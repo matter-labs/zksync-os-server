@@ -1,6 +1,4 @@
-use smart_config::{
-    DescribeConfig, DeserializeConfig,
-};
+use smart_config::{DescribeConfig, DeserializeConfig};
 use std::{path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -23,7 +21,6 @@ pub struct RpcConfig {
     pub eth_call_gas: usize,
 }
 
-
 /// Configuration of state storage
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -33,7 +30,6 @@ pub struct StateConfig {
     /// older blocks will be compacted into RocksDb - and thus unavailable for eth_call
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
-
     // todo: needs its own rocks_db_path config?
 }
 

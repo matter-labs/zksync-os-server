@@ -1,8 +1,8 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::{BlockCommand, ReplayRecord};
 use futures::stream::{self, BoxStream, StreamExt};
-use std::{convert::TryInto};
-use zk_os_forward_system::run::{BatchContext};
+use std::convert::TryInto;
+use zk_os_forward_system::run::BatchContext;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
@@ -126,10 +126,18 @@ impl BlockReplayStorage {
 
         match (context_result, txs_result) {
             (Some(bytes_context), Some(bytes_txs)) => Some(ReplayRecord {
-                context: bincode::serde::decode_from_slice(&bytes_context, bincode::config::standard())
-                    .expect("Failed to deserialize context").0,
-                transactions: bincode::serde::decode_from_slice(&bytes_txs, bincode::config::standard())
-                    .expect("Failed to deserialize transactions").0,
+                context: bincode::serde::decode_from_slice(
+                    &bytes_context,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                transactions: bincode::serde::decode_from_slice(
+                    &bytes_txs,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize transactions")
+                .0,
             }),
             (None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),

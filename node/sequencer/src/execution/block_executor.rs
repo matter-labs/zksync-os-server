@@ -101,8 +101,7 @@ async fn execute_block_inner(
     // todo: not sure tokio::select! is a good solution -
     // for example now if we deadline mid-transaction, the tx will be lost from mempool
     loop {
-        let wait_for_tx_latency = 
-            EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
+        let wait_for_tx_latency = EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {

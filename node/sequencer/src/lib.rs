@@ -15,10 +15,7 @@ use crate::{
     execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
     mempool::Mempool,
     model::{BlockCommand, ReplayRecord},
-    storage::{
-        block_replay_storage::BlockReplayStorage,
-        StateHandle,
-    },
+    storage::{block_replay_storage::BlockReplayStorage, StateHandle},
 };
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};

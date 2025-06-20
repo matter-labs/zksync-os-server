@@ -1,8 +1,13 @@
 use ruint::aliases::B160;
 use zk_ee::utils::Bytes32;
-use zksync_types::{address_to_h256, ethabi::{encode, Address, Token}, h256_to_address, l2::TransactionType, ExecuteTransactionCommon, Transaction, H256, U256};
 use zksync_types::bytecode::BytecodeHash;
-
+use zksync_types::{
+    address_to_h256,
+    ethabi::{encode, Address, Token},
+    h256_to_address,
+    l2::TransactionType,
+    ExecuteTransactionCommon, Transaction, H256, U256,
+};
 
 pub(crate) const MAX_GAS_PER_PUBDATA_BYTE: u64 = 50_000;
 
@@ -56,9 +61,12 @@ impl TransactionData {
             Token::FixedArray(self.reserved.iter().copied().map(Token::Uint).collect()),
             Token::Bytes(self.data),
             Token::Bytes(self.signature),
-            Token::Array(self.factory_deps.into_iter().map(|dep| {
-                Token::FixedBytes(dep.as_bytes().to_vec())
-            }).collect()),
+            Token::Array(
+                self.factory_deps
+                    .into_iter()
+                    .map(|dep| Token::FixedBytes(dep.as_bytes().to_vec()))
+                    .collect(),
+            ),
             Token::Bytes(self.paymaster_input),
             Token::Bytes(self.reserved_dynamic),
         ])]);
@@ -97,9 +105,9 @@ impl From<Transaction> for TransactionData {
                 let is_deployment_transaction = match execute_tx.execute.contract_address {
                     None =>
                     // that means it's a deploy transaction
-                        {
-                            U256([1, 0, 0, 0])
-                        }
+                    {
+                        U256([1, 0, 0, 0])
+                    }
                     // all other transactions
                     Some(_) => U256::zero(),
                 };
@@ -124,7 +132,9 @@ impl From<Transaction> for TransactionData {
                     data: execute_tx.execute.calldata,
                     signature: common_data.signature,
                     // todo: currently zksync_os cannot process factory_deps due to a bug
-                    factory_deps: execute_tx.execute.factory_deps
+                    factory_deps: execute_tx
+                        .execute
+                        .factory_deps
                         .iter()
                         .map(|b| BytecodeHash::for_bytecode(b).value())
                         .collect(),
@@ -154,7 +164,9 @@ impl From<Transaction> for TransactionData {
                     ],
                     data: execute_tx.execute.calldata,
                     signature: vec![],
-                    factory_deps: execute_tx.execute.factory_deps
+                    factory_deps: execute_tx
+                        .execute
+                        .factory_deps
                         .iter()
                         .map(|b| BytecodeHash::for_bytecode(b).value())
                         .collect(),
@@ -176,12 +188,10 @@ pub fn h256_to_bytes32(input: H256) -> Bytes32 {
     new
 }
 
-
 #[allow(dead_code)]
 pub fn bytes32_to_h256(input: Bytes32) -> H256 {
     H256(input.as_u8_array())
 }
-
 
 pub fn b160_to_address(input: B160) -> Address {
     Address::from_slice(&input.to_be_bytes::<20>())

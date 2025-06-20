@@ -1,11 +1,11 @@
 // we use zksync-era transaction types for now, so we need to convert back and forth.
 // we should have a lightweight wrapper for zksync-os (or use some common crate) to avoid this conversion
 
-use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
-use zksync_types::{api, H256, U256, U64};
-use crate::CHAIN_ID;
 use crate::conversions::b160_to_address;
 use crate::storage::in_memory_tx_receipts::TransactionApiData;
+use crate::CHAIN_ID;
+use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
+use zksync_types::{api, H256, U256, U64};
 
 pub fn transaction_to_api_data(
     block_output: &BatchOutput,

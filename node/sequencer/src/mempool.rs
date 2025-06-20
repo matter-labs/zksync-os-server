@@ -1,12 +1,12 @@
 // mempool.rs
 
+use crossbeam_queue::SegQueue;
+use futures_core::task::__internal::AtomicWaker;
+use futures_core::{FusedStream, Stream};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use crossbeam_queue::SegQueue;
-use futures_core::{FusedStream, Stream};
-use futures_core::task::__internal::AtomicWaker;
 use vise::{Buckets, Counter, Histogram, LabeledFamily, Metrics};
 use zksync_types::l1::L1Tx;
 use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
@@ -17,10 +17,8 @@ use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, 
 #[derive(Clone, Debug)]
 pub struct Mempool {
     queue: Arc<SegQueue<Transaction>>,
-    waker: Arc<AtomicWaker>,        // wakes one waiting consumer
+    waker: Arc<AtomicWaker>, // wakes one waiting consumer
 }
-
-
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "mempool")]
@@ -33,28 +31,26 @@ pub struct MempoolMetrics {
 #[vise::register]
 pub(crate) static MEMPOOL_METRICS: vise::Global<MempoolMetrics> = vise::Global::new();
 
-
 impl Mempool {
     pub fn new(forced_tx: Transaction) -> Self {
         let q = Arc::new(SegQueue::new());
         q.push(forced_tx);
-        Self { queue: q, waker: Arc::new(AtomicWaker::new()) }
+        Self {
+            queue: q,
+            waker: Arc::new(AtomicWaker::new()),
+        }
     }
 
     /* -------- producers ------------------------------------------- */
 
     pub fn insert(&self, tx: Transaction) {
         self.queue.push(tx);
-        self.waker.wake();          // notify a waiting task
+        self.waker.wake(); // notify a waiting task
     }
 
     pub fn try_pop(&self) -> Option<Transaction> {
         let r = self.queue.pop();
-        let metrics_key = if r.is_some() {
-            "some"
-        } else {
-            "none"
-        };
+        let metrics_key = if r.is_some() { "some" } else { "none" };
         MEMPOOL_METRICS.try_pop[&metrics_key].inc();
         MEMPOOL_METRICS.len.observe(self.queue.len() as u64);
         r
@@ -75,7 +71,7 @@ impl Mempool {
                     Poll::Pending
                 }
             })
-                .await;
+            .await;
         }
     }
 }
@@ -106,15 +102,18 @@ impl Stream for Mempool {
 }
 
 impl FusedStream for Mempool {
-    fn is_terminated(&self) -> bool { false }     // endless stream
+    fn is_terminated(&self) -> bool {
+        false
+    } // endless stream
 }
 
 // to be replaced with proper L1 deposit
-pub fn forced_deposit_transaction() -> Transaction{
-
+pub fn forced_deposit_transaction() -> Transaction {
     L1Tx {
         execute: Execute {
-            contract_address: Some(Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap()),
+            contract_address: Some(
+                Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+            ),
             calldata: vec![],
             value: U256::from("100"),
             factory_deps: vec![],
@@ -131,9 +130,11 @@ pub fn forced_deposit_transaction() -> Transaction{
             priority_queue_type: Default::default(),
             canonical_tx_hash: Default::default(),
             to_mint: U256::from("100000000000000000000000000000"),
-            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
+                .unwrap(),
             eth_block: 0,
         },
         received_timestamp_ms: 0,
-    }.into()
+    }
+    .into()
 }

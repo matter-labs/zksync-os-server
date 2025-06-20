@@ -16,7 +16,6 @@ pub enum PreimagesCF {
     Meta,
 }
 
-
 impl NamedColumnFamily for PreimagesCF {
     const DB_NAME: &'static str = "preimages";
     const ALL: &'static [Self] = &[PreimagesCF::Storage, PreimagesCF::Meta];
@@ -35,14 +34,10 @@ impl PreimagesCF {
     }
 }
 
-
 impl RocksDbPreimages {
     pub fn new(rocks: RocksDB<PreimagesCF>) -> Self {
-        Self {
-            rocks,
-        }
+        Self { rocks }
     }
-
 
     pub fn rocksdb_block_number(&self) -> u64 {
         self.rocks
@@ -59,7 +54,8 @@ impl RocksDbPreimages {
     /// This batch insertion is safe for concurrent use.
     pub fn get(&self, key: Bytes32) -> Option<Vec<u8>> {
         let latency = PREIMAGES_ROCKS_DB_METRICS.get_latency[&"total"].start();
-        let res = self.rocks
+        let res = self
+            .rocks
             .get_cf(PreimagesCF::Storage, key.as_u8_array_ref())
             .ok()
             .flatten();
@@ -69,7 +65,7 @@ impl RocksDbPreimages {
 
     pub fn add<I>(&self, new_block_number: u64, diffs: I)
     where
-        I: IntoIterator<Item=(Bytes32, Vec<u8>)>,
+        I: IntoIterator<Item = (Bytes32, Vec<u8>)>,
     {
         let latency = PREIMAGES_ROCKS_DB_METRICS.set_latency[&"total"].start();
 
@@ -88,7 +84,6 @@ impl RocksDbPreimages {
         latency.observe();
     }
 }
-
 
 impl PreimageSource for RocksDbPreimages {
     fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {

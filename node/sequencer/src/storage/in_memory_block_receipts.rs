@@ -1,9 +1,5 @@
-use std::{
-    sync::{
-        Arc,
-    },
-};
 use dashmap::DashMap;
+use std::sync::Arc;
 use zk_os_forward_system::run::BatchOutput;
 
 /// In-memory store of the most recent N `BatchOutput`s, keyed by block number.

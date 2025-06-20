@@ -2,15 +2,12 @@
 //! Requires the RocksDB wrapper you already have in scope.
 
 use crate::execution::metrics::STORAGE_VIEW_METRICS;
-use crate::storage::persistent_storage_map::{PersistentStorageMap};
+use crate::storage::persistent_storage_map::PersistentStorageMap;
 use dashmap::DashMap;
 use std::time::Instant;
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
 };
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{ReadStorage, StorageWrite};
@@ -96,7 +93,7 @@ impl StorageMap {
         Self {
             diffs: Arc::new(DashMap::new()),
             persistent_storage_map,
-            blocks_to_retain
+            blocks_to_retain,
         }
     }
 
@@ -116,7 +113,9 @@ impl StorageMap {
         let diff = Diff::new(writes);
         self.diffs.insert(block, Arc::new(diff));
 
-        STORAGE_VIEW_METRICS.storage_add_diff.observe(started_at.elapsed());
+        STORAGE_VIEW_METRICS
+            .storage_add_diff
+            .observe(started_at.elapsed());
     }
 
     // todo: will change when we use ordered map
@@ -206,7 +205,8 @@ impl ReadStorage for StorageMapView {
                 if let Some(value) = res {
                     latency_diffs.observe();
                     latency_total.observe();
-                    STORAGE_VIEW_METRICS.storage_access_diffs_scanned
+                    STORAGE_VIEW_METRICS
+                        .storage_access_diffs_scanned
                         .observe(self.block - bn);
                     return Some(*value);
                 }
@@ -226,7 +226,8 @@ impl ReadStorage for StorageMapView {
         }
 
         latency_diffs.observe();
-        STORAGE_VIEW_METRICS.storage_access_diffs_scanned
+        STORAGE_VIEW_METRICS
+            .storage_access_diffs_scanned
             .observe(self.block - self.base_block);
 
         let latency_base = STORAGE_VIEW_METRICS.storage_access_latency[&"base"].start();

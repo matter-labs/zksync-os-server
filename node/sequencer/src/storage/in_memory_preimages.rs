@@ -23,7 +23,6 @@ impl InMemoryPreimages {
     /// If the key already exists, this does nothing.
     pub fn add(&self, key: Bytes32, preimage: Vec<u8>) {
         self.map.entry(key).or_insert(preimage);
-
     }
 
     /// Insert multiple preimages at once.

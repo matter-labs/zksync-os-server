@@ -1,8 +1,9 @@
+use crate::conversions::{bytes32_to_address, h256_to_bytes32};
 use crate::storage::in_memory_account_properties::InMemoryAccountProperties;
 use crate::storage::in_memory_block_receipts::InMemoryBlockReceipts;
 use crate::storage::in_memory_tx_receipts::InMemoryTxReceipts;
-use crate::storage::persistent_storage_map::{PersistentStorageMap};
-use crate::storage::rocksdb_preimages::{ RocksDbPreimages};
+use crate::storage::persistent_storage_map::PersistentStorageMap;
+use crate::storage::rocksdb_preimages::RocksDbPreimages;
 use crate::storage::storage_map::{StorageMap, StorageMapView};
 use crate::storage::storage_metrics::StorageMetrics;
 use crate::tx_conversions::transaction_to_api_data;
@@ -17,7 +18,6 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zk_os_forward_system::run::{BatchOutput, PreimageSource, ReadStorage, ReadStorageTree};
 use zksync_types::{Address, Transaction};
-use crate::conversions::{bytes32_to_address, h256_to_bytes32};
 
 pub mod block_replay_storage;
 pub mod in_memory_account_properties;
@@ -45,7 +45,6 @@ pub struct StateHandle(pub Arc<StateHandleInner>);
 // todo: we have Arcs above and inside each. check if needed.
 #[derive(Debug)]
 pub struct StateHandleInner {
-
     pub last_pending_block_number: Arc<AtomicU64>,
 
     pub last_canonized_block_number: Arc<AtomicU64>,
@@ -268,9 +267,7 @@ impl StateHandle {
     }
 
     pub fn last_canonized_block_number(&self) -> u64 {
-        self.0
-            .last_canonized_block_number
-            .load(Ordering::Relaxed)
+        self.0.last_canonized_block_number.load(Ordering::Relaxed)
     }
 
     fn extract_account_properties(
