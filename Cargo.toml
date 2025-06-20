@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "node/sequencer",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
+homepage = "https://zksync.io/"
+repository = "https://github.com/matter-labs/zksync-os-server"
+license = "MIT OR Apache-2.0"
+keywords = ["blockchain", "zksync"]
+categories = ["cryptography"]
+
+[workspace.dependencies]
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility"] }
+tokio = "1"
+ruint = { version = "1.12", default-features = false }
+dashmap = "6.1.0"
+itertools = "0.14.0"
+futures-core = "0.3"
+futures = "0.3"
+futures-util = "0.3"
+vise = "0.3.0"
+vise-exporter = "0.3.0"
+hex = "0.4"
+crossbeam-queue = "0.3"
+bincode = {version ="2.0.1", features = ["serde"] }
+smart-config = "0.2.0-pre"
+thiserror = "2.0.12"
+
+zksync_vlog = "28.1.0-non-semver-compat"
+zksync_storage = "28.1.0-non-semver-compat"
+zksync_web3_decl = "28.1.0-non-semver-compat"
+zksync_types = "28.1.0-non-semver-compat"
+#zksync_zk_os_merkle_tree = { version = "28.1.0-non-semver-compat", path = "../zksync-era/core/lib/zk_os_merkle_tree" }

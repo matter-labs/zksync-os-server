@@ -1,0 +1,42 @@
+[package]
+name = "zksync_os_sequencer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+zk_os_forward_system.workspace = true
+zk_ee.workspace = true
+zk_os_basic_system.workspace = true
+zksync_storage.workspace = true
+
+anyhow.workspace = true
+ruint.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+hex.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+itertools.workspace = true
+futures.workspace = true
+dashmap.workspace = true
+vise.workspace = true
+zksync_vlog.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+zksync_web3_decl = { workspace = true, features = ["server"] }
+zksync_types.workspace = true
+crossbeam-queue.workspace = true
+futures-core .workspace = true
+futures-util.workspace = true
+bincode.workspace = true
+smart-config.workspace = true
