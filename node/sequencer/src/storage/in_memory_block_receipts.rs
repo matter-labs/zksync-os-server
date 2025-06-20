@@ -46,4 +46,9 @@ impl InMemoryBlockReceipts {
     pub fn len(&self) -> usize {
         self.receipts.len()
     }
+
+    /// Returns true if no receipts are currently stored.
+    pub fn is_empty(&self) -> bool {
+        self.receipts.is_empty()
+    }
 }

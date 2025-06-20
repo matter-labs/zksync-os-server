@@ -83,7 +83,7 @@ impl Stream for Mempool {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // `self` is a pinned &mut Mempool; we can safely get a shared ref.
-        let me: &Mempool = &*self;
+        let me: &Mempool = &self;
 
         if let Some(tx) = me.try_pop() {
             return Poll::Ready(Some(tx));

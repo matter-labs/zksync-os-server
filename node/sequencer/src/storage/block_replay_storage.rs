@@ -51,7 +51,6 @@ impl BlockReplayStorage {
     }
     /// Appends a replay command (context + raw transactions) to the WAL.
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
-
     pub fn append_replay(&self, record: ReplayRecord) {
         let latency = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         assert!(!record.transactions.is_empty());
@@ -69,7 +68,7 @@ impl BlockReplayStorage {
         // Prepare record
         let block_num = record.context.block_number.to_be_bytes();
         let context_value =
-            bincode::serde::encode_to_vec(&record.context, bincode::config::standard())
+            bincode::serde::encode_to_vec(record.context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
         let txs_value =
             bincode::serde::encode_to_vec(&record.transactions, bincode::config::standard())

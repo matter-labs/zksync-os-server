@@ -41,7 +41,8 @@ pub async fn run_jsonrpsee_server(
 
     let server_handle = server.start(rpc);
 
-    Ok(server_handle.stopped().await)
+    server_handle.stopped().await;
+    Ok(())
 }
 
 pub fn resolve_block_id(block: Option<BlockIdVariant>, state_handle: StateHandle) -> u64 {

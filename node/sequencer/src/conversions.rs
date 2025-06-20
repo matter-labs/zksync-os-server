@@ -13,8 +13,7 @@ pub(crate) const MAX_GAS_PER_PUBDATA_BYTE: u64 = 50_000;
 
 pub fn tx_abi_encode(tx: Transaction) -> Vec<u8> {
     let tx_data: TransactionData = tx.into();
-    let encoded = tx_data.abi_encode();
-    encoded
+    tx_data.abi_encode()
 }
 
 #[derive(Debug, Default, Clone)]

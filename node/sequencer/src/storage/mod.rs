@@ -32,10 +32,9 @@ mod storage_metrics;
 /// This is a handle to the in-memory state of the sequencer.
 /// It's composed of multiple facets - note that they don't interact with each other and are generally lock-free.
 /// all are thread-safe
-
 /// we have two threshold block numbers:
 /// - last_pending_block_number -   highest block number that has its results available in the state facets -
-///                                 potentially not canonized yet. Must not be exposed for API directly, but can be used for nonce/balance validation.
+///   potentially not canonized yet. Must not be exposed for API directly, but can be used for nonce/balance validation.
 /// - last_canonized_block_number - the highest canonized block number - can be exposed in API.
 
 #[derive(Clone, Debug)]
@@ -84,7 +83,6 @@ impl StateHandle {
     /// Returns a `StorageView` for reading state at `block_number`.
     /// Contains changes from up to `block_number - 1`.
     /// todo: for now the caller must ensure `block_number >= base_block`
-
     pub fn view_at(&self, block_number: u64) -> anyhow::Result<StorageView> {
         let last_block = self.0.last_pending_block_number.load(Ordering::Relaxed);
         // tracing::info!("Creating StorageView for block {} (last pending: {})", block_number, last_block);
@@ -222,7 +220,7 @@ impl StateHandle {
             block_output
                 .published_preimages
                 .iter()
-                .map(|(hash, preimage, _)| (hash.clone(), preimage.clone())),
+                .map(|(hash, preimage, _)| (*hash, preimage.clone())),
         );
 
         // tracing::info!("Block {} - saving - added to published_preimages in {:?},", current_block_number, ts.elapsed());
@@ -238,7 +236,7 @@ impl StateHandle {
         // Update transaction receipts
         // Note: race condition - we may expose transaction receipt before `last_canonized_block_number` is bumped
         for (index, tx) in transactions.iter().enumerate() {
-            let api_tx = transaction_to_api_data(&block_output, index, &tx);
+            let api_tx = transaction_to_api_data(&block_output, index, tx);
             self.0
                 .in_memory_tx_receipts
                 .insert(h256_to_bytes32(tx.hash()), api_tx);
@@ -280,7 +278,7 @@ impl StateHandle {
             .filter_map(|(hash, preimage, preimage_type)| match preimage_type {
                 PreimageType::Bytecode => None,
                 PreimageType::AccountData => Some((
-                    hash.clone(),
+                    *hash,
                     AccountProperties::decode(
                         &preimage
                             .clone()
@@ -297,7 +295,7 @@ impl StateHandle {
                 let account_address = bytes32_to_address(&log.account_key);
 
                 if let Some(properties) = account_properties_preimages.get(&log.value) {
-                    result.insert(account_address, properties.clone());
+                    result.insert(account_address, *properties);
                 } else {
                     let ex = self.0.rocks_db_preimages.get(log.value);
                     tracing::warn!(
@@ -313,7 +311,7 @@ impl StateHandle {
         // if !account_properties_preimages.is_empty() {
         //     panic!("could not map account properties to addresses");
         // }
-        return result;
+        result
     }
 
     pub async fn collect_state_metrics(&self, period: Duration) {

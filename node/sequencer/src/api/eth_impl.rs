@@ -194,7 +194,7 @@ impl EthNamespaceServer for EthNamespace {
     }
 
     async fn gas_price(&self) -> RpcResult<U256> {
-        Ok(U256::from(1000).into())
+        Ok(U256::from(1000))
     }
 
     async fn new_filter(&self, _filter: Filter) -> RpcResult<U256> {
@@ -247,7 +247,7 @@ impl EthNamespaceServer for EthNamespace {
             balance
         );
 
-        Ok(balance.into())
+        Ok(balance)
     }
 
     async fn get_block_by_number(

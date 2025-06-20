@@ -44,10 +44,7 @@ pub fn transaction_to_api_data(
     let tx_output = block_output
         .tx_results
         .iter()
-        .filter_map(|result| match result {
-            Ok(output) => Some(output),
-            Err(_) => None,
-        })
+        .filter_map(|result| result.as_ref().ok())
         .nth(index)
         .expect("mismatch in number of transactions and results");
 
