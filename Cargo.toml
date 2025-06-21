@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "lib/state",
     "node/sequencer",
 ]
 resolver = "2"

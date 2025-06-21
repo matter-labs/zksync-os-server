@@ -6364,6 +6364,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_state"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap",
+ "forward_system",
+ "ruint",
+ "smart-config",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vise",
+ "zk_ee",
+ "zksync_storage",
+]
+
+[[package]]
 name = "zksync_storage"
 version = "28.1.0-non-semver-compat"
 source = "registry+https://github.com/rust-lang/crates.io-index"
