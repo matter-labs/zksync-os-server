@@ -1,8 +1,8 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use ruint::aliases::U256;
-use zk_os_forward_system::run::BatchContext;
-use crate::CHAIN_ID;
 use crate::model::BlockCommand;
+use crate::CHAIN_ID;
+use ruint::aliases::U256;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zk_os_forward_system::run::BatchContext;
 
 /// Module responsible for providing BatchContext instances on demand.
 pub struct BlockContextProvider;
@@ -12,7 +12,7 @@ impl BlockContextProvider {
     pub async fn get_produce_command(
         &self,
         block_number: u64,
-        block_time: Duration
+        block_time: Duration,
     ) -> BlockCommand {
         let gas_limit = 100_000_000;
         let timestamp = (millis_since_epoch() / 1000) as u64;
@@ -31,7 +31,6 @@ impl BlockContextProvider {
         BlockCommand::Produce(context, block_time)
     }
 }
-
 
 pub fn millis_since_epoch() -> u128 {
     SystemTime::now()

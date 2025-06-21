@@ -1,8 +1,8 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::{BlockCommand, ReplayRecord};
 use futures::stream::{self, BoxStream, StreamExt};
-use std::{convert::TryInto};
-use zk_os_forward_system::run::{BatchContext};
+use std::convert::TryInto;
+use zk_os_forward_system::run::BatchContext;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
@@ -51,7 +51,6 @@ impl BlockReplayStorage {
     }
     /// Appends a replay command (context + raw transactions) to the WAL.
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
-
     pub fn append_replay(&self, record: ReplayRecord) {
         let latency = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         assert!(!record.transactions.is_empty());
@@ -69,7 +68,7 @@ impl BlockReplayStorage {
         // Prepare record
         let block_num = record.context.block_number.to_be_bytes();
         let context_value =
-            bincode::serde::encode_to_vec(&record.context, bincode::config::standard())
+            bincode::serde::encode_to_vec(record.context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
         let txs_value =
             bincode::serde::encode_to_vec(&record.transactions, bincode::config::standard())
@@ -126,10 +125,18 @@ impl BlockReplayStorage {
 
         match (context_result, txs_result) {
             (Some(bytes_context), Some(bytes_txs)) => Some(ReplayRecord {
-                context: bincode::serde::decode_from_slice(&bytes_context, bincode::config::standard())
-                    .expect("Failed to deserialize context").0,
-                transactions: bincode::serde::decode_from_slice(&bytes_txs, bincode::config::standard())
-                    .expect("Failed to deserialize transactions").0,
+                context: bincode::serde::decode_from_slice(
+                    &bytes_context,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                transactions: bincode::serde::decode_from_slice(
+                    &bytes_txs,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize transactions")
+                .0,
             }),
             (None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),

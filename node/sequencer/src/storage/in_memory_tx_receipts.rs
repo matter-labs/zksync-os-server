@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use dashmap::DashMap;
+use std::sync::Arc;
 use zk_ee::utils::Bytes32;
 use zksync_types::api;
 

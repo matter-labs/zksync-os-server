@@ -1,8 +1,8 @@
-use std::collections::HashSet;
-use zk_ee::utils::Bytes32;
 use crate::storage::persistent_storage_map::StorageMapCF;
 use crate::storage::rocksdb_preimages::PreimagesCF;
 use crate::storage::StateHandle;
+use std::collections::HashSet;
+use zk_ee::utils::Bytes32;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -25,16 +25,23 @@ impl StorageMetrics {
         let mut storage_keys = 0usize;
 
         for entry in state.0.in_memory_storage.diffs.iter() {
-            let diff = entry.value();          // &Arc<HashMap<..>>
+            let diff = entry.value(); // &Arc<HashMap<..>>
             storage_keys += diff.map.len();
             unique.extend(diff.map.keys().copied()); // &Bytes32 → Bytes32
         }
 
-        let rocksdb_storage_entries =
-            state.0.in_memory_storage.persistent_storage_map.rocks.estimated_number_of_entries(StorageMapCF::Storage);
+        let rocksdb_storage_entries = state
+            .0
+            .in_memory_storage
+            .persistent_storage_map
+            .rocks
+            .estimated_number_of_entries(StorageMapCF::Storage);
 
-        let rocksdb_preimages_entries =
-            state.0.rocks_db_preimages.rocks.estimated_number_of_entries(PreimagesCF::Storage);
+        let rocksdb_preimages_entries = state
+            .0
+            .rocks_db_preimages
+            .rocks
+            .estimated_number_of_entries(PreimagesCF::Storage);
 
         StorageMetrics {
             storage_keys,

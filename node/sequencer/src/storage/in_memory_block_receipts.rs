@@ -1,9 +1,5 @@
-use std::{
-    sync::{
-        Arc,
-    },
-};
 use dashmap::DashMap;
+use std::sync::Arc;
 use zk_os_forward_system::run::BatchOutput;
 
 /// In-memory store of the most recent N `BatchOutput`s, keyed by block number.
@@ -49,5 +45,10 @@ impl InMemoryBlockReceipts {
     /// Number of receipts currently stored.
     pub fn len(&self) -> usize {
         self.receipts.len()
+    }
+
+    /// Returns true if no receipts are currently stored.
+    pub fn is_empty(&self) -> bool {
+        self.receipts.is_empty()
     }
 }

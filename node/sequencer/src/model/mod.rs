@@ -1,6 +1,6 @@
+use serde::Deserialize;
 use std::fmt::Display;
 use std::time::Duration;
-use serde::Deserialize;
 use zk_os_forward_system::run::BatchContext;
 use zksync_types::Transaction;
 use zksync_web3_decl::jsonrpsee::core::Serialize;
@@ -30,7 +30,6 @@ pub struct ReplayRecord {
     pub transactions: Vec<Transaction>,
 }
 
-
 // todo: get rid/refactor `Transaction` type in zksync-types crate
 pub enum TransactionSource {
     Replay(Vec<Transaction>),
@@ -40,8 +39,17 @@ pub enum TransactionSource {
 impl Display for BlockCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockCommand::Replay(record) => write!(f, "Replay block {} ({} txs)", record.context.block_number, record.transactions.len()),
-            BlockCommand::Produce(context, duration) => write!(f, "Produce block {} target block time: {:?}", context.block_number, duration),
+            BlockCommand::Replay(record) => write!(
+                f,
+                "Replay block {} ({} txs)",
+                record.context.block_number,
+                record.transactions.len()
+            ),
+            BlockCommand::Produce(context, duration) => write!(
+                f,
+                "Produce block {} target block time: {:?}",
+                context.block_number, duration
+            ),
         }
     }
 }

@@ -1,20 +1,19 @@
 use futures_util::TryFutureExt;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
-use zksync_os_sequencer::config::{RpcConfig, SequencerConfig, StateConfig};
 use std::time::Duration;
 use tokio::sync::watch;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
+use zksync_os_sequencer::config::{RpcConfig, SequencerConfig, StateConfig};
 use zksync_os_sequencer::mempool::{forced_deposit_transaction, Mempool};
 use zksync_os_sequencer::run_sequencer_actor;
-use zksync_os_sequencer::storage::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
+use zksync_os_sequencer::storage::block_replay_storage::{
+    BlockReplayColumnFamily, BlockReplayStorage,
+};
 use zksync_os_sequencer::storage::persistent_storage_map::{PersistentStorageMap, StorageMapCF};
 use zksync_os_sequencer::storage::rocksdb_preimages::{PreimagesCF, RocksDbPreimages};
 use zksync_os_sequencer::storage::StateHandle;
-use zksync_storage::{RocksDB};
+use zksync_storage::RocksDB;
 use zksync_vlog::prometheus::PrometheusExporterConfig;
-
-
-
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_STORAGE_DB_NAME: &str = "state";
@@ -78,12 +77,9 @@ pub async fn main() {
 
     let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db);
 
-    let state_db = RocksDB::<StorageMapCF>::new(
-        &sequencer_config
-            .rocks_db_path
-            .join(STATE_STORAGE_DB_NAME),
-    )
-    .expect("Failed to open State DB");
+    let state_db =
+        RocksDB::<StorageMapCF>::new(&sequencer_config.rocks_db_path.join(STATE_STORAGE_DB_NAME))
+            .expect("Failed to open State DB");
     let persistent_storage_map = PersistentStorageMap::new(state_db);
 
     let preimages_db = RocksDB::<PreimagesCF>::new(
@@ -101,8 +97,12 @@ pub async fn main() {
         "State DB block number ({state_db_block}) is greater than Preimages DB block number ({preimages_db_block}). This is not allowed."
     );
 
-    let state_handle =
-        StateHandle::new(state_db_block, persistent_storage_map, rocks_db_preimages, state_config.blocks_to_retain_in_memory);
+    let state_handle = StateHandle::new(
+        state_db_block,
+        persistent_storage_map,
+        rocks_db_preimages,
+        state_config.blocks_to_retain_in_memory,
+    );
 
     let block_to_start = state_db_block + 1;
     tracing::info!(

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly-2025-03-19
+        components: rustfmt, clippy
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+      continue-on-error: true
+
+    - name: Build project
+      run: cargo build --verbose --all-targets
+
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      continue-on-error: true
+
+    - name: Run tests
+      run: cargo test --verbose

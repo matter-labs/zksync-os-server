@@ -1,14 +1,13 @@
-use ruint::aliases::U256;
-use zk_os_forward_system::run::{BatchContext, simulate_tx, TxOutput};
-use zksync_types::l2::L2Tx;
 use crate::conversions::tx_abi_encode;
 use crate::storage::StorageView;
-
+use ruint::aliases::U256;
+use zk_os_forward_system::run::{simulate_tx, BatchContext, TxOutput};
+use zksync_types::l2::L2Tx;
 
 pub fn execute(
     tx: L2Tx,
     mut block_context: BatchContext,
-     storage_view: StorageView,
+    storage_view: StorageView,
 ) -> anyhow::Result<TxOutput> {
     // tracing::info!(
     //     "Executing transaction: {:?} in block: {:?}",
@@ -25,6 +24,6 @@ pub fn execute(
         storage_view.clone(),
         storage_view,
     )
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?      // outer error
-        .map_err(|e| anyhow::anyhow!("{e:?}"))
+    .map_err(|e| anyhow::anyhow!("{e:?}"))? // outer error
+    .map_err(|e| anyhow::anyhow!("{e:?}"))
 }
