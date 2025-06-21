@@ -1,10 +1,9 @@
 use std::time::Duration;
-use vise::{Histogram, LabeledFamily, Gauge, Metrics, Unit, Buckets, Counter};
+use vise::{Buckets, Counter, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 const BLOCKS_SCANNED: Buckets = Buckets::linear(1.0..=1000.0, 100.0);
 const STORAGE_WRITES: Buckets = Buckets::exponential(1.0..=1000.0, 1.7);
-
 
 #[derive(Debug, Metrics)]
 pub struct ExecutionMetrics {
@@ -76,8 +75,11 @@ pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Glob
 #[vise::register]
 pub(crate) static STORAGE_VIEW_METRICS: vise::Global<StorageViewMetrics> = vise::Global::new();
 #[vise::register]
-pub(crate) static STORAGE_MAP_ROCKS_DB_METRICS: vise::Global<StorageMapRocksDBMetrics> = vise::Global::new();
+pub(crate) static STORAGE_MAP_ROCKS_DB_METRICS: vise::Global<StorageMapRocksDBMetrics> =
+    vise::Global::new();
 #[vise::register]
-pub(crate) static PREIMAGES_ROCKS_DB_METRICS: vise::Global<PreimagesRocksDBMetrics> = vise::Global::new();
+pub(crate) static PREIMAGES_ROCKS_DB_METRICS: vise::Global<PreimagesRocksDBMetrics> =
+    vise::Global::new();
 #[vise::register]
-pub(crate) static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> = vise::Global::new();
+pub(crate) static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
+    vise::Global::new();

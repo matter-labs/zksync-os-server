@@ -1,4 +1,4 @@
 pub mod block_executor;
-pub mod vm_wrapper;
-pub mod sandbox;
 pub(crate) mod metrics;
+pub mod sandbox;
+pub mod vm_wrapper;

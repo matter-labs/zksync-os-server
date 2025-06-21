@@ -59,7 +59,7 @@ impl InMemoryAccountProperties {
             if let Some((oldest_block, _)) = self
                 .diffs
                 .iter()
-                .map(|e| (e.key().clone(), e.value().clone()))
+                .map(|e| (*e.key(), e.value().clone()))
                 .min_by_key(|&(blk, _)| blk)
             {
                 // Remove and merge into base_state
@@ -91,8 +91,8 @@ impl InMemoryAccountProperties {
         // Scan diffs newest-first
         for bn in (base + 1..=block).rev() {
             if let Some(diff_arc) = self.diffs.get(&bn) {
-                if let Some(props) = diff_arc.get(&addr) {
-                    let res = props.clone();
+                if let Some(props) = diff_arc.get(addr) {
+                    let res = *props;
                     // tracing::info!("Found account properties for {:?} at block {}: {:?}",
                     //     addr,
                     //     bn,
@@ -103,7 +103,7 @@ impl InMemoryAccountProperties {
             }
         }
         // Fallback to base_state
-        let res = self.base_state.get(&addr).map(|r| r.value().clone());
+        let res = self.base_state.get(addr).map(|r| *r.value());
 
         // tracing::info!("Account properties for {:?} at block {} not found in diffs, falling back to base state: {:?}",
         //     addr,
@@ -127,13 +127,12 @@ impl InMemoryAccountProperties {
     /// falling back to the consolidated base state.
     pub fn get_latest(&self, addr: &Address) -> Option<AccountProperties> {
         let latest = self.latest_block();
-        let res = self.get(latest, addr);
+        self.get(latest, addr)
 
         // tracing::info!("Getting account properties for {:?} at latest block {}: {:?}",
         //     address_to_bytes32(addr),
         //     latest,
         //     res
         // );
-        res
     }
 }

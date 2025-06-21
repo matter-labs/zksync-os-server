@@ -87,7 +87,7 @@ async fn execute_block_inner(
 
     /* ---------- VM & state ----------------------------------------- */
     let state_view = state.view_at(ctx.block_number)?;
-    let mut runner = VmWrapper::new(ctx.clone(), state_view);
+    let mut runner = VmWrapper::new(ctx, state_view);
     let mut executed = Vec::<Transaction>::new();
 
     /* ---------- deadline config ------------------------------------ */
@@ -101,8 +101,7 @@ async fn execute_block_inner(
     // todo: not sure tokio::select! is a good solution -
     // for example now if we deadline mid-transaction, the tx will be lost from mempool
     loop {
-        let wait_for_tx_latency = 
-            EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
+        let wait_for_tx_latency = EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {
@@ -132,7 +131,7 @@ async fn execute_block_inner(
                                 //                 res = ?res,
                                 //                "tx executed");
                                 latency.observe();
-                                EXECUTION_METRICS.executed_transactions[&metrics_label.as_ref()].inc();
+                                EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 
                                 executed.push(tx);
 
