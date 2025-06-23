@@ -5,9 +5,9 @@ use tokio::{
 use zk_ee::system::errors::InternalError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
-    run_batch, BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, PreimageSource,
-    ReadStorageTree, TxResultCallback, TxSource,
+    run_batch, BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
 };
+use zksync_os_state::StateView;
 
 /// A one‐by‐one driver around `run_batch`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_batch` in zksync-os)
@@ -22,7 +22,7 @@ impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
     pub fn new(
         context: BatchContext,
-        state_view: impl ReadStorageTree + PreimageSource + Send + Clone + 'static,
+        state_view: StateView,
     ) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBatch).
         let (tx_sender, tx_receiver) = channel(1);

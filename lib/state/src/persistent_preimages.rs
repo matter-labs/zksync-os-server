@@ -1,8 +1,8 @@
+use crate::metrics::PREIMAGES_METRICS;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::PreimageSource;
 use zksync_storage::db::NamedColumnFamily;
 use zksync_storage::RocksDB;
-use crate::metrics::PREIMAGES_METRICS;
 
 #[derive(Clone, Debug)]
 pub struct PersistentPreimages {
@@ -63,16 +63,16 @@ impl PersistentPreimages {
         res
     }
 
-    pub fn add<I>(&self, new_block_number: u64, diffs: I)
+    pub fn add<'a, J>(&self, new_block_number: u64, diffs: J)
     where
-        I: IntoIterator<Item = (Bytes32, Vec<u8>)>,
+        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
     {
         let latency = PREIMAGES_METRICS.set[&"total"].start();
 
         let mut batch = self.rocks.new_write_batch();
 
         for (k, v) in diffs {
-            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), &v);
+            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v);
         }
         batch.put_cf(
             PreimagesCF::Meta,

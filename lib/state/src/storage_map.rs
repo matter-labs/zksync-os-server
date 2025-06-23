@@ -1,6 +1,6 @@
 use crate::metrics::STORAGE_MAP_METRICS;
 use crate::persistent_storage_map::PersistentStorageMap;
-use crate::storage_view::StorageMapView;
+use crate::storage_map_view::StorageMapView;
 use dashmap::DashMap;
 use std::sync::atomic::AtomicU64;
 use std::{
@@ -23,10 +23,10 @@ pub struct StorageMap {
     ///  * Empty on start. Grows to at least `blocks_to_retain` items
     ///  * Only compacts when more than `blocks_to_retain` items exist
 
-    ///  Note: currently `state` crate doesn't know anything about canonization,
-    ///  so it may compact non-canonized block if there is a significant delay in canonization,
-    ///  this should not happen in practice because of canonization back pressure
-    ///  (block tip should not be ahead of the last canonized block by more than `blocks_to_retain` blocks)
+    ///    Note: currently `state` crate doesn't know anything about canonization,
+    ///    so it may compact non-canonized block if there is a significant delay in canonization,
+    ///    this should not happen in practice because of canonization back pressure
+    ///    (block tip should not be ahead of the last canonized block by more than `blocks_to_retain` blocks)
     pub diffs: Arc<DashMap<u64, Arc<Diff>>>,
 
     /// RocksDB handle for the persistent base - cheap to clone
@@ -79,7 +79,7 @@ impl StorageMap {
             ));
         }
 
-        if block_number > latest_block {
+        if block_number > latest_block + 1 {
             return Err(anyhow::anyhow!(
                 "Cannot create StorageView for block {} - latest known block number is {}",
                 block_number,
@@ -116,18 +116,39 @@ impl StorageMap {
 
         let latest_memory_block = self.latest_block.load(Ordering::Relaxed);
 
-        assert_eq!(
-            block_number,
-            latest_memory_block + 1,
-            "StorageMap: attempt to add block number {} - previous block is {}. Can only add blocks in order",
+        assert!(
+            block_number <= latest_memory_block + 1,
+            "StorageMap: attempt to add block number {} - previous block is {}. Cannot have gaps in block data",
             block_number,
             latest_memory_block + 1
         );
 
-        let diff = Diff::new(writes);
-        self.diffs.insert(block_number, Arc::new(diff));
+        let new_diff = Diff::new(writes);
+        if block_number == latest_memory_block + 1 {
+            // normal case - inserting next block
+            self.diffs.insert(block_number, Arc::new(new_diff));
+        } else {
+            // transaction replay or rollback
+            let old_diff = self.diffs.get(&block_number).unwrap_or_else(|| {
+                panic!(
+                    "missing diff for block {} - latest_memory_block is be {}",
+                    block_number, latest_memory_block,
+                )
+            });
 
-        // Log performance metrics (removed dependency on external metrics)
+            // Temporary:
+            // check that we are inserting block with the same data.
+            // Doesn't need to hold true with decentralization (ie actual rollbacks)
+            // Clones are expensive but only happen fo bounded number of blocks at startup
+            assert_eq!(old_diff.map.len(), new_diff.map.len(), "mismatch when replaying blocks");
+            for (old_k, old_v) in old_diff.map.clone() {
+                assert_eq!(old_v, new_diff.map[&old_k], "mismatch when replaying blocks");
+            }
+
+            // currently no-op as we don't allow changes
+            self.diffs.insert(block_number, Arc::new(new_diff));
+        }
+        self.latest_block.store(block_number, Ordering::Relaxed);
         started_at.observe();
     }
 
@@ -167,6 +188,7 @@ impl StorageMap {
 
         for block_number in (initial_persistent_block_upper_bound + 1..=compacting_until).rev() {
             // todo: what will happen if there is a StorageMapView holding a reference to this diff?
+            // todo: consider `try_unwrap`
             if let Some(_diff) = self.diffs.remove(&block_number) {
                 tracing::debug!("Compacted diff for block {}", block_number);
             } else {

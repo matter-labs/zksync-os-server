@@ -92,7 +92,7 @@ impl PersistentStorageMap {
         // When traversing diffs backwards, we may look at blocks N-1, N-2, ..., N-k - and then on miss we need to fallback to RocksDB which is already at block N.
         // But that's OK since that's equivalent to just looking through blocks N-1, N-2, ..., N-k again (but without actual iteration since it's already compacted
 
-        // todo: two atomics may be redundant 
+        // todo: two atomics may be redundant
         self.persistent_block_upper_bound
             .store(new_block_number, Ordering::Relaxed);
         self.rocks.write(batch).expect("RocksDB write failed");

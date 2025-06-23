@@ -3,14 +3,20 @@ mod metrics;
 mod persistent_preimages;
 pub mod persistent_storage_map;
 pub mod storage_map;
-mod storage_view;
+mod storage_map_view;
+mod storage_metrics;
 
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{PreimageSource, ReadStorage, StorageWrite};
+use zk_os_forward_system::run::{
+    LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
+};
 use zksync_storage::RocksDB;
 // Re-export commonly used types
 use crate::persistent_preimages::{PersistentPreimages, PreimagesCF};
+use crate::storage_map_view::StorageMapView;
+use crate::storage_metrics::StorageMetrics;
 pub use config::StateConfig;
 pub use persistent_storage_map::{PersistentStorageMap, StorageMapCF};
 pub use storage_map::{Diff, StorageMap};
@@ -21,10 +27,13 @@ const PREIMAGES_STORAGE_DB_NAME: &str = "preimages";
 /// Container for the two state components.
 /// Thread-safe and cheaply clonable.
 /// No atomicity guarantees between the components.
+///
+/// Hint: don't add `block_number` to this struct - manage finality/block_numbers externally
+/// read storage_map.block_number() or persistent_preimages.block_number() if required
 #[derive(Debug, Clone)]
 pub struct StateHandle {
-    pub storage_map: StorageMap,
-    pub persistent_preimages: PersistentPreimages,
+    storage_map: StorageMap,
+    persistent_preimages: PersistentPreimages,
 }
 
 impl StateHandle {
@@ -58,24 +67,91 @@ impl StateHandle {
         }
     }
 
-    pub fn state_providers_at_block(
-        &self,
-        block_number: u64,
-    ) -> anyhow::Result<(impl ReadStorage, impl PreimageSource)> {
-        Ok((
-            self.storage_map.view_at(block_number)?,
-            self.persistent_preimages.clone(),
-        ))
+    /// Returns (state_block_number, preimages_block_number)
+    ///
+    /// Hint: we can return `min` of these two values
+    /// for all intents and purposes - only returning both values for easier logging/context
+    pub fn latest_block_numbers(&self) -> (u64, u64) {
+        (
+            self.storage_map.latest_block.load(Ordering::Relaxed),
+            self.persistent_preimages.rocksdb_block_number(),
+        )
     }
-    
-    pub fn add_block_result(
+
+    pub fn state_view_at_block(&self, block_number: u64) -> anyhow::Result<StateView> {
+        Ok(StateView {
+            storage_map_view: self.storage_map.view_at(block_number)?,
+            preimages: self.persistent_preimages.clone(),
+        })
+    }
+
+    /// Adds a block result to the state components
+    /// No atomicity guarantees
+    /// PreimageType is currently ignored
+    pub fn add_block_result<'a, J>(
         &self,
         block_number: u64,
         storage_diffs: Vec<StorageWrite>,
-        new_preimages: Vec<(Bytes32, Vec<u8>)>
-    ) -> anyhow::Result<()> {
+        new_preimages: J,
+    ) -> anyhow::Result<()>
+    where
+        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
+    {
         self.storage_map.add_diff(block_number, storage_diffs);
         self.persistent_preimages.add(block_number, new_preimages);
         Ok(())
+    }
+    pub async fn collect_state_metrics(&self, period: Duration) {
+        let mut ticker = tokio::time::interval(period);
+        let state_handle = self.clone();
+        loop {
+            ticker.tick().await;
+            let m = StorageMetrics::collect_metrics(state_handle.clone());
+            tracing::info!("{:?}", m);
+        }
+    }
+
+    pub async fn compact_periodically(&self, period: Duration) {
+        let mut ticker = tokio::time::interval(period);
+        let map = self.storage_map.clone();
+        // can take more than `period` to comact - use proper scheduler
+        loop {
+            ticker.tick().await;
+            map.compact();
+        }
+    }
+}
+
+/// Thin wrapper around `StorageMapView` and `PersistentPreimages`
+/// Delegates providing states to the respective components
+#[derive(Debug, Clone)]
+pub struct StateView {
+    storage_map_view: StorageMapView,
+    preimages: PersistentPreimages,
+}
+
+impl PreimageSource for StateView {
+    fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
+        self.preimages.get_preimage(hash)
+    }
+}
+impl ReadStorage for StateView {
+    fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
+        self.storage_map_view.read(key)
+    }
+}
+
+// temporarily implement ReadStorageTree as interface requires that
+impl ReadStorageTree for StateView {
+    fn tree_index(&mut self, _key: Bytes32) -> Option<u64> {
+        unreachable!("VM forward run should not invoke the tree")
+    }
+
+    fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
+        unreachable!("VM forward run should not invoke the tree")
+    }
+
+    fn prev_tree_index(&mut self, _key: Bytes32) -> u64 {
+        unreachable!("VM forward run should not invoke the tree")
     }
 }

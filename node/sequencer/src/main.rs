@@ -1,51 +1,41 @@
-use futures_util::TryFutureExt;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
+use std::cmp::min;
 use std::time::Duration;
 use tokio::sync::watch;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
-use zksync_os_sequencer::config::{RpcConfig, SequencerConfig, StateConfig};
+use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
+use zksync_os_sequencer::config::{RpcConfig, SequencerConfig};
 use zksync_os_sequencer::mempool::{forced_deposit_transaction, Mempool};
+use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
-use zksync_os_sequencer::storage::block_replay_storage::{
-    BlockReplayColumnFamily, BlockReplayStorage,
-};
-use zksync_os_sequencer::storage::persistent_storage_map::{PersistentStorageMap, StorageMapCF};
-use zksync_os_sequencer::storage::rocksdb_preimages::{PreimagesCF, RocksDbPreimages};
-use zksync_os_sequencer::storage::StateHandle;
+use zksync_os_state::{StateConfig, StateHandle};
 use zksync_storage::RocksDB;
 use zksync_vlog::prometheus::PrometheusExporterConfig;
+use zksync_os_sequencer::finality::FinalityTracker;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
-const STATE_STORAGE_DB_NAME: &str = "state";
-const PREIMAGES_STORAGE_DB_NAME: &str = "preimages";
-// const TREE_DB_NAME: &str = "tree";
 
 #[tokio::main]
 pub async fn main() {
+    tracing_subscriber::fmt().init();
+
+    // =========== load configs ===========
+    // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
     schema
         .insert(&RpcConfig::DESCRIPTION, "rpc")
         .expect("Failed to insert rpc config");
     schema
-        .insert(&StateConfig::DESCRIPTION, "state")
-        .expect("Failed to insert rpc config");
-    schema
         .insert(&SequencerConfig::DESCRIPTION, "sequencer")
         .expect("Failed to insert rpc config");
 
-    let repo = ConfigRepository::new(&schema).with(Environment::default());
+    let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
     let rpc_config = repo
         .single::<RpcConfig>()
         .expect("Failed to load rpc config")
         .parse()
         .expect("Failed to parse rpc config");
-
-    let state_config = repo
-        .single::<StateConfig>()
-        .expect("Failed to load state config")
-        .parse()
-        .expect("Failed to parse state config");
 
     let sequencer_config = repo
         .single::<SequencerConfig>()
@@ -55,17 +45,12 @@ pub async fn main() {
 
     let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(3312);
 
-    let (_stop_sender, stop_receiver) = watch::channel(false);
-    tokio::task::spawn(
-        prometheus
-            .run(stop_receiver)
-            .map_ok(|_| tracing::error!("unexp"))
-            .map_err(|e| {
-                tracing::error!("Prometheus exporter failed: {e:#}");
-            }),
-    );
+    // =========== init interruption channel ===========
 
-    tracing_subscriber::fmt().init();
+    // todo: implement interruption handling in other tasks
+    let (_stop_sender, stop_receiver) = watch::channel(false);
+
+    // =========== load DBs ===========
 
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
         &sequencer_config
@@ -77,36 +62,39 @@ pub async fn main() {
 
     let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db);
 
-    let state_db =
-        RocksDB::<StorageMapCF>::new(&sequencer_config.rocks_db_path.join(STATE_STORAGE_DB_NAME))
-            .expect("Failed to open State DB");
-    let persistent_storage_map = PersistentStorageMap::new(state_db);
+    let state_handle = StateHandle::new(StateConfig {
+        blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
+        rocks_db_path: sequencer_config.rocks_db_path.clone(),
+    });
 
-    let preimages_db = RocksDB::<PreimagesCF>::new(
-        &sequencer_config
-            .rocks_db_path
-            .join(PREIMAGES_STORAGE_DB_NAME),
-    )
-    .expect("Failed to open Preimages DB");
-    let rocks_db_preimages = RocksDbPreimages::new(preimages_db);
+    let repositories = RepositoryManager::new(sequencer_config.blocks_to_retain_in_memory);
 
-    let state_db_block = persistent_storage_map.rocksdb_block_number();
-    let preimages_db_block = rocks_db_preimages.rocksdb_block_number();
+    // =========== load last persisted block numbers.  ===========
+    let (storage_map_block, preimages_block) = state_handle.latest_block_numbers();
+    let wal_block = block_replay_storage.latest_block();
+
+    // todo: will be used once repositories have persistence
+    // let repository_blocks = ...
+
+    // it's enough to check a weaker condition (`>= min`) - but currently neither state components can be ahead of WAL
     assert!(
-        state_db_block <= preimages_db_block,
-        "State DB block number ({state_db_block}) is greater than Preimages DB block number ({preimages_db_block}). This is not allowed."
+        wal_block.unwrap_or(0) >= storage_map_block,
+        "State DB block number ({storage_map_block}) is greater than WAL block ({wal_block:?}). Preimages block: ({preimages_block})"
     );
 
-    let state_handle = StateHandle::new(
-        state_db_block,
-        persistent_storage_map,
-        rocks_db_preimages,
-        state_config.blocks_to_retain_in_memory,
-    );
+    let first_block_to_execute = min(storage_map_block, preimages_block) + 1;
 
-    let block_to_start = state_db_block + 1;
+    // ========== Initialize block finality trackers ===========
+    
+    let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
+
     tracing::info!(
-        "State DB block number: {state_db_block}, Preimages DB block number: {preimages_db_block}, starting execution from {block_to_start}"
+        storage_map_block = storage_map_block,
+        preimages_block = preimages_block,
+        wal_block = wal_block,
+        canonized_block = finality_tracker.get_canonized_block(),
+        first_block_to_execute = first_block_to_execute,
+        "▶ Storage read. Node starting."
     );
 
     let mempool = Mempool::new(forced_deposit_transaction());
@@ -130,12 +118,17 @@ pub async fn main() {
     //     // this is a lie - we don't know the actual last block that was processed before restaty,
     //     // but we only use a tree for performance measure so it's ok
     //     state_handle.last_canonized_block_number(),
-    // );
 
     tokio::select! {
         // todo: only start after the sequencer caught up?
         // ── JSON-RPC task ────────────────────────────────────────────────
-        res = run_jsonrpsee_server(state_handle.clone(), mempool.clone(), block_replay_storage.clone(), rpc_config) => {
+        res = run_jsonrpsee_server(
+            rpc_config,
+            repositories.clone(),
+            finality_tracker.clone(),
+            state_handle.clone(),
+            mempool.clone(),
+            block_replay_storage.clone()) => {
             match res {
                 Ok(_)  => tracing::warn!("JSON-RPC server unexpectedly exited"),
                 Err(e) => tracing::error!("JSON-RPC server failed: {e:#}"),
@@ -152,10 +145,12 @@ pub async fn main() {
 
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
-            block_to_start,
-            block_replay_storage,
-            state_handle.clone(),
+            first_block_to_execute,
             mempool,
+            state_handle.clone(),
+            block_replay_storage,
+            repositories,
+            finality_tracker,
             sequencer_config
         ) => {
             match res {
@@ -171,5 +166,12 @@ pub async fn main() {
             tracing::warn!("compact_periodically unexpectedly exited")
         }
 
+        res = prometheus
+            .run(stop_receiver) => {
+            match res {
+                Ok(_)  => tracing::warn!("Prometheus exporter unexpectedly exited"),
+                Err(e) => tracing::error!("Prometheus exporter failed: {e:#}"),
+            }
+        }
     }
 }
