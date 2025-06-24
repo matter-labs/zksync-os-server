@@ -12,6 +12,7 @@ pub mod tree_manager;
 
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
+use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
@@ -25,7 +26,6 @@ use std::time::Duration;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
-use crate::finality::FinalityTracker;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
@@ -73,7 +73,11 @@ pub async fn run_sequencer_actor(
                 let bn = cmd.block_number();
 
                 let mut stage_started_at = Instant::now();
-                tracing::info!(block = bn, cmd = cmd.to_string() , "▶ starting - executing...");
+                tracing::info!(
+                    block = bn,
+                    cmd = cmd.to_string(),
+                    "▶ starting - executing..."
+                );
                 let (batch_out, replay) =
                     execute_block(cmd, Box::pin(mempool.clone()), state.clone())
                         .await
@@ -83,20 +87,23 @@ pub async fn run_sequencer_actor(
                     transactions = replay.transactions.len(),
                     preimages = batch_out.published_preimages.len(),
                     storage_writes = batch_out.storage_writes.len(),
-                    took =? stage_started_at.elapsed(),
-                    "▶ Executed! next: adding to state...",
+                    "▶ Executed in {:?}! next: adding to state...",
+                    stage_started_at.elapsed()
                 );
 
                 stage_started_at = Instant::now();
                 state.add_block_result(
                     bn,
                     batch_out.storage_writes.clone(),
-                    batch_out.published_preimages.iter().map(|(k, v, _)| (*k, v)),
+                    batch_out
+                        .published_preimages
+                        .iter()
+                        .map(|(k, v, _)| (*k, v)),
                 )?;
                 tracing::info!(
                     block_number = bn,
-                    took =? stage_started_at.elapsed(),
-                    "▶ Added to state! next: sending to canonise queue...",
+                    "▶ Added to state in {:?}! next: sending to canonise queue...",
+                    stage_started_at.elapsed()
                 );
                 tx.send((batch_out, replay))
                     .await
@@ -132,8 +139,8 @@ pub async fn run_sequencer_actor(
                 transactions = replay.transactions.len(),
                 preimages = batch_out.published_preimages.len(),
                 storage_writes = batch_out.storage_writes.len(),
-                took =? stage_started_at.elapsed(),
-                "▶ Added to repos! Next: adding to wal...",
+                "▶ Added to repos in {:?}! Next: adding to wal...",
+                stage_started_at.elapsed()
             );
 
             stage_started_at = Instant::now();
@@ -141,14 +148,13 @@ pub async fn run_sequencer_actor(
 
             tracing::info!(
                 block_number = bn,
-                took =? stage_started_at.elapsed(),
-                "▶ Added to wal! Next: advancing canonized...",
+                "▶ Added to wal in {:?}! Next: advancing canonized...",
+                stage_started_at.elapsed()
             );
             finality_tracker.advance_canonized(bn);
 
             tracing::info!(
                 block_number = bn,
-                took =? stage_started_at.elapsed(),
                 "✔ complete",
             );
 
