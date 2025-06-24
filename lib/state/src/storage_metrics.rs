@@ -1,6 +1,5 @@
-use crate::storage::persistent_storage_map::StorageMapCF;
-use crate::storage::rocksdb_preimages::PreimagesCF;
-use crate::storage::StateHandle;
+use crate::persistent_preimages::PreimagesCF;
+use crate::{StateHandle, StorageMapCF};
 use std::collections::HashSet;
 use zk_ee::utils::Bytes32;
 
@@ -20,33 +19,32 @@ pub struct StorageMetrics {
 }
 
 impl StorageMetrics {
+    /// consider delegating individual
     pub fn collect_metrics(state: StateHandle) -> StorageMetrics {
         let mut unique: HashSet<Bytes32> = HashSet::new();
         let mut storage_keys = 0usize;
 
-        for entry in state.0.in_memory_storage.diffs.iter() {
+        for entry in state.storage_map.diffs.iter() {
             let diff = entry.value(); // &Arc<HashMap<..>>
             storage_keys += diff.map.len();
             unique.extend(diff.map.keys().copied()); // &Bytes32 → Bytes32
         }
 
         let rocksdb_storage_entries = state
-            .0
-            .in_memory_storage
+            .storage_map
             .persistent_storage_map
             .rocks
             .estimated_number_of_entries(StorageMapCF::Storage);
 
         let rocksdb_preimages_entries = state
-            .0
-            .rocks_db_preimages
+            .persistent_preimages
             .rocks
             .estimated_number_of_entries(PreimagesCF::Storage);
 
         StorageMetrics {
             storage_keys,
             storage_unique_keys: unique.len(),
-            diff_blocks: state.0.in_memory_storage.diffs.len(),
+            diff_blocks: state.storage_map.diffs.len(),
             rocksdb_storage_entries,
             rocksdb_preimages_entries,
         }

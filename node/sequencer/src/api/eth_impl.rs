@@ -1,5 +1,4 @@
 use crate::CHAIN_ID;
-use anyhow::Context;
 use async_trait::async_trait;
 use zksync_web3_decl::jsonrpsee::core::RpcResult;
 use zksync_web3_decl::types::{
@@ -9,33 +8,37 @@ use zksync_web3_decl::types::{
 
 use zksync_web3_decl::namespaces::EthNamespaceServer;
 
+use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::resolve_block_id;
+use crate::api::tx_handler::TxHandler;
+use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::conversions::{h256_to_bytes32, ruint_u256_to_api_u256};
-use crate::execution::sandbox::execute;
+use crate::finality::FinalityTracker;
 use crate::mempool::Mempool;
-use crate::storage::block_replay_storage::BlockReplayStorage;
-use crate::storage::StateHandle;
-use zksync_types::l2::L2Tx;
+use crate::repositories::RepositoryManager;
+use zksync_os_state::StateHandle;
 use zksync_types::{
-    api,
     api::{
         state_override::StateOverride, BlockId, BlockIdVariant, BlockNumber, FeeHistory,
         Transaction, TransactionVariant,
     },
     transaction_request::CallRequest,
-    Address, L2ChainId, PackedEthSignature, H256,
+    Address, H256,
 };
 use zksync_web3_decl::jsonrpsee::types::error::INTERNAL_ERROR_CODE;
 use zksync_web3_decl::jsonrpsee::types::ErrorObject;
 
 pub(crate) struct EthNamespace {
-    state_handle: StateHandle,
-    mempool: Mempool,
-    block_replay_storage: BlockReplayStorage,
+    tx_handler: TxHandler,
+    eth_call_handler: EthCallHandler,
 
-    config: RpcConfig,
+    // todo: the idea is to only have handlers here, but then get_balance would require its own handler
+    // reconsider approach to API in this regard
+    repository_manager: RepositoryManager,
+
+    finality_info: FinalityTracker,
 }
 
 impl EthNamespace {
@@ -45,101 +48,34 @@ impl EthNamespace {
     }
 
     pub fn new(
+        config: RpcConfig,
+
+        repository_manager: RepositoryManager,
+        finality_tracker: FinalityTracker,
         state_handle: StateHandle,
         mempool: Mempool,
         block_replay_storage: BlockReplayStorage,
-        config: RpcConfig,
-    ) -> Self {
-        Self {
-            state_handle,
+    ) -> EthNamespace {
+        let tx_handler = TxHandler::new(
             mempool,
-            block_replay_storage,
+            repository_manager.account_property_repository.clone(),
+            config.max_nonce_ahead,
+            config.max_tx_size_bytes,
+        );
+
+        let guarded_state = finality_tracker.canonized_state_guard(state_handle.clone());
+        let eth_call_handler = EthCallHandler::new(
             config,
+            finality_tracker.clone(),
+            guarded_state,
+            block_replay_storage,
+        );
+        Self {
+            tx_handler,
+            eth_call_handler,
+            repository_manager,
+            finality_info: finality_tracker,
         }
-    }
-
-    pub fn send_raw_transaction_impl(&self, tx_bytes: Bytes) -> anyhow::Result<H256> {
-        // todo: don't use Transaction types from Types
-        let (tx_request, hash) =
-            api::TransactionRequest::from_bytes(&tx_bytes.0, L2ChainId::new(CHAIN_ID).unwrap())?;
-        let mut l2_tx = L2Tx::from_request(tx_request, self.config.max_tx_size_bytes, true)?;
-        l2_tx.set_input(tx_bytes.0, hash);
-
-        let sender_account_properties = self
-            .state_handle
-            .0
-            .account_property_history
-            .get_latest(&l2_tx.initiator_account());
-
-        // tracing::info!(
-        //     "Processing transaction: {:?}, sender properties: {:?}",
-        //     l2_tx,
-        //     sender_account_properties
-        // );
-
-        EthNamespace::validate_tx_sender_balance(&l2_tx, &sender_account_properties)?;
-
-        self.validate_tx_nonce(
-            &l2_tx,
-            &sender_account_properties,
-            self.config.max_nonce_ahead,
-        )?;
-
-        // let block_number = self.state_handle.last_canonized_block_number() + 1;
-        // let block_context = self
-        //     .block_replay_storage
-        //     .get_context(block_number - 1)
-        //     .context("Failed to get block context")?;
-        //
-        // let storage_view = self.state_handle.view_at(block_number)?;
-        //
-        // let res = execute(
-        //     l2_tx.clone(),
-        //     block_context,
-        //     storage_view,
-        // )?;
-
-        self.mempool.insert(l2_tx.into());
-
-        Ok(hash)
-    }
-
-    pub fn call_impl(
-        &self,
-        mut req: CallRequest,
-        block: Option<BlockIdVariant>,
-        state_override: Option<StateOverride>,
-    ) -> anyhow::Result<Bytes> {
-        anyhow::ensure!(state_override.is_none());
-
-        if req.gas.is_none() {
-            req.gas = Some(self.config.eth_call_gas.into());
-        }
-
-        // todo: doing `+ 1` to make sure eth_calls are done on top of the current chain
-        // consider legacy logic - perhaps differentiate Latest/Commiteetd etc
-        let block_number = resolve_block_id(block, self.state_handle.clone()) + 1;
-        tracing::info!("block {:?} resolved to: {:?}", block, block_number);
-
-        let mut tx = L2Tx::from_request(req.clone().into(), self.config.max_tx_size_bytes, true)?;
-
-        // otherwise it's not parsed properly in VM
-        if tx.common_data.signature.is_empty() {
-            tx.common_data.signature = PackedEthSignature::default().serialize_packed().into();
-        }
-
-        // using previous block context
-        let block_context = self
-            .block_replay_storage
-            .get_replay_record(block_number - 1)
-            .context("Failed to get block context")?
-            .context;
-
-        let storage_view = self.state_handle.view_at(block_number)?;
-
-        let res = execute(tx, block_context, storage_view)?;
-
-        Ok(res.as_returned_bytes().into())
     }
 }
 
@@ -159,8 +95,8 @@ impl EthNamespaceServer for EthNamespace {
 
     async fn get_block_number(&self) -> RpcResult<U64> {
         // todo (Daniyar): really add plus one?
-        let res = self.state_handle.last_canonized_block_number() + 1;
-        tracing::debug!("get_block_number: res: {:?}", res);
+        let res = self.finality_info.get_canonized_block() + 1;
+        // tracing::debug!("get_block_number: res: {:?}", res);
         Ok(res.into())
     }
 
@@ -176,6 +112,7 @@ impl EthNamespaceServer for EthNamespace {
     ) -> RpcResult<Bytes> {
         let latency = API_METRICS.response_time[&"call"].start();
         let r = self
+            .eth_call_handler
             .call_impl(req, block, state_override)
             .map_err(|err| self.map_err(err));
         latency.observe();
@@ -230,22 +167,21 @@ impl EthNamespaceServer for EthNamespace {
         address: Address,
         block: Option<BlockIdVariant>,
     ) -> RpcResult<U256> {
-        //todo: really add +1?
-        let block_number = resolve_block_id(block, self.state_handle.clone()) + 1;
+        //todo Daniyar: really add +1?
+        let block_number = resolve_block_id(block, &self.finality_info) + 1;
         let balance = self
-            .state_handle
-            .0
-            .account_property_history
-            .get(block_number, &address)
+            .repository_manager
+            .account_property_repository
+            .get_at_block(block_number, &address)
             .map(|props| ruint_u256_to_api_u256(props.balance))
             .unwrap_or(U256::zero());
 
-        tracing::info!(
-            "get_balance: address: {:?}, block: {:?}, balance: {:?}",
-            address,
-            block,
-            balance
-        );
+        // tracing::info!(
+        //     "get_balance: address: {:?}, block: {:?}, balance: {:?}",
+        //     address,
+        //     block,
+        //     balance
+        // );
 
         Ok(balance)
     }
@@ -310,38 +246,32 @@ impl EthNamespaceServer for EthNamespace {
         block: Option<BlockIdVariant>,
     ) -> RpcResult<U256> {
         // returning nonce from ethemeral txs
-
-        let nonce_from_pending = self
-            .state_handle
-            .0
-            .account_property_history
+        let nonce = self
+            .repository_manager
+            .account_property_repository
             .get_latest(&address)
-            .map(|prop| prop.nonce)
-            .unwrap_or(0);
-        let block_number = resolve_block_id(block, self.state_handle.clone()) + 1;
-
-        let nonce_from_canonized = self
-            .state_handle
-            .0
-            .account_property_history
-            .get(block_number, &address)
             .map(|props| props.nonce)
             .unwrap_or(0);
 
+        let resolved_block = resolve_block_id(block, &self.finality_info) + 1;
+
         tracing::info!(
-            "get_transaction_count: address: {:?}, block: {:?}, nonce_from_pending: {:?}, nonce_from_canonized: {:?}",
-            address, block, nonce_from_pending, nonce_from_canonized
+            address=?address,
+            block=?block,
+            resolved_block=resolved_block,
+            nonce=nonce,
+            "get_transaction_count resolved",
         );
 
-        Ok(nonce_from_pending.into())
+        Ok(nonce.into())
     }
 
     async fn get_transaction_by_hash(&self, hash: H256) -> RpcResult<Option<Transaction>> {
+        //todo: only expose canonized!!!
         let res = self
-            .state_handle
-            .0
-            .in_memory_tx_receipts
-            .get(&h256_to_bytes32(hash));
+            .repository_manager
+            .transaction_receipt_repository
+            .get_by_hash(&h256_to_bytes32(hash));
         tracing::info!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
         Ok(res.map(|data| data.transaction))
     }
@@ -363,11 +293,11 @@ impl EthNamespaceServer for EthNamespace {
     }
 
     async fn get_transaction_receipt(&self, hash: H256) -> RpcResult<Option<TransactionReceipt>> {
+        //todo: only expose canonized!!!
         let res = self
-            .state_handle
-            .0
-            .in_memory_tx_receipts
-            .get(&h256_to_bytes32(hash));
+            .repository_manager
+            .transaction_receipt_repository
+            .get_by_hash(&h256_to_bytes32(hash));
         tracing::debug!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
         Ok(res.map(|data| data.receipt))
     }
@@ -380,6 +310,7 @@ impl EthNamespaceServer for EthNamespace {
         let latency = API_METRICS.response_time[&"send_raw_transaction"].start();
 
         let r = self
+            .tx_handler
             .send_raw_transaction_impl(tx_bytes)
             .map_err(|err| self.map_err(err));
         latency.observe();

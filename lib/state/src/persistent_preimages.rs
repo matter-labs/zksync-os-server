@@ -1,11 +1,11 @@
-use crate::execution::metrics::PREIMAGES_ROCKS_DB_METRICS;
+use crate::metrics::PREIMAGES_METRICS;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::PreimageSource;
 use zksync_storage::db::NamedColumnFamily;
 use zksync_storage::RocksDB;
 
 #[derive(Clone, Debug)]
-pub struct RocksDbPreimages {
+pub struct PersistentPreimages {
     /// RocksDB handle for the persistent base - cheap to clone
     pub rocks: RocksDB<PreimagesCF>,
 }
@@ -34,7 +34,7 @@ impl PreimagesCF {
     }
 }
 
-impl RocksDbPreimages {
+impl PersistentPreimages {
     pub fn new(rocks: RocksDB<PreimagesCF>) -> Self {
         Self { rocks }
     }
@@ -53,7 +53,7 @@ impl RocksDbPreimages {
     /// Each `(key, preimage)` is added if the key is not already present.
     /// This batch insertion is safe for concurrent use.
     pub fn get(&self, key: Bytes32) -> Option<Vec<u8>> {
-        let latency = PREIMAGES_ROCKS_DB_METRICS.get_latency[&"total"].start();
+        let latency = PREIMAGES_METRICS.get[&"total"].start();
         let res = self
             .rocks
             .get_cf(PreimagesCF::Storage, key.as_u8_array_ref())
@@ -63,16 +63,16 @@ impl RocksDbPreimages {
         res
     }
 
-    pub fn add<I>(&self, new_block_number: u64, diffs: I)
+    pub fn add<'a, J>(&self, new_block_number: u64, diffs: J)
     where
-        I: IntoIterator<Item = (Bytes32, Vec<u8>)>,
+        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
     {
-        let latency = PREIMAGES_ROCKS_DB_METRICS.set_latency[&"total"].start();
+        let latency = PREIMAGES_METRICS.set[&"total"].start();
 
         let mut batch = self.rocks.new_write_batch();
 
         for (k, v) in diffs {
-            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), &v);
+            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v);
         }
         batch.put_cf(
             PreimagesCF::Meta,
@@ -85,7 +85,7 @@ impl RocksDbPreimages {
     }
 }
 
-impl PreimageSource for RocksDbPreimages {
+impl PreimageSource for PersistentPreimages {
     fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
         self.get(hash)
     }

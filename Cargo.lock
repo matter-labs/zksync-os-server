@@ -6357,10 +6357,28 @@ dependencies = [
  "tracing-subscriber",
  "vise",
  "zk_ee",
+ "zksync_os_state",
  "zksync_storage",
  "zksync_types",
  "zksync_vlog",
  "zksync_web3_decl",
+]
+
+[[package]]
+name = "zksync_os_state"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap",
+ "forward_system",
+ "ruint",
+ "smart-config",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vise",
+ "zk_ee",
+ "zksync_storage",
 ]
 
 [[package]]
