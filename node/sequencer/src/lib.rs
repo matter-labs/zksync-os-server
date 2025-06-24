@@ -25,8 +25,7 @@ use futures::stream::{BoxStream, StreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
-use zk_os_forward_system::run::{BatchOutput, StorageWrite};
-use zk_os_forward_system::run::output::BatchResult;
+use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.

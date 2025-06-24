@@ -3,21 +3,21 @@ use std::cmp::min;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::watch;
-use zk_os_forward_system::run::{BatchOutput, StorageWrite};
 use zk_os_forward_system::run::output::BatchResult;
+use zk_os_forward_system::run::{BatchOutput, StorageWrite};
+use zksync_os_merkle_tree::{MerkleTreeColumnFamily, RocksDBWrapper};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{RpcConfig, SequencerConfig};
+use zksync_os_sequencer::finality::FinalityTracker;
 use zksync_os_sequencer::mempool::{forced_deposit_transaction, Mempool};
+use zksync_os_sequencer::model::ReplayRecord;
 use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
+use zksync_os_sequencer::tree_manager::TreeManager;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
-use zksync_os_merkle_tree::{MerkleTreeColumnFamily, RocksDBWrapper};
-use zksync_os_sequencer::finality::FinalityTracker;
-use zksync_os_sequencer::model::ReplayRecord;
-use zksync_os_sequencer::tree_manager::TreeManager;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 
@@ -90,35 +90,50 @@ pub async fn main() {
         "State DB block number ({storage_map_block}) is greater than WAL block ({wal_block:?}). Preimages block: ({preimages_block})"
     );
 
-    let first_block_to_execute = min(storage_map_block, preimages_block) + 1;
-
-    // ========== Initialize block finality trackers ===========
-
-    let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
-
-    tracing::info!(
-        storage_map_block = storage_map_block,
-        preimages_block = preimages_block,
-        wal_block = wal_block,
-        canonized_block = finality_tracker.get_canonized_block(),
-        first_block_to_execute = first_block_to_execute,
-        "▶ Storage read. Node starting."
-    );
-
-    let mempool = Mempool::new(forced_deposit_transaction());
-
     // ======= Initialize batcher- and tree- related channels ===========
 
-    let (batch_output_sender, batch_output_receiver ) = tokio::sync::mpsc::channel::<BatchOutput>(10);
-    let (block_replay_sender, block_replay_receiver ) = tokio::sync::mpsc::channel::<ReplayRecord>(100000);
-
+    let (batch_output_sender, batch_output_receiver) =
+        tokio::sync::mpsc::channel::<BatchOutput>(10);
+    let (block_replay_sender, block_replay_receiver) =
+        tokio::sync::mpsc::channel::<ReplayRecord>(100000);
 
     // ========== Initialize tree manager ===========
 
     let tree_manager = TreeManager::new(
         Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
-        batch_output_receiver
+        batch_output_receiver,
     );
+
+    let tree_last_processed_block = tree_manager
+        .last_processed_block()
+        .expect("cannot read tree last processed block after initialization");
+
+    let first_block_to_execute = [
+        storage_map_block,
+        preimages_block,
+        tree_last_processed_block,
+    ]
+    .iter()
+    .min()
+    .unwrap()
+        + 1;
+
+    // ========== Initialize block finality trackers ===========
+
+    let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
+
+    // note: unfinished feature, not really used yet
+    tracing::info!(
+        storage_map_block = storage_map_block,
+        preimages_block = preimages_block,
+        wal_block = wal_block,
+        canonized_block = finality_tracker.get_canonized_block(),
+        tree_last_processed_block = tree_last_processed_block,
+        first_block_to_execute = first_block_to_execute,
+        "▶ Storage read. Node starting."
+    );
+
+    let mempool = Mempool::new(forced_deposit_transaction());
 
     // ======= Run tasks ===========
 

@@ -9,7 +9,6 @@ use vise::{Buckets, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
 use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
-use zksync_types::H256;
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 
