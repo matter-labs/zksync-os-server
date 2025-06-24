@@ -1,11 +1,60 @@
-// we use zksync-era transaction types for now, so we need to convert back and forth.
-// we should have a lightweight wrapper for zksync-os (or use some common crate) to avoid this conversion
-
+use dashmap::DashMap;
+use std::sync::Arc;
+use zk_ee::utils::Bytes32;
 use crate::conversions::b160_to_address;
-use crate::storage::in_memory_tx_receipts::TransactionApiData;
 use crate::CHAIN_ID;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
 use zksync_types::{api, H256, U256, U64};
+
+#[derive(Clone, Debug)]
+pub struct TransactionApiData {
+    pub transaction: api::Transaction,
+    pub receipt: api::TransactionReceipt,
+}
+
+/// Thread-safe in-memory repository of transaction receipts, keyed by transaction hash.
+///
+/// Retains all inserted receipts indefinitely. Internally uses a lock-free
+/// DashMap to allow concurrent inserts and lookups.
+///
+/// todo: unbounded memory use
+#[derive(Clone, Debug)]
+pub struct TransactionReceiptRepository {
+    /// Map from tx hash → receipt data
+    receipts: Arc<DashMap<Bytes32, TransactionApiData>>,
+}
+
+impl TransactionReceiptRepository {
+    /// Creates a new repository.
+    pub fn new() -> Self {
+        TransactionReceiptRepository {
+            receipts: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Inserts a receipt for `tx_hash`. If a receipt for the same hash
+    /// already exists, it will be overwritten.
+    pub fn insert(&self, tx_hash: Bytes32, data: TransactionApiData) {
+        self.receipts.insert(tx_hash, data);
+    }
+
+    /// Retrieves the receipt for `tx_hash`, if present.
+    /// Returns a cloned `TransactionApiData`.
+    pub fn get_by_hash(&self, tx_hash: &Bytes32) -> Option<TransactionApiData> {
+        self.receipts.get(tx_hash).map(|r| r.value().clone())
+    }
+
+    /// Returns `true` if a receipt for `tx_hash` is present.
+    pub fn contains(&self, tx_hash: &Bytes32) -> bool {
+        self.receipts.contains_key(tx_hash)
+    }
+}
+
+impl Default for TransactionReceiptRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub fn transaction_to_api_data(
     block_output: &BatchOutput,

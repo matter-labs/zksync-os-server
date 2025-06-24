@@ -6,9 +6,14 @@ use zk_os_forward_system::run::BatchContext;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
-/// A write-ahead log storing replay blocks for:
+/// A write-ahead log storing BlockReplayData.
+/// It is then used for:
 ///  * Context + Transaction list: sequencer recovery.
 ///  * Context: provides execution environment for `eth_call`s against older blocks
+/// 
+/// Acts as canonization provider for centralized sequencers. 
+/// Writes must be synchronous.
+/// 
 #[derive(Clone, Debug)]
 pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,

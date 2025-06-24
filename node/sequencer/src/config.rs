@@ -19,24 +19,26 @@ pub struct RpcConfig {
     /// Gas limit of transactions executed via eth_call
     #[config(default_t = 10000000)]
     pub eth_call_gas: usize,
+
+    /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
+    #[config(default_t = 1000)]
+    pub max_connections: u32,
 }
 
-/// Configuration of state storage
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct StateConfig {
-    /// Min number of blocks to retain in memory
-    /// it defines the blocks for which the node can handle API requests
-    /// older blocks will be compacted into RocksDb - and thus unavailable for eth_call
-    #[config(default_t = 512)]
-    pub blocks_to_retain_in_memory: usize,
-    // todo: needs its own rocks_db_path config?
-}
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
-    /// Path to the RocksDB directory - will contain multiple DBs
+    /// Min number of blocks to retain in memory
+    /// it defines the blocks for which the node can handle API requests
+    /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
+    ///
+    /// Currently, it affects both the storage logs (see `state` crate)
+    /// and repositories (see `repositories` package in this crate)
+    #[config(default_t = 512)]
+    pub blocks_to_retain_in_memory: usize,
+
+    /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
 

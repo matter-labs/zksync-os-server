@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "lib/state",
     "node/sequencer",
 ]
 resolver = "2"
@@ -15,6 +16,8 @@ keywords = ["blockchain", "zksync"]
 categories = ["cryptography"]
 
 [workspace.dependencies]
+
+zksync_os_state = {path = "lib/state" }
 
 tracing = "0.1"
 tracing-subscriber = "0.3"

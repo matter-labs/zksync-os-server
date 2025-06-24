@@ -2,7 +2,6 @@ use crate::conversions::tx_abi_encode;
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
-use crate::storage::StateHandle;
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
 use futures_core::Stream;
@@ -10,6 +9,7 @@ use std::{pin::Pin, time::Duration};
 use tokio::time::Sleep;
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_types::Transaction;
+use zksync_os_state::StateHandle;
 
 /// Behaviour when VM returns an InvalidTransaction error.
 #[derive(Clone, Copy, Debug)]
@@ -83,10 +83,8 @@ async fn execute_block_inner(
     fail_policy: InvalidTxPolicy,
     metrics_label: &'static str,
 ) -> Result<(BatchOutput, ReplayRecord)> {
-    tracing::info!(block = ctx.block_number, "start");
-
     /* ---------- VM & state ----------------------------------------- */
-    let state_view = state.view_at(ctx.block_number)?;
+    let state_view = state.state_view_at_block(ctx.block_number)?;
     let mut runner = VmWrapper::new(ctx, state_view);
     let mut executed = Vec::<Transaction>::new();
 

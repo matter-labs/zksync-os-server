@@ -1,4 +1,4 @@
-use crate::execution::metrics::STORAGE_MAP_ROCKS_DB_METRICS;
+use crate::metrics::STORAGE_MAP_METRICS;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -92,17 +92,17 @@ impl PersistentStorageMap {
         // When traversing diffs backwards, we may look at blocks N-1, N-2, ..., N-k - and then on miss we need to fallback to RocksDB which is already at block N.
         // But that's OK since that's equivalent to just looking through blocks N-1, N-2, ..., N-k again (but without actual iteration since it's already compacted
 
-        // todo: two atomics is probably an overkill
+        // todo: two atomics may be redundant
         self.persistent_block_upper_bound
             .store(new_block_number, Ordering::Relaxed);
         self.rocks.write(batch).expect("RocksDB write failed");
         self.persistent_block_lower_bound
             .store(new_block_number, Ordering::Relaxed);
 
-        STORAGE_MAP_ROCKS_DB_METRICS
+        STORAGE_MAP_METRICS
             .compact
             .observe(started_at.elapsed() / (new_block_number - prev_persisted) as u32);
-        STORAGE_MAP_ROCKS_DB_METRICS
+        STORAGE_MAP_METRICS
             .compact_batch_size
             .observe(new_block_number - prev_persisted);
     }
@@ -110,12 +110,12 @@ impl PersistentStorageMap {
     pub fn rocksdb_block_number(&self) -> u64 {
         rocksdb_block_number(&self.rocks)
     }
+
     pub fn persistent_block_upper_bound(&self) -> u64 {
         self.persistent_block_upper_bound.load(Ordering::Relaxed)
     }
 
-    pub fn get_from_rocks(&self, key: Bytes32) -> Option<Bytes32> {
-        let latency = STORAGE_MAP_ROCKS_DB_METRICS.get[&"total"].start();
+    pub fn get(&self, key: Bytes32) -> Option<Bytes32> {
         let res = self
             .rocks
             .get_cf(StorageMapCF::Storage, key.as_u8_array_ref())
@@ -128,7 +128,6 @@ impl PersistentStorageMap {
                     .expect("value must be 32 bytes");
                 Bytes32::from(arr)
             });
-        latency.observe();
         res
     }
 }

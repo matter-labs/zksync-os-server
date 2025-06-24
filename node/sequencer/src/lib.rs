@@ -1,27 +1,31 @@
 pub mod api;
-mod block_context_provider;
+pub mod block_context_provider;
+pub mod block_replay_storage;
 pub mod config;
 mod conversions;
 pub mod execution;
+pub mod finality;
 pub mod mempool;
 pub mod model;
-pub mod storage;
+pub mod repositories;
 pub mod tree_manager;
-mod tx_conversions;
 
+use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
+use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
     execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
     mempool::Mempool,
     model::{BlockCommand, ReplayRecord},
-    storage::{block_replay_storage::BlockReplayStorage, StateHandle},
 };
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
 use std::time::Duration;
+use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
-
+use zksync_os_state::StateHandle;
+use crate::finality::FinalityTracker;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
@@ -41,14 +45,17 @@ use zk_os_forward_system::run::BatchOutput;
 // Only canonized blocks are ever persisted and/or exposed to API
 const CHAIN_ID: u64 = 270;
 
+// todo: consider splitting block production from canonization to own methods
 pub async fn run_sequencer_actor(
     block_to_start: u64,
-    wal: BlockReplayStorage,
-    state: StateHandle,
     mempool: Mempool,
+    state: StateHandle,
+    wal: BlockReplayStorage,
+    repositories: RepositoryManager,
+    finality_tracker: FinalityTracker,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(1);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(2);
 
     /* ------------------------------------------------------------------ */
     /*  Stage 1: execute VM and send results                              */
@@ -62,15 +69,35 @@ pub async fn run_sequencer_actor(
             let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time);
 
             while let Some(cmd) = stream.next().await {
+                // todo: also report full latency between command invocations
                 let bn = cmd.block_number();
-                tracing::info!(block = bn, "▶ execute");
 
+                let mut stage_started_at = Instant::now();
+                tracing::info!(block = bn, cmd = cmd.to_string() , "▶ starting - executing...");
                 let (batch_out, replay) =
                     execute_block(cmd, Box::pin(mempool.clone()), state.clone())
                         .await
                         .context("execute_block")?;
+                tracing::info!(
+                    block_number = bn,
+                    transactions = replay.transactions.len(),
+                    preimages = batch_out.published_preimages.len(),
+                    storage_writes = batch_out.storage_writes.len(),
+                    took =? stage_started_at.elapsed(),
+                    "▶ Executed! next: adding to state...",
+                );
 
-                state.handle_block_output(batch_out.clone(), replay.transactions.clone());
+                stage_started_at = Instant::now();
+                state.add_block_result(
+                    bn,
+                    batch_out.storage_writes.clone(),
+                    batch_out.published_preimages.iter().map(|(k, v, _)| (*k, v)),
+                )?;
+                tracing::info!(
+                    block_number = bn,
+                    took =? stage_started_at.elapsed(),
+                    "▶ Added to state! next: sending to canonise queue...",
+                );
                 tx.send((batch_out, replay))
                     .await
                     .map_err(|_| anyhow::anyhow!("canonise loop stopped"))?;
@@ -87,13 +114,45 @@ pub async fn run_sequencer_actor(
     let canonise_loop = async {
         while let Some((batch_out, replay)) = rx.recv().await {
             let bn = batch_out.header.number;
-            tracing::info!(block = bn, "▶ append_replay");
+
+            let mut stage_started_at = Instant::now();
+            tracing::info!(
+                block = bn,
+                transactions = replay.transactions.len(),
+                "▶ Starting canonization. Next: adding to repos..."
+            );
+            repositories.add_block_output_to_repos(
+                bn,
+                batch_out.clone(),
+                replay.transactions.clone(),
+            );
+
+            tracing::info!(
+                block_number = bn,
+                transactions = replay.transactions.len(),
+                preimages = batch_out.published_preimages.len(),
+                storage_writes = batch_out.storage_writes.len(),
+                took =? stage_started_at.elapsed(),
+                "▶ Added to repos! Next: adding to wal...",
+            );
+
+            stage_started_at = Instant::now();
             wal.append_replay(replay);
 
-            tracing::info!(block = bn, "▶ advance_canonized_block");
-            state.advance_canonized_block(bn);
+            tracing::info!(
+                block_number = bn,
+                took =? stage_started_at.elapsed(),
+                "▶ Added to wal! Next: advancing canonized...",
+            );
+            finality_tracker.advance_canonized(bn);
+
+            tracing::info!(
+                block_number = bn,
+                took =? stage_started_at.elapsed(),
+                "✔ complete",
+            );
+
             EXECUTION_METRICS.sealed_block[&"canonize"].set(bn);
-            tracing::info!(block = bn, "✔ done");
         }
         Ok::<(), anyhow::Error>(())
     };
