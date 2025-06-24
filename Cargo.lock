@@ -6454,6 +6454,7 @@ dependencies = [
  "tracing-subscriber",
  "vise",
  "zk_ee",
+ "zksync_os_merkle_tree",
  "zksync_os_state",
  "zksync_storage",
  "zksync_types",

@@ -23,31 +23,38 @@ use crate::{
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
 use std::time::Duration;
+use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::{BatchOutput, StorageWrite};
+use zk_os_forward_system::run::output::BatchResult;
 use zksync_os_state::StateHandle;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
 // * `Canonize` block operation   - after block is processed in the VM, we want to expose it in API asap.
-//                         But we can only do that once it's durable - that is, it will not change after node crash/restart.
+//                         But we also want to make it durable - that is, it will not change after node crashes or restarts.
+//
 //                         Canonization is the process of making a block durable.
 //                         For the centralized sequencer we persist a WAL of `BlockReplayData`s
-//                         For leader rotation we only consider block Canonized when it's accepted by the network (we have quorum)
+//                         For leader rotation we only consider block Canonized when it's accepted by the network (we have quorum).
 
-// Node state consists of three things:
-
-// * State (storage logs + factory deps)
-// * BlockReceipts (events + pubdata + other heavy info)
-// * TxReceipts (events + pubdata + other heavy info)
+// Minimal sequencer state is the following:
+// * State (storage logs + factory deps - see `state` crate)
 // * WAL of BlockReplayData (only in centralized case)
 //
-// Only canonized blocks are ever persisted and/or exposed to API
+// Note that for API additional data may be reqiured (block/tx receipts)
+
 const CHAIN_ID: u64 = 270;
 
-// todo: consider splitting block production from canonization to own methods
+// todo: clean up list of fields passed; split into two function (canonization and sequencing)
 pub async fn run_sequencer_actor(
     block_to_start: u64,
+
+    // example usage: tree
+    batch_output_sink: Sender<BatchOutput>,
+    // example usage: batcher
+    replay_records_sink: tokio::sync::mpsc::Sender<ReplayRecord>,
+
     mempool: Mempool,
     state: StateHandle,
     wal: BlockReplayStorage,
@@ -76,7 +83,7 @@ pub async fn run_sequencer_actor(
                 tracing::info!(
                     block = bn,
                     cmd = cmd.to_string(),
-                    "▶ starting - executing..."
+                    "▶ starting command"
                 );
                 let (batch_out, replay) =
                     execute_block(cmd, Box::pin(mempool.clone()), state.clone())
@@ -87,11 +94,13 @@ pub async fn run_sequencer_actor(
                     transactions = replay.transactions.len(),
                     preimages = batch_out.published_preimages.len(),
                     storage_writes = batch_out.storage_writes.len(),
-                    "▶ Executed in {:?}! next: adding to state...",
+                    "▶ Executed in {:?}. Adding to state...",
                     stage_started_at.elapsed()
                 );
 
                 stage_started_at = Instant::now();
+                // important: this cannot be done async.
+                // to start next block, we need to have the StorageView as of the end of previous block.
                 state.add_block_result(
                     bn,
                     batch_out.storage_writes.clone(),
@@ -102,7 +111,7 @@ pub async fn run_sequencer_actor(
                 )?;
                 tracing::info!(
                     block_number = bn,
-                    "▶ Added to state in {:?}! next: sending to canonise queue...",
+                    "▶ Added to state in {:?}. Sending to canonise queue...",
                     stage_started_at.elapsed()
                 );
                 tx.send((batch_out, replay))
@@ -125,9 +134,13 @@ pub async fn run_sequencer_actor(
             let mut stage_started_at = Instant::now();
             tracing::info!(
                 block = bn,
-                transactions = replay.transactions.len(),
-                "▶ Starting canonization. Next: adding to repos..."
+                "▶ Starting canonization - adding to repos..."
             );
+
+            // todo:  this is only used by api - can and should be done async,
+            //  but need to be careful with `block_number=latest` then -
+            //  we need to make sure that the block is added to the repos before we return its number as `latest`
+
             repositories.add_block_output_to_repos(
                 bn,
                 batch_out.clone(),
@@ -136,26 +149,29 @@ pub async fn run_sequencer_actor(
 
             tracing::info!(
                 block_number = bn,
-                transactions = replay.transactions.len(),
-                preimages = batch_out.published_preimages.len(),
-                storage_writes = batch_out.storage_writes.len(),
-                "▶ Added to repos in {:?}! Next: adding to wal...",
+                "▶ Added to repos in {:?}. Adding to wal...",
                 stage_started_at.elapsed()
             );
 
             stage_started_at = Instant::now();
-            wal.append_replay(replay);
-
-            tracing::info!(
-                block_number = bn,
-                "▶ Added to wal in {:?}! Next: advancing canonized...",
-                stage_started_at.elapsed()
-            );
+            wal.append_replay(replay.clone());
             finality_tracker.advance_canonized(bn);
 
             tracing::info!(
                 block_number = bn,
-                "✔ complete",
+                "▶ Added to wal and canonized in {:?}. Sending to state diffs sink...",
+                stage_started_at.elapsed()
+            );
+
+            stage_started_at = Instant::now();
+
+            batch_output_sink.send(batch_out).await?;
+            replay_records_sink.send(replay).await?;
+
+            tracing::info!(
+                block_number = bn,
+                "✔ sent to sinks in {:?}",
+                stage_started_at
             );
 
             EXECUTION_METRICS.sealed_block[&"canonize"].set(bn);

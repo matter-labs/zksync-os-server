@@ -1,7 +1,10 @@
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::cmp::min;
+use std::path::Path;
 use std::time::Duration;
 use tokio::sync::watch;
+use zk_os_forward_system::run::{BatchOutput, StorageWrite};
+use zk_os_forward_system::run::output::BatchResult;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{RpcConfig, SequencerConfig};
@@ -9,11 +12,16 @@ use zksync_os_sequencer::mempool::{forced_deposit_transaction, Mempool};
 use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_state::{StateConfig, StateHandle};
-use zksync_storage::RocksDB;
+use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
+use zksync_os_merkle_tree::{MerkleTreeColumnFamily, RocksDBWrapper};
 use zksync_os_sequencer::finality::FinalityTracker;
+use zksync_os_sequencer::model::ReplayRecord;
+use zksync_os_sequencer::tree_manager::TreeManager;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
+
+const TREE_DB_NAME: &str = "tree";
 
 #[tokio::main]
 pub async fn main() {
@@ -85,7 +93,7 @@ pub async fn main() {
     let first_block_to_execute = min(storage_map_block, preimages_block) + 1;
 
     // ========== Initialize block finality trackers ===========
-    
+
     let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
 
     tracing::info!(
@@ -99,25 +107,20 @@ pub async fn main() {
 
     let mempool = Mempool::new(forced_deposit_transaction());
 
-    // Sequencer will not run the tree - batcher will (other component, another machine)
-    // running it for now just to test the performance
-    // let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
-    //     Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
-    //     RocksDBOptions {
-    //         block_cache_capacity: Some(128 << 20),
-    //         include_indices_and_filters_in_block_cache: false,
-    //         large_memtable_capacity: Some(256 << 20),
-    //         stalled_writes_retries: StalledWritesRetries::new(Duration::from_secs(10)),
-    //         max_open_files: None,
-    //     },
-    // ).unwrap();
-    // let tree_wrapper = RocksDBWrapper::from(db);
-    // let mut tree_manager = TreeManager::new(
-    //     tree_wrapper,
-    //     state_handle.clone(),
-    //     // this is a lie - we don't know the actual last block that was processed before restaty,
-    //     // but we only use a tree for performance measure so it's ok
-    //     state_handle.last_canonized_block_number(),
+    // ======= Initialize batcher- and tree- related channels ===========
+
+    let (batch_output_sender, batch_output_receiver ) = tokio::sync::mpsc::channel::<BatchOutput>(10);
+    let (block_replay_sender, block_replay_receiver ) = tokio::sync::mpsc::channel::<ReplayRecord>(100000);
+
+
+    // ========== Initialize tree manager ===========
+
+    let tree_manager = TreeManager::new(
+        Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
+        batch_output_receiver
+    );
+
+    // ======= Run tasks ===========
 
     tokio::select! {
         // todo: only start after the sequencer caught up?
@@ -136,16 +139,18 @@ pub async fn main() {
         }
 
         // ── TREE task ────────────────────────────────────────────────
-        // res = tree_manager.run_loop() => {
-        //     match res {
-        //         Ok(_)  => tracing::warn!("TREE server unexpectedly exited"),
-        //         Err(e) => tracing::error!("TREE server failed: {e:#}"),
-        //     }
-        // }
+        res = tree_manager.run_loop() => {
+            match res {
+                Ok(_)  => tracing::warn!("TREE server unexpectedly exited"),
+                Err(e) => tracing::error!("TREE server failed: {e:#}"),
+            }
+        }
 
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
             first_block_to_execute,
+            batch_output_sender,
+            block_replay_sender,
             mempool,
             state_handle.clone(),
             block_replay_storage,

@@ -42,3 +42,4 @@ bincode.workspace = true
 smart-config.workspace = true
 
 zksync_os_state.workspace = true
+zksync_os_merkle_tree.workspace = true
