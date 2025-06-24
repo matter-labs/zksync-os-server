@@ -58,7 +58,7 @@ pub async fn run_jsonrpsee_server(
     Ok(())
 }
 
-// todo: consider best place for this logic - maybe `FinalityInfo`?
+// todo: consider best place for this logic - maybe `FinalityInfo` itself?
 pub fn resolve_block_id(block: Option<BlockIdVariant>, finality_info: &FinalityTracker) -> u64 {
     let block_id: BlockId = block
         .map(|b| b.into())

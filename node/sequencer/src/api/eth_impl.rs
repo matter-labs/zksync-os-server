@@ -63,11 +63,10 @@ impl EthNamespace {
             config.max_tx_size_bytes,
         );
 
-        let guarded_state = finality_tracker.canonized_state_guard(state_handle.clone());
         let eth_call_handler = EthCallHandler::new(
             config,
             finality_tracker.clone(),
-            guarded_state,
+            state_handle,
             block_replay_storage,
         );
         Self {
