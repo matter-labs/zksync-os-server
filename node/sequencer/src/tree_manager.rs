@@ -10,7 +10,7 @@
 // };
 // use zksync_storage::rocksdb::Error;
 // use zksync_storage::RocksDB;
-// // use zksync_zk_os_merkle_tree::{MerkleTree, RocksDBWrapper, TreeEntry};
+// // use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper, TreeEntry};
 //
 // const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 //
