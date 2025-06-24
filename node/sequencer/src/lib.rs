@@ -1,4 +1,5 @@
 pub mod api;
+pub mod batcher;
 pub mod block_context_provider;
 pub mod block_replay_storage;
 pub mod config;

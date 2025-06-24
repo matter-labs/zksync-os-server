@@ -7,6 +7,7 @@ use zk_os_forward_system::run::output::BatchResult;
 use zk_os_forward_system::run::{BatchOutput, StorageWrite};
 use zksync_os_merkle_tree::{MerkleTreeColumnFamily, RocksDBWrapper};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
+use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{RpcConfig, SequencerConfig};
 use zksync_os_sequencer::finality::FinalityTracker;
@@ -99,7 +100,7 @@ pub async fn main() {
 
     // ========== Initialize tree manager ===========
 
-    let tree_manager = TreeManager::new(
+    let (tree_manager, tree_block_watch) = TreeManager::new(
         Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
         batch_output_receiver,
     );
@@ -135,6 +136,10 @@ pub async fn main() {
 
     let mempool = Mempool::new(forced_deposit_transaction());
 
+    // ========== Initialize batcher ===========
+
+    let batcher = Batcher::new(block_replay_receiver, tree_block_watch);
+
     // ======= Run tasks ===========
 
     tokio::select! {
@@ -158,6 +163,14 @@ pub async fn main() {
             match res {
                 Ok(_)  => tracing::warn!("TREE server unexpectedly exited"),
                 Err(e) => tracing::error!("TREE server failed: {e:#}"),
+            }
+        }
+
+        // ── BATCHER task ──────────────────────────────────────────────────
+        res = batcher.run_loop() => {
+            match res {
+                Ok(_)  => tracing::warn!("Batcher unexpectedly exited"),
+                Err(e) => tracing::error!("Batcher failed: {e:#}"),
             }
         }
 

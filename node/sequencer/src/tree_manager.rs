@@ -4,6 +4,7 @@ use std::ops::Div;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BatchOutput;
@@ -34,10 +35,11 @@ pub(crate) static TREE_METRICS: vise::Global<TreeMetrics> = vise::Global::new();
 pub struct TreeManager {
     tree: Arc<RwLock<MerkleTree<RocksDBWrapper>>>,
     receiver: tokio::sync::mpsc::Receiver<BatchOutput>,
+    latest_block_sender: watch::Sender<u64>,
 }
 
 impl TreeManager {
-    pub fn new(path: &Path, receiver: tokio::sync::mpsc::Receiver<BatchOutput>) -> Self {
+    pub fn new(path: &Path, receiver: tokio::sync::mpsc::Receiver<BatchOutput>) -> (Self, watch::Receiver<u64>) {
         let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
             path,
             RocksDBOptions {
@@ -62,10 +64,16 @@ impl TreeManager {
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
 
-        Self {
+        let initial_block = version.unwrap_or(0);
+        let (latest_block_sender, latest_block_receiver) = watch::channel(initial_block);
+
+        let tree_manager = Self {
             tree: Arc::new(RwLock::new(tree)),
             receiver,
-        }
+            latest_block_sender,
+        };
+
+        (tree_manager, latest_block_receiver)
     }
 
     pub fn last_processed_block(&self) -> anyhow::Result<u64> {
@@ -117,6 +125,9 @@ impl TreeManager {
                     let version_after = self.tree.write().unwrap().latest_version()?;
 
                     assert_eq!(version_after, Some(block_number));
+
+                    // Send the latest processed block number to watchers
+                    let _ = self.latest_block_sender.send(block_number);
 
                     tracing::info!(
                         block_number = block_number,
