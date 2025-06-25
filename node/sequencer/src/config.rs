@@ -29,11 +29,6 @@ pub struct RpcConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
-    /// Whether to run the batcher (prover input generator) or not.
-    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart
-    #[config(default_t = false)]
-    pub run_batcher: bool,
-
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
@@ -54,4 +49,20 @@ pub struct SequencerConfig {
     /// Max number of transactions in a block.
     #[config(default_t = 1000)]
     pub max_transactions_in_block: usize
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BatcherConfig {
+
+    /// Whether to run the batcher (prover input generator) or not.
+    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart
+    #[config(default_t = false)]
+    pub component_enabled: bool,
+
+    /// Whether to enable debug output in RiscV binary.
+    /// Also known as app.bin vs app_logging_enabled.bin
+    #[config(default_t = false)]
+    pub logging_enabled: bool,
+
 }

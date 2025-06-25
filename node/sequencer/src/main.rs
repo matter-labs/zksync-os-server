@@ -12,7 +12,7 @@ use zksync_os_merkle_tree::MerkleTreeReader;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
-use zksync_os_sequencer::config::{RpcConfig, SequencerConfig};
+use zksync_os_sequencer::config::{BatcherConfig, RpcConfig, SequencerConfig};
 use zksync_os_sequencer::finality::FinalityTracker;
 use zksync_os_sequencer::model::ReplayRecord;
 use zksync_os_sequencer::repositories::RepositoryManager;
@@ -50,6 +50,9 @@ pub async fn main() {
     schema
         .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
         .expect("Failed to insert l1_watcher config");
+    schema
+        .insert(&BatcherConfig::DESCRIPTION, "batcher")
+        .expect("Failed to insert batcher config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -67,6 +70,12 @@ pub async fn main() {
 
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
+        .expect("Failed to load L1 watcher config")
+        .parse()
+        .expect("Failed to parse L1 watcher config");
+
+    let batcher_config = repo
+        .single::<BatcherConfig>()
         .expect("Failed to load L1 watcher config")
         .parse()
         .expect("Failed to parse L1 watcher config");
@@ -92,7 +101,7 @@ pub async fn main() {
 
     let state_handle = StateHandle::new(StateConfig {
         // when running batcher, we need to start from zero due to in-memory tree
-        erase_storage_on_start: sequencer_config.run_batcher,
+        erase_storage_on_start: batcher_config.component_enabled,
         blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
@@ -133,7 +142,7 @@ pub async fn main() {
         .last_processed_block()
         .expect("cannot read tree last processed block after initialization");
 
-    let first_block_to_execute = if sequencer_config.run_batcher {
+    let first_block_to_execute = if batcher_config.component_enabled {
         1
     } else {
         [
@@ -182,12 +191,13 @@ pub async fn main() {
 
     // ========== Initialize batcher (conditional) ===========
 
-    let batcher_task: BoxFuture<anyhow::Result<()>> = if sequencer_config.run_batcher {
+    let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         let batcher = Batcher::new(
             batcher_receiver,
             tree_ready_block_receiver.clone(),
             state_handle.clone(),
             MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
+            batcher_config.logging_enabled
         );
         Box::pin(batcher.run_loop())
     } else {

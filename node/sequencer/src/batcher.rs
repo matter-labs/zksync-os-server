@@ -1,4 +1,5 @@
-use crate::conversions::tx_abi_encode;
+use crate::commitment::CommitBatchInfo;
+use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::ReplayRecord;
 use std::alloc::Global;
 use std::collections::{HashMap, VecDeque};
@@ -27,7 +28,10 @@ pub struct Batcher {
     state_handle: StateHandle,
 
     // using in-memory tree for now - until persistent tree implements needed interface
+    // todo: clean a mess with Arc<RwLock>
     in_memory_tree: Arc<RwLock<InMemoryTree>>,
+
+    bin_path: &'static str,
 }
 
 impl Batcher {
@@ -40,16 +44,24 @@ impl Batcher {
 
         // todo: this is not used currently as we don't have impl `ReadStorageTree` for it
         _tree: MerkleTreeReader<RocksDBWrapper>,
+
+        enable_logging: bool,
     ) -> Self {
         let in_memory_tree = InMemoryTree {
             storage_tree: TestingTree::new_in(Global),
             cold_storage: HashMap::new(),
+        };
+        let bin_path = if enable_logging {
+            "app_logging_enabled.bin"
+        } else {
+            "app.bin"
         };
         Self {
             block_receiver,
             tree_block_watch,
             state_handle,
             in_memory_tree: Arc::new(RwLock::new(in_memory_tree)),
+            bin_path,
         }
     }
 
@@ -100,6 +112,7 @@ impl Batcher {
 
                     let transactions = replay_record
                         .transactions
+                        .clone()
                         .into_iter()
                         .map(tx_abi_encode)
                         .collect::<VecDeque<_>>();
@@ -115,7 +128,7 @@ impl Batcher {
                     let cloned_tree = self.in_memory_tree.clone();
                     let prover_input = spawn_blocking(move || {
                         generate_proof_input(
-                            PathBuf::from("app.bin"),
+                            PathBuf::from(self.bin_path),
                             replay_record.context,
                             in_memory_storage_commitment,
                             cloned_tree,
@@ -132,19 +145,37 @@ impl Batcher {
                         BATCHER_METRICS.prover_input_generation[&"update_memory_tree"].start();
 
                     let mut write_tree = self.in_memory_tree.write().unwrap();
-                    for write in batch_output.storage_writes {
+                    for write in batch_output.storage_writes.iter() {
                         write_tree.cold_storage.insert(write.key, write.value);
                         write_tree.storage_tree.insert(&write.key, &write.value);
                     }
+                    drop(write_tree);
 
                     memory_tree_latency.observe();
                     let total_latency = total_latency.observe();
+                    let tree_output = zksync_os_merkle_tree::BatchOutput {
+                        root_hash: bytes32_to_h256(
+                            *self.in_memory_tree.read().unwrap().storage_tree.root(),
+                        ),
+                        leaf_count: self
+                            .in_memory_tree
+                            .read()
+                            .unwrap()
+                            .storage_tree
+                            .next_free_slot,
+                    };
+                    let commit_batch_info =
+                        CommitBatchInfo::new(batch_output, replay_record.transactions, tree_output);
+
+                    tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
+
                     tracing::info!(
                         "Prover input generated for block {}. length: {}. Took {:?}",
                         block_number,
                         prover_input.len(),
                         total_latency
                     );
+
                     //
                     // let u8s_prover_input: Vec<u8> = prover_input
                     //     .into_iter()
