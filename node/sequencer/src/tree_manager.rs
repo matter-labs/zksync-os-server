@@ -1,9 +1,11 @@
 use crate::conversions::bytes32_to_h256;
+use crate::model::ReplayRecord;
 use anyhow::Context;
 use std::ops::Div;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Histogram, Metrics, Unit};
@@ -11,35 +13,16 @@ use zk_os_forward_system::run::BatchOutput;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
 use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
-const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
-
-const BLOCK_RANGE_SIZE: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
-
-#[derive(Debug, Metrics)]
-#[metrics(prefix = "tree")]
-pub struct TreeMetrics {
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub entry_time: Histogram<Duration>,
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub block_time: Histogram<Duration>,
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub range_time: Histogram<Duration>,
-    #[metrics(buckets = BLOCK_RANGE_SIZE)]
-    pub processing_range: Histogram<u64>,
-}
-
-#[vise::register]
-pub(crate) static TREE_METRICS: vise::Global<TreeMetrics> = vise::Global::new();
-
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
 pub struct TreeManager {
-    tree: Arc<RwLock<MerkleTree<RocksDBWrapper>>>,
-    receiver: tokio::sync::mpsc::Receiver<BatchOutput>,
+    pub tree: Arc<RwLock<MerkleTree<RocksDBWrapper>>>,
+    // todo: it only needs the BatchOutput - sending both for now
+    block_receiver: tokio::sync::mpsc::Receiver<BatchOutput>,
     latest_block_sender: watch::Sender<u64>,
 }
 
 impl TreeManager {
-    pub fn new(path: &Path, receiver: tokio::sync::mpsc::Receiver<BatchOutput>) -> (Self, watch::Receiver<u64>) {
+    pub fn tree_wrapper(path: &Path) -> RocksDBWrapper {
         let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
             path,
             RocksDBOptions {
@@ -51,7 +34,13 @@ impl TreeManager {
             },
         )
         .unwrap();
-        let tree_wrapper = RocksDBWrapper::from(db);
+        RocksDBWrapper::from(db)
+    }
+    pub fn new(
+        tree_wrapper: RocksDBWrapper,
+        block_receiver: Receiver<BatchOutput>,
+        latest_block_sender: watch::Sender<u64>,
+    ) -> TreeManager {
         let mut tree = MerkleTree::new(tree_wrapper).unwrap();
 
         let version = tree
@@ -63,17 +52,21 @@ impl TreeManager {
         }
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
-
-        let initial_block = version.unwrap_or(0);
-        let (latest_block_sender, latest_block_receiver) = watch::channel(initial_block);
-
         let tree_manager = Self {
             tree: Arc::new(RwLock::new(tree)),
-            receiver,
+            block_receiver,
             latest_block_sender,
         };
+        tree_manager
+            .latest_block_sender
+            .send(
+                tree_manager
+                    .last_processed_block()
+                    .expect("cannot get last processed block from tree"),
+            )
+            .expect("cannot send last processed block to watcher");
 
-        (tree_manager, latest_block_receiver)
+        tree_manager
     }
 
     pub fn last_processed_block(&self) -> anyhow::Result<u64> {
@@ -86,8 +79,7 @@ impl TreeManager {
 
     pub async fn run_loop(mut self) -> anyhow::Result<()> {
         loop {
-            // Wait for messages from the channel
-            match self.receiver.recv().await {
+            match self.block_receiver.recv().await {
                 Some(batch_output) => {
                     let started_at = Instant::now();
                     let block_number = batch_output.header.number;
@@ -140,15 +132,13 @@ impl TreeManager {
                         .entry_time
                         .observe(started_at.elapsed().div(count as u32));
 
-                    TREE_METRICS
-                        .block_time
-                        .observe(started_at.elapsed());
+                    TREE_METRICS.block_time.observe(started_at.elapsed());
 
                     TREE_METRICS.processing_range.observe(count as u64);
                 }
                 None => {
                     // Channel closed, exit the loop
-                    tracing::info!("BatchOutput channel closed, exiting tree manager");
+                    tracing::info!("BatchOutput channel closed, exiting tree manager",);
                     break;
                 }
             }
@@ -156,3 +146,22 @@ impl TreeManager {
         Ok(())
     }
 }
+
+const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
+const BLOCK_RANGE_SIZE: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
+
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "tree")]
+pub struct TreeMetrics {
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub entry_time: Histogram<Duration>,
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub block_time: Histogram<Duration>,
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub range_time: Histogram<Duration>,
+    #[metrics(buckets = BLOCK_RANGE_SIZE)]
+    pub processing_range: Histogram<u64>,
+}
+
+#[vise::register]
+pub(crate) static TREE_METRICS: vise::Global<TreeMetrics> = vise::Global::new();

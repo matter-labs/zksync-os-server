@@ -1,3 +1,7 @@
+#![feature(allocator_api)]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
 pub mod api;
 pub mod batcher;
 pub mod block_context_provider;
@@ -50,10 +54,8 @@ const CHAIN_ID: u64 = 270;
 pub async fn run_sequencer_actor(
     block_to_start: u64,
 
-    // example usage: tree
-    batch_output_sink: Sender<BatchOutput>,
-    // example usage: batcher
-    replay_records_sink: tokio::sync::mpsc::Sender<ReplayRecord>,
+    batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
+    tree_sink: Sender<BatchOutput>,
 
     mempool: Mempool,
     state: StateHandle,
@@ -86,7 +88,7 @@ pub async fn run_sequencer_actor(
                     "▶ starting command"
                 );
                 let (batch_out, replay) =
-                    execute_block(cmd, Box::pin(mempool.clone()), state.clone())
+                    execute_block(cmd, Box::pin(mempool.clone()), state.clone(), sequencer_config.max_transactions_in_block)
                         .await
                         .context("execute_block")?;
                 tracing::info!(
@@ -165,13 +167,13 @@ pub async fn run_sequencer_actor(
 
             stage_started_at = Instant::now();
 
-            batch_output_sink.send(batch_out).await?;
-            replay_records_sink.send(replay).await?;
+            batcher_sink.send((batch_out.clone(), replay)).await?;
+            tree_sink.send(batch_out).await?;
 
             tracing::info!(
                 block_number = bn,
                 "✔ sent to sinks in {:?}",
-                stage_started_at
+                stage_started_at.elapsed()
             );
 
             EXECUTION_METRICS.sealed_block[&"canonize"].set(bn);

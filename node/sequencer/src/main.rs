@@ -1,11 +1,12 @@
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::cmp::min;
 use std::path::Path;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tokio::sync::watch;
 use zk_os_forward_system::run::output::BatchResult;
 use zk_os_forward_system::run::{BatchOutput, StorageWrite};
-use zksync_os_merkle_tree::{MerkleTreeColumnFamily, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTreeColumnFamily, MerkleTreeReader, RocksDBWrapper};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
@@ -17,7 +18,7 @@ use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_sequencer::tree_manager::TreeManager;
 use zksync_os_state::{StateConfig, StateHandle};
-use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
+use zksync_storage::{RocksDB, StalledWritesRetries};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -91,19 +92,22 @@ pub async fn main() {
         "State DB block number ({storage_map_block}) is greater than WAL block ({wal_block:?}). Preimages block: ({preimages_block})"
     );
 
-    // ======= Initialize batcher- and tree- related channels ===========
+    // ======= Initialize channel between sequencer and tree/batcher  ===========
 
-    let (batch_output_sender, batch_output_receiver) =
-        tokio::sync::mpsc::channel::<BatchOutput>(10);
-    let (block_replay_sender, block_replay_receiver) =
-        tokio::sync::mpsc::channel::<ReplayRecord>(100000);
+    let (batcher_sender, batcher_receiver) =
+        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
+
+    let (tree_sender, tree_receiver) =
+        tokio::sync::mpsc::channel::<BatchOutput>(100);
+
+    let (tree_ready_block_sender, tree_ready_block_receiver) = watch::channel(0u64);
 
     // ========== Initialize tree manager ===========
 
-    let (tree_manager, tree_block_watch) = TreeManager::new(
-        Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
-        batch_output_receiver,
-    );
+    let tree_wrapper = TreeManager::tree_wrapper(Path::new(
+        &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
+    ));
+    let tree_manager = TreeManager::new(tree_wrapper.clone(), tree_receiver, tree_ready_block_sender);
 
     let tree_last_processed_block = tree_manager
         .last_processed_block()
@@ -113,6 +117,8 @@ pub async fn main() {
         storage_map_block,
         preimages_block,
         tree_last_processed_block,
+        // todo: for now need to always start from zero because batcher maintains in-memory tree for debug
+        0,
     ]
     .iter()
     .min()
@@ -138,7 +144,12 @@ pub async fn main() {
 
     // ========== Initialize batcher ===========
 
-    let batcher = Batcher::new(block_replay_receiver, tree_block_watch);
+    let batcher = Batcher::new(
+        batcher_receiver,
+        tree_ready_block_receiver,
+        state_handle.clone(),
+        MerkleTreeReader::new(tree_wrapper).expect("cannot init MerkleTreeReader"),
+    );
 
     // ======= Run tasks ===========
 
@@ -177,8 +188,8 @@ pub async fn main() {
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
             first_block_to_execute,
-            batch_output_sender,
-            block_replay_sender,
+            batcher_sender,
+            tree_sender,
             mempool,
             state_handle.clone(),
             block_replay_storage,

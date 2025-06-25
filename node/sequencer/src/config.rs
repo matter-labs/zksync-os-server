@@ -45,4 +45,8 @@ pub struct SequencerConfig {
     /// Defines the block time for the sequencer.
     #[config(default_t = Duration::from_millis(100))]
     pub block_time: Duration,
+
+    /// Max number of transactions in a block.
+    #[config(default_t = 500)]
+    pub max_transactions_in_block: usize
 }

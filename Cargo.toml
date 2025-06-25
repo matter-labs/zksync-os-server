@@ -28,10 +28,19 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_with = "1"
 serde_json = "1"
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility", "unlimited_native", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility"] }
+
+
+zk_os_forward_system = { package = "forward_system", path="../zksync-os/forward_system", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+zk_ee = { package = "zk_ee", path="../zksync-os/zk_ee" }
+zk_os_basic_system = { package = "basic_system", path="../zksync-os/basic_system"}
+zk_os_evm_interpreter = { package = "evm_interpreter", path="../zksync-os/evm_interpreter", features = ["evm-compatibility"] }
+
+#zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+#zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
+#zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
+#zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility"] }
+
+
 tokio = "1"
 ruint = { version = "1.12", default-features = false }
 dashmap = "6.1.0"
@@ -54,6 +63,8 @@ once_cell = "1"
 proptest = "1.6.0"
 rand = "0.8"
 tempfile = "3.0.2"
+base64 = "0.22.1"
+
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
