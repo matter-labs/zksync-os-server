@@ -1,3 +1,4 @@
+use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::cmp::min;
 use std::str::FromStr;
@@ -151,9 +152,21 @@ pub async fn main() {
 
     let mempool = zksync_os_mempool::in_memory(forced_deposit_transaction());
 
-    let l1_watcher = L1Watcher::new(l1_watcher_config, mempool.clone())
-        .await
-        .expect("failed to create L1 watcher");
+    let l1_watcher = L1Watcher::new(l1_watcher_config, mempool.clone()).await;
+    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        }
+    };
 
     // Sequencer will not run the tree - batcher will (other component, another machine)
     // running it for now just to test the performance
@@ -200,7 +213,7 @@ pub async fn main() {
         // }
 
         // ── L1 Watcher task ────────────────────────────────────────────────
-        res = l1_watcher.run() => {
+        res = l1_watcher_task => {
             match res {
                 Ok(_)  => tracing::warn!("L1 watcher unexpectedly exited"),
                 Err(e) => tracing::error!("L1 watcher failed: {e:#}"),
