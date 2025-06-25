@@ -1,15 +1,13 @@
-// mempool.rs
-
+use crate::TransactionPool;
 use crossbeam_queue::SegQueue;
-use futures_core::task::__internal::AtomicWaker;
-use futures_core::{FusedStream, Stream};
+use futures::stream::FusedStream;
+use futures::task::AtomicWaker;
+use futures::Stream;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use vise::{Buckets, Counter, Histogram, LabeledFamily, Metrics};
-use zksync_types::l1::L1Tx;
-use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
+use zksync_types::Transaction;
 
 /// Thread-safe FIFO mempool that can be polled as a `Stream`.
 ///
@@ -56,24 +54,24 @@ impl Mempool {
         r
     }
 
-    /* -------- consumer helpers ------------------------------------ */
-
-    pub async fn next_tx(&self) -> Transaction {
-        loop {
-            if let Some(tx) = self.try_pop() {
-                return tx;
-            }
-            futures_util::future::poll_fn(|cx| {
-                self.waker.register(cx.waker());
-                if let Some(tx) = self.try_pop() {
-                    Poll::Ready(tx)
-                } else {
-                    Poll::Pending
-                }
-            })
-            .await;
-        }
-    }
+    // /* -------- consumer helpers ------------------------------------ */
+    //
+    // pub async fn next_tx(&self) -> Transaction {
+    //     loop {
+    //         if let Some(tx) = self.try_pop() {
+    //             return tx;
+    //         }
+    //         std::future::poll_fn(|cx| {
+    //             self.waker.register(cx.waker());
+    //             if let Some(tx) = self.try_pop() {
+    //                 Poll::Ready(tx)
+    //             } else {
+    //                 Poll::Pending
+    //             }
+    //         })
+    //         .await;
+    //     }
+    // }
 }
 
 /* -------- Stream / FusedStream for &Mempool ---------------------- */
@@ -107,34 +105,12 @@ impl FusedStream for Mempool {
     } // endless stream
 }
 
-// to be replaced with proper L1 deposit
-pub fn forced_deposit_transaction() -> Transaction {
-    L1Tx {
-        execute: Execute {
-            contract_address: Some(
-                Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-            ),
-            calldata: vec![],
-            value: U256::from("100"),
-            factory_deps: vec![],
-        },
-        common_data: L1TxCommonData {
-            sender: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-            serial_id: PriorityOpId(1),
-            layer_2_tip_fee: Default::default(),
-            full_fee: U256::from("10000000000"),
-            max_fee_per_gas: U256::from(1),
-            gas_limit: U256::from("10000000000"),
-            gas_per_pubdata_limit: U256::from(1000),
-            op_processing_type: Default::default(),
-            priority_queue_type: Default::default(),
-            canonical_tx_hash: Default::default(),
-            to_mint: U256::from("100000000000000000000000000000"),
-            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
-                .unwrap(),
-            eth_block: 0,
-        },
-        received_timestamp_ms: 0,
+impl TransactionPool for Mempool {
+    fn dyn_clone(&self) -> Box<dyn TransactionPool> {
+        Box::new(self.clone())
     }
-    .into()
+
+    fn add_transaction(&self, transaction: Transaction) {
+        self.insert(transaction);
+    }
 }

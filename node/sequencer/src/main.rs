@@ -1,23 +1,67 @@
+use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::cmp::min;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
+use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{RpcConfig, SequencerConfig};
-use zksync_os_sequencer::mempool::{forced_deposit_transaction, Mempool};
+use zksync_os_sequencer::finality::FinalityTracker;
 use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_storage::RocksDB;
+use zksync_types::l1::L1Tx;
+use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
-use zksync_os_sequencer::finality::FinalityTracker;
+
+// to be replaced with proper L1 deposit
+pub fn forced_deposit_transaction() -> Transaction {
+    L1Tx {
+        execute: Execute {
+            contract_address: Some(
+                Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+            ),
+            calldata: vec![],
+            value: U256::from("100"),
+            factory_deps: vec![],
+        },
+        common_data: L1TxCommonData {
+            sender: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+            serial_id: PriorityOpId(1),
+            layer_2_tip_fee: Default::default(),
+            full_fee: U256::from("10000000000"),
+            max_fee_per_gas: U256::from(1),
+            gas_limit: U256::from("10000000000"),
+            gas_per_pubdata_limit: U256::from(1000),
+            op_processing_type: Default::default(),
+            priority_queue_type: Default::default(),
+            canonical_tx_hash: Default::default(),
+            to_mint: U256::from("100000000000000000000000000000"),
+            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
+                .unwrap(),
+            eth_block: 0,
+        },
+        received_timestamp_ms: 0,
+    }
+    .into()
+}
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 
 #[tokio::main]
 pub async fn main() {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
 
     // =========== load configs ===========
     // todo: change with the idiomatic approach
@@ -27,7 +71,10 @@ pub async fn main() {
         .expect("Failed to insert rpc config");
     schema
         .insert(&SequencerConfig::DESCRIPTION, "sequencer")
-        .expect("Failed to insert rpc config");
+        .expect("Failed to insert sequencer config");
+    schema
+        .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
+        .expect("Failed to insert l1_watcher config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -42,6 +89,12 @@ pub async fn main() {
         .expect("Failed to load sequencer config")
         .parse()
         .expect("Failed to parse sequencer config");
+
+    let l1_watcher_config = repo
+        .single::<L1WatcherConfig>()
+        .expect("Failed to load L1 watcher config")
+        .parse()
+        .expect("Failed to parse L1 watcher config");
 
     let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(3312);
 
@@ -85,7 +138,7 @@ pub async fn main() {
     let first_block_to_execute = min(storage_map_block, preimages_block) + 1;
 
     // ========== Initialize block finality trackers ===========
-    
+
     let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
 
     tracing::info!(
@@ -97,7 +150,23 @@ pub async fn main() {
         "▶ Storage read. Node starting."
     );
 
-    let mempool = Mempool::new(forced_deposit_transaction());
+    let mempool = zksync_os_mempool::in_memory(forced_deposit_transaction());
+
+    let l1_watcher = L1Watcher::new(l1_watcher_config, mempool.clone()).await;
+    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        }
+    };
 
     // Sequencer will not run the tree - batcher will (other component, another machine)
     // running it for now just to test the performance
@@ -142,6 +211,14 @@ pub async fn main() {
         //         Err(e) => tracing::error!("TREE server failed: {e:#}"),
         //     }
         // }
+
+        // ── L1 Watcher task ────────────────────────────────────────────────
+        res = l1_watcher_task => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 watcher unexpectedly exited"),
+                Err(e) => tracing::error!("L1 watcher failed: {e:#}"),
+            }
+        }
 
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(

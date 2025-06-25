@@ -5,18 +5,17 @@ pub mod config;
 mod conversions;
 pub mod execution;
 pub mod finality;
-pub mod mempool;
 pub mod model;
 pub mod repositories;
 pub mod tree_manager;
 
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
+use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
     execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
-    mempool::Mempool,
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
@@ -24,8 +23,8 @@ use futures::stream::{BoxStream, StreamExt};
 use std::time::Duration;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
+use zksync_os_mempool::DynPool;
 use zksync_os_state::StateHandle;
-use crate::finality::FinalityTracker;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
@@ -48,7 +47,7 @@ const CHAIN_ID: u64 = 270;
 // todo: consider splitting block production from canonization to own methods
 pub async fn run_sequencer_actor(
     block_to_start: u64,
-    mempool: Mempool,
+    mempool: DynPool,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
@@ -73,9 +72,13 @@ pub async fn run_sequencer_actor(
                 let bn = cmd.block_number();
 
                 let mut stage_started_at = Instant::now();
-                tracing::info!(block = bn, cmd = cmd.to_string() , "▶ starting - executing...");
+                tracing::info!(
+                    block = bn,
+                    cmd = cmd.to_string(),
+                    "▶ starting - executing..."
+                );
                 let (batch_out, replay) =
-                    execute_block(cmd, Box::pin(mempool.clone()), state.clone())
+                    execute_block(cmd, Box::into_pin(mempool.clone()), state.clone())
                         .await
                         .context("execute_block")?;
                 tracing::info!(
@@ -91,7 +94,10 @@ pub async fn run_sequencer_actor(
                 state.add_block_result(
                     bn,
                     batch_out.storage_writes.clone(),
-                    batch_out.published_preimages.iter().map(|(k, v, _)| (*k, v)),
+                    batch_out
+                        .published_preimages
+                        .iter()
+                        .map(|(k, v, _)| (*k, v)),
                 )?;
                 tracing::info!(
                     block_number = bn,

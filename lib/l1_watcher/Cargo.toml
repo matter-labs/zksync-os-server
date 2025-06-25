@@ -1,0 +1,24 @@
+[package]
+name = "zksync_os_l1_watcher"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_contract_interface.workspace = true
+zksync_os_mempool.workspace = true
+
+zksync_storage.workspace = true
+zksync_types.workspace = true
+
+alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
+anyhow.workspace = true
+serde_json.workspace = true
+smart-config = { workspace = true, features = ["primitive-types"] }
+tokio.workspace = true
+tracing.workspace = true
