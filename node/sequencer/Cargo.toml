@@ -10,10 +10,15 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_l1_watcher.workspace = true
+zksync_os_mempool.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
+
+zksync_web3_decl = { workspace = true, features = ["server"] }
+zksync_types.workspace = true
 zksync_storage.workspace = true
 
 anyhow.workspace = true
@@ -33,12 +38,7 @@ zksync_vlog.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
-zksync_web3_decl = { workspace = true, features = ["server"] }
-zksync_types.workspace = true
-crossbeam-queue.workspace = true
-futures-core .workspace = true
-futures-util.workspace = true
 bincode.workspace = true
-smart-config.workspace = true
+smart-config = { workspace = true, features = ["primitive-types"] }
 
 zksync_os_state.workspace = true
