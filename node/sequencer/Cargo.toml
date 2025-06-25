@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_l1_watcher.workspace = true
+zksync_os_contract_interface.workspace = true
 zksync_os_mempool.workspace = true
 
 zk_os_forward_system.workspace = true
@@ -22,6 +23,8 @@ zksync_types.workspace = true
 zksync_storage.workspace = true
 
 anyhow.workspace = true
+alloy = { workspace = true, default-features = false }
+blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true

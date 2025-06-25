@@ -7414,11 +7414,13 @@ dependencies = [
 name = "zksync_os_sequencer"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
  "basic_system",
  "bincode 2.0.1",
+ "blake2",
  "dashmap",
  "forward_system",
  "futures",
@@ -7434,6 +7436,7 @@ dependencies = [
  "tracing-subscriber",
  "vise",
  "zk_ee",
+ "zksync_os_contract_interface",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
