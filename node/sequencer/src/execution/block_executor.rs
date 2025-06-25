@@ -3,8 +3,7 @@ use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
 use anyhow::{anyhow, Result};
-use futures::StreamExt;
-use futures_core::Stream;
+use futures::{Stream, StreamExt};
 use std::{pin::Pin, time::Duration};
 use tokio::time::Sleep;
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
@@ -125,11 +124,13 @@ async fn execute_block_inner(
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx_abi_encode(tx.clone())).await {
-                            Ok(_res) => {
-                                // tracing::info!(block = ctx.block_number,
-                                //                tx = ?tx.hash(),
-                                //                 res = ?res,
-                                //                "tx executed");
+                            Ok(res) => {
+                                // tracing::info!(
+                                //     block = ctx.block_number,
+                                //     tx = ?tx.hash(),
+                                //     res = ?res,
+                                //     "tx executed"
+                                // );
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 

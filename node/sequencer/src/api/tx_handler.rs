@@ -1,15 +1,15 @@
+use crate::conversions::ruint_u256_to_api_u256;
+use crate::repositories::AccountPropertyRepository;
+use crate::CHAIN_ID;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
-use zksync_types::{api, L2ChainId, Nonce, H256, U256};
+use zksync_os_mempool::DynPool;
 use zksync_types::l2::L2Tx;
 use zksync_types::web3::Bytes;
-use crate::CHAIN_ID;
-use crate::conversions::ruint_u256_to_api_u256;
-use crate::mempool::Mempool;
-use crate::repositories::AccountPropertyRepository;
+use zksync_types::{api, L2ChainId, Nonce, H256, U256};
 
 /// Handles transactions received in API
 pub struct TxHandler {
-    mempool: Mempool,
+    mempool: DynPool,
     // we give access to non-canonized blocks here on purpose
     account_property_repository: AccountPropertyRepository,
 
@@ -19,7 +19,7 @@ pub struct TxHandler {
 }
 impl TxHandler {
     pub fn new(
-        mempool: Mempool,
+        mempool: DynPool,
         account_property_repository: AccountPropertyRepository,
         max_nonce_ahead: u32,
         max_tx_size_bytes: usize,
@@ -28,7 +28,7 @@ impl TxHandler {
             mempool,
             account_property_repository,
             max_nonce_ahead,
-            max_tx_size_bytes
+            max_tx_size_bytes,
         }
     }
 
@@ -51,11 +51,7 @@ impl TxHandler {
 
         Self::validate_tx_sender_balance(&l2_tx, &sender_account_properties)?;
 
-        Self::validate_tx_nonce(
-            &l2_tx,
-            &sender_account_properties,
-            self.max_nonce_ahead,
-        )?;
+        Self::validate_tx_nonce(&l2_tx, &sender_account_properties, self.max_nonce_ahead)?;
 
         // let block_number = self.state_handle.last_canonized_block_number() + 1;
         // let block_context = self
@@ -71,11 +67,10 @@ impl TxHandler {
         //     storage_view,
         // )?;
 
-        self.mempool.insert(l2_tx.into());
+        self.mempool.add_transaction(l2_tx.into());
 
         Ok(hash)
     }
-
 
     pub fn validate_tx_nonce(
         transaction: &L2Tx,

@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "lib/contract_interface",
+    "lib/l1_watcher",
+    "lib/mempool",
     "lib/state",
     "lib/merkle_tree",
     "node/sequencer",
@@ -18,11 +21,10 @@ categories = ["cryptography"]
 
 [workspace.dependencies]
 
-zksync_os_state = {path = "lib/state" }
-zksync_os_merkle_tree = {path = "lib/merkle_tree" }
-
+auto_impl = "1.3.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+alloy = { version = "1.0.12", default-features = false }
 anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -45,15 +47,13 @@ tokio = "1"
 ruint = { version = "1.12", default-features = false }
 dashmap = "6.1.0"
 itertools = "0.14.0"
-futures-core = "0.3"
 futures = "0.3"
-futures-util = "0.3"
 vise = "0.3.0"
 vise-exporter = "0.3.0"
 hex = "0.4"
 crossbeam-queue = "0.3"
 bincode = {version ="2.0.1", features = ["serde"] }
-smart-config = "0.2.0-pre"
+smart-config = "=0.2.0-pre"
 thiserror = "2.0.12"
 clap = "4.2.2"
 insta = "1.29.0"
@@ -72,3 +72,10 @@ zksync_web3_decl = "28.1.0-non-semver-compat"
 zksync_types = "28.1.0-non-semver-compat"
 zksync_basic_types = "28.1.0-non-semver-compat"
 zksync_crypto_primitives = "28.1.0-non-semver-compat"
+
+# "Local" dependencies
+zksync_os_contract_interface = { path = "lib/contract_interface" }
+zksync_os_l1_watcher = { path = "lib/l1_watcher" }
+zksync_os_mempool = { path = "lib/mempool" }
+zksync_os_state = { path = "lib/state" }
+zksync_os_merkle_tree = {path = "lib/merkle_tree" }

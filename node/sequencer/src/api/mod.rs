@@ -6,9 +6,9 @@ use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
-use crate::mempool::Mempool;
 use crate::repositories::RepositoryManager;
 use anyhow::Context;
+use zksync_os_mempool::DynPool;
 use zksync_os_state::StateHandle;
 use zksync_types::api::{BlockId, BlockIdVariant, BlockNumber};
 use zksync_web3_decl::jsonrpsee::server::ServerBuilder;
@@ -22,7 +22,7 @@ pub async fn run_jsonrpsee_server(
     repository_manager: RepositoryManager,
     finality_tracker: FinalityTracker,
     state_handle: StateHandle,
-    mempool: Mempool,
+    mempool: DynPool,
     block_replay_storage: BlockReplayStorage,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
