@@ -1,14 +1,14 @@
 use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
-use std::str::FromStr;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
+use zk_os_forward_system::run::BatchOutput;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
-use zk_os_forward_system::run::{BatchOutput};
-use zksync_os_merkle_tree::{MerkleTreeReader};
+use zksync_os_merkle_tree::MerkleTreeReader;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
@@ -19,42 +19,10 @@ use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_sequencer::tree_manager::TreeManager;
 use zksync_os_state::{StateConfig, StateHandle};
+use zksync_storage::RocksDB;
 use zksync_types::l1::L1Tx;
 use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
-use zksync_storage::{RocksDB};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
-
-// to be replaced with proper L1 deposit
-pub fn forced_deposit_transaction() -> Transaction {
-    L1Tx {
-        execute: Execute {
-            contract_address: Some(
-                Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-            ),
-            calldata: vec![],
-            value: U256::from("100"),
-            factory_deps: vec![],
-        },
-        common_data: L1TxCommonData {
-            sender: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-            serial_id: PriorityOpId(1),
-            layer_2_tip_fee: Default::default(),
-            full_fee: U256::from("10000000000"),
-            max_fee_per_gas: U256::from(1),
-            gas_limit: U256::from("10000000000"),
-            gas_per_pubdata_limit: U256::from(1000),
-            op_processing_type: Default::default(),
-            priority_queue_type: Default::default(),
-            canonical_tx_hash: Default::default(),
-            to_mint: U256::from("100000000000000000000000000000"),
-            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
-                .unwrap(),
-            eth_block: 0,
-        },
-        received_timestamp_ms: 0,
-    }
-    .into()
-}
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 
@@ -123,6 +91,8 @@ pub async fn main() {
     let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db);
 
     let state_handle = StateHandle::new(StateConfig {
+        // when running batcher, we need to start from zero due to in-memory tree
+        erase_storage_on_start: sequencer_config.run_batcher,
         blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
@@ -147,8 +117,7 @@ pub async fn main() {
     let (batcher_sender, batcher_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
 
-    let (tree_sender, tree_receiver) =
-        tokio::sync::mpsc::channel::<BatchOutput>(100);
+    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
     let (tree_ready_block_sender, tree_ready_block_receiver) = watch::channel(0u64);
 
@@ -157,23 +126,26 @@ pub async fn main() {
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
     ));
-    let tree_manager = TreeManager::new(tree_wrapper.clone(), tree_receiver, tree_ready_block_sender);
+    let tree_manager =
+        TreeManager::new(tree_wrapper.clone(), tree_receiver, tree_ready_block_sender);
 
     let tree_last_processed_block = tree_manager
         .last_processed_block()
         .expect("cannot read tree last processed block after initialization");
 
-    let first_block_to_execute = [
-        storage_map_block,
-        preimages_block,
-        tree_last_processed_block,
-        // todo: for now need to always start from zero because batcher maintains in-memory tree for debug
-        0,
-    ]
-    .iter()
-    .min()
-    .unwrap()
-        + 1;
+    let first_block_to_execute = if sequencer_config.run_batcher {
+        1
+    } else {
+        [
+            storage_map_block,
+            preimages_block,
+            tree_last_processed_block,
+        ]
+        .iter()
+        .min()
+        .unwrap()
+            + 1
+    };
 
     // ========== Initialize block finality trackers ===========
 
@@ -208,14 +180,28 @@ pub async fn main() {
         }
     };
 
-    // ========== Initialize batcher ===========
+    // ========== Initialize batcher (conditional) ===========
 
-    let batcher = Batcher::new(
-        batcher_receiver,
-        tree_ready_block_receiver,
-        state_handle.clone(),
-        MerkleTreeReader::new(tree_wrapper).expect("cannot init MerkleTreeReader"),
-    );
+    let batcher_task: BoxFuture<anyhow::Result<()>> = if sequencer_config.run_batcher {
+        let batcher = Batcher::new(
+            batcher_receiver,
+            tree_ready_block_receiver.clone(),
+            state_handle.clone(),
+            MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
+        );
+        Box::pin(batcher.run_loop())
+    } else {
+        tracing::info!(
+            "Batcher disabled via configuration; draining channel to avoid backpressure"
+        );
+        let mut receiver = batcher_receiver;
+        Box::pin(async move {
+            while receiver.recv().await.is_some() {
+                // Drop messages silently to prevent backpressure
+            }
+            Ok(())
+        })
+    };
 
     // ======= Run tasks ===========
 
@@ -243,11 +229,11 @@ pub async fn main() {
             }
         }
 
-        // ── BATCHER task ──────────────────────────────────────────────────
-        res = batcher.run_loop() => {
+        // ── BATCHER task (may be disabled) ──────────────────────────────────
+        res = batcher_task => {
             match res {
-                Ok(_)  => tracing::warn!("Batcher unexpectedly exited"),
-                Err(e) => tracing::error!("Batcher failed: {e:#}"),
+                Ok(_)  => tracing::warn!("Batcher task exited"),
+                Err(e) => tracing::error!("Batcher task failed: {e:#}"),
             }
         }
 
@@ -293,4 +279,36 @@ pub async fn main() {
             }
         }
     }
+}
+
+// to be replaced with proper L1 deposit
+pub fn forced_deposit_transaction() -> Transaction {
+    L1Tx {
+        execute: Execute {
+            contract_address: Some(
+                Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+            ),
+            calldata: vec![],
+            value: U256::from("100"),
+            factory_deps: vec![],
+        },
+        common_data: L1TxCommonData {
+            sender: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+            serial_id: PriorityOpId(1),
+            layer_2_tip_fee: Default::default(),
+            full_fee: U256::from("10000000000"),
+            max_fee_per_gas: U256::from(1),
+            gas_limit: U256::from("10000000000"),
+            gas_per_pubdata_limit: U256::from(1000),
+            op_processing_type: Default::default(),
+            priority_queue_type: Default::default(),
+            canonical_tx_hash: Default::default(),
+            to_mint: U256::from("100000000000000000000000000000"),
+            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
+                .unwrap(),
+            eth_block: 0,
+        },
+        received_timestamp_ms: 0,
+    }
+    .into()
 }

@@ -29,6 +29,11 @@ pub struct RpcConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
+    /// Whether to run the batcher (prover input generator) or not.
+    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart
+    #[config(default_t = false)]
+    pub run_batcher: bool,
+
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.

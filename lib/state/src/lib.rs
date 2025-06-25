@@ -6,6 +6,7 @@ pub mod storage_map;
 mod storage_map_view;
 mod storage_metrics;
 
+use std::fs;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use zk_ee::utils::Bytes32;
@@ -38,6 +39,15 @@ pub struct StateHandle {
 
 impl StateHandle {
     pub fn new(config: StateConfig) -> Self {
+        if config.erase_storage_on_start {
+            let path = config.rocks_db_path.join(STATE_STORAGE_DB_NAME);
+            if fs::exists(path.clone()).unwrap() {
+                tracing::info!("Erasing state storage");
+                fs::remove_dir_all(path).unwrap();
+            } else {
+                tracing::info!("State storage is already empty - not erasing");
+            }
+        }
         let state_db =
             RocksDB::<StorageMapCF>::new(&config.rocks_db_path.join(STATE_STORAGE_DB_NAME))
                 .expect("Failed to open State DB");

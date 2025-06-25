@@ -15,7 +15,6 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_merkle_tree::{MerkleTreeReader, RocksDBWrapper};
 use zksync_os_state::StateHandle;
 
-
 /// This component will genearte l1 batches from the stream of blocks
 /// It will also generate Prover Input for each batch.
 ///
@@ -170,11 +169,11 @@ impl Batcher {
             let current_tree_block = *self.tree_block_watch.borrow();
 
             if current_tree_block >= target_block {
-                tracing::info!(
-                    "Tree has processed block {} (current: {})",
-                    target_block,
-                    current_tree_block
-                );
+                // tracing::info!(
+                //     "Tree has processed block {} (current: {})",
+                //     target_block,
+                //     current_tree_block
+                // );
                 return Ok(());
             }
 
