@@ -1,16 +1,14 @@
 use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
-use std::cmp::min;
 use std::str::FromStr;
 use std::path::Path;
-use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
-use zk_os_forward_system::run::{BatchOutput, StorageWrite};
-use zksync_os_merkle_tree::{MerkleTreeColumnFamily, MerkleTreeReader, RocksDBWrapper};
+use zk_os_forward_system::run::{BatchOutput};
+use zksync_os_merkle_tree::{MerkleTreeReader};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
@@ -23,7 +21,7 @@ use zksync_os_sequencer::tree_manager::TreeManager;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_types::l1::L1Tx;
 use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
-use zksync_storage::{RocksDB, StalledWritesRetries};
+use zksync_storage::{RocksDB};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
 // to be replaced with proper L1 deposit
@@ -195,7 +193,7 @@ pub async fn main() {
     let mempool = zksync_os_mempool::in_memory(forced_deposit_transaction());
 
     let l1_watcher = L1Watcher::new(l1_watcher_config, mempool.clone()).await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+    let _l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
             tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
@@ -253,6 +251,7 @@ pub async fn main() {
             }
         }
 
+        // todo: commented out for now because it affects performance - even when doing nothing
         // ── L1 Watcher task ────────────────────────────────────────────────
         // res = l1_watcher_task => {
         //     match res {

@@ -1089,6 +1089,7 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "basic_system",
@@ -1106,6 +1107,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -1730,13 +1732,14 @@ checksum = "43da5946c66ffcc7745f48db692ffbb10a83bfe0afd96235c5c2a4fb23994929"
 [[package]]
 name = "crypto"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
- "ark-std 0.5.0",
+ "ark-std 0.3.0",
  "blake2",
  "cfg-if",
  "const_for",
@@ -1811,6 +1814,7 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 
 [[package]]
 name = "darling"
@@ -2216,6 +2220,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -2390,6 +2395,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "basic_bootloader",
@@ -3733,6 +3739,7 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 
 [[package]]
 name = "native-tls"
@@ -4056,6 +4063,7 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "ringbuffer",
  "risc_v_simulator",
@@ -5716,6 +5724,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -5893,6 +5902,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -7340,6 +7350,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "arrayvec",
  "bitflags 2.9.1",
@@ -7478,6 +7489,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-no-ecrecover#375839ce7ec50b376a222bb1040e2599e997e08a"
 dependencies = [
  "cycle_marker",
  "execution_utils",

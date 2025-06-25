@@ -50,6 +50,8 @@ use zksync_os_state::StateHandle;
 const CHAIN_ID: u64 = 270;
 
 // todo: clean up list of fields passed; split into two function (canonization and sequencing)
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run_sequencer_actor(
     block_to_start: u64,
 
@@ -81,15 +83,15 @@ pub async fn run_sequencer_actor(
                 let bn = cmd.block_number();
 
                 let mut stage_started_at = Instant::now();
-                tracing::info!(
-                    block = bn,
-                    cmd = cmd.to_string(),
-                    "▶ starting command"
-                );
-                let (batch_out, replay) =
-                    execute_block(cmd, Box::into_pin(mempool.clone()), state.clone(), sequencer_config.max_transactions_in_block)
-                        .await
-                        .context("execute_block")?;
+                tracing::info!(block = bn, cmd = cmd.to_string(), "▶ starting command");
+                let (batch_out, replay) = execute_block(
+                    cmd,
+                    Box::into_pin(mempool.clone()),
+                    state.clone(),
+                    sequencer_config.max_transactions_in_block,
+                )
+                .await
+                .context("execute_block")?;
                 tracing::info!(
                     block_number = bn,
                     transactions = replay.transactions.len(),
@@ -133,10 +135,7 @@ pub async fn run_sequencer_actor(
             let bn = batch_out.header.number;
 
             let mut stage_started_at = Instant::now();
-            tracing::info!(
-                block = bn,
-                "▶ Starting canonization - adding to repos..."
-            );
+            tracing::info!(block = bn, "▶ Starting canonization - adding to repos...");
 
             // todo:  this is only used by api - can and should be done async,
             //  but need to be careful with `block_number=latest` then -

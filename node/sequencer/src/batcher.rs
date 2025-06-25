@@ -3,11 +3,10 @@ use crate::model::ReplayRecord;
 use std::alloc::Global;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::ptr::read;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::task::spawn_blocking;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_basic_system::system_implementation::flat_storage_model::TestingTree;
@@ -74,12 +73,15 @@ impl Batcher {
 
                     let state_view = self.state_handle.state_view_at_block(block_number)?;
 
-                    let read_tree = self.in_memory_tree.read().unwrap();
                     let in_memory_storage_commitment = StorageCommitment {
-                        root: read_tree.storage_tree.root().clone(),
-                        next_free_slot: read_tree.storage_tree.next_free_slot,
+                        root: *self.in_memory_tree.read().unwrap().storage_tree.root(),
+                        next_free_slot: self
+                            .in_memory_tree
+                            .read()
+                            .unwrap()
+                            .storage_tree
+                            .next_free_slot,
                     };
-                    drop(read_tree);
                     // let persistent_storage_commitment = self.tree.root_info(block_number - 1)?;
 
                     // assert_eq!(
@@ -130,8 +132,8 @@ impl Batcher {
                         write_tree.storage_tree.insert(&write.key, &write.value);
                     }
 
+                    memory_tree_latency.observe();
                     let total_latency = total_latency.observe();
-
                     tracing::info!(
                         "Prover input generated for block {}. length: {}. Took {:?}",
                         block_number,

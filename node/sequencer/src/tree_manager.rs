@@ -1,5 +1,4 @@
 use crate::conversions::bytes32_to_h256;
-use crate::model::ReplayRecord;
 use anyhow::Context;
 use std::ops::Div;
 use std::path::Path;

@@ -124,7 +124,7 @@ async fn execute_block_inner(
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx_abi_encode(tx.clone())).await {
-                            Ok(res) => {
+                            Ok(_res) => {
                                 // tracing::info!(
                                 //     block = ctx.block_number,
                                 //     tx = ?tx.hash(),
