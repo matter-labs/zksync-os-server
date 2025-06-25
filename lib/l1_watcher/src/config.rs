@@ -27,7 +27,7 @@ pub struct L1WatcherConfig {
 
     /// How often to poll L1 for new priority requests.
     #[config(default_t = 100 * TimeUnit::Millis)]
-    pub l1_poll_interval: Duration,
+    pub poll_interval: Duration,
 
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.

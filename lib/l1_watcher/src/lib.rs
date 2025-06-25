@@ -21,6 +21,7 @@ pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
     pool: Box<dyn TransactionPool>,
     diamond_proxy_address: Address,
+    poll_interval: Duration,
     max_blocks_to_process: u64,
     storage: L1WatcherRocksdbStorage,
 }
@@ -61,13 +62,14 @@ impl L1Watcher {
             provider,
             pool,
             diamond_proxy_address,
+            poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
             storage,
         })
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
-        let mut timer = tokio::time::interval(Duration::from_millis(100));
+        let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
             self.poll().await?;
@@ -85,6 +87,8 @@ impl L1Watcher {
             .await?
             .context("L1 does not have any blocks")?;
         // TODO: Do not start from genesis; figure out when diamond proxy was first deployed instead?
+        //       Alternatively presume that we should continue from `latest_block - N` and panic if
+        //       first priority id does not match expected value.
         let from_block = self.storage.next_l1_block().unwrap_or(0);
         // Inspect up to `self.max_blocks_to_process` blocks at a time
         let to_block = latest_block
