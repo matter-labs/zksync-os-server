@@ -47,6 +47,6 @@ pub struct SequencerConfig {
     pub block_time: Duration,
 
     /// Max number of transactions in a block.
-    #[config(default_t = 500)]
+    #[config(default_t = 1000)]
     pub max_transactions_in_block: usize
 }

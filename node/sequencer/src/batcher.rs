@@ -15,6 +15,12 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_merkle_tree::{MerkleTreeReader, RocksDBWrapper};
 use zksync_os_state::StateHandle;
 
+
+/// This component will genearte l1 batches from the stream of blocks
+/// It will also generate Prover Input for each batch.
+///
+/// Currently, batching is not implemented on zksync-os side, so we do 1 batch == 1 block
+///
 pub struct Batcher {
     block_receiver: mpsc::Receiver<(BatchOutput, ReplayRecord)>,
     // block number that persistent tree has processed

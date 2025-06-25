@@ -177,9 +177,9 @@ pub async fn main() {
 
     // ========== Initialize block finality trackers ===========
 
+    // note: unfinished feature, not really used yet
     let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
 
-    // note: unfinished feature, not really used yet
     tracing::info!(
         storage_map_block = storage_map_block,
         preimages_block = preimages_block,
