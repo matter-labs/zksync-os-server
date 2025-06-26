@@ -1,6 +1,9 @@
 use crate::CHAIN_ID;
 use blake2::{Blake2s256, Digest};
 use zk_os_forward_system::run::BatchOutput;
+use zksync_mini_merkle_tree::MiniMerkleTree;
+use zksync_types::hasher::keccak::KeccakHasher;
+use zksync_types::hasher::Hasher;
 use zksync_types::web3::keccak256;
 use zksync_types::{Address, ExecuteTransactionCommon, Transaction, H256, U256};
 
@@ -108,13 +111,30 @@ impl CommitBatchInfo {
         // blob_commitment should be set to zero in ZK OS
         operator_da_input.extend(H256::zero().as_bytes());
 
+        let mut encoded_l2_l1_logs = Vec::new();
+        for tx_result in batch_output.tx_results {
+            if let Ok(tx_output) = tx_result {
+                encoded_l2_l1_logs.extend(
+                    tx_output
+                        .l2_to_l1_logs
+                        .into_iter()
+                        .map(|log_with_preimage| log_with_preimage.log.encode()),
+                );
+            }
+        }
+        // todo - extract constant
+        let l2_l1_local_root =
+            MiniMerkleTree::new(encoded_l2_l1_logs.clone().into_iter(), Some(1 << 14))
+                .merkle_root();
+        // The result should be Keccak(l2_l1_local_root, aggreagation_root) - we don't compute aggregation root yet
+        let l2_to_l1_logs_root_hash = KeccakHasher.compress(&l2_l1_local_root, &H256::zero());
+
         Self {
             batch_number: batch_output.header.number,
             new_state_commitment,
             number_of_layer1_txs: U256::from(l1_tx_count),
             priority_operations_hash,
-            // TODO: Update once ZKsync OS has L2->L1 logs
-            l2_to_l1_logs_root_hash: Default::default(),
+            l2_to_l1_logs_root_hash,
             // TODO: Update once enforced, not sure where to source it from yet
             l2_da_validator: Default::default(),
             da_commitment: operator_da_input_header_hash,
