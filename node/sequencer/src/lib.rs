@@ -14,6 +14,7 @@ pub mod finality;
 pub mod model;
 pub mod repositories;
 pub mod tree_manager;
+pub mod prover_api;
 
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;

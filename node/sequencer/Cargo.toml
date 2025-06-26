@@ -47,3 +47,6 @@ smart-config = { workspace = true, features = ["primitive-types"] }
 
 zksync_os_state.workspace = true
 zksync_os_merkle_tree.workspace = true
+axum.workspace = true
+http.workspace = true
+parking_lot.workspace = true

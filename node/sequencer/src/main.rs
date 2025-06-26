@@ -2,18 +2,18 @@ use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{watch};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
-use zksync_os_merkle_tree::MerkleTreeReader;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
-use zksync_os_sequencer::config::{BatcherConfig, RpcConfig, SequencerConfig};
+use zksync_os_sequencer::config::{BatcherConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use zksync_os_sequencer::finality::FinalityTracker;
-use zksync_os_sequencer::model::ReplayRecord;
+use zksync_os_sequencer::model::{BatchJob, ReplayRecord};
 use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_sequencer::tree_manager::TreeManager;
@@ -25,6 +25,8 @@ use zksync_types::{Transaction, PRIORITY_OPERATION_L2_TX_TYPE, U256};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
 use zksync_os_sequencer::batcher::Batcher;
+use zksync_os_sequencer::prover_api::prover_job_manager::ProverJobManager;
+use zksync_os_sequencer::prover_api::prover_server;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 
@@ -55,6 +57,9 @@ pub async fn main() {
     schema
         .insert(&BatcherConfig::DESCRIPTION, "batcher")
         .expect("Failed to insert batcher config");
+    schema
+        .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
+        .expect("Failed to insert prover api config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -75,12 +80,18 @@ pub async fn main() {
         .expect("Failed to load L1 watcher config")
         .parse()
         .expect("Failed to parse L1 watcher config");
-    
+
     let batcher_config = repo
         .single::<BatcherConfig>()
         .expect("Failed to load L1 watcher config")
         .parse()
         .expect("Failed to parse L1 watcher config");
+
+    let prover_api_config = repo
+        .single::<ProverApiConfig>()
+        .expect("Failed to load prover api config")
+        .parse()
+        .expect("Failed to parse prover api config");
 
     let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(3312);
 
@@ -123,10 +134,14 @@ pub async fn main() {
         "State DB block number ({storage_map_block}) is greater than WAL block ({wal_block:?}). Preimages block: ({preimages_block})"
     );
 
-    // ======= Initialize channel between sequencer and tree/batcher  ===========
+    // ======= Initialize async channels  ===========
 
-    let (batcher_sender, batcher_receiver) =
+    // todo: this is received by batcher and then fanned out to workers. Could just use broadcast instead
+    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
+
+    //
+    let (batch_sender, batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(100);
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
@@ -191,13 +206,14 @@ pub async fn main() {
         }
     };
 
-    // ========== Initialize batcher (conditional) ===========
+    // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
 
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         let batcher = Batcher::new(
-            batcher_receiver,
+            blocks_for_batcher_receiver,
+            batch_sender,
             state_handle.clone(),
-            MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
+            // MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,
             batcher_config.num_workers,
         );
@@ -206,7 +222,7 @@ pub async fn main() {
         tracing::info!(
             "Batcher disabled via configuration; draining channel to avoid backpressure"
         );
-        let mut receiver = batcher_receiver;
+        let mut receiver = blocks_for_batcher_receiver;
         Box::pin(async move {
             while receiver.recv().await.is_some() {
                 // Drop messages silently to prevent backpressure
@@ -214,6 +230,15 @@ pub async fn main() {
             Ok(())
         })
     };
+
+    // ======= Initialize Prover Api Server (todo: should be optional) ========
+
+    let prover_job_manager = Arc::new(ProverJobManager::new(
+        prover_api_config.job_timeout,
+        prover_api_config.max_unproved_blocks,
+    ));
+    let prover_server_job =
+        prover_server::run(prover_job_manager.clone(), prover_api_config.address);
 
     // ======= Run tasks ===========
 
@@ -249,6 +274,19 @@ pub async fn main() {
             }
         }
 
+        // ── Prover Server tasks (todo: should be conditioned) ──────────────────────────────────
+        _res = prover_job_manager.listen_for_batch_jobs(batch_receiver) => {
+            tracing::warn!("Prover job manager task exited")
+        }
+
+        res = prover_server_job => {
+            match res {
+                Ok(_)  => tracing::warn!("prover_server_job task exited"),
+                Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),
+            }
+
+        }
+
         // todo: commented out for now because it affects performance - even when doing nothing
         // ── L1 Watcher task ────────────────────────────────────────────────
         // res = l1_watcher_task => {
@@ -261,7 +299,7 @@ pub async fn main() {
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
             first_block_to_execute,
-            batcher_sender,
+            blocks_for_batcher_sender,
             tree_sender,
             mempool,
             state_handle.clone(),

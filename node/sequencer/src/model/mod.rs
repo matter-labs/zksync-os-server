@@ -1,3 +1,4 @@
+use crate::commitment::CommitBatchInfo;
 use serde::Deserialize;
 use std::fmt::Display;
 use std::time::Duration;
@@ -34,6 +35,13 @@ pub struct ReplayRecord {
 pub enum TransactionSource {
     Replay(Vec<Transaction>),
     Mempool,
+}
+
+/// Currently used both for prover api and eth-sender - may reconsider later on
+pub struct BatchJob {
+    pub block_number: u64,
+    pub prover_input: Vec<u32>,
+    pub commit_batch_info: CommitBatchInfo,
 }
 
 impl Display for BlockCommand {
