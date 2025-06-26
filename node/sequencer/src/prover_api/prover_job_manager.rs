@@ -156,7 +156,7 @@ impl ProverJobManager {
             return Err(SubmitError::VerificationFailed);
         }
 
-        self.proof_storage.save_proof(block, &proof);
+        self.proof_storage.save_proof(block, &proof).map_err(|e| SubmitError::Other(e.to_string()))?;
         Ok(())
     }
 
