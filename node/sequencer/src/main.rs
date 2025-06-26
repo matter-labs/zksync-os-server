@@ -10,7 +10,6 @@ use zk_os_forward_system::run::BatchOutput;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_merkle_tree::MerkleTreeReader;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
-use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{BatcherConfig, RpcConfig, SequencerConfig};
 use zksync_os_sequencer::finality::FinalityTracker;
@@ -23,6 +22,7 @@ use zksync_storage::RocksDB;
 use zksync_types::l1::L1Tx;
 use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
+use zksync_os_sequencer::batcher::Batcher;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 
@@ -128,7 +128,7 @@ pub async fn main() {
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
-    let (tree_ready_block_sender, tree_ready_block_receiver) = watch::channel(0u64);
+    let (tree_ready_block_sender, _tree_ready_block_receiver) = watch::channel(0u64);
 
     // ========== Initialize tree manager ===========
 
@@ -194,10 +194,10 @@ pub async fn main() {
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         let batcher = Batcher::new(
             batcher_receiver,
-            tree_ready_block_receiver.clone(),
             state_handle.clone(),
             MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
-            batcher_config.logging_enabled
+            batcher_config.logging_enabled,
+            batcher_config.num_workers
         );
         Box::pin(batcher.run_loop())
     } else {

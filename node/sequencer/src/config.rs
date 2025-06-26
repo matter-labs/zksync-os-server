@@ -65,4 +65,6 @@ pub struct BatcherConfig {
     #[config(default_t = false)]
     pub logging_enabled: bool,
 
+    #[config(default_t = 5)]
+    pub num_workers: usize
 }
