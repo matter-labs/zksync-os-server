@@ -1,3 +1,8 @@
+use crate::IBridgehub::IBridgehubInstance;
+use alloy::network::Ethereum;
+use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::providers::DynProvider;
+
 alloy::sol! {
     // `Messaging.sol`
     struct L2CanonicalTransaction {
@@ -31,8 +36,22 @@ alloy::sol! {
     }
 
     // `IBridgehub.sol`
+    #[sol(rpc)]
     interface IBridgehub {
         function getZKChain(uint256 _chainId) external view returns (address);
+        function chainTypeManager(uint256 _chainId) external view returns (address);
+    }
+
+    // `IChainTypeManager.sol`
+    #[sol(rpc)]
+    interface IChainTypeManager {
+        address public validatorTimelock;
+    }
+
+    // `IZKChain.sol`
+    #[sol(rpc)]
+    interface IZKChain {
+        function storedBatchHash(uint256 _batchNumber) external view returns (bytes32);
     }
 
     // Taken from `IExecutor.sol`
@@ -68,5 +87,59 @@ alloy::sol! {
             uint256 _processTo,
             bytes calldata _commitData
         ) external;
+    }
+}
+
+pub struct Bridgehub {
+    instance: IBridgehubInstance<DynProvider, Ethereum>,
+    l2_chain_id: u64,
+}
+
+impl Bridgehub {
+    pub fn new(address: Address, provider: DynProvider<Ethereum>, l2_chain_id: u64) -> Self {
+        let instance = IBridgehub::new(address, provider);
+        Self {
+            instance,
+            l2_chain_id,
+        }
+    }
+
+    pub fn address(&self) -> &Address {
+        self.instance.address()
+    }
+
+    pub async fn chain_type_manager_address(&self) -> alloy::contract::Result<Address> {
+        self.instance
+            .chainTypeManager(U256::from(self.l2_chain_id))
+            .call()
+            .await
+    }
+
+    // TODO: Consider creating a separate `ChainTypeManager` struct
+    pub async fn validator_timelock_address(&self) -> alloy::contract::Result<Address> {
+        let chain_type_manager_address = self.chain_type_manager_address().await?;
+        let chain_type_manager =
+            IChainTypeManager::new(chain_type_manager_address, self.instance.provider().clone());
+        chain_type_manager.validatorTimelock().call().await
+    }
+
+    pub async fn zk_chain_address(&self) -> alloy::contract::Result<Address> {
+        self.instance
+            .getZKChain(U256::from(self.l2_chain_id))
+            .call()
+            .await
+    }
+
+    // TODO: Consider creating a separate `ZkChain` struct
+    pub async fn stored_batch_hash(
+        &self,
+        batch_number: u64,
+    ) -> alloy::contract::Result<FixedBytes<32>> {
+        let zk_chain_address = self.zk_chain_address().await?;
+        let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider().clone());
+        zk_chain
+            .storedBatchHash(U256::from(batch_number))
+            .call()
+            .await
     }
 }

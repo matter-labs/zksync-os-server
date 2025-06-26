@@ -10,4 +10,5 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-alloy = { workspace = true, default-features = false, features = ["sol-types"] }
+alloy = { workspace = true, default-features = false, features = ["contract", "providers"] }
+anyhow.workspace = true
