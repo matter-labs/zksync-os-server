@@ -117,7 +117,7 @@ impl StateHandle {
         loop {
             ticker.tick().await;
             let m = StorageMetrics::collect_metrics(state_handle.clone());
-            tracing::info!("{:?}", m);
+            tracing::debug!("{:?}", m);
         }
     }
 
