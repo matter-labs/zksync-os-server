@@ -1,6 +1,5 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use zksync_os_state::{StateHandle, StateView};
 // todo: experimental approach - reconsider after adding more finality stages
 
 /// Holds block numbers for various finality stages
@@ -40,34 +39,5 @@ impl FinalityTracker {
     pub fn get_canonized_block(&self) -> u64 {
         self.canonized.load(std::sync::atomic::Ordering::Relaxed)
     }
-
-    pub fn canonized_state_guard(&self, state: StateHandle) -> CanonizedStateGuard {
-        CanonizedStateGuard {
-            _canonized: self.canonized.clone(),
-            state,
-        }
-    }
+    
 }
-
-#[derive(Debug)]
-pub struct CanonizedStateGuard {
-    _canonized: Arc<AtomicU64>,
-    state: StateHandle,
-}
-
-impl CanonizedStateGuard {
-    pub fn access_state(&self, block_number: u64) -> anyhow::Result<StateView> {
-        // todo: restrict by block number
-        self.state.state_view_at_block(block_number)
-    }
-}
-
-// #[derive(Debug)]
-// pub struct CanonizedRepositoriesGuard {
-//     canonized: Arc<AtomicU64>,
-//     repository_manager: RepositoryManager
-// }
-//
-// impl CanonizedStateGuard {
-//     pub fn access_block()
-// }

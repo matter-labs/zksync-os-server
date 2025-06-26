@@ -40,8 +40,10 @@ impl L1Watcher {
                 .context("failed to connect to L1 api")?,
         );
         tracing::info!(
-            bridgehub_address = ?config.bridgehub_address,
-            chain_id = config.chain_id,
+            config.chain_id,
+            config.max_blocks_to_process,
+            ?config.poll_interval,
+            ?config.bridgehub_address,
             next_l1_block = storage.next_l1_block().unwrap_or(0),
             "initializing L1 watcher"
         );

@@ -34,4 +34,39 @@ alloy::sol! {
     interface IBridgehub {
         function getZKChain(uint256 _chainId) external view returns (address);
     }
+
+    // Taken from `IExecutor.sol`
+    interface IExecutor {
+        struct StoredBatchInfo {
+            uint64 batchNumber;
+            bytes32 batchHash;
+            uint64 indexRepeatedStorageChanges;
+            uint256 numberOfLayer1Txs;
+            bytes32 priorityOperationsHash;
+            bytes32 l2LogsTreeRoot;
+            uint256 timestamp;
+            bytes32 commitment;
+        }
+
+        struct CommitBoojumOSBatchInfo {
+            uint64 batchNumber;
+            bytes32 newStateCommitment;
+            uint256 numberOfLayer1Txs;
+            bytes32 priorityOperationsHash;
+            bytes32 l2LogsTreeRoot;
+            address l2DaValidator;
+            bytes32 daCommitment;
+            uint64 firstBlockTimestamp;
+            uint64 lastBlockTimestamp;
+            uint256 chainId;
+            bytes operatorDAInput;
+        }
+
+        function commitBatchesSharedBridge(
+            uint256 _chainId,
+            uint256 _processFrom,
+            uint256 _processTo,
+            bytes calldata _commitData
+        ) external;
+    }
 }

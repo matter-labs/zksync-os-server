@@ -5,16 +5,17 @@ use zksync_types::l2::L2Tx;
 use zksync_types::PackedEthSignature;
 use zksync_types::transaction_request::CallRequest;
 use zksync_types::web3::Bytes;
+use zksync_os_state::StateHandle;
 use crate::api::resolve_block_id;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
-use crate::finality::{CanonizedStateGuard, FinalityTracker};
+use crate::finality::FinalityTracker;
 
 pub struct EthCallHandler {
     config: RpcConfig,
     finality_info: FinalityTracker,
-    guarded_state: CanonizedStateGuard,
+    state_handle: StateHandle,
 
     block_replay_storage: BlockReplayStorage
 }
@@ -23,13 +24,13 @@ impl EthCallHandler {
     pub fn new(
         config: RpcConfig,
         finality_tracker: FinalityTracker,
-        guarded_state: CanonizedStateGuard,
+        state_handle: StateHandle,
         block_replay_storage: BlockReplayStorage
     ) -> EthCallHandler {
         Self {
             config,
             finality_info: finality_tracker,
-            guarded_state,
+            state_handle,
             block_replay_storage
         }
     }
@@ -67,7 +68,7 @@ impl EthCallHandler {
             .context("Failed to get block context")?
             .context;
 
-        let storage_view = self.guarded_state.access_state(block_number)?;
+        let storage_view = self.state_handle.state_view_at_block(block_number)?;
 
         let res = execute(tx, block_context, storage_view)?;
 

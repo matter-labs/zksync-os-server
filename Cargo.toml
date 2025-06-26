@@ -4,6 +4,7 @@ members = [
     "lib/l1_watcher",
     "lib/mempool",
     "lib/state",
+    "lib/merkle_tree",
     "node/sequencer",
 ]
 resolver = "2"
@@ -21,17 +22,27 @@ categories = ["cryptography"]
 [workspace.dependencies]
 
 auto_impl = "1.3.0"
+blake2 = "0.10.6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 alloy = { version = "1.0.12", default-features = false }
 anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
+serde_with = "1"
 serde_json = "1"
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility", "unlimited_native", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-no-ecrecover", features = ["evm-compatibility"] }
+
+
+#zk_os_forward_system = { package = "forward_system", path="../zksync-os/forward_system", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+#zk_ee = { package = "zk_ee", path="../zksync-os/zk_ee" }
+#zk_os_basic_system = { package = "basic_system", path="../zksync-os/basic_system"}
+#zk_os_evm_interpreter = { package = "evm_interpreter", path="../zksync-os/evm_interpreter", features = ["evm-compatibility"] }
+
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.2-new-sequencer", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.2-new-sequencer"}
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.2-new-sequencer"}
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.2-new-sequencer", features = ["evm-compatibility"] }
+
 tokio = "1"
 ruint = { version = "1.12", default-features = false }
 dashmap = "6.1.0"
@@ -44,15 +55,28 @@ crossbeam-queue = "0.3"
 bincode = {version ="2.0.1", features = ["serde"] }
 smart-config = "=0.2.0-pre"
 thiserror = "2.0.12"
+clap = "4.2.2"
+insta = "1.29.0"
+leb128 = "0.2.5"
+rayon = "1.3.1"
+once_cell = "1"
+proptest = "1.6.0"
+rand = "0.8"
+tempfile = "3.0.2"
+base64 = "0.22.1"
+
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
 zksync_web3_decl = "28.1.0-non-semver-compat"
 zksync_types = "28.1.0-non-semver-compat"
-#zksync_zk_os_merkle_tree = { version = "28.1.0-non-semver-compat", path = "../zksync-era/core/lib/zk_os_merkle_tree" }
+zksync_basic_types = "28.1.0-non-semver-compat"
+zksync_crypto_primitives = "28.1.0-non-semver-compat"
+zksync_mini_merkle_tree = "28.1.0-non-semver-compat"
 
 # "Local" dependencies
 zksync_os_contract_interface = { path = "lib/contract_interface" }
 zksync_os_l1_watcher = { path = "lib/l1_watcher" }
 zksync_os_mempool = { path = "lib/mempool" }
 zksync_os_state = { path = "lib/state" }
+zksync_os_merkle_tree = {path = "lib/merkle_tree" }
