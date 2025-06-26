@@ -10,7 +10,7 @@ use crate::consensus::{
     types::{BlockCertificate, Payload, ReducedBlockCommand},
 };
 
-/// Wrapper of `ConnectionPool` implementing `EngineInterface`.
+/// Wrapper of `ConsensusStorage` implementing `EngineInterface`.
 ///
 /// Contains queues to save Quorum Certificates received over gossip to the store
 /// as and when the payload they are over becomes available.

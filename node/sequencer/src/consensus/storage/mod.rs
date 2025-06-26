@@ -1,4 +1,4 @@
-//! Storage implementation based on DAL.
+//! Storage implementation based on RocksDB.
 
 use crate::consensus::types::Payload;
 
