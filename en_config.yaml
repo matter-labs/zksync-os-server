@@ -27,3 +27,6 @@ rpc:
 sequencer:
   rocks_db_path: ./db/en1
   prometheus_exporter_port: 2951
+
+l1_watcher:
+  rocks_db_path: ./db/en1
