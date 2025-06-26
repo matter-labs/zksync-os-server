@@ -1,5 +1,6 @@
 use crate::CHAIN_ID;
 use blake2::{Blake2s256, Digest};
+use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_mini_merkle_tree::MiniMerkleTree;
 use zksync_types::hasher::keccak::KeccakHasher;
@@ -18,8 +19,36 @@ pub struct StoredBatchInfo {
     pub number_of_layer1_txs: U256,
     pub priority_operations_hash: H256,
     pub l2_to_l1_logs_root_hash: H256,
-    // TODO: Presumably this is actually H256?
-    pub commitment: [u8; 32],
+    pub commitment: H256,
+}
+
+impl From<CommitBatchInfo> for StoredBatchInfo {
+    fn from(value: CommitBatchInfo) -> Self {
+        // TODO: This ALSO really needs a different name
+        let system_batch_output = zk_os_basic_system::system_implementation::system::BatchOutput {
+            chain_id: alloy::primitives::U256::from_limbs(value.chain_id.0),
+            first_block_timestamp: value.first_block_timestamp,
+            last_block_timestamp: value.last_block_timestamp,
+            used_l2_da_validator_address: ruint::aliases::B160::from_be_bytes(
+                value.l2_da_validator.0,
+            ),
+            pubdata_commitment: Bytes32::from(value.da_commitment.0),
+            number_of_layer_1_txs: ruint::aliases::U256::from_limbs(value.number_of_layer1_txs.0),
+            priority_operations_hash: Bytes32::from(value.priority_operations_hash.0),
+            l2_logs_tree_root: Bytes32::from(value.l2_to_l1_logs_root_hash.0),
+            // TODO: Presumably shouldn't always be zero once we have upgrade transactions
+            upgrade_tx_hash: Default::default(),
+        };
+        let commitment = H256::from(system_batch_output.hash());
+        Self {
+            batch_number: value.batch_number,
+            state_commitment: value.new_state_commitment,
+            number_of_layer1_txs: value.number_of_layer1_txs,
+            priority_operations_hash: value.priority_operations_hash,
+            l2_to_l1_logs_root_hash: value.l2_to_l1_logs_root_hash,
+            commitment,
+        }
+    }
 }
 
 impl From<StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredBatchInfo {
@@ -40,7 +69,7 @@ impl From<StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredBa
             // `timestamp` - Not used in ZKsync OS, must be zero
             alloy::primitives::U256::from(0),
             // `commitment` - For ZKsync OS batches we store batch output hash here
-            alloy::primitives::FixedBytes::<32>::from(value.commitment),
+            alloy::primitives::FixedBytes::<32>::from(value.commitment.0),
         ))
     }
 }
