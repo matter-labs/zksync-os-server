@@ -48,4 +48,24 @@ pub struct SequencerConfig {
 
     #[config(default_t = 3312)]
     pub prometheus_exporter_port: u16,
+
+    /// Max number of transactions in a block.
+    #[config(default_t = 1000)]
+    pub max_transactions_in_block: usize
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BatcherConfig {
+
+    /// Whether to run the batcher (prover input generator) or not.
+    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart
+    #[config(default_t = false)]
+    pub component_enabled: bool,
+
+    /// Whether to enable debug output in RiscV binary.
+    /// Also known as app.bin vs app_logging_enabled.bin
+    #[config(default_t = false)]
+    pub logging_enabled: bool,
+
 }

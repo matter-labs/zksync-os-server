@@ -29,7 +29,7 @@ impl NamedColumnFamily for PreimagesCF {
 }
 
 impl PreimagesCF {
-    fn block_key() -> &'static [u8] {
+    pub fn block_key() -> &'static [u8] {
         b"block"
     }
 }

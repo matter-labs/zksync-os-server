@@ -16,8 +16,8 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::conversions::{h256_to_bytes32, ruint_u256_to_api_u256};
 use crate::finality::FinalityTracker;
-use crate::mempool::Mempool;
 use crate::repositories::RepositoryManager;
+use zksync_os_mempool::DynPool;
 use zksync_os_state::StateHandle;
 use zksync_types::{
     api::{
@@ -53,7 +53,7 @@ impl EthNamespace {
         repository_manager: RepositoryManager,
         finality_tracker: FinalityTracker,
         state_handle: StateHandle,
-        mempool: Mempool,
+        mempool: DynPool,
         block_replay_storage: BlockReplayStorage,
     ) -> EthNamespace {
         let tx_handler = TxHandler::new(
@@ -63,11 +63,10 @@ impl EthNamespace {
             config.max_tx_size_bytes,
         );
 
-        let guarded_state = finality_tracker.canonized_state_guard(state_handle.clone());
         let eth_call_handler = EthCallHandler::new(
             config,
             finality_tracker.clone(),
-            guarded_state,
+            state_handle,
             block_replay_storage,
         );
         Self {

@@ -1,57 +1,68 @@
+#![feature(allocator_api)]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
+
 pub mod api;
+pub mod batcher;
 pub mod block_context_provider;
 pub mod block_replay_storage;
+pub mod commitment;
 pub mod config;
 mod conversions;
 pub mod consensus;
 pub mod execution;
 pub mod finality;
-pub mod mempool;
 pub mod model;
 pub mod repositories;
 pub mod tree_manager;
 
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
+use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
     execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
-    mempool::Mempool,
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
 use futures::channel::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
+use zksync_os_mempool::DynPool;
 use zksync_os_state::StateHandle;
 use crate::consensus::ReducedBlockCommand;
-use crate::finality::FinalityTracker;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
 // * `Canonize` block operation   - after block is processed in the VM, we want to expose it in API asap.
-//                         But we can only do that once it's durable - that is, it will not change after node crash/restart.
+//                         But we also want to make it durable - that is, it will not change after node crashes or restarts.
+//
 //                         Canonization is the process of making a block durable.
 //                         For the centralized sequencer we persist a WAL of `BlockReplayData`s
-//                         For leader rotation we only consider block Canonized when it's accepted by the network (we have quorum)
+//                         For leader rotation we only consider block Canonized when it's accepted by the network (we have quorum).
 
-// Node state consists of three things:
-
-// * State (storage logs + factory deps)
-// * BlockReceipts (events + pubdata + other heavy info)
-// * TxReceipts (events + pubdata + other heavy info)
+// Minimal sequencer state is the following:
+// * State (storage logs + factory deps - see `state` crate)
 // * WAL of BlockReplayData (only in centralized case)
 //
-// Only canonized blocks are ever persisted and/or exposed to API
+// Note that for API additional data may be reqiured (block/tx receipts)
+
 const CHAIN_ID: u64 = 270;
 
-// todo: consider splitting block production from canonization to own methods
+// todo: clean up list of fields passed; split into two function (canonization and sequencing)
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run_sequencer_actor(
     block_to_start: u64,
-    mempool: Mempool,
+
+    batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
+    tree_sink: Sender<BatchOutput>,
+
+    mempool: DynPool,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
@@ -77,30 +88,39 @@ pub async fn run_sequencer_actor(
                 let bn = cmd.block_number();
 
                 let mut stage_started_at = Instant::now();
-                tracing::info!(block = bn, cmd = cmd.to_string() , "▶ starting - executing...");
-                let (batch_out, replay) =
-                    execute_block(cmd, Box::pin(mempool.clone()), state.clone())
-                        .await
-                        .context("execute_block")?;
+                tracing::info!(block = bn, cmd = cmd.to_string(), "▶ starting command");
+                let (batch_out, replay) = execute_block(
+                    cmd,
+                    Box::into_pin(mempool.clone()),
+                    state.clone(),
+                    sequencer_config.max_transactions_in_block,
+                )
+                .await
+                .context("execute_block")?;
                 tracing::info!(
                     block_number = bn,
                     transactions = replay.transactions.len(),
                     preimages = batch_out.published_preimages.len(),
                     storage_writes = batch_out.storage_writes.len(),
-                    took =? stage_started_at.elapsed(),
-                    "▶ Executed! next: adding to state...",
+                    "▶ Executed in {:?}. Adding to state...",
+                    stage_started_at.elapsed()
                 );
 
                 stage_started_at = Instant::now();
+                // important: this cannot be done async.
+                // to start next block, we need to have the StorageView as of the end of previous block.
                 state.add_block_result(
                     bn,
                     batch_out.storage_writes.clone(),
-                    batch_out.published_preimages.iter().map(|(k, v, _)| (*k, v)),
+                    batch_out
+                        .published_preimages
+                        .iter()
+                        .map(|(k, v, _)| (*k, v)),
                 )?;
                 tracing::info!(
                     block_number = bn,
-                    took =? stage_started_at.elapsed(),
-                    "▶ Added to state! next: sending to canonise queue...",
+                    "▶ Added to state in {:?}. Sending to canonise queue...",
+                    stage_started_at.elapsed()
                 );
                 tx.send((batch_out, replay))
                     .await
@@ -120,11 +140,12 @@ pub async fn run_sequencer_actor(
             let bn = batch_out.header.number;
 
             let mut stage_started_at = Instant::now();
-            tracing::info!(
-                block = bn,
-                transactions = replay.transactions.len(),
-                "▶ Starting canonization. Next: adding to repos..."
-            );
+            tracing::info!(block = bn, "▶ Starting canonization - adding to repos...");
+
+            // todo:  this is only used by api - can and should be done async,
+            //  but need to be careful with `block_number=latest` then -
+            //  we need to make sure that the block is added to the repos before we return its number as `latest`
+
             repositories.add_block_output_to_repos(
                 bn,
                 batch_out.clone(),
@@ -133,27 +154,29 @@ pub async fn run_sequencer_actor(
 
             tracing::info!(
                 block_number = bn,
-                transactions = replay.transactions.len(),
-                preimages = batch_out.published_preimages.len(),
-                storage_writes = batch_out.storage_writes.len(),
-                took =? stage_started_at.elapsed(),
-                "▶ Added to repos! Next: adding to wal...",
+                "▶ Added to repos in {:?}. Adding to wal...",
+                stage_started_at.elapsed()
             );
 
             stage_started_at = Instant::now();
-            wal.append_replay(replay);
-
-            tracing::info!(
-                block_number = bn,
-                took =? stage_started_at.elapsed(),
-                "▶ Added to wal! Next: advancing canonized...",
-            );
+            wal.append_replay(replay.clone());
             finality_tracker.advance_canonized(bn);
 
             tracing::info!(
                 block_number = bn,
-                took =? stage_started_at.elapsed(),
-                "✔ complete",
+                "▶ Added to wal and canonized in {:?}. Sending to state diffs sink...",
+                stage_started_at.elapsed()
+            );
+
+            stage_started_at = Instant::now();
+
+            batcher_sink.send((batch_out.clone(), replay)).await?;
+            tree_sink.send(batch_out).await?;
+
+            tracing::info!(
+                block_number = bn,
+                "✔ sent to sinks in {:?}",
+                stage_started_at.elapsed()
             );
 
             EXECUTION_METRICS.sealed_block[&"canonize"].set(bn);
