@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package zksync.dal;
+
+import "zksync/roles/validator.proto";
+import "zksync/roles/node.proto";
+
+message BlockCertificate {
+  // required
+  oneof t {
+    roles.validator.CommitQC v1 = 1;
+    roles.validator.CommitQCV2 v2 = 2;
+  }
+}
+
+message BlockMetadata {
+  optional roles.validator.PayloadHash payload_hash = 1; // required
+}
+
+message Payload {
+  optional BatchContext batch_context = 1; // required
+  repeated Transaction transactions = 2;
+}
+
+message BatchContext {
+  optional uint64 chain_id = 1; // required
+  optional uint64 block_number = 2; // required
+  repeated bytes block_hashes = 3; // required; H256,
+  optional uint64 timestamp = 4; // required; seconds since UNIX epoch
+  optional bytes eip1559_basefee = 5; // required; U256
+  optional bytes gas_per_pubdata = 6; // required; U256
+  optional bytes native_price = 7; // required; U256
+  optional bytes coinbase = 8;  // required; H160
+  optional uint64 gas_limit = 9; // required
+}
+
+message L1Transaction {
+  optional bytes rlp = 1; // required; RLP encoded L2CanonicalTransaction
+  repeated bytes factory_deps = 2;
+}
+
+message L2Transaction {
+  optional bytes rlp = 1; // required; RLP encoded TransactionRequest
+}
+
+message Transaction {
+  // required
+  oneof t {
+    L1Transaction l1 = 1;
+    L2Transaction l2 = 2;
+  }
+}
+
+message NodeAddr {
+  optional roles.node.PublicKey key = 1; // required
+  optional string addr = 2; // required; Host
+}
+
+message GlobalConfig {
+  optional roles.validator.Genesis genesis = 1; // required
+  optional bytes registry_address = 2; // optional; H160
+  repeated NodeAddr seed_peers = 3;
+}

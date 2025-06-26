@@ -3,6 +3,7 @@ pub mod block_context_provider;
 pub mod block_replay_storage;
 pub mod config;
 mod conversions;
+pub mod consensus;
 pub mod execution;
 pub mod finality;
 pub mod mempool;
@@ -21,10 +22,12 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
+use futures::channel::mpsc;
 use std::time::Duration;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
+use crate::consensus::ReducedBlockCommand;
 use crate::finality::FinalityTracker;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
@@ -54,6 +57,7 @@ pub async fn run_sequencer_actor(
     repositories: RepositoryManager,
     finality_tracker: FinalityTracker,
     sequencer_config: SequencerConfig,
+    consensus_command_receiver: Option<mpsc::UnboundedReceiver<ReducedBlockCommand>>
 ) -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(2);
 
@@ -66,7 +70,7 @@ pub async fn run_sequencer_actor(
         let state = state.clone();
 
         async move {
-            let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time);
+            let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time, consensus_command_receiver);
 
             while let Some(cmd) = stream.next().await {
                 // todo: also report full latency between command invocations
@@ -168,6 +172,7 @@ fn command_source(
     block_replay_wal: &BlockReplayStorage,
     block_to_start: u64,
     block_time: Duration,
+    consensus_command_receiver: Option<mpsc::UnboundedReceiver<ReducedBlockCommand>>
 ) -> BoxStream<BlockCommand> {
     let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
     tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
@@ -178,7 +183,16 @@ fn command_source(
         Box::pin(block_replay_wal.replay_commands_from(block_to_start));
 
     // Combined source: run WAL replay first, then produce blocks from mempool
-    let produce_stream: BoxStream<BlockCommand> =
+    let produce_stream: BoxStream<BlockCommand> = if let Some(receiver) = consensus_command_receiver {
+        receiver.then(move |reduced_command| async move {
+            match reduced_command {
+                ReducedBlockCommand::Replay(replay) => BlockCommand::Replay(replay),
+                ReducedBlockCommand::Produce(block_number) => BlockContextProvider
+                    .get_produce_command(block_number, block_time)
+                    .await
+            }
+        }).boxed()
+    } else {
         futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
             Some((
                 BlockContextProvider
@@ -187,7 +201,8 @@ fn command_source(
                 block_number + 1,
             ))
         })
-        .boxed();
+        .boxed()
+    };
     let stream = replay_wal_stream.chain(produce_stream);
     stream.boxed()
 }

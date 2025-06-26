@@ -45,4 +45,7 @@ pub struct SequencerConfig {
     /// Defines the block time for the sequencer.
     #[config(default_t = Duration::from_millis(100))]
     pub block_time: Duration,
+
+    #[config(default_t = 3312)]
+    pub prometheus_exporter_port: u16,
 }

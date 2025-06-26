@@ -49,3 +49,24 @@ zksync_storage = "28.1.0-non-semver-compat"
 zksync_web3_decl = "28.1.0-non-semver-compat"
 zksync_types = "28.1.0-non-semver-compat"
 #zksync_zk_os_merkle_tree = { version = "28.1.0-non-semver-compat", path = "../zksync-era/core/lib/zk_os_merkle_tree" }
+
+# Consensus dependencies.
+zksync_concurrency = "=0.11.4"
+zksync_consensus_bft = "=0.11.4"
+zksync_consensus_crypto = "=0.11.4"
+zksync_consensus_engine = "=0.11.4"
+zksync_consensus_executor = "=0.11.4"
+zksync_consensus_network = "=0.11.4"
+zksync_consensus_roles = "=0.11.4"
+zksync_consensus_utils = "=0.11.4"
+zksync_protobuf = "=0.11.4"
+zksync_protobuf_build = "=0.11.4"
+
+secrecy = "0.10.3"
+semver = "1"
+tempfile = "3.0.2"
+prost = "0.12.6"
+serde_yaml = "0.9"
+
+# Local dependencies.
+zksync_os_sequencer = { path = "node/sequencer", version = "0.1.0" }

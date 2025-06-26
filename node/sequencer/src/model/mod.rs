@@ -1,7 +1,8 @@
 use serde::Deserialize;
 use std::fmt::Display;
 use std::time::Duration;
-use zk_os_forward_system::run::BatchContext;
+pub use zk_ee::system::metadata::BlockHashes;
+pub use zk_os_forward_system::run::BatchContext;
 use zksync_types::Transaction;
 use zksync_web3_decl::jsonrpsee::core::Serialize;
 
@@ -24,7 +25,7 @@ impl BlockCommand {
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ReplayRecord {
     pub context: BatchContext,
     pub transactions: Vec<Transaction>,

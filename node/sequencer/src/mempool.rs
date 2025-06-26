@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use vise::{Buckets, Counter, Histogram, LabeledFamily, Metrics};
 use zksync_types::l1::L1Tx;
-use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
+use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, H256, U256};
 
 /// Thread-safe FIFO mempool that can be polled as a `Stream`.
 ///
@@ -128,7 +128,7 @@ pub fn forced_deposit_transaction() -> Transaction {
             gas_per_pubdata_limit: U256::from(1000),
             op_processing_type: Default::default(),
             priority_queue_type: Default::default(),
-            canonical_tx_hash: Default::default(),
+            canonical_tx_hash: H256::from_str("0xe35817578fe51cf6abd8c26f76096029961e0d4d73578410a05fa3be9cf88390").unwrap(),
             to_mint: U256::from("100000000000000000000000000000"),
             refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
                 .unwrap(),

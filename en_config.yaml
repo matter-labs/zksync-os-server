@@ -1,0 +1,29 @@
+consensus:
+  port: 2954
+  server_addr: 127.0.0.1:2954
+  public_addr: 127.0.0.1:2954
+  max_payload_size: 2500000
+  gossip_dynamic_inbound_limit: 100
+  genesis_spec:
+    chain_id: 270
+    protocol_version: 1
+    validators:
+      - key: validator:public:bls12_381:8aa65e55cf96fee4d3d56ca6bd251271121bd64fee1430c8a5646e7f22daa8790ea2b1220309fffdfb663dfc24cd115e06418b17617dc14089ff065a758167832ce66345b491c29d9adca01f86f9de9babfeac29814d1dcc27e587566547d1ea
+        weight: 1
+      - key: validator:public:bls12_381:84fe19a96b6443ca7cecdebabf5f01f29528a9e8e6da90e41dcbe5fd8c0d59bb0ad778d675d2b1df6a4942c4e946e3af15e42dfa05ac6aab8683176827e6e3229a5682ca99ac498dec0870f6d8aa95c8164102f0d62e4c47e3566c4e5c32354d
+        weight: 1
+    leader: validator:public:bls12_381:8aa65e55cf96fee4d3d56ca6bd251271121bd64fee1430c8a5646e7f22daa8790ea2b1220309fffdfb663dfc24cd115e06418b17617dc14089ff065a758167832ce66345b491c29d9adca01f86f9de9babfeac29814d1dcc27e587566547d1ea
+  gossip_static_outbound:
+    - key: node:public:ed25519:3fcdfc69cd9241631c47f1fec244866a44121ffed7d1e8af1dd7f42a7f5427ca
+      addr: 127.0.0.1:3054
+
+consensus_secrets:
+  validator_key: validator:secret:bls12_381:1de85683e6decbfcf6c12aa42a5c8bfa98d7ae796dee068ae73dc784a58f5213
+  node_key: node:secret:ed25519:c767ed795a167949de3a899114ab3cd6696bd61c9d5d92b96377a425a7749b98
+
+rpc:
+  address: 127.0.0.1:2950
+
+sequencer:
+  rocks_db_path: ./db/en1
+  prometheus_exporter_port: 2951
