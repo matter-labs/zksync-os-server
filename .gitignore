@@ -3,3 +3,5 @@
 .idea
 
 db/node1/*
+
+.DS_Store
