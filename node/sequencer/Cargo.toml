@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_l1_watcher.workspace = true
+zksync_os_contract_interface.workspace = true
 zksync_os_mempool.workspace = true
 
 zk_os_forward_system.workspace = true
@@ -20,8 +21,11 @@ zk_os_basic_system.workspace = true
 zksync_web3_decl = { workspace = true, features = ["server"] }
 zksync_types.workspace = true
 zksync_storage.workspace = true
+zksync_mini_merkle_tree.workspace = true
 
 anyhow.workspace = true
+alloy = { workspace = true, default-features = false }
+blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
@@ -34,7 +38,7 @@ futures.workspace = true
 dashmap.workspace = true
 vise.workspace = true
 zksync_vlog.workspace = true
-
+base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
@@ -42,3 +46,4 @@ bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }
 
 zksync_os_state.workspace = true
+zksync_os_merkle_tree.workspace = true

@@ -65,13 +65,14 @@ pub async fn execute_block(
     cmd: BlockCommand,
     tx_stream: TxStream,
     state: StateHandle,
+    max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {
     let metrics_label = match cmd {
         BlockCommand::Produce(_, _) => "produce",
         BlockCommand::Replay(_) => "replay",
     };
     let (ctx, stream, seal, invalid) = command_into_parts(cmd, tx_stream);
-    execute_block_inner(ctx, state, stream, seal, invalid, metrics_label).await
+    execute_block_inner(ctx, state, stream, seal, invalid, metrics_label, max_transactions_in_block).await
 }
 
 async fn execute_block_inner(
@@ -81,6 +82,7 @@ async fn execute_block_inner(
     seal_policy: SealPolicy,
     fail_policy: InvalidTxPolicy,
     metrics_label: &'static str,
+    max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {
     /* ---------- VM & state ----------------------------------------- */
     let state_view = state.state_view_at_block(ctx.block_number)?;
@@ -122,13 +124,13 @@ async fn execute_block_inner(
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx_abi_encode(tx.clone())).await {
-                            Ok(res) => {
-                                tracing::info!(
-                                    block = ctx.block_number,
-                                    tx = ?tx.hash(),
-                                    res = ?res,
-                                    "tx executed"
-                                );
+                            Ok(_res) => {
+                                // tracing::info!(
+                                //     block = ctx.block_number,
+                                //     tx = ?tx.hash(),
+                                //     res = ?res,
+                                //     "tx executed"
+                                // );
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 
@@ -139,6 +141,11 @@ async fn execute_block_inner(
                                     if let Some(dur) = deadline_dur {
                                         deadline = Some(Box::pin(tokio::time::sleep(dur)));
                                     }
+                                }
+
+                                // seal block if max transactions number reached
+                                if executed.len() >= max_transactions_in_block {
+                                    break;
                                 }
                             }
                             Err(e) => match fail_policy {
