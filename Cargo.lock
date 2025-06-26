@@ -7514,7 +7514,6 @@ name = "zksync_os_contract_interface"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "anyhow",
 ]
 
 [[package]]

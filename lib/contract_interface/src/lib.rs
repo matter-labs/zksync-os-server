@@ -1,6 +1,6 @@
 use crate::IBridgehub::IBridgehubInstance;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::DynProvider;
 
 alloy::sol! {
@@ -131,10 +131,7 @@ impl Bridgehub {
     }
 
     // TODO: Consider creating a separate `ZkChain` struct
-    pub async fn stored_batch_hash(
-        &self,
-        batch_number: u64,
-    ) -> alloy::contract::Result<FixedBytes<32>> {
+    pub async fn stored_batch_hash(&self, batch_number: u64) -> alloy::contract::Result<B256> {
         let zk_chain_address = self.zk_chain_address().await?;
         let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider().clone());
         zk_chain

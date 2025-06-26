@@ -11,4 +11,3 @@ categories.workspace = true
 
 [dependencies]
 alloy = { workspace = true, default-features = false, features = ["contract", "providers"] }
-anyhow.workspace = true

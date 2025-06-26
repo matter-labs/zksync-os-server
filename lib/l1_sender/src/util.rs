@@ -1,7 +1,6 @@
 use crate::commitment::StoredBatchInfo;
+use alloy::primitives::keccak256;
 use zksync_os_contract_interface::Bridgehub;
-use zksync_types::web3::keccak256;
-use zksync_types::H256;
 
 pub async fn load_genesis_stored_batch(bridgehub: &Bridgehub) -> anyhow::Result<StoredBatchInfo> {
     let genesis_stored_batch = StoredBatchInfo {
@@ -11,7 +10,7 @@ pub async fn load_genesis_stored_batch(bridgehub: &Bridgehub) -> anyhow::Result<
         state_commitment: "0x6e6e7044cb237fa30937e7e2ee56db7bb3b5d3bd0f46ba7c3a46a6ac4cf2f330"
             .parse()
             .unwrap(),
-        number_of_layer1_txs: 0.into(),
+        number_of_layer1_txs: 0,
         priority_operations_hash: keccak256(&[]).into(),
         // `DEFAULT_L2_LOGS_TREE_ROOT_HASH` is explicitly set to zero in L1 contracts.
         // See `era-contracts/l1-contracts/contracts/common/Config.sol`.
@@ -21,7 +20,7 @@ pub async fn load_genesis_stored_batch(bridgehub: &Bridgehub) -> anyhow::Result<
             .parse()
             .unwrap(),
     };
-    let genesis_stored_hash = H256::from_slice(bridgehub.stored_batch_hash(0).await?.as_slice());
+    let genesis_stored_hash = bridgehub.stored_batch_hash(0).await?;
     assert_eq!(genesis_stored_batch.hash(), genesis_stored_hash);
 
     Ok(genesis_stored_batch)
