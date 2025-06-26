@@ -19,9 +19,11 @@ use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_sequencer::tree_manager::TreeManager;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_storage::RocksDB;
+use zksync_types::abi::{L2CanonicalTransaction, NewPriorityRequest};
 use zksync_types::l1::L1Tx;
-use zksync_types::{Address, Execute, L1TxCommonData, PriorityOpId, Transaction, U256};
+use zksync_types::{Transaction, PRIORITY_OPERATION_L2_TX_TYPE, U256};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
+
 use zksync_os_sequencer::batcher::Batcher;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -73,7 +75,7 @@ pub async fn main() {
         .expect("Failed to load L1 watcher config")
         .parse()
         .expect("Failed to parse L1 watcher config");
-
+    
     let batcher_config = repo
         .single::<BatcherConfig>()
         .expect("Failed to load L1 watcher config")
@@ -197,7 +199,7 @@ pub async fn main() {
             state_handle.clone(),
             MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,
-            batcher_config.num_workers
+            batcher_config.num_workers,
         );
         Box::pin(batcher.run_loop())
     } else {
@@ -293,32 +295,39 @@ pub async fn main() {
 
 // to be replaced with proper L1 deposit
 pub fn forced_deposit_transaction() -> Transaction {
-    L1Tx {
-        execute: Execute {
-            contract_address: Some(
-                Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-            ),
-            calldata: vec![],
-            value: U256::from("100"),
-            factory_deps: vec![],
-        },
-        common_data: L1TxCommonData {
-            sender: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-            serial_id: PriorityOpId(1),
-            layer_2_tip_fee: Default::default(),
-            full_fee: U256::from("10000000000"),
-            max_fee_per_gas: U256::from(1),
-            gas_limit: U256::from("10000000000"),
-            gas_per_pubdata_limit: U256::from(1000),
-            op_processing_type: Default::default(),
-            priority_queue_type: Default::default(),
-            canonical_tx_hash: Default::default(),
-            to_mint: U256::from("100000000000000000000000000000"),
-            refund_recipient: Address::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049")
-                .unwrap(),
-            eth_block: 0,
-        },
-        received_timestamp_ms: 0,
-    }
-    .into()
+    let transaction = L2CanonicalTransaction {
+        tx_type: U256::from(PRIORITY_OPERATION_L2_TX_TYPE),
+        from: U256::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+        to: U256::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
+        gas_limit: U256::from("10000000000"),
+        gas_per_pubdata_byte_limit: U256::from(1000),
+        max_fee_per_gas: U256::from(1),
+        max_priority_fee_per_gas: U256::from(0),
+        paymaster: U256::zero(),
+        nonce: U256::from(1),
+        value: U256::from(100),
+        reserved: [
+            // `toMint`
+            U256::from("100000000000000000000000000000"),
+            // `refundRecipient`
+            U256::from("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049"),
+            U256::from(0),
+            U256::from(0),
+        ],
+        data: vec![],
+        signature: vec![],
+        factory_deps: vec![],
+        paymaster_input: vec![],
+        reserved_dynamic: vec![],
+    };
+    let new_priority_request = NewPriorityRequest {
+        tx_id: transaction.nonce,
+        tx_hash: transaction.hash().0,
+        expiration_timestamp: u64::MAX,
+        transaction: Box::new(transaction),
+        factory_deps: vec![],
+    };
+    L1Tx::try_from(new_priority_request)
+        .expect("forced deposit transaction is malformed")
+        .into()
 }

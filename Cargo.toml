@@ -72,6 +72,7 @@ zksync_web3_decl = "28.1.0-non-semver-compat"
 zksync_types = "28.1.0-non-semver-compat"
 zksync_basic_types = "28.1.0-non-semver-compat"
 zksync_crypto_primitives = "28.1.0-non-semver-compat"
+zksync_mini_merkle_tree = "28.1.0-non-semver-compat"
 
 # "Local" dependencies
 zksync_os_contract_interface = { path = "lib/contract_interface" }

@@ -1,4 +1,4 @@
-use crate::commitment::CommitBatchInfo;
+use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::ReplayRecord;
 use std::alloc::Global;
@@ -235,8 +235,11 @@ fn worker_loop(
             };
             let commit_batch_info =
                 CommitBatchInfo::new(batch_output, replay_record.transactions, tree_output);
-
             tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
+
+            let stored_batch_info = StoredBatchInfo::from(commit_batch_info);
+            tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
+
         }
     }
 }
