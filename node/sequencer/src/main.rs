@@ -4,7 +4,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{watch};
+use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zk_os_forward_system::run::BatchOutput;
@@ -25,12 +25,13 @@ use zksync_types::{Transaction, PRIORITY_OPERATION_L2_TX_TYPE, U256};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
 use zksync_os_sequencer::batcher::Batcher;
+use zksync_os_sequencer::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use zksync_os_sequencer::prover_api::prover_job_manager::ProverJobManager;
 use zksync_os_sequencer::prover_api::prover_server;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
-
 const TREE_DB_NAME: &str = "tree";
+const PROOF_STORAGE_DB_NAME: &str = "proofs";
 
 #[tokio::main]
 pub async fn main() {
@@ -120,6 +121,14 @@ pub async fn main() {
     });
 
     let repositories = RepositoryManager::new(sequencer_config.blocks_to_retain_in_memory);
+
+    let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
+        &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
+    )
+    .expect("Failed to open ProofStorageDB");
+
+    let proof_storage = ProofStorage::new(proof_storage_db);
+    tracing::info!("Proof storage initialized with {} proofs already present", proof_storage.get_blocks_with_proof().len());
 
     // =========== load last persisted block numbers.  ===========
     let (storage_map_block, preimages_block) = state_handle.latest_block_numbers();
@@ -234,6 +243,7 @@ pub async fn main() {
     // ======= Initialize Prover Api Server (todo: should be optional) ========
 
     let prover_job_manager = Arc::new(ProverJobManager::new(
+        proof_storage,
         prover_api_config.job_timeout,
         prover_api_config.max_unproved_blocks,
     ));

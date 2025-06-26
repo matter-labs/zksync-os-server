@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::commitment::CommitBatchInfo;
 use crate::model::BatchJob;
+use crate::prover_api::proof_storage::ProofStorage;
 use dashmap::DashMap;
 use itertools::Itertools;
 use serde::Serialize;
@@ -62,6 +63,7 @@ pub struct JobState {
 
 pub struct ProverJobManager {
     jobs: DashMap<u64, JobEntry>,
+    proof_storage: ProofStorage,
     assignment_timeout: Duration,
     // applies backpressure when `jobs` reaches this number
     max_jobs_count: usize,
@@ -72,9 +74,14 @@ pub struct ProverJobManager {
 }
 
 impl ProverJobManager {
-    pub fn new(assignment_timeout: Duration, max_jobs_count: usize) -> Self {
+    pub fn new(
+        proof_storage: ProofStorage,
+        assignment_timeout: Duration,
+        max_jobs_count: usize,
+    ) -> Self {
         Self {
             jobs: DashMap::new(),
+            proof_storage,
             assignment_timeout,
             max_jobs_count,
             pick_lock: parking_lot::Mutex::new(()),
@@ -149,7 +156,7 @@ impl ProverJobManager {
             return Err(SubmitError::VerificationFailed);
         }
 
-        persist_proof_stub(block, &proof).map_err(SubmitError::Other)?;
+        self.proof_storage.save_proof(block, &proof);
         Ok(())
     }
 
@@ -182,10 +189,15 @@ impl ProverJobManager {
 
     // The following delegate to persistent storage (stubs for now).
     pub fn available_proofs(&self) -> Vec<(u64, Vec<String>)> {
-        list_persisted_proofs_stub()
+        self.proof_storage
+            .get_blocks_with_proof()
+            .into_iter()
+            .map(|number| (number, vec!["fri".to_string()]))
+            .collect()
     }
+
     pub fn get_fri_proof(&self, block: u64) -> Option<Vec<u8>> {
-        load_fri_proof_stub(block)
+        self.proof_storage.get_proof(block)
     }
 }
 
@@ -193,13 +205,4 @@ impl ProverJobManager {
 
 fn verify_fri_proof_stub(_info: &CommitBatchInfo, _proof: &[u8]) -> bool {
     true
-}
-fn persist_proof_stub(_block: u64, _proof: &[u8]) -> Result<(), String> {
-    Ok(())
-}
-fn list_persisted_proofs_stub() -> Vec<(u64, Vec<String>)> {
-    Vec::new()
-}
-fn load_fri_proof_stub(_block: u64) -> Option<Vec<u8>> {
-    None
 }
