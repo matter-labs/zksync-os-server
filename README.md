@@ -21,3 +21,17 @@ $ cargo run --release
 INFO zksync_os_l1_watcher: initializing L1 watcher bridgehub_address=0x4b37536b9824c4a4cf3d15362135e346adb7cb9c chain_id=270 next_l1_block=0
 ...
 ```
+
+## Consensus
+
+By default, the sequencer will run in consensus mode with 2 validators.
+It means blocks will be produced only if both validators are running.
+```
+$ cargo run --release
+
+$ ZKSYNC_CONFIG_PATH=./en_config.yaml cargo run --release
+```
+
+In case you want only one validator, you can update validator list in the config.
+
+In case you don't want to run consensus at all, you can remove `consensus:` from the config.
