@@ -2,16 +2,16 @@ version: "3.9"
 
 services:
   sequencer:
-    build: .               # or `image: ghcr.io/you/zksync-os:latest`
+    image: zksync_os_sequencer
     container_name: sequencer
     restart: unless-stopped
     environment:
       RUST_LOG: info
       # add your own env vars here
     volumes:
-      - sequencer-db:/data       # SSD-backed volume
+      - sequencer-db:/db       # SSD-backed volume
     ports:
-      - "3000:3000"              # JSON-RPC
+      - "3050:3050"              # JSON-RPC
       - "3124:3124"              # prover-api
       - "3312:3312"              # Prometheus metrics
     healthcheck:
