@@ -2,7 +2,7 @@ consensus:
   port: 2954
   server_addr: 127.0.0.1:2954
   public_addr: 127.0.0.1:2954
-  max_payload_size: 2500000
+  max_payload_size: 2500000b
   gossip_dynamic_inbound_limit: 100
   genesis_spec:
     chain_id: 270

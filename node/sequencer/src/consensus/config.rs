@@ -9,7 +9,6 @@ use anyhow::Context as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use smart_config::{ByteSize, DescribeConfig, DeserializeConfig, Serde};
 use smart_config::de::{Qualified, WellKnown, WellKnownOption, Entries};
-use smart_config::metadata::{SizeUnit};
 use zksync_concurrency::{limiter, net, time};
 use zksync_consensus_crypto::{Text};
 use zksync_consensus_executor as executor;
@@ -17,7 +16,6 @@ use zksync_consensus_network as network;
 use zksync_consensus_roles::{node, validator};
 use zksync_protobuf::build::serde::{Deserialize, Serialize};
 use zksync_types::{ethabi, L2ChainId};
-use utils::Fallback;
 
 /// `zksync_consensus_crypto::TextFmt` representation of `zksync_consensus_roles::validator::PublicKey`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -91,7 +89,7 @@ pub struct ConsensusConfig {
     /// node.
     pub public_addr: Host,
     /// Maximal allowed size of the payload in bytes.
-    #[config(default_t = ByteSize(2_500_000), with = Fallback(SizeUnit::Bytes))]
+    #[config(default_t = ByteSize(2_500_000))]
     pub max_payload_size: ByteSize,
     /// View timeout duration.
     #[config(default_t = Duration::from_secs(2))]
@@ -312,54 +310,4 @@ pub struct GlobalConfig {
     pub genesis: validator::Genesis,
     pub registry_address: Option<ethabi::Address>,
     pub seed_peers: BTreeMap<node::PublicKey, net::Host>,
-}
-
-mod utils {
-    use smart_config::{
-        de::{DeserializeContext, DeserializeParam, WellKnown},
-        metadata::{BasicTypes, ParamMetadata, TypeDescription},
-        ErrorWithOrigin,
-    };
-
-    /// Combines the standard deserializer with another one having lower priority (wrapped by the type).
-    /// The fallback deserializer will only be invoked if the standard deserializer fails. If both deserializers fail,
-    /// both their errors will be reported.
-    #[derive(Debug)]
-    pub(crate) struct Fallback<De>(pub(crate) De);
-
-    impl<T, De> DeserializeParam<T> for Fallback<De>
-    where
-        T: 'static + WellKnown,
-        De: DeserializeParam<T>,
-    {
-        const EXPECTING: BasicTypes = <T::Deserializer>::EXPECTING.or(De::EXPECTING);
-
-        fn describe(&self, description: &mut TypeDescription) {
-            T::DE.describe(description);
-            description.set_fallback(&self.0);
-        }
-
-        fn deserialize_param(
-            &self,
-            mut ctx: DeserializeContext<'_>,
-            param: &'static ParamMetadata,
-        ) -> Result<T, ErrorWithOrigin> {
-            let main_err = match T::DE.deserialize_param(ctx.borrow(), param) {
-                Ok(value) => return Ok(value),
-                Err(err) => err,
-            };
-            self.0
-                .deserialize_param(ctx.borrow(), param)
-                .map_err(|fallback_err| {
-                    // Push both errors into the context.
-                    ctx.push_error(fallback_err);
-                    main_err
-                })
-        }
-
-        fn serialize_param(&self, param: &T) -> serde_json::Value {
-            // The main deserializer always has priority
-            self.0.serialize_param(param)
-        }
-    }
 }
