@@ -1,0 +1,32 @@
+[package]
+name = "zksync_os_l1_sender"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_contract_interface.workspace = true
+zksync_os_merkle_tree.workspace = true
+
+zksync_storage.workspace = true
+zksync_types.workspace = true
+zksync_mini_merkle_tree.workspace = true
+
+zk_os_forward_system.workspace = true
+zk_ee.workspace = true
+zk_os_basic_system.workspace = true
+
+alloy = { workspace = true, default-features = false, features = ["reqwest", "kzg", "provider-debug-api", "signer-local"] }
+anyhow.workspace = true
+blake2.workspace = true
+ruint.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+smart-config = { workspace = true, features = ["primitive-types"] }
+tokio.workspace = true
+tracing.workspace = true
