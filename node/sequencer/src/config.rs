@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 #[config(derive(Default))]
 pub struct RpcConfig {
     /// JSON-RPC address to listen on. Only http is currently supported.
-    #[config(default_t = "127.0.0.1:3050".into())]
+    #[config(default_t = "0.0.0.0:3050".into())]
     pub address: String,
 
     /// Max size of a transaction to be accepted by API
@@ -76,7 +76,7 @@ pub struct ProverApiConfig {
     pub job_timeout: Duration,
 
     /// Prover API address to listen on.
-    #[config(default_t = "127.0.0.1:3124".into())]
+    #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,
 
     /// Upper bound on the number of FRI blocks whose **prover inputs** are still
