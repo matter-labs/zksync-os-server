@@ -119,28 +119,14 @@ impl BlockReplayStorage {
 
     pub fn get_replay_record(&self, block_number: u64) -> Option<ReplayRecord> {
         let key = block_number.to_be_bytes();
-        let mut context_result = self
+        let context_result = self
             .db
             .get_cf(BlockReplayColumnFamily::Context, &key)
             .expect("Failed to read from Context CF");
-        let mut txs_result = self
+        let txs_result = self
             .db
             .get_cf(BlockReplayColumnFamily::Txs, &key)
             .expect("Failed to read from Txs CF");
-
-        // there is no way to read transactionally from two column families.
-        // so we retry reads if one piece of data is missing.
-        if context_result.is_none() && txs_result.is_some() {
-            context_result = self
-                .db
-                .get_cf(BlockReplayColumnFamily::Context, &key)
-                .expect("Failed to read from Context CF");
-        } else if context_result.is_some() && txs_result.is_none() {
-            txs_result = self
-                .db
-                .get_cf(BlockReplayColumnFamily::Txs, &key)
-                .expect("Failed to read from Txs CF");
-        }
 
         match (context_result, txs_result) {
             (Some(bytes_context), Some(bytes_txs)) => Some(ReplayRecord {
@@ -157,8 +143,7 @@ impl BlockReplayStorage {
                 .expect("Failed to deserialize transactions")
                 .0,
             }),
-            (None, None) => None,
-            _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
+            _ => None,
         }
     }
 

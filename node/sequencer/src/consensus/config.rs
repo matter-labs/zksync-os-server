@@ -7,11 +7,11 @@ use std::{
 
 use anyhow::Context as _;
 use secrecy::{ExposeSecret as _, SecretString};
-use smart_config::{ByteSize, DescribeConfig, DeserializeConfig, ErrorWithOrigin, Serde};
-use smart_config::de::{self, Qualified, WellKnown, WellKnownOption, Entries, DeserializeContext};
-use smart_config::metadata::{BasicTypes, ParamMetadata, SizeUnit, TypeDescription};
+use smart_config::{ByteSize, DescribeConfig, DeserializeConfig, Serde};
+use smart_config::de::{Qualified, WellKnown, WellKnownOption, Entries};
+use smart_config::metadata::{SizeUnit};
 use zksync_concurrency::{limiter, net, time};
-use zksync_consensus_crypto::{Text, TextFmt};
+use zksync_consensus_crypto::{Text};
 use zksync_consensus_executor as executor;
 use zksync_consensus_network as network;
 use zksync_consensus_roles::{node, validator};
@@ -80,41 +80,6 @@ impl RpcConfig {
     }
 }
 
-// We cannot deserialize `Duration` directly because it expects an object with the `secs` (not `seconds`!) and `nanos` fields.
-#[derive(Debug, Serialize, Deserialize)]
-struct SerdeDuration {
-    seconds: u64,
-    nanos: u32,
-}
-
-#[derive(Debug)]
-struct CustomDurationFormat;
-
-impl de::DeserializeParam<Duration> for CustomDurationFormat {
-    const EXPECTING: BasicTypes = BasicTypes::OBJECT;
-
-    fn describe(&self, description: &mut TypeDescription) {
-        description.set_details("object with `seconds` and `nanos` fields");
-    }
-
-    fn deserialize_param(
-        &self,
-        ctx: DeserializeContext<'_>,
-        param: &'static ParamMetadata,
-    ) -> Result<Duration, ErrorWithOrigin> {
-        let duration = SerdeDuration::deserialize(ctx.current_value_deserializer(param.name)?)?;
-        Ok(Duration::new(duration.seconds, duration.nanos))
-    }
-
-    fn serialize_param(&self, param: &Duration) -> serde_json::Value {
-        let duration = SerdeDuration {
-            seconds: param.as_secs(),
-            nanos: param.subsec_nanos(),
-        };
-        serde_json::to_value(duration).unwrap()
-    }
-}
-
 /// Config (shared between main node and external node).
 #[derive(Clone, Debug, PartialEq, DescribeConfig, DeserializeConfig)]
 pub struct ConsensusConfig {
@@ -129,16 +94,8 @@ pub struct ConsensusConfig {
     #[config(default_t = ByteSize(2_500_000), with = Fallback(SizeUnit::Bytes))]
     pub max_payload_size: ByteSize,
     /// View timeout duration.
-    #[config(default_t = Duration::from_secs(2), with = Fallback(CustomDurationFormat))]
+    #[config(default_t = Duration::from_secs(2))]
     pub view_timeout: Duration,
-    /// Maximal allowed size of the sync-batch payloads in bytes.
-    ///
-    /// The batch consists of block payloads and a Merkle proof of inclusion on L1 (~1kB),
-    /// so the maximum batch size should be the maximum payload size times the maximum number
-    /// of blocks in a batch.
-    #[config(default_t = ByteSize(12_500_001_024), with = Fallback(SizeUnit::Bytes))]
-    pub max_batch_size: ByteSize,
-
     /// Limit on the number of inbound connections outside the `static_inbound` set.
     #[config(default_t = 100)]
     pub gossip_dynamic_inbound_limit: usize,
@@ -172,24 +129,23 @@ impl ConsensusConfig {
 
 /// Secrets needed for consensus.
 #[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
 pub struct ConsensusSecrets {
     /// Has `validator:secret:bls12_381:` prefix.
     pub validator_key: Option<SecretString>,
     /// Has `node:secret:ed25519:` prefix.
-    pub node_key: Option<SecretString>,
-}
-
-fn read_secret_text<T: TextFmt>(text: Option<&SecretString>) -> anyhow::Result<Option<T>> {
-    text.map(|text| Text::new(text.expose_secret()).decode())
-        .transpose()
-        .map_err(|_| anyhow::format_err!("invalid format"))
+    pub node_key: SecretString,
 }
 
 pub(super) fn validator_key(
     secrets: &ConsensusSecrets,
 ) -> anyhow::Result<Option<validator::SecretKey>> {
-    read_secret_text(secrets.validator_key.as_ref())
+    secrets.validator_key.as_ref().map(|text| Text::new(text.expose_secret()).decode())
+        .transpose()
+        .map_err(|_| anyhow::format_err!("invalid format"))
+}
+
+pub(super) fn node_key(secrets: &ConsensusSecrets) -> anyhow::Result<node::SecretKey> {
+    Text::new(secrets.node_key.expose_secret()).decode()
 }
 
 /// Consensus genesis specification.
@@ -292,10 +248,6 @@ impl GenesisSpec {
     }
 }
 
-pub(super) fn node_key(secrets: &ConsensusSecrets) -> anyhow::Result<Option<node::SecretKey>> {
-    read_secret_text(secrets.node_key.as_ref())
-}
-
 pub(super) fn executor(
     cfg: &ConsensusConfig,
     secrets: &ConsensusSecrets,
@@ -338,8 +290,7 @@ pub(super) fn executor(
         max_payload_size: cfg.max_payload_size.0 as usize,
         view_timeout: cfg.view_timeout.try_into().context("view_timeout")?,
         node_key: node_key(secrets)
-            .context("node_key")?
-            .context("missing node_key")?,
+            .context("node_key")?,
         validator_key: validator_key(secrets).context("validator_key")?,
         gossip_dynamic_inbound_limit: cfg.gossip_dynamic_inbound_limit,
         gossip_static_inbound: cfg

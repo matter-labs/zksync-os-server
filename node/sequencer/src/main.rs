@@ -102,9 +102,8 @@ pub async fn main() {
 
     let consensus_secrets = repo
         .single::<ConsensusSecrets>()
-        .expect("Failed to load consensus secrets")
-        .parse()
-        .expect("Failed to parse consensus secrets");
+        .map(|s| s.parse().expect("Failed to parse consensus secrets"))
+        .ok();
 
     let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(sequencer_config.prometheus_exporter_port);
 
@@ -363,7 +362,7 @@ fn read_yaml(path: &std::path::Path) -> anyhow::Result<Yaml> {
 
 async fn run_consensus(
     config: Option<ConsensusConfig>,
-    secrets: ConsensusSecrets,
+    secrets: Option<ConsensusSecrets>,
     storage: ConsensusStorage,
     command_sender: mpsc::UnboundedSender<ReducedBlockCommand>,
     mut stop_receiver: watch::Receiver<bool>,
@@ -376,7 +375,7 @@ async fn run_consensus(
         s.spawn_bg(run_main_node(
             ctx,
             config,
-            secrets,
+            secrets.unwrap(),
             storage,
             command_sender,
         ));

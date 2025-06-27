@@ -16,6 +16,7 @@ consensus:
   gossip_static_outbound:
     - key: node:public:ed25519:3fcdfc69cd9241631c47f1fec244866a44121ffed7d1e8af1dd7f42a7f5427ca
       addr: 127.0.0.1:3054
+  view_timeout: 10sec
 
 consensus_secrets:
   validator_key: validator:secret:bls12_381:1de85683e6decbfcf6c12aa42a5c8bfa98d7ae796dee068ae73dc784a58f5213
