@@ -54,7 +54,7 @@ pub struct SequencerConfig {
 #[config(derive(Default))]
 pub struct BatcherConfig {
     /// Whether to run the batcher (prover input generator) or not.
-    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart
+    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart.
     #[config(default_t = true)]
     pub component_enabled: bool,
 
@@ -62,4 +62,31 @@ pub struct BatcherConfig {
     /// Also known as app.bin vs app_logging_enabled.bin
     #[config(default_t = false)]
     pub logging_enabled: bool,
+
+    #[config(default_t = 1)]
+    pub num_workers: usize,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ProverApiConfig {
+    /// Whether to enable debug output in RiscV binary.
+    /// Also known as app.bin vs app_logging_enabled.bin
+    #[config(default_t = Duration::from_secs(60))]
+    pub job_timeout: Duration,
+
+    /// Prover API address to listen on.
+    #[config(default_t = "127.0.0.1:3124".into())]
+    pub address: String,
+
+    /// Upper bound on the number of FRI blocks whose **prover inputs** are still
+    /// retained in memory while a proof is outstanding.
+    ///
+    /// * When the threshold is reached, the batching stage applies back-pressure,
+    ///   which propagates up to block production.
+    /// * Each unproved block holds its entire prover-input blob in RAM, so this
+    ///   value must remain bounded.
+    ///
+    #[config(default_t = 1000)]
+    pub max_unproved_blocks: usize,
 }
