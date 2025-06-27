@@ -1120,6 +1120,8 @@ dependencies = [
  "http 1.3.1",
  "http-body 1.0.1",
  "http-body-util",
+ "hyper 1.6.0",
+ "hyper-util",
  "itoa",
  "matchit",
  "memchr",
@@ -1128,10 +1130,15 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper 1.0.2",
+ "tokio",
  "tower 0.5.2",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1152,6 +1159,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1196,7 +1204,7 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "basic_system",
@@ -1214,7 +1222,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -1839,7 +1847,7 @@ checksum = "43da5946c66ffcc7745f48db692ffbb10a83bfe0afd96235c5c2a4fb23994929"
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -1921,7 +1929,7 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 
 [[package]]
 name = "darling"
@@ -2327,7 +2335,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -2502,7 +2510,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "basic_bootloader",
@@ -3846,7 +3854,7 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 
 [[package]]
 name = "native-tls"
@@ -4159,7 +4167,7 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "ringbuffer",
  "risc_v_simulator",
@@ -5516,6 +5524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59fab13f937fa393d08645bf3a84bdfe86e296747b506ada67bb15f10f218b2a"
+dependencies = [
+ "itoa",
+ "serde",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5811,7 +5829,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -5989,7 +6007,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -6287,6 +6305,7 @@ dependencies = [
  "tokio",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -7431,7 +7450,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "arrayvec",
  "bitflags 2.9.1",
@@ -7593,7 +7612,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.2-new-sequencer#0e00325f824bd7791426a0e4e3979a2ad2be7915"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#654b1f6582ef154320637cd2f503e91ace8ec80d"
 dependencies = [
  "cycle_marker",
  "execution_utils",
@@ -7609,6 +7628,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "basic_system",
  "bincode 2.0.1",
@@ -7617,7 +7637,9 @@ dependencies = [
  "forward_system",
  "futures",
  "hex",
+ "http 1.3.1",
  "itertools 0.14.0",
+ "parking_lot",
  "ruint",
  "serde",
  "serde_json",

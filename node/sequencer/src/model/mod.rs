@@ -4,6 +4,7 @@ use std::time::Duration;
 use zk_os_forward_system::run::BatchContext;
 use zksync_types::Transaction;
 use zksync_web3_decl::jsonrpsee::core::Serialize;
+use zksync_os_l1_sender::commitment::CommitBatchInfo;
 
 #[derive(Clone, Debug)]
 pub enum BlockCommand {
@@ -34,6 +35,13 @@ pub struct ReplayRecord {
 pub enum TransactionSource {
     Replay(Vec<Transaction>),
     Mempool,
+}
+
+/// Currently used both for prover api and eth-sender - may reconsider later on
+pub struct BatchJob {
+    pub block_number: u64,
+    pub prover_input: Vec<u32>,
+    pub commit_batch_info: CommitBatchInfo,
 }
 
 impl Display for BlockCommand {

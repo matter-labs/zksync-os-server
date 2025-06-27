@@ -26,7 +26,7 @@ impl StoredBatchInfo {
     pub fn hash(&self) -> B256 {
         let abi_encoded = zksync_os_contract_interface::IExecutor::StoredBatchInfo::from(self)
             .abi_encode_params();
-        FixedBytes::from(keccak256(abi_encoded.as_slice()))
+        keccak256(abi_encoded.as_slice())
     }
 }
 
@@ -105,7 +105,7 @@ impl CommitBatchInfo {
         chain_id: u64,
     ) -> Self {
         let mut l1_tx_count = 0;
-        let mut priority_operations_hash = keccak256(&[]);
+        let mut priority_operations_hash = keccak256([]);
         for tx in &transactions {
             if let ExecuteTransactionCommon::L1(data) = &tx.common_data {
                 l1_tx_count += 1;

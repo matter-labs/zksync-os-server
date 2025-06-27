@@ -11,7 +11,7 @@ pub async fn load_genesis_stored_batch(bridgehub: &Bridgehub) -> anyhow::Result<
             .parse()
             .unwrap(),
         number_of_layer1_txs: 0,
-        priority_operations_hash: keccak256(&[]).into(),
+        priority_operations_hash: keccak256([]),
         // `DEFAULT_L2_LOGS_TREE_ROOT_HASH` is explicitly set to zero in L1 contracts.
         // See `era-contracts/l1-contracts/contracts/common/Config.sol`.
         l2_to_l1_logs_root_hash: Default::default(),
