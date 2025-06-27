@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'zksync-os-server'
+    static_configs:
+      - targets: ['sequencer:3312']
