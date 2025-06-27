@@ -160,7 +160,6 @@ pub async fn main() {
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
 
-    //
     let (batch_sender, batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(100);
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
