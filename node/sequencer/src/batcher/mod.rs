@@ -1,4 +1,3 @@
-use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::{BatchJob, ReplayRecord};
 use std::alloc::Global;
@@ -11,7 +10,10 @@ use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_basic_system::system_implementation::flat_storage_model::TestingTree;
 use zk_os_forward_system::run::test_impl::{InMemoryTree, TxListSource};
 use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
+use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
+use crate::CHAIN_ID;
 
 const MAX_INFLIGHT: usize = 30;
 
@@ -22,8 +24,10 @@ const MAX_INFLIGHT: usize = 30;
 /// Thus, this component only generates prover input.
 pub struct Batcher {
     block_sender: Receiver<(BatchOutput, ReplayRecord)>,
-    // todo: this will need to be a broadcast with backpressure instead (to eth-sender and prover-api)
+    // todo: the following two may just need to be a broadcast with backpressure instead (to eth-sender and prover-api)
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
+    // handled by l1-sender
+    commit_batch_info_sender: Option<L1SenderHandle>,
     state_handle: StateHandle,
     bin_path: &'static str,
     num_workers: usize,
@@ -34,6 +38,8 @@ impl Batcher {
         // In the future it will only need ReplayRecord - it only uses BatchOutput for in-memory tree
         block_sender: tokio::sync::mpsc::Receiver<(BatchOutput, ReplayRecord)>,
         batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
+        // handled by l1-sender
+        commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
 
         enable_logging: bool,
@@ -48,6 +54,7 @@ impl Batcher {
             block_sender,
             state_handle,
             batch_sender,
+            commit_batch_info_sender,
             bin_path,
             num_workers,
         }
@@ -63,6 +70,7 @@ impl Batcher {
             let (block_sender, block_receiver) = tokio::sync::mpsc::channel(MAX_INFLIGHT);
             worker_block_senders.push(block_sender);
             let batch_sender = self.batch_sender.clone();
+            let commit_batch_info_sender = self.commit_batch_info_sender.clone();
             let state_handle = self.state_handle.clone();
             std::thread::spawn(move || {
                 worker_loop(
@@ -70,6 +78,7 @@ impl Batcher {
                     self.num_workers,
                     block_receiver,
                     batch_sender,
+                    commit_batch_info_sender,
                     state_handle,
                     self.bin_path,
                 )
@@ -112,8 +121,8 @@ fn worker_loop(
     worker_id: usize,
     total_workers_count: usize,
     mut block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-    // (block, prover input)
     batch_sender: Sender<BatchJob>,
+    commit_batch_info_sender: Option<L1SenderHandle>,
     state_handle: StateHandle,
     bin_path: &'static str,
 ) {
@@ -201,11 +210,16 @@ fn worker_loop(
             };
 
             let commit_batch_info =
-                CommitBatchInfo::new(batch_output, replay_record.transactions, tree_output);
+                CommitBatchInfo::new(batch_output, replay_record.transactions, tree_output, CHAIN_ID);
             tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
+
+            if let Some(handle) = &commit_batch_info_sender {
+                rt.block_on(handle.commit(commit_batch_info.clone())).unwrap();
+            }
 
             let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
             tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
+
 
             let batch = BatchJob {
                 block_number: bn,

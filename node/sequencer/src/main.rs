@@ -8,6 +8,8 @@ use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zk_os_forward_system::run::BatchOutput;
+use zksync_os_l1_sender::config::L1SenderConfig;
+use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
@@ -53,6 +55,9 @@ pub async fn main() {
         .insert(&SequencerConfig::DESCRIPTION, "sequencer")
         .expect("Failed to insert sequencer config");
     schema
+        .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
+        .expect("Failed to insert l1_sender config");
+    schema
         .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
         .expect("Failed to insert l1_watcher config");
     schema
@@ -75,6 +80,12 @@ pub async fn main() {
         .expect("Failed to load sequencer config")
         .parse()
         .expect("Failed to parse sequencer config");
+
+    let l1_sender_config = repo
+        .single::<L1SenderConfig>()
+        .expect("Failed to load L1 sender config")
+        .parse()
+        .expect("Failed to parse L1 sender config");
 
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
@@ -199,6 +210,8 @@ pub async fn main() {
 
     let mempool = zksync_os_mempool::in_memory(forced_deposit_transaction());
 
+    // ========== Initialize L1 watcher (fallible) ===========
+
     let l1_watcher = L1Watcher::new(l1_watcher_config, mempool.clone()).await;
     let _l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
@@ -215,12 +228,44 @@ pub async fn main() {
         }
     };
 
+    // ========== Initialize L1 sender (fallible) ===========
+
+    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
+        BoxFuture<anyhow::Result<()>>,
+        Option<L1SenderHandle>,
+        u64,
+    ) = match l1_sender {
+        Ok((l1_sender, l1_handle, last_committed_batch_number)) => (
+            Box::pin(l1_sender.run()),
+            Some(l1_handle),
+            last_committed_batch_number,
+        ),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 sender; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            (
+                Box::pin(async move {
+                    // Defer until we receive stop signal, i.e. a task that does nothing
+                    stop_receiver
+                        .changed()
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))
+                }),
+                None,
+                0,
+            )
+        }
+    };
+
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
 
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
+        // TODO: Start from `last_committed_batch_number`
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
+            l1_sender_handle,
             state_handle.clone(),
             // MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,
@@ -305,6 +350,14 @@ pub async fn main() {
         //         Err(e) => tracing::error!("L1 watcher failed: {e:#}"),
         //     }
         // }
+
+        // ── L1 sender task ────────────────────────────────────────────────
+        res = l1_sender_task => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
+                Err(e) => tracing::error!("L1 sender failed: {e:#}"),
+            }
+        }
 
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(

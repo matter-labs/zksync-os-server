@@ -10,7 +10,6 @@
 
 use std::time::{Duration, Instant};
 
-use crate::commitment::CommitBatchInfo;
 use crate::model::BatchJob;
 use crate::prover_api::proof_storage::ProofStorage;
 use dashmap::DashMap;
@@ -19,6 +18,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc::Receiver;
+use zksync_os_l1_sender::commitment::CommitBatchInfo;
 // ───────────── Error types ─────────────
 
 #[derive(Error, Debug)]
