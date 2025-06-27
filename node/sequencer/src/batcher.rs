@@ -1,6 +1,6 @@
-use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::ReplayRecord;
+use crate::CHAIN_ID;
 use std::alloc::Global;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -13,6 +13,8 @@ use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_basic_system::system_implementation::flat_storage_model::TestingTree;
 use zk_os_forward_system::run::test_impl::{InMemoryTree, TxListSource};
 use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
+use zksync_os_l1_sender::commitment::CommitBatchInfo;
+use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_merkle_tree::{MerkleTreeReader, RocksDBWrapper};
 use zksync_os_state::StateHandle;
 
@@ -26,6 +28,7 @@ pub struct Batcher {
     // block number that persistent tree has processed
     tree_block_watch: watch::Receiver<u64>,
     state_handle: StateHandle,
+    l1_sender_handle: Option<L1SenderHandle>,
 
     // using in-memory tree for now - until persistent tree implements needed interface
     // todo: clean a mess with Arc<RwLock>
@@ -41,6 +44,7 @@ impl Batcher {
         tree_block_watch: watch::Receiver<u64>,
 
         state_handle: StateHandle,
+        l1_sender_handle: Option<L1SenderHandle>,
 
         // todo: this is not used currently as we don't have impl `ReadStorageTree` for it
         _tree: MerkleTreeReader<RocksDBWrapper>,
@@ -60,6 +64,7 @@ impl Batcher {
             block_receiver,
             tree_block_watch,
             state_handle,
+            l1_sender_handle,
             in_memory_tree: Arc::new(RwLock::new(in_memory_tree)),
             bin_path,
         }
@@ -144,12 +149,14 @@ impl Batcher {
                     let memory_tree_latency =
                         BATCHER_METRICS.prover_input_generation[&"update_memory_tree"].start();
 
-                    let mut write_tree = self.in_memory_tree.write().unwrap();
-                    for write in batch_output.storage_writes.iter() {
-                        write_tree.cold_storage.insert(write.key, write.value);
-                        write_tree.storage_tree.insert(&write.key, &write.value);
+                    {
+                        let mut write_tree = self.in_memory_tree.write().unwrap();
+                        for write in batch_output.storage_writes.iter() {
+                            write_tree.cold_storage.insert(write.key, write.value);
+                            write_tree.storage_tree.insert(&write.key, &write.value);
+                        }
+                        drop(write_tree);
                     }
-                    drop(write_tree);
 
                     memory_tree_latency.observe();
                     let total_latency = total_latency.observe();
@@ -164,11 +171,16 @@ impl Batcher {
                             .storage_tree
                             .next_free_slot,
                     };
-                    let commit_batch_info =
-                        CommitBatchInfo::new(batch_output, replay_record.transactions, tree_output);
+                    let commit_batch_info = CommitBatchInfo::new(
+                        batch_output,
+                        replay_record.transactions,
+                        tree_output,
+                        CHAIN_ID,
+                    );
                     tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
-                    let stored_batch_info = StoredBatchInfo::from(commit_batch_info);
-                    tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
+                    if let Some(l1_sender_handle) = &self.l1_sender_handle {
+                        l1_sender_handle.commit(commit_batch_info).await?;
+                    }
 
                     tracing::info!(
                         "Prover input generated for block {}. length: {}. Took {:?}",

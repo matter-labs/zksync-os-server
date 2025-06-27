@@ -5,14 +5,14 @@ pub use crate::config::L1WatcherConfig;
 
 use crate::rocksdb::L1WatcherRocksdbStorage;
 use alloy::eips::BlockId;
-use alloy::network::{Ethereum, TransactionBuilder};
-use alloy::primitives::{Address, BlockNumber, U256};
+use alloy::network::Ethereum;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use alloy::rpc::types::{Filter, TransactionRequest};
-use alloy::sol_types::{SolCall, SolEvent};
+use alloy::rpc::types::Filter;
+use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::time::Duration;
-use zksync_os_contract_interface::IBridgehub;
+use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_mempool::TransactionPool;
 use zksync_types::l1::L1Tx;
@@ -20,7 +20,7 @@ use zksync_types::l1::L1Tx;
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
     pool: Box<dyn TransactionPool>,
-    diamond_proxy_address: Address,
+    zk_chain_address: Address,
     poll_interval: Duration,
     max_blocks_to_process: u64,
     storage: L1WatcherRocksdbStorage,
@@ -47,23 +47,17 @@ impl L1Watcher {
             next_l1_block = storage.next_l1_block().unwrap_or(0),
             "initializing L1 watcher"
         );
-        let diamond_proxy_address = provider
-            .call(
-                TransactionRequest::default()
-                    .to(Address::from(config.bridgehub_address.0))
-                    .with_call(&IBridgehub::getZKChainCall::new((U256::from(
-                        config.chain_id,
-                    ),))),
-            )
-            .await
-            .context("failed to resolve diamond proxy address")?;
-        // Take 12..32 (last 20) bytes representing address
-        let diamond_proxy_address = Address::from_slice(&diamond_proxy_address[12..]);
-        tracing::info!(?diamond_proxy_address, "resolved on L1");
+        let bridgehub = Bridgehub::new(
+            config.bridgehub_address.0.into(),
+            provider.clone(),
+            config.chain_id,
+        );
+        let zk_chain_address = bridgehub.zk_chain_address().await?;
+        tracing::info!(?zk_chain_address, "resolved on L1");
         Ok(Self {
             provider,
             pool,
-            diamond_proxy_address,
+            zk_chain_address,
             poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
             storage,
@@ -134,7 +128,7 @@ impl L1Watcher {
             .from_block(from)
             .to_block(to)
             .event_signature(NewPriorityRequest::SIGNATURE_HASH)
-            .address(self.diamond_proxy_address);
+            .address(self.zk_chain_address);
         let priority_logs = self.provider.get_logs(&filter).await?;
         let priority_txs = priority_logs
             .into_iter()
