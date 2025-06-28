@@ -11,6 +11,7 @@
 use std::time::{Duration, Instant};
 
 use crate::model::BatchJob;
+use crate::prover_api::metrics::PROVER_METRICS;
 use crate::prover_api::proof_storage::ProofStorage;
 use dashmap::DashMap;
 use itertools::Itertools;
@@ -151,6 +152,16 @@ impl ProverJobManager {
             .remove(&block)
             .ok_or(SubmitError::UnknownJob(block))?
             .1;
+
+        if let JobStatus::Assigned { assigned_at, .. } = &entry.status {
+            let prove_time = assigned_at.elapsed();
+            PROVER_METRICS.prove_time.observe(prove_time);
+        } else {
+            tracing::warn!(
+                block_number=block,
+                "submitting prove for unassigned job"
+            )
+        }
 
         if !verify_fri_proof_stub(&entry.commit_batch_info, &proof) {
             return Err(SubmitError::VerificationFailed);
