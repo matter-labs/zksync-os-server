@@ -72,7 +72,7 @@ pub struct BatcherConfig {
 pub struct ProverApiConfig {
     /// Whether to enable debug output in RiscV binary.
     /// Also known as app.bin vs app_logging_enabled.bin
-    #[config(default_t = Duration::from_secs(60))]
+    #[config(default_t = Duration::from_secs(180))]
     pub job_timeout: Duration,
 
     /// Prover API address to listen on.

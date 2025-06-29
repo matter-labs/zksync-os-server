@@ -46,7 +46,6 @@ enum JobStatus {
     Pending,
     Assigned {
         assigned_at: Instant,
-        prover_id: String,
     },
 }
 
@@ -109,7 +108,7 @@ impl ProverJobManager {
 
     /// Picks the **smallest** block number that is either **pending** or whose
     /// assignment has **timed‑out**. Returns its `(block, prover_input)`.
-    pub fn pick_next_job(&self, prover_id: &str) -> Option<(u64, Vec<u32>)> {
+    pub fn pick_next_job(&self) -> Option<(u64, Vec<u32>)> {
         let _guard = self.pick_lock.lock();
         let now = Instant::now();
 
@@ -136,7 +135,6 @@ impl ProverJobManager {
                 let input = entry.prover_input.clone();
                 entry.status = JobStatus::Assigned {
                     assigned_at: now,
-                    prover_id: prover_id.to_owned(),
                 };
                 return Some((block, input));
             }
@@ -146,28 +144,33 @@ impl ProverJobManager {
 
     /// Called by the HTTP handler after verifying a proof. On success the entry
     /// is removed so the map cannot grow without bounds.
-    pub fn submit_proof(&self, block: u64, proof: Vec<u8>) -> Result<(), SubmitError> {
+    pub fn submit_proof(&self, block: u64, proof: Vec<u8>, prover_id: &str) -> Result<(), SubmitError> {
         let entry = self
             .jobs
             .remove(&block)
             .ok_or(SubmitError::UnknownJob(block))?
             .1;
 
-        if let JobStatus::Assigned { assigned_at, .. } = &entry.status {
-            let prove_time = assigned_at.elapsed();
-            PROVER_METRICS.prove_time.observe(prove_time);
-        } else {
-            tracing::warn!(
-                block_number=block,
-                "submitting prove for unassigned job"
-            )
-        }
+        match &entry.status {
+            JobStatus::Assigned { assigned_at } => {
+                let prove_time = assigned_at.elapsed();
+                let label: &'static str =
+                    Box::leak(prover_id.to_owned().into_boxed_str());
+                PROVER_METRICS.prove_time[&label].observe(prove_time);
+            }
+            JobStatus::Pending => {
+                tracing::warn!(
+                    block_number=block,
+                    "submitting prove for unassigned job"
+                );
+            }
+        };
 
         if !verify_fri_proof_stub(&entry.commit_batch_info, &proof) {
             return Err(SubmitError::VerificationFailed);
         }
 
-        self.proof_storage.save_proof(block, &proof).map_err(|e| SubmitError::Other(e.to_string()))?;
+        self.proof_storage.save_proof_with_prover(block, &proof, prover_id).map_err(|e| SubmitError::Other(e.to_string()))?;
         Ok(())
     }
 
@@ -186,11 +189,10 @@ impl ProverJobManager {
                     },
                     JobStatus::Assigned {
                         assigned_at,
-                        prover_id,
                     } => JobState {
                         block_number: block,
                         status: "Assigned",
-                        prover_id: Some(prover_id.clone()),
+                        prover_id: None,
                         assigned_seconds_ago: Some((*assigned_at).elapsed().as_secs() as u32),
                     },
                 }
