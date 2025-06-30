@@ -7,7 +7,6 @@ pub mod batcher;
 pub mod block_context_provider;
 pub mod block_replay_storage;
 pub mod config;
-mod conversions;
 pub mod execution;
 pub mod finality;
 pub mod model;
@@ -29,7 +28,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
-use zksync_os_mempool::DynPool;
+use zksync_os_mempool::{DynL1Pool, DynPool};
 use zksync_os_state::StateHandle;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
@@ -58,6 +57,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
     tree_sink: Sender<BatchOutput>,
 
+    l1_mempool: DynL1Pool,
     mempool: DynPool,
     state: StateHandle,
     wal: BlockReplayStorage,
@@ -72,8 +72,9 @@ pub async fn run_sequencer_actor(
     /* ------------------------------------------------------------------ */
     let exec_loop = {
         let wal = wal.clone();
-        let mempool = mempool.clone();
         let state = state.clone();
+        // TODO: Take initial value from L1 watcher? Persist?
+        let mut last_l1_priority_id = 0;
 
         async move {
             let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time);
@@ -86,6 +87,8 @@ pub async fn run_sequencer_actor(
                 tracing::info!(block = bn, cmd = cmd.to_string(), "▶ starting command");
                 let (batch_out, replay) = execute_block(
                     cmd,
+                    &mut last_l1_priority_id,
+                    l1_mempool.clone(),
                     Box::into_pin(mempool.clone()),
                     state.clone(),
                     sequencer_config.max_transactions_in_block,
@@ -94,7 +97,8 @@ pub async fn run_sequencer_actor(
                 .context("execute_block")?;
                 tracing::info!(
                     block_number = bn,
-                    transactions = replay.transactions.len(),
+                    l1_transactions = replay.l1_transactions.len(),
+                    l2_transactions = replay.l2_transactions.len(),
                     preimages = batch_out.published_preimages.len(),
                     storage_writes = batch_out.storage_writes.len(),
                     "▶ Executed in {:?}. Adding to state...",
@@ -144,7 +148,8 @@ pub async fn run_sequencer_actor(
             repositories.add_block_output_to_repos(
                 bn,
                 batch_out.clone(),
-                replay.transactions.clone(),
+                replay.l1_transactions.clone(),
+                replay.l2_transactions.clone(),
             );
 
             tracing::info!(

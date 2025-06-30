@@ -2,6 +2,8 @@ mod config;
 mod rocksdb;
 
 pub use crate::config::L1WatcherConfig;
+use zksync_os_mempool::DynL1Pool;
+use zksync_os_types::L1Transaction;
 
 use crate::rocksdb::L1WatcherRocksdbStorage;
 use alloy::eips::BlockId;
@@ -14,12 +16,10 @@ use anyhow::Context;
 use std::time::Duration;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_mempool::TransactionPool;
-use zksync_types::l1::L1Tx;
 
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
-    pool: Box<dyn TransactionPool>,
+    l1_pool: DynL1Pool,
     zk_chain_address: Address,
     poll_interval: Duration,
     max_blocks_to_process: u64,
@@ -27,10 +27,7 @@ pub struct L1Watcher {
 }
 
 impl L1Watcher {
-    pub async fn new(
-        config: L1WatcherConfig,
-        pool: Box<dyn TransactionPool>,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(config: L1WatcherConfig, l1_pool: DynL1Pool) -> anyhow::Result<Self> {
         let storage = L1WatcherRocksdbStorage::new(config.rocks_db_path);
 
         let provider = DynProvider::new(
@@ -56,7 +53,7 @@ impl L1Watcher {
         tracing::info!(?zk_chain_address, "resolved on L1");
         Ok(Self {
             provider,
-            pool,
+            l1_pool,
             zk_chain_address,
             poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
@@ -106,7 +103,7 @@ impl L1Watcher {
             // Moreover, we assume that all transactions are idempotent - inserting the same
             // transaction multiple times does not affect sequencer's operation where sequencer is
             // the sole consumer of mempool.
-            self.pool.add_transaction(tx.into());
+            self.l1_pool.add_transaction(tx);
         }
         // L1 transactions already added to mempool are guaranteed to be processed eventually so we
         // do not have to process these blocks ever again. If L1 watcher were to fail before calling
@@ -123,7 +120,7 @@ impl L1Watcher {
         &self,
         from: BlockNumber,
         to: BlockNumber,
-    ) -> anyhow::Result<Vec<L1Tx>> {
+    ) -> anyhow::Result<Vec<L1Transaction>> {
         let filter = Filter::new()
             .from_block(from)
             .to_block(to)
@@ -136,7 +133,7 @@ impl L1Watcher {
                 // TODO: Get rid of this conversion by parsing L1Tx from alloy log
                 let zksync_log: zksync_types::web3::Log =
                     serde_json::from_value(serde_json::to_value(log)?)?;
-                anyhow::Ok(L1Tx::try_from(zksync_log)?)
+                anyhow::Ok(L1Transaction::try_from(zksync_log)?)
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 

@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::fmt::Display;
 use std::time::Duration;
 use zk_os_forward_system::run::BatchContext;
-use zksync_types::Transaction;
+use zksync_os_types::{L1Transaction, L2Transaction};
 use zksync_web3_decl::jsonrpsee::core::Serialize;
 
 #[derive(Clone, Debug)]
@@ -27,12 +27,12 @@ impl BlockCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
     pub context: BatchContext,
-    pub transactions: Vec<Transaction>,
+    pub l1_transactions: Vec<L1Transaction>,
+    pub l2_transactions: Vec<L2Transaction>,
 }
 
-// todo: get rid/refactor `Transaction` type in zksync-types crate
 pub enum TransactionSource {
-    Replay(Vec<Transaction>),
+    Replay(Vec<L1Transaction>, Vec<L2Transaction>),
     Mempool,
 }
 
@@ -41,9 +41,10 @@ impl Display for BlockCommand {
         match self {
             BlockCommand::Replay(record) => write!(
                 f,
-                "Replay block {} ({} txs)",
+                "Replay block {} ({} L1 txs, {} L2 txs)",
                 record.context.block_number,
-                record.transactions.len()
+                record.l1_transactions.len(),
+                record.l2_transactions.len()
             ),
             BlockCommand::Produce(context, duration) => write!(
                 f,

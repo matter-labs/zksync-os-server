@@ -1,6 +1,6 @@
-use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::ReplayRecord;
 use crate::CHAIN_ID;
+use alloy::eips::Encodable2718;
 use std::alloc::Global;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -17,6 +17,7 @@ use zksync_os_l1_sender::commitment::CommitBatchInfo;
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_merkle_tree::{MerkleTreeReader, RocksDBWrapper};
 use zksync_os_state::StateHandle;
+use zksync_os_types::tx_abi_encode;
 
 /// This component will genearte l1 batches from the stream of blocks
 /// It will also generate Prover Input for each batch.
@@ -84,9 +85,10 @@ impl Batcher {
                     let block_number = replay_record.context.block_number;
 
                     tracing::info!(
-                        "Batcher received block {} with {} transactions",
+                        "Batcher received block {} with {} L1 transactions and {} L2 transactions",
                         block_number,
-                        replay_record.transactions.len()
+                        replay_record.l1_transactions.len(),
+                        replay_record.l2_transactions.len()
                     );
 
                     // Wait for the persistent tree to process this block
@@ -114,12 +116,17 @@ impl Batcher {
                     //     in_memory_storage_commitment.next_free_slot,
                     //     persistent_storage_commitment.unwrap().1
                     // );
-
-                    let transactions = replay_record
-                        .transactions
+                    let l1_transactions = replay_record
+                        .l1_transactions
                         .clone()
                         .into_iter()
-                        .map(tx_abi_encode)
+                        .map(|l1_tx| tx_abi_encode(l1_tx.into()));
+                    let l2_transactions = replay_record
+                        .l2_transactions
+                        .iter()
+                        .map(Encodable2718::encoded_2718);
+                    let transactions = l1_transactions
+                        .chain(l2_transactions)
                         .collect::<VecDeque<_>>();
 
                     let list_source = TxListSource { transactions };
@@ -161,9 +168,14 @@ impl Batcher {
                     memory_tree_latency.observe();
                     let total_latency = total_latency.observe();
                     let tree_output = zksync_os_merkle_tree::BatchOutput {
-                        root_hash: bytes32_to_h256(
-                            *self.in_memory_tree.read().unwrap().storage_tree.root(),
-                        ),
+                        root_hash: self
+                            .in_memory_tree
+                            .read()
+                            .unwrap()
+                            .storage_tree
+                            .root()
+                            .as_u8_array()
+                            .into(),
                         leaf_count: self
                             .in_memory_tree
                             .read()
@@ -173,7 +185,7 @@ impl Batcher {
                     };
                     let commit_batch_info = CommitBatchInfo::new(
                         batch_output,
-                        replay_record.transactions,
+                        replay_record.l1_transactions,
                         tree_output,
                         CHAIN_ID,
                     );

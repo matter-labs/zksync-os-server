@@ -1,0 +1,17 @@
+[package]
+name = "zksync_os_rpc_api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types"] }
+jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
+
+[features]
+server = ["jsonrpsee/server"]

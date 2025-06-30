@@ -1,5 +1,5 @@
 [package]
-name = "zksync_os_mempool"
+name = "zksync_os_types"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,10 +10,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_types.workspace = true
+zksync_types.workspace = true
 
-auto_impl.workspace = true
-crossbeam-queue.workspace = true
-dashmap.workspace = true
-futures.workspace = true
-vise.workspace = true
+alloy = { workspace = true, default-features = false, features = ["consensus"] }

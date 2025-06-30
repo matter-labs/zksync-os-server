@@ -1,23 +1,20 @@
-use anyhow::Context;
-use zksync_types::api::BlockIdVariant;
-use zksync_types::api::state_override::StateOverride;
-use zksync_types::l2::L2Tx;
-use zksync_types::PackedEthSignature;
-use zksync_types::transaction_request::CallRequest;
-use zksync_types::web3::Bytes;
-use zksync_os_state::StateHandle;
 use crate::api::resolve_block_id;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
 use crate::finality::FinalityTracker;
+use alloy::eips::BlockId;
+use alloy::primitives::Bytes;
+use alloy::rpc::types::{BlockOverrides, TransactionRequest};
+use anyhow::Context;
+use zksync_os_state::StateHandle;
 
 pub struct EthCallHandler {
     config: RpcConfig,
     finality_info: FinalityTracker,
     state_handle: StateHandle,
 
-    block_replay_storage: BlockReplayStorage
+    block_replay_storage: BlockReplayStorage,
 }
 
 impl EthCallHandler {
@@ -25,26 +22,28 @@ impl EthCallHandler {
         config: RpcConfig,
         finality_tracker: FinalityTracker,
         state_handle: StateHandle,
-        block_replay_storage: BlockReplayStorage
+        block_replay_storage: BlockReplayStorage,
     ) -> EthCallHandler {
         Self {
             config,
             finality_info: finality_tracker,
             state_handle,
-            block_replay_storage
+            block_replay_storage,
         }
     }
 
     pub fn call_impl(
         &self,
-        mut req: CallRequest,
-        block: Option<BlockIdVariant>,
-        state_override: Option<StateOverride>,
+        mut request: TransactionRequest,
+        block: Option<BlockId>,
+        state_overrides: Option<alloy::rpc::types::state::StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
     ) -> anyhow::Result<Bytes> {
-        anyhow::ensure!(state_override.is_none());
+        anyhow::ensure!(state_overrides.is_none());
+        anyhow::ensure!(block_overrides.is_none());
 
-        if req.gas.is_none() {
-            req.gas = Some(self.config.eth_call_gas.into());
+        if request.gas.is_none() {
+            request.gas = Some(self.config.eth_call_gas as u64);
         }
 
         // todo Daniyar
@@ -53,11 +52,14 @@ impl EthCallHandler {
         let block_number = resolve_block_id(block, &self.finality_info) + 1;
         tracing::info!("block {:?} resolved to: {:?}", block, block_number);
 
-        let mut tx = L2Tx::from_request(req.clone().into(), self.config.max_tx_size_bytes, true)?;
-
-        // otherwise it's not parsed properly in VM
-        if tx.common_data.signature.is_empty() {
-            tx.common_data.signature = PackedEthSignature::default().serialize_packed().into();
+        // TODO: Double-check that this is an accurate method to use here
+        let tx = request.build_typed_simulate_transaction()?;
+        if tx.eip2718_encoded_length() * 32 > self.config.max_tx_size_bytes {
+            anyhow::bail!(
+                "oversized data. max: {}; actual: {}",
+                self.config.max_tx_size_bytes,
+                tx.eip2718_encoded_length() * 32
+            );
         }
 
         // using previous block context
@@ -72,6 +74,6 @@ impl EthCallHandler {
 
         let res = execute(tx, block_context, storage_view)?;
 
-        Ok(res.as_returned_bytes().into())
+        Ok(Bytes::copy_from_slice(res.as_returned_bytes()))
     }
 }

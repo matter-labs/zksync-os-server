@@ -1,4 +1,4 @@
-use crate::conversions::bytes32_to_address;
+use alloy::primitives::Address;
 use dashmap::DashMap;
 use std::{
     collections::HashMap,
@@ -13,7 +13,6 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
 };
 use zk_os_forward_system::run::BatchOutput;
-use zksync_types::Address;
 
 /// History-based repository for account properties with compaction.
 ///
@@ -162,7 +161,7 @@ pub fn extract_account_properties(
     let mut result = HashMap::new();
     for log in &block_output.storage_writes {
         if log.account == ACCOUNT_PROPERTIES_STORAGE_ADDRESS {
-            let account_address = bytes32_to_address(&log.account_key);
+            let account_address = Address::from_slice(&log.account_key.as_u8_array()[12..]);
 
             if let Some(properties) = account_properties_preimages.get(&log.value) {
                 result.insert(account_address, *properties);

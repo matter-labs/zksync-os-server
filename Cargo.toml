@@ -5,7 +5,9 @@ members = [
     "lib/l1_watcher",
     "lib/mempool",
     "lib/merkle_tree",
+    "lib/rpc_api",
     "lib/state",
+    "lib/types",
     "node/sequencer",
 ]
 resolver = "2"
@@ -58,6 +60,7 @@ smart-config = "=0.2.0-pre"
 thiserror = "2.0.12"
 clap = "4.2.2"
 insta = "1.29.0"
+jsonrpsee = { version = "0.25.1", default-features = false }
 leb128 = "0.2.5"
 rayon = "1.3.1"
 once_cell = "1"
@@ -81,4 +84,6 @@ zksync_os_l1_sender = { path = "lib/l1_sender" }
 zksync_os_l1_watcher = { path = "lib/l1_watcher" }
 zksync_os_mempool = { path = "lib/mempool" }
 zksync_os_merkle_tree = {path = "lib/merkle_tree" }
+zksync_os_rpc_api = { path = "lib/rpc_api" }
 zksync_os_state = { path = "lib/state" }
+zksync_os_types = { path = "lib/types" }

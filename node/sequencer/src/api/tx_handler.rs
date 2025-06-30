@@ -1,11 +1,12 @@
-use crate::conversions::ruint_u256_to_api_u256;
 use crate::repositories::AccountPropertyRepository;
 use crate::CHAIN_ID;
+use alloy::consensus::transaction::SignerRecoverable;
+use alloy::consensus::{Transaction, TxEnvelope};
+use alloy::eips::Decodable2718;
+use alloy::primitives::{Bytes, B256, U256};
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_mempool::DynPool;
-use zksync_types::l2::L2Tx;
-use zksync_types::web3::Bytes;
-use zksync_types::{api, L2ChainId, Nonce, H256, U256};
+use zksync_os_types::L2Transaction;
 
 /// Handles transactions received in API
 pub struct TxHandler {
@@ -14,14 +15,14 @@ pub struct TxHandler {
     account_property_repository: AccountPropertyRepository,
 
     // will probably be replaced with an own config
-    max_nonce_ahead: u32,
+    max_nonce_ahead: u64,
     max_tx_size_bytes: usize,
 }
 impl TxHandler {
     pub fn new(
         mempool: DynPool,
         account_property_repository: AccountPropertyRepository,
-        max_nonce_ahead: u32,
+        max_nonce_ahead: u64,
         max_tx_size_bytes: usize,
     ) -> TxHandler {
         Self {
@@ -32,16 +33,24 @@ impl TxHandler {
         }
     }
 
-    pub fn send_raw_transaction_impl(&self, tx_bytes: Bytes) -> anyhow::Result<H256> {
-        // todo: don't use Transaction types from Types
-        let (tx_request, hash) =
-            api::TransactionRequest::from_bytes(&tx_bytes.0, L2ChainId::new(CHAIN_ID).unwrap())?;
-        let mut l2_tx = L2Tx::from_request(tx_request, self.max_tx_size_bytes, true)?;
-        l2_tx.set_input(tx_bytes.0, hash);
+    pub fn send_raw_transaction_impl(&self, tx_bytes: Bytes) -> anyhow::Result<B256> {
+        let transaction = TxEnvelope::decode_2718(&mut tx_bytes.as_ref())?;
+        if let Some(chain_id) = transaction.chain_id() {
+            anyhow::ensure!(chain_id == CHAIN_ID, "wrong chain id {chain_id}");
+        }
+        let l2_tx: L2Transaction = transaction.try_into_recovered()?;
+        // TODO: Why not just restrict `tx_bytes` size above instead?
+        if l2_tx.eip2718_encoded_length() * 32 > self.max_tx_size_bytes {
+            anyhow::bail!(
+                "oversized data. max: {}; actual: {}",
+                self.max_tx_size_bytes,
+                l2_tx.eip2718_encoded_length() * 32
+            );
+        }
 
         let sender_account_properties = self
             .account_property_repository
-            .get_latest(&l2_tx.initiator_account());
+            .get_latest(l2_tx.signer_ref());
 
         // tracing::info!(
         //     "Processing transaction: {:?}, sender properties: {:?}",
@@ -67,22 +76,19 @@ impl TxHandler {
         //     storage_view,
         // )?;
 
-        self.mempool.add_transaction(l2_tx.into());
+        let hash = *l2_tx.hash();
+        self.mempool.add_transaction(l2_tx);
 
         Ok(hash)
     }
 
     pub fn validate_tx_nonce(
-        transaction: &L2Tx,
+        transaction: &L2Transaction,
         acc_props: &Option<AccountProperties>,
-        max_nonce_ahead: u32,
+        max_nonce_ahead: u64,
     ) -> anyhow::Result<()> {
         let nonce = transaction.nonce();
-
-        let expected_nonce = Nonce(match acc_props {
-            Some(props) => props.nonce,
-            None => 0,
-        } as u32);
+        let expected_nonce = acc_props.map(|props| props.nonce).unwrap_or(0);
 
         if nonce < expected_nonce {
             return Err(anyhow::anyhow!(
@@ -101,25 +107,25 @@ impl TxHandler {
         Ok(())
     }
     pub fn validate_tx_sender_balance(
-        tx: &L2Tx,
+        tx: &L2Transaction,
         acc_props: &Option<AccountProperties>,
     ) -> anyhow::Result<()> {
         let current_balance = match acc_props {
-            Some(props) => ruint_u256_to_api_u256(props.balance),
-            None => U256::zero(),
+            Some(props) => props.balance,
+            None => U256::ZERO,
         };
 
         // Estimate the minimum fee price user will agree to.
-        let gas_price = tx.common_data.fee.max_fee_per_gas;
-        let max_fee = tx.common_data.fee.gas_limit * gas_price;
-        let max_fee_and_value = max_fee + tx.execute.value;
+        let gas_price = tx.max_fee_per_gas();
+        let max_fee = tx.gas_limit() as u128 * gas_price;
+        let max_fee_and_value = U256::from(max_fee) + tx.value();
 
         if current_balance < max_fee_and_value {
             return Err(anyhow::anyhow!(
                 "Insufficient funds for gas + value. Balance: {}, Fee: {}, Value: {}",
                 current_balance,
                 max_fee,
-                tx.execute.value
+                tx.value()
             ));
         }
         Ok(())

@@ -1,14 +1,16 @@
-use crate::conversions::tx_abi_encode;
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
+use alloy::eips::Encodable2718;
 use anyhow::{anyhow, Result};
 use futures::{Stream, StreamExt};
+use itertools::Either;
 use std::{pin::Pin, time::Duration};
 use tokio::time::Sleep;
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
+use zksync_os_mempool::DynL1Pool;
 use zksync_os_state::StateHandle;
-use zksync_types::Transaction;
+use zksync_os_types::{tx_abi_encode, L1Transaction, L2Transaction};
 
 /// Behaviour when VM returns an InvalidTransaction error.
 #[derive(Clone, Copy, Debug)]
@@ -28,7 +30,10 @@ enum SealPolicy {
 }
 
 /// A stream of transactions that can be `await`-ed item-by-item.
-type TxStream = Pin<Box<dyn Stream<Item = Transaction> + Send>>;
+type L1TxStream = Pin<Box<dyn Stream<Item = L1Transaction> + Send>>;
+
+/// A stream of transactions that can be `await`-ed item-by-item.
+type TxStream = Pin<Box<dyn Stream<Item = L2Transaction> + Send>>;
 
 /// Build everything the VM runner needs for this command:
 ///   – the context (`BatchContext`)
@@ -38,18 +43,38 @@ type TxStream = Pin<Box<dyn Stream<Item = Transaction> + Send>>;
 /// The `mempool` parameter is *used only* by `Produce`.
 fn command_into_parts(
     block_command: BlockCommand,
+    last_l1_priority_id: &mut u64,
+    l1_mempool: DynL1Pool,
     tx_stream: TxStream,
-) -> (BatchContext, TxStream, SealPolicy, InvalidTxPolicy) {
+) -> (
+    BatchContext,
+    L1TxStream,
+    TxStream,
+    SealPolicy,
+    InvalidTxPolicy,
+) {
     match block_command {
-        BlockCommand::Produce(ctx, deadline) => (
-            ctx,
-            tx_stream,
-            SealPolicy::Deadline(deadline),
-            InvalidTxPolicy::RejectAndContinue,
-        ),
+        BlockCommand::Produce(ctx, deadline) => {
+            let mut l1_transactions = Vec::new();
+            while let Some(l1_tx) =
+                l1_mempool.get(*last_l1_priority_id + 1 + l1_transactions.len() as u64)
+            {
+                l1_transactions.push(l1_tx);
+            }
+
+            (
+                ctx,
+                // TODO: Make stream actually look in L1 mempool during execution
+                Box::pin(futures::stream::iter(l1_transactions)) as L1TxStream,
+                tx_stream,
+                SealPolicy::Deadline(deadline),
+                InvalidTxPolicy::RejectAndContinue,
+            )
+        }
         BlockCommand::Replay(replay) => (
             replay.context,
-            Box::pin(futures::stream::iter(replay.transactions)) as TxStream,
+            Box::pin(futures::stream::iter(replay.l1_transactions)) as L1TxStream,
+            Box::pin(futures::stream::iter(replay.l2_transactions)) as TxStream,
             SealPolicy::Exhausted,
             InvalidTxPolicy::Abort,
         ),
@@ -63,6 +88,8 @@ fn command_into_parts(
 // please be mindful when adding new parameters here
 pub async fn execute_block(
     cmd: BlockCommand,
+    last_l1_priority_id: &mut u64,
+    l1_mempool: DynL1Pool,
     tx_stream: TxStream,
     state: StateHandle,
     max_transactions_in_block: usize,
@@ -71,14 +98,28 @@ pub async fn execute_block(
         BlockCommand::Produce(_, _) => "produce",
         BlockCommand::Replay(_) => "replay",
     };
-    let (ctx, stream, seal, invalid) = command_into_parts(cmd, tx_stream);
-    execute_block_inner(ctx, state, stream, seal, invalid, metrics_label, max_transactions_in_block).await
+    let (ctx, l1_stream, stream, seal, invalid) =
+        command_into_parts(cmd, last_l1_priority_id, l1_mempool, tx_stream);
+    execute_block_inner(
+        ctx,
+        state,
+        last_l1_priority_id,
+        l1_stream,
+        stream,
+        seal,
+        invalid,
+        metrics_label,
+        max_transactions_in_block,
+    )
+    .await
 }
 
 async fn execute_block_inner(
     ctx: BatchContext,
     state: StateHandle,
-    mut txs: TxStream,
+    last_l1_priority_id: &mut u64,
+    l1_txs: L1TxStream,
+    l2_txs: TxStream,
     seal_policy: SealPolicy,
     fail_policy: InvalidTxPolicy,
     metrics_label: &'static str,
@@ -87,7 +128,11 @@ async fn execute_block_inner(
     /* ---------- VM & state ----------------------------------------- */
     let state_view = state.state_view_at_block(ctx.block_number)?;
     let mut runner = VmWrapper::new(ctx, state_view);
-    let mut executed = Vec::<Transaction>::new();
+    let mut l1_executed = Vec::<L1Transaction>::new();
+    let mut l2_executed = Vec::<L2Transaction>::new();
+    let mut txs = l1_txs
+        .map(|l1_tx| Either::Left(l1_tx))
+        .chain(l2_txs.map(|l2_tx| Either::Right(l2_tx)));
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match seal_policy {
@@ -111,7 +156,7 @@ async fn execute_block_inner(
                 if deadline.is_some()
             => {
                 tracing::info!(block = ctx.block_number,
-                               txs = executed.len(),
+                               txs = l2_executed.len(),
                                "deadline reached → sealing");
                 break;                                     // leave the loop ⇒ seal
             }
@@ -119,11 +164,11 @@ async fn execute_block_inner(
             /* -------- stream branch ------------------------------- */
             maybe_tx = txs.next() => {
                 match maybe_tx {
-                    /* ----- got a transaction ---------------------- */
-                    Some(tx) => {
+                    /* ----- got an L1 transaction ---------------------- */
+                    Some(Either::Left(l1_tx)) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(tx_abi_encode(tx.clone())).await {
+                        match runner.execute_next_tx(tx_abi_encode(l1_tx.clone())).await {
                             Ok(_res) => {
                                 // tracing::info!(
                                 //     block = ctx.block_number,
@@ -134,7 +179,8 @@ async fn execute_block_inner(
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 
-                                executed.push(tx);
+                                *last_l1_priority_id = l1_tx.common_data.serial_id.0;
+                                l1_executed.push(l1_tx);
 
                                 // arm the timer once, after the first successful tx
                                 if deadline.is_none() {
@@ -144,7 +190,47 @@ async fn execute_block_inner(
                                 }
 
                                 // seal block if max transactions number reached
-                                if executed.len() >= max_transactions_in_block {
+                                if l1_executed.len() + l2_executed.len() >= max_transactions_in_block {
+                                    break;
+                                }
+                            }
+                            Err(e) => match fail_policy {
+                                InvalidTxPolicy::RejectAndContinue => {
+                                    tracing::warn!(block = ctx.block_number, ?e,
+                                                   "invalid tx → skipped");
+                                }
+                                InvalidTxPolicy::Abort => {
+                                    return Err(anyhow!("invalid tx: {e:?}"));
+                                }
+                            }
+                        }
+                    }
+                    /* ----- got an L2 transaction ---------------------- */
+                    Some(Either::Right(l2_tx)) => {
+                        wait_for_tx_latency.observe();
+                        let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
+                        match runner.execute_next_tx(l2_tx.encoded_2718()).await {
+                            Ok(_res) => {
+                                // tracing::info!(
+                                //     block = ctx.block_number,
+                                //     tx = ?tx.hash(),
+                                //     res = ?res,
+                                //     "tx executed"
+                                // );
+                                latency.observe();
+                                EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
+
+                                l2_executed.push(l2_tx);
+
+                                // arm the timer once, after the first successful tx
+                                if deadline.is_none() {
+                                    if let Some(dur) = deadline_dur {
+                                        deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                                    }
+                                }
+
+                                // seal block if max transactions number reached
+                                if l1_executed.len() + l2_executed.len() >= max_transactions_in_block {
                                     break;
                                 }
                             }
@@ -162,7 +248,7 @@ async fn execute_block_inner(
 
                     /* ----- stream ended --------------------------- */
                     None => {
-                        if executed.is_empty() && matches!(seal_policy, SealPolicy::Exhausted)
+                        if l1_executed.is_empty() && l2_executed.is_empty() && matches!(seal_policy, SealPolicy::Exhausted)
                         {
                             // Replay path requires at least one tx.
                             return Err(anyhow!(
@@ -172,7 +258,7 @@ async fn execute_block_inner(
                         }
 
                         tracing::info!(block = ctx.block_number,
-                                       txs = executed.len(),
+                                       txs = l2_executed.len(),
                                        "stream exhausted → sealing");
                         break;
                     }
@@ -195,7 +281,8 @@ async fn execute_block_inner(
         output,
         ReplayRecord {
             context: ctx,
-            transactions: executed,
+            l1_transactions: l1_executed,
+            l2_transactions: l2_executed,
         },
     ))
 }

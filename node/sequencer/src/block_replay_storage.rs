@@ -10,10 +10,10 @@ use zksync_storage::RocksDB;
 /// It is then used for:
 ///  * Context + Transaction list: sequencer recovery.
 ///  * Context: provides execution environment for `eth_call`s against older blocks
-/// 
-/// Acts as canonization provider for centralized sequencers. 
+///
+/// Acts as canonization provider for centralized sequencers.
 /// Writes must be synchronous.
-/// 
+///
 #[derive(Clone, Debug)]
 pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,
@@ -22,10 +22,12 @@ pub struct BlockReplayStorage {
 /// Column families for WAL storage of block replay commands.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
-    /// ReplayRecord = Txs + Context
+    /// ReplayRecord = L2Txs + Context
     Context,
-    /// ReplayRecord = Txs + Context
-    Txs,
+    /// ReplayRecord = L1Txs + L2Txs + Context
+    L1Txs,
+    /// ReplayRecord = L1Txs + L2Txs + Context
+    L2Txs,
     /// Stores the latest appended block number under a fixed key.
     Latest,
 }
@@ -34,14 +36,16 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     const DB_NAME: &'static str = "block_replay_wal";
     const ALL: &'static [Self] = &[
         BlockReplayColumnFamily::Context,
-        BlockReplayColumnFamily::Txs,
+        BlockReplayColumnFamily::L1Txs,
+        BlockReplayColumnFamily::L2Txs,
         BlockReplayColumnFamily::Latest,
     ];
 
     fn name(&self) -> &'static str {
         match self {
             BlockReplayColumnFamily::Context => "context",
-            BlockReplayColumnFamily::Txs => "txs",
+            BlockReplayColumnFamily::L1Txs => "l1_txs",
+            BlockReplayColumnFamily::L2Txs => "l2_txs",
             BlockReplayColumnFamily::Latest => "latest",
         }
     }
@@ -58,7 +62,7 @@ impl BlockReplayStorage {
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
     pub fn append_replay(&self, record: ReplayRecord) {
         let latency = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
-        assert!(!record.transactions.is_empty());
+        assert!(!record.l1_transactions.is_empty() || !record.l2_transactions.is_empty());
 
         let current_latest_block = self.latest_block().unwrap_or(0);
 
@@ -75,8 +79,11 @@ impl BlockReplayStorage {
         let context_value =
             bincode::serde::encode_to_vec(record.context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
-        let txs_value =
-            bincode::serde::encode_to_vec(&record.transactions, bincode::config::standard())
+        let l1_txs_value =
+            bincode::serde::encode_to_vec(&record.l1_transactions, bincode::config::standard())
+                .expect("Failed to serialize record.transactions");
+        let l2_txs_value =
+            bincode::serde::encode_to_vec(&record.l2_transactions, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
 
         // Batch both writes: replay entry and latest pointer
@@ -87,7 +94,8 @@ impl BlockReplayStorage {
             &block_num,
         );
         batch.put_cf(BlockReplayColumnFamily::Context, &block_num, &context_value);
-        batch.put_cf(BlockReplayColumnFamily::Txs, &block_num, &txs_value);
+        batch.put_cf(BlockReplayColumnFamily::L1Txs, &block_num, &l1_txs_value);
+        batch.put_cf(BlockReplayColumnFamily::L2Txs, &block_num, &l2_txs_value);
 
         self.db.write(batch).expect("Failed to write to WAL");
         latency.observe();
@@ -123,28 +131,38 @@ impl BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::Context, &key)
             .expect("Failed to read from Context CF");
-        let txs_result = self
+        let l1_txs_result = self
             .db
-            .get_cf(BlockReplayColumnFamily::Txs, &key)
+            .get_cf(BlockReplayColumnFamily::L1Txs, &key)
+            .expect("Failed to read from Txs CF");
+        let l2_txs_result = self
+            .db
+            .get_cf(BlockReplayColumnFamily::L2Txs, &key)
             .expect("Failed to read from Txs CF");
 
-        match (context_result, txs_result) {
-            (Some(bytes_context), Some(bytes_txs)) => Some(ReplayRecord {
+        match (context_result, l1_txs_result, l2_txs_result) {
+            (Some(bytes_context), Some(bytes_l1_txs), Some(bytes_l2_txs)) => Some(ReplayRecord {
                 context: bincode::serde::decode_from_slice(
                     &bytes_context,
                     bincode::config::standard(),
                 )
                 .expect("Failed to deserialize context")
                 .0,
-                transactions: bincode::serde::decode_from_slice(
-                    &bytes_txs,
+                l1_transactions: bincode::serde::decode_from_slice(
+                    &bytes_l1_txs,
                     bincode::config::standard(),
                 )
-                .expect("Failed to deserialize transactions")
+                .expect("Failed to deserialize L1 transactions")
+                .0,
+                l2_transactions: bincode::serde::decode_from_slice(
+                    &bytes_l2_txs,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize L2 transactions")
                 .0,
             }),
-            (None, None) => None,
-            _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
+            (None, None, None) => None,
+            _ => panic!("Inconsistent state: Context and L1/L2 Txs must be written atomically"),
         }
     }
 

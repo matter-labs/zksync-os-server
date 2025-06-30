@@ -1,34 +1,29 @@
-use crate::CHAIN_ID;
-use async_trait::async_trait;
-use zksync_web3_decl::jsonrpsee::core::RpcResult;
-use zksync_web3_decl::types::{
-    Block, Bytes, Filter, FilterChanges, Index, Log, SyncState, TransactionReceipt, U64Number,
-    U256, U64,
-};
-
-use zksync_web3_decl::namespaces::EthNamespaceServer;
-
 use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::resolve_block_id;
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::conversions::{h256_to_bytes32, ruint_u256_to_api_u256};
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
-use zksync_os_mempool::DynPool;
-use zksync_os_state::StateHandle;
-use zksync_types::{
-    api::{
-        state_override::StateOverride, BlockId, BlockIdVariant, BlockNumber, FeeHistory,
-        Transaction, TransactionVariant,
-    },
-    transaction_request::CallRequest,
-    Address, H256,
+use crate::CHAIN_ID;
+use alloy::dyn_abi::TypedData;
+use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::rpc::types::state::StateOverride;
+use alloy::rpc::types::{
+    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
+    Transaction, TransactionReceipt, TransactionRequest,
 };
+use alloy::serde::JsonStorageKey;
+use async_trait::async_trait;
+use jsonrpsee::core::RpcResult;
+use jsonrpsee::types::ErrorObjectOwned;
+use zk_ee::utils::Bytes32;
+use zksync_os_mempool::DynPool;
+use zksync_os_rpc_api::eth::EthApiServer;
+use zksync_os_state::StateHandle;
 use zksync_web3_decl::jsonrpsee::types::error::INTERNAL_ERROR_CODE;
-use zksync_web3_decl::jsonrpsee::types::ErrorObject;
 
 pub(crate) struct EthNamespace {
     tx_handler: TxHandler,
@@ -39,12 +34,13 @@ pub(crate) struct EthNamespace {
     repository_manager: RepositoryManager,
 
     finality_info: FinalityTracker,
+    chain_id: u64,
 }
 
 impl EthNamespace {
-    pub fn map_err(&self, err: anyhow::Error) -> ErrorObject<'static> {
+    pub fn map_err(&self, err: anyhow::Error) -> ErrorObjectOwned {
         tracing::warn!("Error in EthNamespace: {}", err);
-        ErrorObject::owned(INTERNAL_ERROR_CODE, err.to_string(), None::<()>)
+        ErrorObjectOwned::owned(INTERNAL_ERROR_CODE, err.to_string(), None::<()>)
     }
 
     pub fn new(
@@ -55,7 +51,7 @@ impl EthNamespace {
         state_handle: StateHandle,
         mempool: DynPool,
         block_replay_storage: BlockReplayStorage,
-    ) -> EthNamespace {
+    ) -> Self {
         let tx_handler = TxHandler::new(
             mempool,
             repository_manager.account_property_repository.clone(),
@@ -74,106 +70,169 @@ impl EthNamespace {
             eth_call_handler,
             repository_manager,
             finality_info: finality_tracker,
+            chain_id: CHAIN_ID,
         }
     }
 }
 
 #[async_trait]
-impl EthNamespaceServer for EthNamespace {
-    // todo: temporary solution for EN
-    // async fn block_replay(&self, block_number: u64) -> RpcResult<Value> {
-    //     let Some(replay_record) = self
-    //         .block_replay_storage
-    //         .get_replay_record(block_number)
-    //     else {
-    //         return Ok(Value::Null);
-    //     };
-    //
-    //     Ok(serde_json::to_value(replay_record).unwrap())
-    // }
+impl EthApiServer for EthNamespace {
+    async fn protocol_version(&self) -> RpcResult<String> {
+        Ok("zksync_os/0.0.1".to_string())
+    }
 
-    async fn get_block_number(&self) -> RpcResult<U64> {
+    fn syncing(&self) -> RpcResult<SyncStatus> {
+        todo!()
+    }
+
+    async fn author(&self) -> RpcResult<Address> {
+        todo!()
+    }
+
+    fn accounts(&self) -> RpcResult<Vec<Address>> {
+        todo!()
+    }
+
+    fn block_number(&self) -> RpcResult<U256> {
         // todo (Daniyar): really add plus one?
         let res = self.finality_info.get_canonized_block() + 1;
-        // tracing::debug!("get_block_number: res: {:?}", res);
-        Ok(res.into())
+        Ok(U256::from(res))
     }
 
-    async fn chain_id(&self) -> RpcResult<U64> {
-        Ok(CHAIN_ID.into())
+    async fn chain_id(&self) -> RpcResult<Option<U64>> {
+        Ok(Some(U64::from(self.chain_id)))
     }
 
-    async fn call(
+    async fn block_by_hash(&self, _hash: B256, _full: bool) -> RpcResult<Option<Block>> {
+        todo!()
+    }
+
+    async fn block_by_number(
         &self,
-        req: CallRequest,
-        block: Option<BlockIdVariant>,
-        state_override: Option<StateOverride>,
-    ) -> RpcResult<Bytes> {
-        let latency = API_METRICS.response_time[&"call"].start();
-        let r = self
-            .eth_call_handler
-            .call_impl(req, block, state_override)
-            .map_err(|err| self.map_err(err));
-        latency.observe();
-        r
+        _number: BlockNumberOrTag,
+        _full: bool,
+    ) -> RpcResult<Option<Block>> {
+        todo!()
     }
 
-    async fn estimate_gas(
+    async fn block_transaction_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
+        todo!()
+    }
+
+    async fn block_transaction_count_by_number(
         &self,
-        _req: CallRequest,
-        _block: Option<BlockNumber>,
-        _state_override: Option<StateOverride>,
-    ) -> RpcResult<U256> {
-        let latency = API_METRICS.response_time[&"estimate_gas"].start();
-        latency.observe();
-        Ok(U256::from("1000000"))
+        _number: BlockNumberOrTag,
+    ) -> RpcResult<Option<U256>> {
+        todo!()
     }
 
-    async fn gas_price(&self) -> RpcResult<U256> {
-        Ok(U256::from(1000))
+    async fn block_uncles_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
+        todo!()
     }
 
-    async fn new_filter(&self, _filter: Filter) -> RpcResult<U256> {
-        unimplemented!()
-    }
-
-    async fn new_block_filter(&self) -> RpcResult<U256> {
-        unimplemented!()
-    }
-
-    async fn uninstall_filter(&self, _idx: U256) -> RpcResult<bool> {
-        unimplemented!()
-    }
-
-    async fn new_pending_transaction_filter(&self) -> RpcResult<U256> {
-        unimplemented!()
-    }
-
-    async fn get_logs(&self, _filter: Filter) -> RpcResult<Vec<Log>> {
-        unimplemented!()
-    }
-
-    async fn get_filter_logs(&self, _filter_index: U256) -> RpcResult<FilterChanges> {
-        unimplemented!()
-    }
-
-    async fn get_filter_changes(&self, _filter_index: U256) -> RpcResult<FilterChanges> {
-        unimplemented!()
-    }
-
-    async fn get_balance(
+    async fn block_uncles_count_by_number(
         &self,
-        address: Address,
-        block: Option<BlockIdVariant>,
-    ) -> RpcResult<U256> {
+        _number: BlockNumberOrTag,
+    ) -> RpcResult<Option<U256>> {
+        todo!()
+    }
+
+    async fn block_receipts(
+        &self,
+        _block_id: BlockId,
+    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
+        todo!()
+    }
+
+    async fn uncle_by_block_hash_and_index(
+        &self,
+        _hash: B256,
+        _index: Index,
+    ) -> RpcResult<Option<Block>> {
+        todo!()
+    }
+
+    async fn uncle_by_block_number_and_index(
+        &self,
+        _number: BlockNumberOrTag,
+        _index: Index,
+    ) -> RpcResult<Option<Block>> {
+        todo!()
+    }
+
+    async fn raw_transaction_by_hash(&self, _hash: B256) -> RpcResult<Option<Bytes>> {
+        todo!()
+    }
+
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+        //todo: only expose canonized!!!
+        let res = self
+            .repository_manager
+            .transaction_receipt_repository
+            .get_by_hash(&Bytes32::from(hash.0));
+        tracing::info!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
+        Ok(res.map(|data| data.transaction))
+    }
+
+    async fn raw_transaction_by_block_hash_and_index(
+        &self,
+        _hash: B256,
+        _index: Index,
+    ) -> RpcResult<Option<Bytes>> {
+        todo!()
+    }
+
+    async fn transaction_by_block_hash_and_index(
+        &self,
+        _hash: B256,
+        _index: Index,
+    ) -> RpcResult<Option<Transaction>> {
+        todo!()
+    }
+
+    async fn raw_transaction_by_block_number_and_index(
+        &self,
+        _number: BlockNumberOrTag,
+        _index: Index,
+    ) -> RpcResult<Option<Bytes>> {
+        todo!()
+    }
+
+    async fn transaction_by_block_number_and_index(
+        &self,
+        _number: BlockNumberOrTag,
+        _index: Index,
+    ) -> RpcResult<Option<Transaction>> {
+        todo!()
+    }
+
+    async fn transaction_by_sender_and_nonce(
+        &self,
+        _address: Address,
+        _nonce: U64,
+    ) -> RpcResult<Option<Transaction>> {
+        todo!()
+    }
+
+    async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
+        //todo: only expose canonized!!!
+        let res = self
+            .repository_manager
+            .transaction_receipt_repository
+            .get_by_hash(&Bytes32::from(hash.0));
+        tracing::debug!("transaction_receipt: hash: {:?}, res: {:?}", hash, res);
+        Ok(res.map(|data| data.receipt))
+    }
+
+    async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
         //todo Daniyar: really add +1?
-        let block_number = resolve_block_id(block, &self.finality_info) + 1;
+        let block_number = resolve_block_id(block_number, &self.finality_info) + 1;
         let balance = self
             .repository_manager
             .account_property_repository
             .get_at_block(block_number, &address)
-            .map(|props| ruint_u256_to_api_u256(props.balance))
-            .unwrap_or(U256::zero());
+            .map(|props| props.balance)
+            .unwrap_or(U256::ZERO);
 
         // tracing::info!(
         //     "get_balance: address: {:?}, block: {:?}, balance: {:?}",
@@ -185,64 +244,19 @@ impl EthNamespaceServer for EthNamespace {
         Ok(balance)
     }
 
-    async fn get_block_by_number(
-        &self,
-        _block_number: BlockNumber,
-        _full_transactions: bool,
-    ) -> RpcResult<Option<Block<TransactionVariant>>> {
-        unimplemented!()
-    }
-
-    async fn get_block_by_hash(
-        &self,
-        _hash: H256,
-        _full_transactions: bool,
-    ) -> RpcResult<Option<Block<TransactionVariant>>> {
-        unimplemented!()
-    }
-
-    async fn get_block_transaction_count_by_number(
-        &self,
-        _block_number: BlockNumber,
-    ) -> RpcResult<Option<U256>> {
-        unimplemented!()
-    }
-
-    async fn get_block_receipts(
-        &self,
-        _block_id: BlockId,
-    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
-        unimplemented!()
-    }
-
-    async fn get_block_transaction_count_by_hash(
-        &self,
-        _block_hash: H256,
-    ) -> RpcResult<Option<U256>> {
-        unimplemented!()
-    }
-
-    async fn get_code(
+    async fn storage_at(
         &self,
         _address: Address,
-        _block: Option<BlockIdVariant>,
-    ) -> RpcResult<Bytes> {
-        unimplemented!()
+        _index: JsonStorageKey,
+        _block_number: Option<BlockId>,
+    ) -> RpcResult<B256> {
+        todo!()
     }
 
-    async fn get_storage_at(
-        &self,
-        _address: Address,
-        _idx: U256,
-        _block: Option<BlockIdVariant>,
-    ) -> RpcResult<H256> {
-        unimplemented!()
-    }
-
-    async fn get_transaction_count(
+    async fn transaction_count(
         &self,
         address: Address,
-        block: Option<BlockIdVariant>,
+        block_number: Option<BlockId>,
     ) -> RpcResult<U256> {
         // returning nonce from ethemeral txs
         let nonce = self
@@ -252,116 +266,125 @@ impl EthNamespaceServer for EthNamespace {
             .map(|props| props.nonce)
             .unwrap_or(0);
 
-        let resolved_block = resolve_block_id(block, &self.finality_info) + 1;
+        let resolved_block = resolve_block_id(block_number, &self.finality_info) + 1;
 
         tracing::info!(
-            address=?address,
-            block=?block,
-            resolved_block=resolved_block,
-            nonce=nonce,
+            ?address,
+            ?block_number,
+            resolved_block,
+            nonce,
             "get_transaction_count resolved",
         );
 
-        Ok(nonce.into())
+        Ok(U256::from(nonce))
     }
 
-    async fn get_transaction_by_hash(&self, hash: H256) -> RpcResult<Option<Transaction>> {
-        //todo: only expose canonized!!!
-        let res = self
-            .repository_manager
-            .transaction_receipt_repository
-            .get_by_hash(&h256_to_bytes32(hash));
-        tracing::info!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
-        Ok(res.map(|data| data.transaction))
-    }
-
-    async fn get_transaction_by_block_hash_and_index(
+    async fn get_code(
         &self,
-        _block_hash: H256,
-        _index: Index,
-    ) -> RpcResult<Option<Transaction>> {
-        unimplemented!()
+        _address: Address,
+        _block_number: Option<BlockId>,
+    ) -> RpcResult<Bytes> {
+        todo!()
     }
 
-    async fn get_transaction_by_block_number_and_index(
+    async fn header_by_number(&self, _hash: BlockNumberOrTag) -> RpcResult<Option<Header>> {
+        todo!()
+    }
+
+    async fn header_by_hash(&self, _hash: B256) -> RpcResult<Option<Header>> {
+        todo!()
+    }
+
+    async fn call(
         &self,
-        _block_number: BlockNumber,
-        _index: Index,
-    ) -> RpcResult<Option<Transaction>> {
-        unimplemented!()
+        request: TransactionRequest,
+        block_number: Option<BlockId>,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> RpcResult<Bytes> {
+        let latency = API_METRICS.response_time[&"call"].start();
+        let r = self
+            .eth_call_handler
+            .call_impl(request, block_number, state_overrides, block_overrides)
+            .map_err(|err| self.map_err(err));
+        latency.observe();
+        r
     }
 
-    async fn get_transaction_receipt(&self, hash: H256) -> RpcResult<Option<TransactionReceipt>> {
-        //todo: only expose canonized!!!
-        let res = self
-            .repository_manager
-            .transaction_receipt_repository
-            .get_by_hash(&h256_to_bytes32(hash));
-        tracing::debug!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
-        Ok(res.map(|data| data.receipt))
+    async fn estimate_gas(
+        &self,
+        _request: TransactionRequest,
+        _block_number: Option<BlockId>,
+        _state_override: Option<StateOverride>,
+    ) -> RpcResult<U256> {
+        let latency = API_METRICS.response_time[&"estimate_gas"].start();
+        latency.observe();
+        Ok(U256::from(1000000))
     }
 
-    async fn protocol_version(&self) -> RpcResult<String> {
-        unimplemented!()
+    async fn gas_price(&self) -> RpcResult<U256> {
+        Ok(U256::from(1000))
     }
 
-    async fn send_raw_transaction(&self, tx_bytes: Bytes) -> RpcResult<H256> {
+    async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
+        todo!()
+    }
+
+    async fn blob_base_fee(&self) -> RpcResult<U256> {
+        todo!()
+    }
+
+    async fn fee_history(
+        &self,
+        _block_count: U64,
+        _newest_block: BlockNumberOrTag,
+        _reward_percentiles: Option<Vec<f64>>,
+    ) -> RpcResult<FeeHistory> {
+        todo!()
+    }
+
+    async fn is_mining(&self) -> RpcResult<bool> {
+        todo!()
+    }
+
+    async fn hashrate(&self) -> RpcResult<U256> {
+        todo!()
+    }
+
+    async fn send_transaction(&self, _request: TransactionRequest) -> RpcResult<B256> {
+        todo!()
+    }
+
+    async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
         let latency = API_METRICS.response_time[&"send_raw_transaction"].start();
 
         let r = self
             .tx_handler
-            .send_raw_transaction_impl(tx_bytes)
+            .send_raw_transaction_impl(bytes)
             .map_err(|err| self.map_err(err));
         latency.observe();
 
         r
     }
 
-    async fn syncing(&self) -> RpcResult<SyncState> {
-        unimplemented!()
+    async fn sign(&self, _address: Address, _message: Bytes) -> RpcResult<Bytes> {
+        todo!()
     }
 
-    async fn accounts(&self) -> RpcResult<Vec<Address>> {
-        unimplemented!()
+    async fn sign_transaction(&self, _transaction: TransactionRequest) -> RpcResult<Bytes> {
+        todo!()
     }
 
-    async fn coinbase(&self) -> RpcResult<Address> {
-        unimplemented!()
+    async fn sign_typed_data(&self, _address: Address, _data: TypedData) -> RpcResult<Bytes> {
+        todo!()
     }
 
-    async fn compilers(&self) -> RpcResult<Vec<String>> {
-        unimplemented!()
-    }
-
-    async fn hashrate(&self) -> RpcResult<U256> {
-        unimplemented!()
-    }
-
-    async fn get_uncle_count_by_block_hash(&self, _hash: H256) -> RpcResult<Option<U256>> {
-        unimplemented!()
-    }
-
-    async fn get_uncle_count_by_block_number(
+    async fn get_proof(
         &self,
-        _number: BlockNumber,
-    ) -> RpcResult<Option<U256>> {
-        unimplemented!()
-    }
-
-    async fn mining(&self) -> RpcResult<bool> {
-        unimplemented!()
-    }
-
-    async fn fee_history(
-        &self,
-        _block_count: U64Number,
-        _newest_block: BlockNumber,
-        _reward_percentiles: Option<Vec<f32>>,
-    ) -> RpcResult<FeeHistory> {
-        unimplemented!()
-    }
-
-    async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
-        unimplemented!()
+        _address: Address,
+        _keys: Vec<JsonStorageKey>,
+        _block_number: Option<BlockId>,
+    ) -> RpcResult<EIP1186AccountProofResponse> {
+        todo!()
     }
 }

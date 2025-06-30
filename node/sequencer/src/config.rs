@@ -14,7 +14,7 @@ pub struct RpcConfig {
 
     /// Maximal gap between the nonce of the last executed block and the nonce being submitted
     #[config(default_t = 1000)]
-    pub max_nonce_ahead: u32,
+    pub max_nonce_ahead: u64,
 
     /// Gas limit of transactions executed via eth_call
     #[config(default_t = 10000000)]
