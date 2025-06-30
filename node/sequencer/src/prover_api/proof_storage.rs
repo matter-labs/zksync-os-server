@@ -44,6 +44,16 @@ impl ProofStorage {
         Ok(())
     }
 
+    /// Persist a proof with prover ID label. Overwrites any existing entry for the same block.
+    pub fn save_proof_with_prover(&self, block_number: u64, proof: &[u8], prover_id: &str) -> anyhow::Result<()> {
+        let key = block_number.to_be_bytes();
+        let mut batch: WriteBatch<'_, ProofColumnFamily> = self.db.new_write_batch();
+        batch.put_cf(ProofColumnFamily::Proofs, &key, proof);
+        tracing::info!(block_number, prover_id, "Saving proof with prover ID");
+        self.db.write(batch)?;
+        Ok(())
+    }
+
     /// Loads a proof for `block_number`, if present.
     pub fn get_proof(&self, block_number: u64) -> Option<Vec<u8>> {
         let key = block_number.to_be_bytes();
