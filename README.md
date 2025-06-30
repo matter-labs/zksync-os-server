@@ -37,7 +37,7 @@ When running on a new VM:
 sudo apt-get install -y build-essential pkg-config cmake clang lldb lld libssl-dev apt-transport-https ca-certificates curl software-properties-common git
 # rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-# add rust to 
+# add rust to PATH
 . "$HOME/.cargo/env"    
 ```
 
