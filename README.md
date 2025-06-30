@@ -59,6 +59,7 @@ pub struct ReplayRecord {
   1. Actual state - data needed to execute VM: key-value storage and preimages map - see `state` crate
   2. Receipts repositories - data only needed in API - see `repositories/mod.rs`
   3. Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from `batcher` - see below.
+     
 Minimal Node will only have (1).
 * Explicit finality handling - description WIP
 
