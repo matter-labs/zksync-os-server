@@ -1,6 +1,6 @@
 use crate::prover_api::prover_job_manager::{ProverJobManager, SubmitError};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -12,6 +12,7 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 // ───────────── JSON payloads ─────────────
+
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NextProverJobPayload {
@@ -31,6 +32,11 @@ struct AvailableProofsPayload {
     available_proofs: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProverQuery {
+    id: Option<String>,
+}
+
 #[derive(Clone)]
 struct AppState {
     job_manager: Arc<ProverJobManager>,
@@ -39,7 +45,7 @@ struct AppState {
 // ───────────── HTTP handlers ─────────────
 
 async fn pick_fri_job(State(state): State<AppState>) -> Response {
-    match state.job_manager.pick_next_job("unknown_prover") {
+    match state.job_manager.pick_next_job() {
         Some((block, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(NextProverJobPayload {
@@ -53,6 +59,7 @@ async fn pick_fri_job(State(state): State<AppState>) -> Response {
 }
 
 async fn submit_fri_proof(
+    Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
     Json(payload): Json<ProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
@@ -60,9 +67,10 @@ async fn submit_fri_proof(
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
+    let prover_id = query.id.as_deref().unwrap_or("unknown_prover");
     match state
         .job_manager
-        .submit_proof(payload.block_number, proof_bytes)
+        .submit_proof(payload.block_number, proof_bytes, prover_id)
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
         Err(SubmitError::VerificationFailed) => Err((
