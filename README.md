@@ -37,7 +37,7 @@ When running on a new VM:
 sudo apt-get install -y build-essential pkg-config cmake clang lldb lld libssl-dev apt-transport-https ca-certificates curl software-properties-common git
 # rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-# add rust to 
+# add rust to PATH
 . "$HOME/.cargo/env"    
 ```
 
@@ -59,6 +59,7 @@ pub struct ReplayRecord {
   1. Actual state - data needed to execute VM: key-value storage and preimages map - see `state` crate
   2. Receipts repositories - data only needed in API - see `repositories/mod.rs`
   3. Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from `batcher` - see below.
+     
 Minimal Node will only have (1).
 * Explicit finality handling - description WIP
 
