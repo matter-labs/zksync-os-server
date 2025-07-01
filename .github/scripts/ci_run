@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Runs the command from within CI docker-compose environment.
+cd "$ZKSYNC_OS_HOME"/.github
+compose_file="${RUNNER_COMPOSE_FILE:-docker-compose.yml}"
+
+docker-compose -f "$compose_file" exec -T ci-runner "$@"

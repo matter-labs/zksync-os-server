@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,28 +12,51 @@ env:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner-highmem-long
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: nightly-2025-03-19
-        components: rustfmt, clippy
+    - name: Setup misc environment variables
+      shell: bash
+      run: |
+        echo $(pwd)/.github/scripts >> $GITHUB_PATH
+        echo ZKSYNC_OS_HOME=$(pwd) >> $GITHUB_ENV
+
+    - name: Setup sccache for building Rust code inside Docker
+      shell: bash
+      run: |
+        echo SCCACHE_CACHE_SIZE=50G >> .github/.env
+        echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> .github/.env
+        echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> .github/.env
+        echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> .github/.env
+        echo SCCACHE_GCS_RW_MODE=READ_WRITE >> .github/.env
+        echo RUSTC_WRAPPER=sccache >> .github/.env
+        echo DOCKER_PWD=$(pwd) >> .github/.env
+
+    - name: Start CI Docker
+      shell: bash
+      run: ci_up
+
+    - name: Start sccache server
+      shell: bash
+      run: ci_run sccache --start-server
 
     - name: Check formatting
-      run: cargo fmt --all -- --check
-      continue-on-error: true
+      run: ci_run cargo fmt --all -- --check
 
     - name: Build project
-      run: cargo build --verbose --all-targets
+      run: ci_run cargo build --verbose --all-targets
 
     - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-      continue-on-error: true
+      run: ci_run cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Run tests
-      run: cargo test --verbose
+      run: ci_run cargo test --verbose
+
+    - name: Show sccache logs
+      if: always()
+      run: |
+        ci_run sccache --show-stats || true
+        ci_run cat /tmp/sccache_log.txt || true
