@@ -1,8 +1,11 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::{BlockCommand, ReplayRecord};
+use alloy::consensus::transaction::SignerRecoverable;
+use alloy::eips::{Decodable2718, Encodable2718};
 use futures::stream::{self, BoxStream, StreamExt};
 use std::convert::TryInto;
 use zk_os_forward_system::run::BatchContext;
+use zksync_os_types::L2Envelope;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
@@ -82,8 +85,13 @@ impl BlockReplayStorage {
         let l1_txs_value =
             bincode::serde::encode_to_vec(&record.l1_transactions, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
+        let l2_txs_2718_encoded = record
+            .l2_transactions
+            .into_iter()
+            .map(|l2_tx| l2_tx.encoded_2718())
+            .collect::<Vec<_>>();
         let l2_txs_value =
-            bincode::serde::encode_to_vec(&record.l2_transactions, bincode::config::standard())
+            bincode::serde::encode_to_vec(&l2_txs_2718_encoded, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
 
         // Batch both writes: replay entry and latest pointer
@@ -154,12 +162,20 @@ impl BlockReplayStorage {
                 )
                 .expect("Failed to deserialize L1 transactions")
                 .0,
-                l2_transactions: bincode::serde::decode_from_slice(
+                l2_transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
                     &bytes_l2_txs,
                     bincode::config::standard(),
                 )
                 .expect("Failed to deserialize L2 transactions")
-                .0,
+                .0
+                .into_iter()
+                .map(|bytes| {
+                    L2Envelope::decode_2718(&mut bytes.as_slice())
+                        .expect("Failed to decode 2718 L2 transaction")
+                        .try_into_recovered()
+                        .expect("Failed to recover L2 transaction's signer")
+                })
+                .collect(),
             }),
             (None, None, None) => None,
             _ => panic!("Inconsistent state: Context and L1/L2 Txs must be written atomically"),
