@@ -78,10 +78,13 @@ impl RepositoryManager {
             .add_diff(block_number, account_properties);
 
         // Add transaction receipts to the transaction receipt repository
-        for (_index, _l1_tx) in l1_transactions.into_iter().enumerate() {
-            // TODO
+        let mut index = 0;
+        for _l1_tx in l1_transactions.into_iter() {
+            index += 1;
+            // TODO: Convert into alloy receipt once we get rid of `zksync_types::L1Tx`
         }
-        for (index, l2_tx) in l2_transactions.into_iter().enumerate() {
+        for l2_tx in l2_transactions.into_iter() {
+            index += 1;
             let hash = Bytes32::from(l2_tx.hash().0);
             let api_tx = l2_transaction_to_api_data(&block_output, index, l2_tx);
             self.transaction_receipt_repository.insert(hash, api_tx);
