@@ -2,7 +2,7 @@
 
 use std::str;
 
-use zksync_basic_types::H256;
+use alloy::primitives::B256;
 
 use crate::{
     errors::{DeserializeContext, DeserializeErrorKind},
@@ -32,8 +32,8 @@ impl Leaf {
         if buffer.len() < 2 * HASH_SIZE {
             return Err(DeserializeErrorKind::UnexpectedEof.into());
         }
-        let key = H256::from_slice(&buffer[..HASH_SIZE]);
-        let value = H256::from_slice(&buffer[HASH_SIZE..2 * HASH_SIZE]);
+        let key = B256::from_slice(&buffer[..HASH_SIZE]);
+        let value = B256::from_slice(&buffer[HASH_SIZE..2 * HASH_SIZE]);
 
         buffer = &buffer[2 * HASH_SIZE..];
         let next_index =
@@ -49,8 +49,8 @@ impl Leaf {
     }
 
     pub(super) fn serialize(&self, buffer: &mut Vec<u8>) {
-        buffer.extend_from_slice(self.key.as_bytes());
-        buffer.extend_from_slice(self.value.as_bytes());
+        buffer.extend_from_slice(self.key.as_slice());
+        buffer.extend_from_slice(self.value.as_slice());
         leb128::write::unsigned(buffer, self.next_index).unwrap();
     }
 }
@@ -60,14 +60,14 @@ impl ChildRef {
         if buffer.len() < HASH_SIZE {
             return Err(DeserializeErrorKind::UnexpectedEof.into());
         }
-        let hash = H256::from_slice(&buffer[..HASH_SIZE]);
+        let hash = B256::from_slice(&buffer[..HASH_SIZE]);
         *buffer = &buffer[HASH_SIZE..];
         let version = leb128::read::unsigned(buffer).map_err(DeserializeErrorKind::Leb128)?;
         Ok(Self { hash, version })
     }
 
     fn serialize(&self, buffer: &mut Vec<u8>) {
-        buffer.extend_from_slice(self.hash.as_bytes());
+        buffer.extend_from_slice(self.hash.as_slice());
         leb128::write::unsigned(buffer, self.version).unwrap();
     }
 }

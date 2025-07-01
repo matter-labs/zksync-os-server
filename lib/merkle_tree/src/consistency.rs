@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use zksync_basic_types::H256;
+use alloy::primitives::B256;
 
 use crate::{
     leaf_nibbles, max_nibbles_for_internal_node, max_node_children,
@@ -59,13 +59,13 @@ pub enum ConsistencyError {
     #[error("leaf {0} has maximum key")]
     MaxKey(u64),
     #[error("missing key {0:?} in lookup")]
-    MissingKeyLookup(H256),
+    MissingKeyLookup(B256),
     #[error(
         "{kind} index mismatch for key {key:?} in tree leaf ({in_tree}) and lookup ({in_lookup})"
     )]
     IndexMismatch {
         kind: IndexKind,
-        key: H256,
+        key: B256,
         in_lookup: u64,
         in_tree: u64,
     },
@@ -95,8 +95,8 @@ pub enum ConsistencyError {
     HashMismatch {
         key: NodeKey,
         nibble: u8,
-        expected: H256,
-        actual: H256,
+        expected: B256,
+        actual: B256,
     },
 }
 
@@ -139,7 +139,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         node: &InternalNode,
         key: NodeKey,
         leaf_data: &LeafConsistencyData,
-    ) -> Result<H256, ConsistencyError> {
+    ) -> Result<B256, ConsistencyError> {
         use rayon::prelude::*;
 
         let leaf_count = leaf_data.expected_leaf_count;
@@ -230,13 +230,13 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         leaf: &Leaf,
         key: NodeKey,
         leaf_data: &LeafConsistencyData,
-    ) -> Result<H256, ConsistencyError> {
+    ) -> Result<B256, ConsistencyError> {
         let index = key.index_on_level;
 
-        if index == 0 && leaf.key != H256::zero() {
+        if index == 0 && leaf.key != B256::ZERO {
             return Err(ConsistencyError::UnexpectedMinGuard);
         }
-        if index == 1 && (leaf.key != H256::repeat_byte(0xff) || leaf.next_index != 1) {
+        if index == 1 && (leaf.key != B256::repeat_byte(0xff) || leaf.next_index != 1) {
             return Err(ConsistencyError::UnexpectedMaxGuard);
         }
 
@@ -289,7 +289,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     }
 }
 
-fn next_key(key: H256) -> Option<H256> {
+fn next_key(key: B256) -> Option<B256> {
     let mut bytes = key.0;
     for pos in (0..32).rev() {
         if bytes[pos] != u8::MAX {
@@ -297,7 +297,7 @@ fn next_key(key: H256) -> Option<H256> {
             for byte in &mut bytes[pos + 1..] {
                 *byte = 0;
             }
-            return Some(H256(bytes));
+            return Some(B256::from(bytes));
         }
     }
     None
@@ -397,22 +397,23 @@ impl AtomicBitSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::U256;
 
     #[test]
     fn prev_and_next_key_work_as_expected() {
-        let key = H256::zero();
-        assert_eq!(next_key(key), Some(H256::from_low_u64_be(1)));
+        let key = B256::ZERO;
+        assert_eq!(next_key(key), Some(U256::from(1).into()));
 
-        let key = H256::from_low_u64_be(10);
-        assert_eq!(next_key(key), Some(H256::from_low_u64_be(11)));
+        let key = U256::from(10).into();
+        assert_eq!(next_key(key), Some(U256::from(11).into()));
 
-        let key = H256::from_low_u64_be((1 << 32) - 1);
-        assert_eq!(next_key(key), Some(H256::from_low_u64_be(1 << 32)));
+        let key = U256::from((1u64 << 32) - 1).into();
+        assert_eq!(next_key(key), Some(U256::from(1u64 << 32).into()));
 
-        let key = H256::from_low_u64_be(1 << 32);
-        assert_eq!(next_key(key), Some(H256::from_low_u64_be((1 << 32) + 1)));
+        let key = U256::from(1u64 << 32).into();
+        assert_eq!(next_key(key), Some(U256::from((1u64 << 32) + 1).into()));
 
-        let key = H256::repeat_byte(0xff);
+        let key = B256::repeat_byte(0xff);
         assert_eq!(next_key(key), None);
     }
 }

@@ -112,7 +112,7 @@ impl CommitBatchInfo {
         }
 
         let mut hasher = Blake2s256::new();
-        hasher.update(tree_output.root_hash.as_bytes());
+        hasher.update(tree_output.root_hash.as_slice());
         hasher.update(tree_output.leaf_count.to_be_bytes());
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
