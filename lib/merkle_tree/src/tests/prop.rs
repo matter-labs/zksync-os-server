@@ -6,11 +6,11 @@ use std::{
     ops,
 };
 
+use alloy::primitives::B256;
 use proptest::{prelude::*, sample::Index};
-use zksync_basic_types::H256;
-use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
 
 use super::naive_hash_tree;
+use crate::blake2::Blake2Hasher;
 use crate::{
     types::Leaf, BatchOutput, BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeEntry,
     TreeOperation, TreeParams,
@@ -18,11 +18,11 @@ use crate::{
 
 const MAX_ENTRIES: usize = 100;
 
-fn uniform_hash() -> impl Strategy<Value = H256> {
+fn uniform_hash() -> impl Strategy<Value = B256> {
     proptest::array::uniform32(proptest::num::u8::ANY)
-        .prop_map(H256)
+        .prop_map(B256::from)
         .prop_filter("guard", |hash| {
-            *hash != H256::zero() && *hash != H256::repeat_byte(0xff)
+            *hash != B256::ZERO && *hash != B256::repeat_byte(0xff)
         })
 }
 
@@ -35,18 +35,18 @@ fn gen_writes(size: ops::RangeInclusive<usize>) -> impl Strategy<Value = Vec<Tre
     })
 }
 
-fn gen_reads() -> impl Strategy<Value = Vec<H256>> {
+fn gen_reads() -> impl Strategy<Value = Vec<B256>> {
     proptest::collection::vec(uniform_hash(), 0..=MAX_ENTRIES)
 }
 
-fn gen_updates() -> impl Strategy<Value = Vec<(Index, H256)>> {
+fn gen_updates() -> impl Strategy<Value = Vec<(Index, B256)>> {
     proptest::collection::vec((any::<Index>(), uniform_hash()), 0..=MAX_ENTRIES)
 }
 
 fn merge_updates(
     inserts: &mut Vec<TreeEntry>,
     prev_entries: &[TreeEntry],
-    updates: Vec<(Index, H256)>,
+    updates: Vec<(Index, B256)>,
 ) {
     // We need deduplication to uphold the tree extension contract.
     let deduplicated_updates: HashMap<_, _> = updates
@@ -61,7 +61,7 @@ fn merge_updates(
     );
 }
 
-fn merge_reads(reads: &mut Vec<H256>, prev_entries: &[TreeEntry], indices: Vec<Index>) {
+fn merge_reads(reads: &mut Vec<B256>, prev_entries: &[TreeEntry], indices: Vec<Index>) {
     let deduplicated_reads: HashSet<_> = indices
         .into_iter()
         .map(|idx| idx.get(prev_entries).key)
@@ -81,15 +81,15 @@ fn latest_tree_info(tree: &MerkleTree<PatchSet>) -> Option<BatchOutput> {
     }
 }
 
-fn flip_bit(hash: &mut H256, bit: u8) {
+fn flip_bit(hash: &mut B256, bit: u8) {
     let (byte, shift_in_byte) = (bit / 8, bit % 8);
-    hash.as_bytes_mut()[usize::from(byte)] ^= 1 << shift_in_byte;
+    hash.as_mut_slice()[usize::from(byte)] ^= 1 << shift_in_byte;
 }
 
 fn test_read_proof(
     tree: &mut MerkleTree<PatchSet>,
     prev_writes: &[TreeEntry],
-    reads: &[H256],
+    reads: &[B256],
 ) -> Result<(), TestCaseError> {
     // Necessary for proof fields to be non-empty
     assert!(!prev_writes.is_empty());
@@ -237,7 +237,7 @@ impl ProofMutation {
 fn test_proof_mutation(
     tree: &mut MerkleTree<PatchSet>,
     prev_writes: &[TreeEntry],
-    reads: &[H256],
+    reads: &[B256],
     mutation: ProofMutation,
 ) -> Result<(), TestCaseError> {
     // Necessary for proof fields to be non-empty
@@ -262,7 +262,7 @@ fn test_proof_mutation(
 fn test_update(
     tree: &mut MerkleTree<PatchSet>,
     writes: &[TreeEntry],
-    reads: &[H256],
+    reads: &[B256],
 ) -> Result<(), TestCaseError> {
     let tree_info = latest_tree_info(tree);
     let (output, proof) = tree.extend_with_proof(writes, reads).unwrap();
