@@ -1,6 +1,5 @@
 use crate::model::ReplayRecord;
 use crate::CHAIN_ID;
-use alloy::eips::Encodable2718;
 use std::alloc::Global;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -17,7 +16,7 @@ use zksync_os_l1_sender::commitment::CommitBatchInfo;
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_merkle_tree::{MerkleTreeReader, RocksDBWrapper};
 use zksync_os_state::StateHandle;
-use zksync_os_types::tx_abi_encode;
+use zksync_os_types::EncodableZksyncOs;
 
 /// This component will genearte l1 batches from the stream of blocks
 /// It will also generate Prover Input for each batch.
@@ -120,11 +119,11 @@ impl Batcher {
                         .l1_transactions
                         .clone()
                         .into_iter()
-                        .map(|l1_tx| tx_abi_encode(l1_tx.into()));
+                        .map(|l1_tx| l1_tx.encode_zksync_os());
                     let l2_transactions = replay_record
                         .l2_transactions
-                        .iter()
-                        .map(Encodable2718::encoded_2718);
+                        .into_iter()
+                        .map(|l2_tx| l2_tx.encode_zksync_os());
                     let transactions = l1_transactions
                         .chain(l2_transactions)
                         .collect::<VecDeque<_>>();

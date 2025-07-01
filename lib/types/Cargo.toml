@@ -12,4 +12,4 @@ categories.workspace = true
 [dependencies]
 zksync_types.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["consensus"] }
+alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types"] }

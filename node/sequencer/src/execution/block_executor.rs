@@ -1,7 +1,6 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
-use alloy::eips::Encodable2718;
 use anyhow::{anyhow, Result};
 use futures::{Stream, StreamExt};
 use itertools::Either;
@@ -10,7 +9,7 @@ use tokio::time::Sleep;
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_os_mempool::DynL1Pool;
 use zksync_os_state::StateHandle;
-use zksync_os_types::{tx_abi_encode, L1Transaction, L2Transaction};
+use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
 
 /// Behaviour when VM returns an InvalidTransaction error.
 #[derive(Clone, Copy, Debug)]
@@ -168,7 +167,7 @@ async fn execute_block_inner(
                     Some(Either::Left(l1_tx)) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(tx_abi_encode(l1_tx.clone())).await {
+                        match runner.execute_next_tx(l1_tx.clone().encode_zksync_os()).await {
                             Ok(_res) => {
                                 // tracing::info!(
                                 //     block = ctx.block_number,
@@ -209,7 +208,7 @@ async fn execute_block_inner(
                     Some(Either::Right(l2_tx)) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(l2_tx.encoded_2718()).await {
+                        match runner.execute_next_tx(l2_tx.clone().encode_zksync_os()).await {
                             Ok(_res) => {
                                 // tracing::info!(
                                 //     block = ctx.block_number,
