@@ -16,12 +16,12 @@ pub mod transaction_receipt_repository;
 use crate::conversions::h256_to_bytes32;
 use crate::repositories::account_property_repository::extract_account_properties;
 use crate::repositories::metrics::REPOSITORIES_METRICS;
+use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
 pub use block_receipt_repository::BlockReceiptRepository;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_types::Transaction;
-use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 
 /// Manages repositories that store node data required for RPC but not for VM execution.
 ///

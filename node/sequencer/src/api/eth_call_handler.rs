@@ -1,23 +1,23 @@
-use anyhow::Context;
-use zksync_types::api::BlockIdVariant;
-use zksync_types::api::state_override::StateOverride;
-use zksync_types::l2::L2Tx;
-use zksync_types::PackedEthSignature;
-use zksync_types::transaction_request::CallRequest;
-use zksync_types::web3::Bytes;
-use zksync_os_state::StateHandle;
 use crate::api::resolve_block_id;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
 use crate::finality::FinalityTracker;
+use anyhow::Context;
+use zksync_os_state::StateHandle;
+use zksync_types::api::state_override::StateOverride;
+use zksync_types::api::BlockIdVariant;
+use zksync_types::l2::L2Tx;
+use zksync_types::transaction_request::CallRequest;
+use zksync_types::web3::Bytes;
+use zksync_types::PackedEthSignature;
 
 pub struct EthCallHandler {
     config: RpcConfig,
     finality_info: FinalityTracker,
     state_handle: StateHandle,
 
-    block_replay_storage: BlockReplayStorage
+    block_replay_storage: BlockReplayStorage,
 }
 
 impl EthCallHandler {
@@ -25,13 +25,13 @@ impl EthCallHandler {
         config: RpcConfig,
         finality_tracker: FinalityTracker,
         state_handle: StateHandle,
-        block_replay_storage: BlockReplayStorage
+        block_replay_storage: BlockReplayStorage,
     ) -> EthCallHandler {
         Self {
             config,
             finality_info: finality_tracker,
             state_handle,
-            block_replay_storage
+            block_replay_storage,
         }
     }
 

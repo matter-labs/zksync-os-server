@@ -5,7 +5,8 @@ use tokio::{
 use zk_ee::system::errors::InternalError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
-    run_batch, BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
+    run_batch, BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback,
+    TxSource,
 };
 use zksync_os_state::StateView;
 
@@ -20,10 +21,7 @@ pub struct VmWrapper {
 
 impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
-    pub fn new(
-        context: BatchContext,
-        state_view: StateView,
-    ) -> Self {
+    pub fn new(context: BatchContext, state_view: StateView) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBatch).
         let (tx_sender, tx_receiver) = channel(1);
         // Channel for receiving per‐tx execution results.
