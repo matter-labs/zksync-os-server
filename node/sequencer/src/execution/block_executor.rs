@@ -72,7 +72,16 @@ pub async fn execute_block(
         BlockCommand::Replay(_) => "replay",
     };
     let (ctx, stream, seal, invalid) = command_into_parts(cmd, tx_stream);
-    execute_block_inner(ctx, state, stream, seal, invalid, metrics_label, max_transactions_in_block).await
+    execute_block_inner(
+        ctx,
+        state,
+        stream,
+        seal,
+        invalid,
+        metrics_label,
+        max_transactions_in_block,
+    )
+    .await
 }
 
 async fn execute_block_inner(

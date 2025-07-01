@@ -139,7 +139,10 @@ pub async fn main() {
     .expect("Failed to open ProofStorageDB");
 
     let proof_storage = ProofStorage::new(proof_storage_db);
-    tracing::info!("Proof storage initialized with {} proofs already present", proof_storage.get_blocks_with_proof().len());
+    tracing::info!(
+        "Proof storage initialized with {} proofs already present",
+        proof_storage.get_blocks_with_proof().len()
+    );
 
     // =========== load last persisted block numbers.  ===========
     let (storage_map_block, preimages_block) = state_handle.latest_block_numbers();

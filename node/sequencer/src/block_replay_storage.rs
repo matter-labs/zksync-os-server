@@ -10,10 +10,10 @@ use zksync_storage::RocksDB;
 /// It is then used for:
 ///  * Context + Transaction list: sequencer recovery.
 ///  * Context: provides execution environment for `eth_call`s against older blocks
-/// 
-/// Acts as canonization provider for centralized sequencers. 
+///
+/// Acts as canonization provider for centralized sequencers.
 /// Writes must be synchronous.
-/// 
+///
 #[derive(Clone, Debug)]
 pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,

@@ -1,8 +1,8 @@
+use crate::conversions::b160_to_address;
+use crate::CHAIN_ID;
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_ee::utils::Bytes32;
-use crate::conversions::b160_to_address;
-use crate::CHAIN_ID;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
 use zksync_types::{api, H256, U256, U64};
 
