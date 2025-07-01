@@ -1,6 +1,7 @@
 use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
@@ -9,13 +10,11 @@ use zk_os_forward_system::run::BatchOutput;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
-use zksync_os_merkle_tree::MerkleTreeReader;
 use zksync_os_sequencer::api::run_jsonrpsee_server;
-use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
-use zksync_os_sequencer::config::{BatcherConfig, RpcConfig, SequencerConfig};
+use zksync_os_sequencer::config::{BatcherConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use zksync_os_sequencer::finality::FinalityTracker;
-use zksync_os_sequencer::model::ReplayRecord;
+use zksync_os_sequencer::model::{BatchJob, ReplayRecord};
 use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_sequencer::tree_manager::TreeManager;
@@ -24,9 +23,14 @@ use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
-const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
+use zksync_os_sequencer::batcher::Batcher;
+use zksync_os_sequencer::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
+use zksync_os_sequencer::prover_api::prover_job_manager::ProverJobManager;
+use zksync_os_sequencer::prover_api::prover_server;
 
+const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
+const PROOF_STORAGE_DB_NAME: &str = "proofs";
 
 #[tokio::main]
 pub async fn main() {
@@ -56,6 +60,9 @@ pub async fn main() {
     schema
         .insert(&BatcherConfig::DESCRIPTION, "batcher")
         .expect("Failed to insert batcher config");
+    schema
+        .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
+        .expect("Failed to insert prover api config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -89,6 +96,12 @@ pub async fn main() {
         .parse()
         .expect("Failed to parse L1 watcher config");
 
+    let prover_api_config = repo
+        .single::<ProverApiConfig>()
+        .expect("Failed to load prover api config")
+        .parse()
+        .expect("Failed to parse prover api config");
+
     let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(3312);
 
     // =========== init interruption channel ===========
@@ -117,6 +130,14 @@ pub async fn main() {
 
     let repositories = RepositoryManager::new(sequencer_config.blocks_to_retain_in_memory);
 
+    let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
+        &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
+    )
+    .expect("Failed to open ProofStorageDB");
+
+    let proof_storage = ProofStorage::new(proof_storage_db);
+    tracing::info!("Proof storage initialized with {} proofs already present", proof_storage.get_blocks_with_proof().len());
+
     // =========== load last persisted block numbers.  ===========
     let (storage_map_block, preimages_block) = state_handle.latest_block_numbers();
     let wal_block = block_replay_storage.latest_block();
@@ -130,14 +151,17 @@ pub async fn main() {
         "State DB block number ({storage_map_block}) is greater than WAL block ({wal_block:?}). Preimages block: ({preimages_block})"
     );
 
-    // ======= Initialize channel between sequencer and tree/batcher  ===========
+    // ======= Initialize async channels  ===========
 
-    let (batcher_sender, batcher_receiver) =
+    // todo: this is received by batcher and then fanned out to workers. Could just use broadcast instead
+    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
+
+    let (batch_sender, batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(100);
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
-    let (tree_ready_block_sender, tree_ready_block_receiver) = watch::channel(0u64);
+    let (tree_ready_block_sender, _tree_ready_block_receiver) = watch::channel(0u64);
 
     // ========== Initialize tree manager ===========
 
@@ -230,24 +254,25 @@ pub async fn main() {
         }
     };
 
-    // ========== Initialize batcher (conditional) ===========
+    // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
 
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
         let batcher = Batcher::new(
-            batcher_receiver,
-            tree_ready_block_receiver.clone(),
-            state_handle.clone(),
+            blocks_for_batcher_receiver,
+            batch_sender,
             l1_sender_handle,
-            MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
+            state_handle.clone(),
+            // MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,
+            batcher_config.num_workers,
         );
         Box::pin(batcher.run_loop())
     } else {
         tracing::info!(
             "Batcher disabled via configuration; draining channel to avoid backpressure"
         );
-        let mut receiver = batcher_receiver;
+        let mut receiver = blocks_for_batcher_receiver;
         Box::pin(async move {
             while receiver.recv().await.is_some() {
                 // Drop messages silently to prevent backpressure
@@ -255,6 +280,16 @@ pub async fn main() {
             Ok(())
         })
     };
+
+    // ======= Initialize Prover Api Server (todo: should be optional) ========
+
+    let prover_job_manager = Arc::new(ProverJobManager::new(
+        proof_storage,
+        prover_api_config.job_timeout,
+        prover_api_config.max_unproved_blocks,
+    ));
+    let prover_server_job =
+        prover_server::run(prover_job_manager.clone(), prover_api_config.address);
 
     // ======= Run tasks ===========
 
@@ -290,6 +325,19 @@ pub async fn main() {
             }
         }
 
+        // ── Prover Server tasks (todo: should be conditioned) ──────────────────────────────────
+        _res = prover_job_manager.listen_for_batch_jobs(batch_receiver) => {
+            tracing::warn!("Prover job manager task exited")
+        }
+
+        res = prover_server_job => {
+            match res {
+                Ok(_)  => tracing::warn!("prover_server_job task exited"),
+                Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),
+            }
+
+        }
+
         // todo: commented out for now because it affects performance - even when doing nothing
         // ── L1 Watcher task ────────────────────────────────────────────────
         // res = l1_watcher_task => {
@@ -310,7 +358,7 @@ pub async fn main() {
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
             first_block_to_execute,
-            batcher_sender,
+            blocks_for_batcher_sender,
             tree_sender,
             l1_mempool,
             mempool,
