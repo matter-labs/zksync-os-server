@@ -1,10 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::time::Duration;
 use zk_os_forward_system::run::BatchContext;
-use zksync_os_types::{L1Transaction, L2Transaction};
-use zksync_web3_decl::jsonrpsee::core::Serialize;
 use zksync_os_l1_sender::commitment::CommitBatchInfo;
+use zksync_os_types::{L1Transaction, L2Transaction};
 
 #[derive(Clone, Debug)]
 pub enum BlockCommand {

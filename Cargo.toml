@@ -76,7 +76,6 @@ parking_lot = "0.12.4"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
-zksync_web3_decl = "28.1.0-non-semver-compat"
 zksync_types = "28.1.0-non-semver-compat"
 zksync_basic_types = "28.1.0-non-semver-compat"
 zksync_crypto_primitives = "28.1.0-non-semver-compat"

@@ -23,7 +23,9 @@ use zk_ee::utils::Bytes32;
 use zksync_os_mempool::DynPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_web3_decl::jsonrpsee::types::error::INTERNAL_ERROR_CODE;
+
+/// Internal error code.
+pub const INTERNAL_ERROR_CODE: i32 = -32603;
 
 pub(crate) struct EthNamespace {
     tx_handler: TxHandler,

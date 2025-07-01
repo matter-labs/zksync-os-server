@@ -10,7 +10,6 @@ use vise::{Buckets, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
 use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
-use zksync_web3_decl::types::H256;
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
 pub struct TreeManager {
@@ -102,8 +101,8 @@ impl TreeManager {
                         .storage_writes
                         .into_iter()
                         .map(|write| TreeEntry {
-                            key: H256::from(write.key.as_u8_array()),
-                            value: H256::from(write.value.as_u8_array()),
+                            key: write.key.as_u8_array().into(),
+                            value: write.value.as_u8_array().into(),
                         })
                         .collect::<Vec<_>>();
 
