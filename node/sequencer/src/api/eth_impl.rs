@@ -56,7 +56,7 @@ impl EthNamespace {
             mempool,
             repository_manager.account_property_repository.clone(),
             config.max_nonce_ahead,
-            config.max_tx_size_bytes,
+            config.max_tx_input_bytes,
         );
 
         let eth_call_handler = EthCallHandler::new(

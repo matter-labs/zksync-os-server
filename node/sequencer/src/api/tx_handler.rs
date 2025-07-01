@@ -16,20 +16,20 @@ pub struct TxHandler {
 
     // will probably be replaced with an own config
     max_nonce_ahead: u64,
-    max_tx_size_bytes: usize,
+    max_tx_input_bytes: usize,
 }
 impl TxHandler {
     pub fn new(
         mempool: DynPool,
         account_property_repository: AccountPropertyRepository,
         max_nonce_ahead: u64,
-        max_tx_size_bytes: usize,
+        max_tx_input_bytes: usize,
     ) -> TxHandler {
         Self {
             mempool,
             account_property_repository,
             max_nonce_ahead,
-            max_tx_size_bytes,
+            max_tx_input_bytes,
         }
     }
 
@@ -39,12 +39,11 @@ impl TxHandler {
             anyhow::ensure!(chain_id == CHAIN_ID, "wrong chain id {chain_id}");
         }
         let l2_tx: L2Transaction = transaction.try_into_recovered()?;
-        // TODO: Why not just restrict `tx_bytes` size above instead?
-        if l2_tx.eip2718_encoded_length() * 32 > self.max_tx_size_bytes {
+        if l2_tx.input().len() > self.max_tx_input_bytes {
             anyhow::bail!(
-                "oversized data. max: {}; actual: {}",
-                self.max_tx_size_bytes,
-                l2_tx.eip2718_encoded_length() * 32
+                "oversized input data. max: {}; actual: {}",
+                self.max_tx_input_bytes,
+                l2_tx.input().len()
             );
         }
 

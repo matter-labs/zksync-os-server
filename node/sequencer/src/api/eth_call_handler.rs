@@ -4,6 +4,7 @@ use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
 use crate::finality::FinalityTracker;
 use crate::repositories::AccountPropertyRepository;
+use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::Bytes;
@@ -136,11 +137,13 @@ impl EthCallHandler {
             }
         }
         let tx = request.build_typed_simulate_transaction()?;
-        if tx.eip2718_encoded_length() * 32 > self.config.max_tx_size_bytes {
+        // TODO: reth doesn't validate max tx size for `eth_call` since these transactions are
+        //       short-lived and are not added to the mempool. Consider doing the same
+        if tx.input().len() > self.config.max_tx_input_bytes {
             anyhow::bail!(
-                "oversized data. max: {}; actual: {}",
-                self.config.max_tx_size_bytes,
-                tx.eip2718_encoded_length() * 32
+                "oversized input data. max: {}; actual: {}",
+                self.config.max_tx_input_bytes,
+                tx.input().len()
             );
         }
 
