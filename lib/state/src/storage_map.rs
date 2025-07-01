@@ -140,9 +140,16 @@ impl StorageMap {
             // check that we are inserting block with the same data.
             // Doesn't need to hold true with decentralization (ie actual rollbacks)
             // Clones are expensive but only happen fo bounded number of blocks at startup
-            assert_eq!(old_diff.map.len(), new_diff.map.len(), "mismatch when replaying blocks");
+            assert_eq!(
+                old_diff.map.len(),
+                new_diff.map.len(),
+                "mismatch when replaying blocks"
+            );
             for (old_k, old_v) in old_diff.map.clone() {
-                assert_eq!(old_v, new_diff.map[&old_k], "mismatch when replaying blocks");
+                assert_eq!(
+                    old_v, new_diff.map[&old_k],
+                    "mismatch when replaying blocks"
+                );
             }
 
             // currently no-op as we don't allow changes

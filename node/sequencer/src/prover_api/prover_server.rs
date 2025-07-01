@@ -13,7 +13,6 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 // ───────────── JSON payloads ─────────────
 
-
 #[derive(Debug, Serialize, Deserialize)]
 struct NextProverJobPayload {
     block_number: u64,

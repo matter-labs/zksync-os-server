@@ -1,5 +1,6 @@
 use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::{BatchJob, ReplayRecord};
+use crate::CHAIN_ID;
 use std::alloc::Global;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -13,7 +14,6 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
-use crate::CHAIN_ID;
 
 const MAX_INFLIGHT: usize = 30;
 
@@ -209,17 +209,21 @@ fn worker_loop(
                 leaf_count: tree.read().unwrap().storage_tree.next_free_slot,
             };
 
-            let commit_batch_info =
-                CommitBatchInfo::new(batch_output, replay_record.transactions, tree_output, CHAIN_ID);
+            let commit_batch_info = CommitBatchInfo::new(
+                batch_output,
+                replay_record.transactions,
+                tree_output,
+                CHAIN_ID,
+            );
             tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
 
             if let Some(handle) = &commit_batch_info_sender {
-                rt.block_on(handle.commit(commit_batch_info.clone())).unwrap();
+                rt.block_on(handle.commit(commit_batch_info.clone()))
+                    .unwrap();
             }
 
             let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
             tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
-
 
             let batch = BatchJob {
                 block_number: bn,

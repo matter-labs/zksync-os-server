@@ -44,9 +44,7 @@ struct JobEntry {
 #[derive(Clone)]
 enum JobStatus {
     Pending,
-    Assigned {
-        assigned_at: Instant,
-    },
+    Assigned { assigned_at: Instant },
 }
 
 /// Public view of one job’s state.
@@ -133,9 +131,7 @@ impl ProverJobManager {
         if let Some(block) = candidate {
             if let Some(mut entry) = self.jobs.get_mut(&block) {
                 let input = entry.prover_input.clone();
-                entry.status = JobStatus::Assigned {
-                    assigned_at: now,
-                };
+                entry.status = JobStatus::Assigned { assigned_at: now };
                 return Some((block, input));
             }
         }
@@ -144,7 +140,12 @@ impl ProverJobManager {
 
     /// Called by the HTTP handler after verifying a proof. On success the entry
     /// is removed so the map cannot grow without bounds.
-    pub fn submit_proof(&self, block: u64, proof: Vec<u8>, prover_id: &str) -> Result<(), SubmitError> {
+    pub fn submit_proof(
+        &self,
+        block: u64,
+        proof: Vec<u8>,
+        prover_id: &str,
+    ) -> Result<(), SubmitError> {
         let entry = self
             .jobs
             .remove(&block)
@@ -154,15 +155,11 @@ impl ProverJobManager {
         match &entry.status {
             JobStatus::Assigned { assigned_at } => {
                 let prove_time = assigned_at.elapsed();
-                let label: &'static str =
-                    Box::leak(prover_id.to_owned().into_boxed_str());
+                let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
                 PROVER_METRICS.prove_time[&label].observe(prove_time);
             }
             JobStatus::Pending => {
-                tracing::warn!(
-                    block_number=block,
-                    "submitting prove for unassigned job"
-                );
+                tracing::warn!(block_number = block, "submitting prove for unassigned job");
             }
         };
 
@@ -170,7 +167,9 @@ impl ProverJobManager {
             return Err(SubmitError::VerificationFailed);
         }
 
-        self.proof_storage.save_proof_with_prover(block, &proof, prover_id).map_err(|e| SubmitError::Other(e.to_string()))?;
+        self.proof_storage
+            .save_proof_with_prover(block, &proof, prover_id)
+            .map_err(|e| SubmitError::Other(e.to_string()))?;
         Ok(())
     }
 
@@ -187,9 +186,7 @@ impl ProverJobManager {
                         prover_id: None,
                         assigned_seconds_ago: None,
                     },
-                    JobStatus::Assigned {
-                        assigned_at,
-                    } => JobState {
+                    JobStatus::Assigned { assigned_at } => JobState {
                         block_number: block,
                         status: "Assigned",
                         prover_id: None,

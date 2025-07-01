@@ -10,7 +10,6 @@ pub struct FinalityTracker {
     /// for a decentralized case this means accepted and signed by the validator quorum
     /// for a centralized case this is equivalent to durability - i.e., block is written to WAL
     canonized: Arc<AtomicU64>,
-
     // the latest block present in state and all repositories - not necessarily canonized yet.
     // sealed: Arc<AtomicU64>,
 }
@@ -33,11 +32,14 @@ impl FinalityTracker {
             self.canonized
                 .store(block_number, std::sync::atomic::Ordering::Relaxed);
         } else {
-            tracing::debug!("already canonized until {} - skipping block {}", cur_canonized, block_number);
+            tracing::debug!(
+                "already canonized until {} - skipping block {}",
+                cur_canonized,
+                block_number
+            );
         }
     }
     pub fn get_canonized_block(&self) -> u64 {
         self.canonized.load(std::sync::atomic::Ordering::Relaxed)
     }
-    
 }
