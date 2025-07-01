@@ -1,3 +1,6 @@
+// The code in this file was copied from reth with some minor changes. Source:
+// https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/core.rs
+
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, Bytes, B256, U256, U64};
