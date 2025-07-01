@@ -84,10 +84,10 @@ impl RepositoryManager {
             // TODO: Convert into alloy receipt once we get rid of `zksync_types::L1Tx`
         }
         for l2_tx in l2_transactions.into_iter() {
-            index += 1;
             let hash = Bytes32::from(l2_tx.hash().0);
             let api_tx = l2_transaction_to_api_data(&block_output, index, l2_tx);
             self.transaction_receipt_repository.insert(hash, api_tx);
+            index += 1;
         }
 
         // Add the full block output to the block receipt repository
