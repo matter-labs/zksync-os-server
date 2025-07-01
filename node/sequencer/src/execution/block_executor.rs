@@ -113,6 +113,7 @@ pub async fn execute_block(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_block_inner(
     ctx: BatchContext,
     state: StateHandle,
@@ -130,9 +131,7 @@ async fn execute_block_inner(
     let mut l1_executed = Vec::<L1Transaction>::new();
     let mut l2_executed = Vec::<L2Transaction>::new();
     // Exhaust stream of L1 txs first before taking L2 txs
-    let mut txs = l1_txs
-        .map(|l1_tx| Either::Left(l1_tx))
-        .chain(l2_txs.map(|l2_tx| Either::Right(l2_tx)));
+    let mut txs = l1_txs.map(Either::Left).chain(l2_txs.map(Either::Right));
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match seal_policy {

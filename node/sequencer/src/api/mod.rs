@@ -64,9 +64,7 @@ pub async fn run_jsonrpsee_server(
 
 // todo: consider best place for this logic - maybe `FinalityInfo` itself?
 pub fn resolve_block_id(block: Option<BlockId>, finality_info: &FinalityTracker) -> u64 {
-    let block_id: BlockId = block
-        .map(|b| b.into())
-        .unwrap_or_else(|| BlockId::Number(BlockNumberOrTag::Pending));
+    let block_id: BlockId = block.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
 
     match block_id {
         BlockId::Hash(_) => unimplemented!(),
