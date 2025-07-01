@@ -129,6 +129,7 @@ async fn execute_block_inner(
     let mut runner = VmWrapper::new(ctx, state_view);
     let mut l1_executed = Vec::<L1Transaction>::new();
     let mut l2_executed = Vec::<L2Transaction>::new();
+    // Exhaust stream of L1 txs first before taking L2 txs
     let mut txs = l1_txs
         .map(|l1_tx| Either::Left(l1_tx))
         .chain(l2_txs.map(|l2_tx| Either::Right(l2_tx)));
@@ -173,7 +174,7 @@ async fn execute_block_inner(
                                 //     block = ctx.block_number,
                                 //     tx = ?tx.hash(),
                                 //     res = ?res,
-                                //     "tx executed"
+                                //     "L1 tx executed"
                                 // );
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
@@ -193,14 +194,10 @@ async fn execute_block_inner(
                                     break;
                                 }
                             }
-                            Err(e) => match fail_policy {
-                                InvalidTxPolicy::RejectAndContinue => {
-                                    tracing::warn!(block = ctx.block_number, ?e,
-                                                   "invalid tx → skipped");
-                                }
-                                InvalidTxPolicy::Abort => {
-                                    return Err(anyhow!("invalid tx: {e:?}"));
-                                }
+                            Err(e) => {
+                                // We ignore `fail_policy` here as we cannot continue after encountering
+                                // an invalid L1 transaction. This essentially halts protocol.
+                                anyhow::bail!("found invalid L1 tx, cannot proceed: {e:?}");
                             }
                         }
                     }
@@ -214,7 +211,7 @@ async fn execute_block_inner(
                                 //     block = ctx.block_number,
                                 //     tx = ?tx.hash(),
                                 //     res = ?res,
-                                //     "tx executed"
+                                //     "L2 tx executed"
                                 // );
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
@@ -236,10 +233,10 @@ async fn execute_block_inner(
                             Err(e) => match fail_policy {
                                 InvalidTxPolicy::RejectAndContinue => {
                                     tracing::warn!(block = ctx.block_number, ?e,
-                                                   "invalid tx → skipped");
+                                                   "invalid L2 tx → skipped");
                                 }
                                 InvalidTxPolicy::Abort => {
-                                    return Err(anyhow!("invalid tx: {e:?}"));
+                                    return Err(anyhow!("invalid L2 tx: {e:?}"));
                                 }
                             }
                         }
@@ -256,9 +253,12 @@ async fn execute_block_inner(
                             ));
                         }
 
-                        tracing::info!(block = ctx.block_number,
-                                       txs = l2_executed.len(),
-                                       "stream exhausted → sealing");
+                        tracing::info!(
+                            block = ctx.block_number,
+                            l1_txs = l1_executed.len(),
+                            l2_txs = l2_executed.len(),
+                            "stream exhausted → sealing"
+                        );
                         break;
                     }
                 }
