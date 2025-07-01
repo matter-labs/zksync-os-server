@@ -64,6 +64,7 @@ impl EthNamespace {
             finality_tracker.clone(),
             state_handle,
             block_replay_storage,
+            repository_manager.account_property_repository.clone(),
         );
         Self {
             tx_handler,
