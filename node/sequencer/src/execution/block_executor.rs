@@ -42,7 +42,7 @@ type TxStream = Pin<Box<dyn Stream<Item = L2Transaction> + Send>>;
 /// The `mempool` parameter is *used only* by `Produce`.
 fn command_into_parts(
     block_command: BlockCommand,
-    last_l1_priority_id: &mut u64,
+    next_l1_priority_id: &mut u64,
     l1_mempool: DynL1Pool,
     tx_stream: TxStream,
 ) -> (
@@ -56,7 +56,7 @@ fn command_into_parts(
         BlockCommand::Produce(ctx, deadline) => {
             let mut l1_transactions = Vec::new();
             while let Some(l1_tx) =
-                l1_mempool.get(*last_l1_priority_id + 1 + l1_transactions.len() as u64)
+                l1_mempool.get(*next_l1_priority_id + l1_transactions.len() as u64)
             {
                 l1_transactions.push(l1_tx);
             }
@@ -87,7 +87,7 @@ fn command_into_parts(
 // please be mindful when adding new parameters here
 pub async fn execute_block(
     cmd: BlockCommand,
-    last_l1_priority_id: &mut u64,
+    next_l1_priority_id: &mut u64,
     l1_mempool: DynL1Pool,
     tx_stream: TxStream,
     state: StateHandle,
@@ -98,11 +98,11 @@ pub async fn execute_block(
         BlockCommand::Replay(_) => "replay",
     };
     let (ctx, l1_stream, stream, seal, invalid) =
-        command_into_parts(cmd, last_l1_priority_id, l1_mempool, tx_stream);
+        command_into_parts(cmd, next_l1_priority_id, l1_mempool, tx_stream);
     execute_block_inner(
         ctx,
         state,
-        last_l1_priority_id,
+        next_l1_priority_id,
         l1_stream,
         stream,
         seal,
@@ -117,7 +117,7 @@ pub async fn execute_block(
 async fn execute_block_inner(
     ctx: BatchContext,
     state: StateHandle,
-    last_l1_priority_id: &mut u64,
+    next_l1_priority_id: &mut u64,
     l1_txs: L1TxStream,
     l2_txs: TxStream,
     seal_policy: SealPolicy,
@@ -178,7 +178,7 @@ async fn execute_block_inner(
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 
-                                *last_l1_priority_id = l1_tx.common_data.serial_id.0;
+                                *next_l1_priority_id = l1_tx.common_data.serial_id.0 + 1;
                                 l1_executed.push(l1_tx);
 
                                 // arm the timer once, after the first successful tx

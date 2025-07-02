@@ -17,7 +17,7 @@ pub fn forced_deposit_transaction() -> L1Transaction {
         max_fee_per_gas: U256::from(1),
         max_priority_fee_per_gas: U256::from(0),
         paymaster: U256::zero(),
-        nonce: U256::from(1),
+        nonce: U256::from(0),
         value: U256::from(100),
         reserved: [
             // `toMint`

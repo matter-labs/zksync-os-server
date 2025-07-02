@@ -194,4 +194,19 @@ impl BlockReplayStorage {
         });
         Box::pin(stream)
     }
+
+    /// Loads last executed L1 priority id. Returns `None` if there are no L1 txs available in WAL.
+    pub fn last_l1_priority_id(&self) -> Option<u64> {
+        let mut block = self.latest_block()?;
+        loop {
+            // Early return with `None`, we assume there are no replay records available before this
+            let record = self.get_replay_record(block)?;
+            if let Some(last_l1_tx) = record.l1_transactions.last() {
+                return Some(last_l1_tx.common_data.serial_id.0);
+            }
+            // Early return with `None` on underflow, i.e. we reached genesis without discovering a
+            // single L1 tx
+            block = block.checked_sub(1)?;
+        }
+    }
 }
