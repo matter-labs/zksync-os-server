@@ -13,6 +13,7 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{BatcherConfig, ProverApiConfig, RpcConfig, SequencerConfig};
+use zksync_os_sequencer::execution::transaction_stream_provider::TransactionStreamProvider;
 use zksync_os_sequencer::finality::FinalityTracker;
 use zksync_os_sequencer::model::{BatchJob, ReplayRecord};
 use zksync_os_sequencer::repositories::RepositoryManager;
@@ -209,6 +210,15 @@ pub async fn main() {
 
     let (l1_mempool, mempool) = zksync_os_mempool::in_memory(forced_deposit_transaction());
 
+    // ========== Initialize TransactionStreamProvider ===========
+
+    let next_l1_priority_id = block_replay_storage.last_l1_priority_id().map(|n| n + 1).unwrap_or_default();
+    let tx_stream_provider = TransactionStreamProvider::new(
+        next_l1_priority_id,
+        l1_mempool.clone(),
+        mempool.clone(),
+    );
+
     // ========== Initialize L1 watcher (fallible) ===========
 
     let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone()).await;
@@ -363,8 +373,7 @@ pub async fn main() {
             first_block_to_execute,
             blocks_for_batcher_sender,
             tree_sender,
-            l1_mempool,
-            mempool,
+            tx_stream_provider,
             state_handle.clone(),
             block_replay_storage,
             repositories,

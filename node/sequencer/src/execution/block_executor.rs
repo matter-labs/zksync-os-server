@@ -1,13 +1,14 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::transaction_stream_provider::{
+    Transaction, TransactionStreamProvider, UnifiedTxStream,
+};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
 use anyhow::{anyhow, Result};
-use futures::{Stream, StreamExt};
-use itertools::Either;
+use futures::StreamExt;
 use std::{pin::Pin, time::Duration};
 use tokio::time::Sleep;
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
-use zksync_os_mempool::DynL1Pool;
 use zksync_os_state::StateHandle;
 use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
 
@@ -28,52 +29,26 @@ enum SealPolicy {
     Exhausted,
 }
 
-/// A stream of transactions that can be `await`-ed item-by-item.
-type L1TxStream = Pin<Box<dyn Stream<Item = L1Transaction> + Send>>;
-
-/// A stream of transactions that can be `await`-ed item-by-item.
-type TxStream = Pin<Box<dyn Stream<Item = L2Transaction> + Send>>;
-
 /// Build everything the VM runner needs for this command:
 ///   – the context (`BatchContext`)
-///   – the stream (`TxStream`)
+///   – the stream of transactions (`UnifiedTxStream`)
 ///   – the seal and invalid-tx policies
 ///
-/// The `mempool` parameter is *used only* by `Produce`.
 fn command_into_parts(
     block_command: BlockCommand,
-    next_l1_priority_id: &mut u64,
-    l1_mempool: DynL1Pool,
-    tx_stream: TxStream,
-) -> (
-    BatchContext,
-    L1TxStream,
-    TxStream,
-    SealPolicy,
-    InvalidTxPolicy,
-) {
+    tx_stream_provider: &mut TransactionStreamProvider,
+) -> (BatchContext, UnifiedTxStream, SealPolicy, InvalidTxPolicy) {
+    let tx_stream = tx_stream_provider.request_transaction_stream(block_command.clone());
     match block_command {
-        BlockCommand::Produce(ctx, deadline) => {
-            let mut l1_transactions = Vec::new();
-            while let Some(l1_tx) =
-                l1_mempool.get(*next_l1_priority_id + l1_transactions.len() as u64)
-            {
-                l1_transactions.push(l1_tx);
-            }
-
-            (
-                ctx,
-                // TODO: Make stream actually look in L1 mempool during execution
-                Box::pin(futures::stream::iter(l1_transactions)) as L1TxStream,
-                tx_stream,
-                SealPolicy::Deadline(deadline),
-                InvalidTxPolicy::RejectAndContinue,
-            )
-        }
+        BlockCommand::Produce(ctx, deadline) => (
+            ctx,
+            tx_stream,
+            SealPolicy::Deadline(deadline),
+            InvalidTxPolicy::RejectAndContinue,
+        ),
         BlockCommand::Replay(replay) => (
             replay.context,
-            Box::pin(futures::stream::iter(replay.l1_transactions)) as L1TxStream,
-            Box::pin(futures::stream::iter(replay.l2_transactions)) as TxStream,
+            tx_stream,
             SealPolicy::Exhausted,
             InvalidTxPolicy::Abort,
         ),
@@ -87,9 +62,7 @@ fn command_into_parts(
 // please be mindful when adding new parameters here
 pub async fn execute_block(
     cmd: BlockCommand,
-    next_l1_priority_id: &mut u64,
-    l1_mempool: DynL1Pool,
-    tx_stream: TxStream,
+    tx_stream_provider: &mut TransactionStreamProvider,
     state: StateHandle,
     max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {
@@ -97,14 +70,11 @@ pub async fn execute_block(
         BlockCommand::Produce(_, _) => "produce",
         BlockCommand::Replay(_) => "replay",
     };
-    let (ctx, l1_stream, stream, seal, invalid) =
-        command_into_parts(cmd, next_l1_priority_id, l1_mempool, tx_stream);
+    let (ctx, unified_tx_stream, seal, invalid) = command_into_parts(cmd, tx_stream_provider);
     execute_block_inner(
         ctx,
         state,
-        next_l1_priority_id,
-        l1_stream,
-        stream,
+        unified_tx_stream,
         seal,
         invalid,
         metrics_label,
@@ -117,9 +87,7 @@ pub async fn execute_block(
 async fn execute_block_inner(
     ctx: BatchContext,
     state: StateHandle,
-    next_l1_priority_id: &mut u64,
-    l1_txs: L1TxStream,
-    l2_txs: TxStream,
+    mut txs: UnifiedTxStream,
     seal_policy: SealPolicy,
     fail_policy: InvalidTxPolicy,
     metrics_label: &'static str,
@@ -130,8 +98,6 @@ async fn execute_block_inner(
     let mut runner = VmWrapper::new(ctx, state_view);
     let mut l1_executed = Vec::<L1Transaction>::new();
     let mut l2_executed = Vec::<L2Transaction>::new();
-    // Exhaust stream of L1 txs first before taking L2 txs
-    let mut txs = l1_txs.map(Either::Left).chain(l2_txs.map(Either::Right));
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match seal_policy {
@@ -164,7 +130,7 @@ async fn execute_block_inner(
             maybe_tx = txs.next() => {
                 match maybe_tx {
                     /* ----- got an L1 transaction ---------------------- */
-                    Some(Either::Left(l1_tx)) => {
+                    Some(Transaction::L1(l1_tx)) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(l1_tx.clone().encode_zksync_os()).await {
@@ -178,7 +144,6 @@ async fn execute_block_inner(
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 
-                                *next_l1_priority_id = l1_tx.common_data.serial_id.0 + 1;
                                 l1_executed.push(l1_tx);
 
                                 // arm the timer once, after the first successful tx
@@ -201,7 +166,7 @@ async fn execute_block_inner(
                         }
                     }
                     /* ----- got an L2 transaction ---------------------- */
-                    Some(Either::Right(l2_tx)) => {
+                    Some(Transaction::L2(l2_tx)) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(l2_tx.clone().encode_zksync_os()).await {

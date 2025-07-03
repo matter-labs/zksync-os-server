@@ -20,7 +20,7 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
-    execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
+    execution::{block_executor::execute_block, metrics::EXECUTION_METRICS, transaction_stream_provider::TransactionStreamProvider},
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
@@ -29,7 +29,6 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
-use zksync_os_mempool::{DynL1Pool, DynPool};
 use zksync_os_state::StateHandle;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
@@ -58,8 +57,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
     tree_sink: Sender<BatchOutput>,
 
-    l1_mempool: DynL1Pool,
-    mempool: DynPool,
+    mut tx_stream_provider: TransactionStreamProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
@@ -74,10 +72,7 @@ pub async fn run_sequencer_actor(
     let exec_loop = {
         let wal = wal.clone();
         let state = state.clone();
-        // TODO: This doesn't match well with consensus. Consider making `last_l1_priority_id` a part
-        //       of `BlockCommand::Replay`.
-        let mut next_l1_priority_id = wal.last_l1_priority_id().map(|n| n + 1).unwrap_or_default();
-        tracing::info!(block_to_start, next_l1_priority_id, "starting sequencer");
+        tracing::info!(block_to_start, "starting sequencer");
 
         async move {
             let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time);
@@ -88,11 +83,11 @@ pub async fn run_sequencer_actor(
 
                 let mut stage_started_at = Instant::now();
                 tracing::info!(block = bn, cmd = cmd.to_string(), "▶ starting command");
+
+
                 let (batch_out, replay) = execute_block(
                     cmd,
-                    &mut next_l1_priority_id,
-                    l1_mempool.clone(),
-                    Box::into_pin(mempool.clone()),
+                    &mut tx_stream_provider,
                     state.clone(),
                     sequencer_config.max_transactions_in_block,
                 )
