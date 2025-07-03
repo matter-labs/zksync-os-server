@@ -1,9 +1,9 @@
+use alloy::primitives::Address;
 use smart_config::metadata::TimeUnit;
+use smart_config::Serde;
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Duration;
-use zksync_types::Address;
 
 /// Configuration of L1 watcher.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -32,6 +32,6 @@ pub struct L1WatcherConfig {
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = FromStr::from_str("0x4b37536b9824c4a4cf3d15362135e346adb7cb9c").unwrap())]
+    #[config(with = Serde![str], default_t = "0x4b37536b9824c4a4cf3d15362135e346adb7cb9c".parse().unwrap())]
     pub bridgehub_address: Address,
 }

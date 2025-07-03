@@ -13,17 +13,17 @@ categories.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
+zksync_os_rpc_api =  { workspace = true, features = ["server"] }
+zksync_os_types.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 
-zksync_web3_decl = { workspace = true, features = ["server"] }
-zksync_types.workspace = true
 zksync_storage.workspace = true
 
 anyhow.workspace = true
-alloy = { workspace = true, default-features = false }
+alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256"] }
 blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
@@ -40,6 +40,7 @@ zksync_vlog.workspace = true
 base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+jsonrpsee.workspace = true
 
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }

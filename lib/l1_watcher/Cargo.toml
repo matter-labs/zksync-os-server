@@ -12,6 +12,7 @@ categories.workspace = true
 [dependencies]
 zksync_os_contract_interface.workspace = true
 zksync_os_mempool.workspace = true
+zksync_os_types.workspace = true
 
 zksync_storage.workspace = true
 zksync_types.workspace = true

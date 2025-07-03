@@ -2,18 +2,19 @@ mod eth_call_handler;
 mod eth_impl;
 mod metrics;
 mod tx_handler;
+
 use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use alloy::eips::{BlockId, BlockNumberOrTag};
 use anyhow::Context;
+use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
+use jsonrpsee::RpcModule;
 use zksync_os_mempool::DynPool;
+use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_types::api::{BlockId, BlockIdVariant, BlockNumber};
-use zksync_web3_decl::jsonrpsee::server::ServerBuilder;
-use zksync_web3_decl::jsonrpsee::RpcModule;
-use zksync_web3_decl::namespaces::EthNamespaceServer;
 
 // stripped-down version of `api_server/src/web3/mod.rs`
 pub async fn run_jsonrpsee_server(
@@ -40,14 +41,17 @@ pub async fn run_jsonrpsee_server(
         .into_rpc(),
     )?;
 
-    let server_builder = ServerBuilder::default().max_connections(config.max_connections);
+    let server_config = ServerConfigBuilder::default()
+        .max_connections(config.max_connections)
+        .http_only()
+        .build();
+    let server_builder = ServerBuilder::default().set_config(server_config);
     // .set_http_middleware(middleware)
     // .max_response_body_size(response_body_size_limit)
     // .set_batch_request_config(batch_request_config)
     // .set_rpc_middleware(rpc_middleware);
 
     let server = server_builder
-        .http_only()
         .build(config.address)
         .await
         .context("Failed building HTTP JSON-RPC server")?;
@@ -59,25 +63,24 @@ pub async fn run_jsonrpsee_server(
 }
 
 // todo: consider best place for this logic - maybe `FinalityInfo` itself?
-pub fn resolve_block_id(block: Option<BlockIdVariant>, finality_info: &FinalityTracker) -> u64 {
-    let block_id: BlockId = block
-        .map(|b| b.into())
-        .unwrap_or_else(|| BlockId::Number(BlockNumber::Pending));
+pub fn resolve_block_id(block: Option<BlockId>, finality_info: &FinalityTracker) -> u64 {
+    let block_id: BlockId = block.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
 
     match block_id {
         BlockId::Hash(_) => unimplemented!(),
-        // todo (Daniyar): research exact expectations on each BlockNumber
-        BlockId::Number(BlockNumber::Pending)
-        | BlockId::Number(BlockNumber::Committed)
-        | BlockId::Number(BlockNumber::Finalized)
-        | BlockId::Number(BlockNumber::Latest)
-        | BlockId::Number(BlockNumber::L1Committed) => finality_info.get_canonized_block(),
-        BlockId::Number(BlockNumber::Earliest) => unimplemented!(),
-        BlockId::Number(BlockNumber::Number(number)) => {
+        // TODO: return last sealed block here when available instead
+        BlockId::Number(BlockNumberOrTag::Pending) => finality_info.get_canonized_block(),
+        BlockId::Number(BlockNumberOrTag::Latest) => finality_info.get_canonized_block(),
+        // TODO: return last committed block here when available instead
+        BlockId::Number(BlockNumberOrTag::Safe) => finality_info.get_canonized_block(),
+        // TODO: return last executed block here when available instead
+        BlockId::Number(BlockNumberOrTag::Finalized) => finality_info.get_canonized_block(),
+        BlockId::Number(BlockNumberOrTag::Earliest) => unimplemented!(),
+        BlockId::Number(BlockNumberOrTag::Number(number)) => {
             // note: we don't check whether the requested Block Number is less than `BLOCKS_TO_RETAIN` behind -
             // we won't be able to serve `eth_call`s and `storage_at`s for it
             // this will be handled when instantiating `StorageView` for it
-            number.as_u64()
+            number
         }
     }
 }

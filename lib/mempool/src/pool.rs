@@ -7,14 +7,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use vise::{Buckets, Counter, Histogram, LabeledFamily, Metrics};
-use zksync_types::Transaction;
+use zksync_os_types::L2Transaction;
 
 /// Thread-safe FIFO mempool that can be polled as a `Stream`.
 ///
 /// Doesn't respect nonces
 #[derive(Clone, Debug)]
 pub struct Mempool {
-    queue: Arc<SegQueue<Transaction>>,
+    queue: Arc<SegQueue<L2Transaction>>,
     waker: Arc<AtomicWaker>, // wakes one waiting consumer
 }
 
@@ -30,9 +30,8 @@ pub struct MempoolMetrics {
 pub(crate) static MEMPOOL_METRICS: vise::Global<MempoolMetrics> = vise::Global::new();
 
 impl Mempool {
-    pub fn new(forced_tx: Transaction) -> Self {
+    pub fn new() -> Self {
         let q = Arc::new(SegQueue::new());
-        q.push(forced_tx);
         Self {
             queue: q,
             waker: Arc::new(AtomicWaker::new()),
@@ -41,12 +40,12 @@ impl Mempool {
 
     /* -------- producers ------------------------------------------- */
 
-    pub fn insert(&self, tx: Transaction) {
+    pub fn insert(&self, tx: L2Transaction) {
         self.queue.push(tx);
         self.waker.wake(); // notify a waiting task
     }
 
-    pub fn try_pop(&self) -> Option<Transaction> {
+    pub fn try_pop(&self) -> Option<L2Transaction> {
         let r = self.queue.pop();
         let metrics_key = if r.is_some() { "some" } else { "none" };
         MEMPOOL_METRICS.try_pop[&metrics_key].inc();
@@ -77,7 +76,7 @@ impl Mempool {
 /* -------- Stream / FusedStream for &Mempool ---------------------- */
 
 impl Stream for Mempool {
-    type Item = Transaction;
+    type Item = L2Transaction;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // `self` is a pinned &mut Mempool; we can safely get a shared ref.
@@ -110,7 +109,7 @@ impl TransactionPool for Mempool {
         Box::new(self.clone())
     }
 
-    fn add_transaction(&self, transaction: Transaction) {
+    fn add_transaction(&self, transaction: L2Transaction) {
         self.insert(transaction);
     }
 }

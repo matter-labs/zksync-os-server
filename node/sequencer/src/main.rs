@@ -1,7 +1,6 @@
 use futures::future::BoxFuture;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -20,10 +19,8 @@ use zksync_os_sequencer::repositories::RepositoryManager;
 use zksync_os_sequencer::run_sequencer_actor;
 use zksync_os_sequencer::tree_manager::TreeManager;
 use zksync_os_state::{StateConfig, StateHandle};
+use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
-use zksync_types::abi::{L2CanonicalTransaction, NewPriorityRequest};
-use zksync_types::l1::L1Tx;
-use zksync_types::{Transaction, PRIORITY_OPERATION_L2_TX_TYPE, U256};
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
 use zksync_os_sequencer::batcher::Batcher;
@@ -210,11 +207,11 @@ pub async fn main() {
         "▶ Storage read. Node starting."
     );
 
-    let mempool = zksync_os_mempool::in_memory(forced_deposit_transaction());
+    let (l1_mempool, mempool) = zksync_os_mempool::in_memory(forced_deposit_transaction());
 
     // ========== Initialize L1 watcher (fallible) ===========
 
-    let l1_watcher = L1Watcher::new(l1_watcher_config, mempool.clone()).await;
+    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone()).await;
     let _l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -366,6 +363,7 @@ pub async fn main() {
             first_block_to_execute,
             blocks_for_batcher_sender,
             tree_sender,
+            l1_mempool,
             mempool,
             state_handle.clone(),
             block_replay_storage,
@@ -394,43 +392,4 @@ pub async fn main() {
             }
         }
     }
-}
-
-// to be replaced with proper L1 deposit
-pub fn forced_deposit_transaction() -> Transaction {
-    let transaction = L2CanonicalTransaction {
-        tx_type: U256::from(PRIORITY_OPERATION_L2_TX_TYPE),
-        from: U256::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-        to: U256::from_str("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049").unwrap(),
-        gas_limit: U256::from("10000000000"),
-        gas_per_pubdata_byte_limit: U256::from(1000),
-        max_fee_per_gas: U256::from(1),
-        max_priority_fee_per_gas: U256::from(0),
-        paymaster: U256::zero(),
-        nonce: U256::from(1),
-        value: U256::from(100),
-        reserved: [
-            // `toMint`
-            U256::from("100000000000000000000000000000"),
-            // `refundRecipient`
-            U256::from("0x36615Cf349d7F6344891B1e7CA7C72883F5dc049"),
-            U256::from(0),
-            U256::from(0),
-        ],
-        data: vec![],
-        signature: vec![],
-        factory_deps: vec![],
-        paymaster_input: vec![],
-        reserved_dynamic: vec![],
-    };
-    let new_priority_request = NewPriorityRequest {
-        tx_id: transaction.nonce,
-        tx_hash: transaction.hash().0,
-        expiration_timestamp: u64::MAX,
-        transaction: Box::new(transaction),
-        factory_deps: vec![],
-    };
-    L1Tx::try_from(new_priority_request)
-        .expect("forced deposit transaction is malformed")
-        .into()
 }

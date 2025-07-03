@@ -1,13 +1,13 @@
 use futures::Stream;
 use std::fmt::Debug;
-use zksync_types::Transaction;
+use zksync_os_types::L2Transaction;
 
 #[auto_impl::auto_impl(&, Box, Arc)]
-pub trait TransactionPool: Stream<Item = Transaction> + Send + Sync + Debug + 'static {
+pub trait TransactionPool: Stream<Item = L2Transaction> + Send + Sync + Debug + 'static {
     /// Alternative for [`Clone::clone`] that is object safe.
     fn dyn_clone(&self) -> Box<dyn TransactionPool>;
 
-    fn add_transaction(&self, transaction: Transaction);
+    fn add_transaction(&self, transaction: L2Transaction);
 }
 
 impl Clone for Box<dyn TransactionPool> {
