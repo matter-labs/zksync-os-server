@@ -1,12 +1,11 @@
-use std::collections::HashSet;
-
-use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
-
 use super::*;
+use crate::blake2::Blake2Hasher;
 use crate::{
     leaf_nibbles, storage::patch::InsertedLeaf, DefaultTreeParams, MerkleTree, TreeEntry,
     TreeParams,
 };
+use alloy::primitives::U256;
+use std::collections::HashSet;
 
 #[test]
 fn creating_min_update_for_empty_tree() {
@@ -20,14 +19,14 @@ fn creating_min_update_for_empty_tree() {
 
     assert_eq!(update.sorted_new_leaves.len(), 2);
     assert_eq!(
-        update.sorted_new_leaves[&H256::zero()],
+        update.sorted_new_leaves[&B256::ZERO],
         InsertedKeyEntry {
             index: 0,
             inserted_at: 0,
         }
     );
     assert_eq!(
-        update.sorted_new_leaves[&H256::repeat_byte(0xff)],
+        update.sorted_new_leaves[&B256::repeat_byte(0xff)],
         InsertedKeyEntry {
             index: 1,
             inserted_at: 0,
@@ -39,12 +38,12 @@ fn creating_min_update_for_empty_tree() {
 fn creating_non_empty_update_for_empty_tree() {
     let update = TreeUpdate::for_empty_tree(&[
         TreeEntry {
-            key: H256::repeat_byte(2),
-            value: H256::from_low_u64_be(1),
+            key: B256::repeat_byte(2),
+            value: U256::from(1).into(),
         },
         TreeEntry {
-            key: H256::repeat_byte(1),
-            value: H256::from_low_u64_be(2),
+            key: B256::repeat_byte(1),
+            value: U256::from(2).into(),
         },
     ])
     .unwrap();
@@ -63,8 +62,8 @@ fn creating_non_empty_update_for_empty_tree() {
     assert_eq!(
         update.inserts[2].leaf,
         Leaf {
-            key: H256::repeat_byte(2),
-            value: H256::from_low_u64_be(1),
+            key: B256::repeat_byte(2),
+            value: U256::from(1).into(),
             next_index: 1,
         }
     );
@@ -72,8 +71,8 @@ fn creating_non_empty_update_for_empty_tree() {
     assert_eq!(
         update.inserts[3].leaf,
         Leaf {
-            key: H256::repeat_byte(1),
-            value: H256::from_low_u64_be(2),
+            key: B256::repeat_byte(1),
+            value: U256::from(2).into(),
             next_index: 2,
         }
     );
@@ -81,28 +80,28 @@ fn creating_non_empty_update_for_empty_tree() {
 
     assert_eq!(update.sorted_new_leaves.len(), 4);
     assert_eq!(
-        update.sorted_new_leaves[&H256::zero()],
+        update.sorted_new_leaves[&B256::ZERO],
         InsertedKeyEntry {
             index: 0,
             inserted_at: 0,
         }
     );
     assert_eq!(
-        update.sorted_new_leaves[&H256::repeat_byte(0xff)],
+        update.sorted_new_leaves[&B256::repeat_byte(0xff)],
         InsertedKeyEntry {
             index: 1,
             inserted_at: 0,
         }
     );
     assert_eq!(
-        update.sorted_new_leaves[&H256::repeat_byte(2)],
+        update.sorted_new_leaves[&B256::repeat_byte(2)],
         InsertedKeyEntry {
             index: 2,
             inserted_at: 0,
         }
     );
     assert_eq!(
-        update.sorted_new_leaves[&H256::repeat_byte(1)],
+        update.sorted_new_leaves[&B256::repeat_byte(1)],
         InsertedKeyEntry {
             index: 3,
             inserted_at: 0,
@@ -144,7 +143,7 @@ fn test_creating_empty_tree<P: TreeParams<Hasher = Blake2Hasher>>() {
     assert_eq!(root.leaf_count, 2);
 
     assert_eq!(root.root_node.children.len(), 1);
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b"
             .parse()
             .unwrap();
@@ -171,8 +170,8 @@ where
 
     let mut patch = WorkingPatchSet::<P>::empty();
     let update = TreeUpdate::for_empty_tree(&[TreeEntry {
-        key: H256::repeat_byte(0x01),
-        value: H256::repeat_byte(0x10),
+        key: B256::repeat_byte(0x01),
+        value: B256::repeat_byte(0x10),
     }])
     .unwrap();
     let final_update = patch.update(update);
@@ -183,7 +182,7 @@ where
     let root = patch.try_root(0).unwrap().expect("no root");
     assert_eq!(root.leaf_count, 3);
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x08da20879eebed16fbd14e50b427bb97c8737aa860e6519877757e238df83a15"
             .parse()
             .unwrap();
@@ -214,8 +213,8 @@ where
 
     let merkle_tree = MerkleTree::<_, P>::with_hasher(patch, Blake2Hasher).unwrap();
     let new_entry = TreeEntry {
-        key: H256::repeat_byte(0x01),
-        value: H256::repeat_byte(0x10),
+        key: B256::repeat_byte(0x01),
+        value: B256::repeat_byte(0x10),
     };
     let (mut patch, update) = merkle_tree.create_patch(0, &[new_entry], &[]).unwrap();
 
@@ -265,7 +264,7 @@ where
     assert_eq!(new_patch.manifest.version_count, 2);
     assert_eq!(new_patch.patches_by_version.len(), 1);
     let root = new_patch.patches_by_version[&1].root();
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x08da20879eebed16fbd14e50b427bb97c8737aa860e6519877757e238df83a15"
             .parse()
             .unwrap();
@@ -296,12 +295,12 @@ where
 
     let mut merkle_tree = MerkleTree::<_, P>::with_hasher(patch, Blake2Hasher).unwrap();
     let first_entry = TreeEntry {
-        key: H256::repeat_byte(0x01),
-        value: H256::repeat_byte(0x10),
+        key: B256::repeat_byte(0x01),
+        value: B256::repeat_byte(0x10),
     };
     let second_entry = TreeEntry {
-        key: H256::repeat_byte(0x02),
-        value: H256::repeat_byte(0x20),
+        key: B256::repeat_byte(0x02),
+        value: B256::repeat_byte(0x20),
     };
     let (mut patch, update) = merkle_tree
         .create_patch(0, &[first_entry, second_entry], &[])
@@ -312,7 +311,7 @@ where
 
     merkle_tree.db.apply_patch(new_patch).unwrap();
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0xf227612db17b44a5c9a2ebd0e4ff2dbe91aa05f3198d09f0bcfd6ef16c1d28c8"
             .parse()
             .unwrap();
@@ -320,7 +319,7 @@ where
 
     let updated_entry = TreeEntry {
         key: first_entry.key,
-        value: H256::repeat_byte(0x33),
+        value: B256::repeat_byte(0x33),
     };
     let (mut patch, update) = merkle_tree.create_patch(1, &[updated_entry], &[]).unwrap();
 
@@ -341,7 +340,7 @@ where
     let (new_patch, ..) = patch.finalize(&Blake2Hasher, final_update);
     merkle_tree.db.apply_patch(new_patch).unwrap();
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x81a600569c2cda27c7ae4773255acc70ac318a49404fa1035a7734a3aaa82589"
             .parse()
             .unwrap();
@@ -369,18 +368,18 @@ where
     let mut merkle_tree =
         MerkleTree::<_, P>::with_hasher(PatchSet::default(), Blake2Hasher).unwrap();
     let first_entry = TreeEntry {
-        key: H256::repeat_byte(0x01),
-        value: H256::repeat_byte(0x10),
+        key: B256::repeat_byte(0x01),
+        value: B256::repeat_byte(0x10),
     };
     merkle_tree.extend(&[first_entry]).unwrap();
 
     let updated_entry = TreeEntry {
         key: first_entry.key,
-        value: H256::repeat_byte(0x33),
+        value: B256::repeat_byte(0x33),
     };
     let second_entry = TreeEntry {
-        key: H256::repeat_byte(0x02),
-        value: H256::repeat_byte(0x20),
+        key: B256::repeat_byte(0x02),
+        value: B256::repeat_byte(0x20),
     };
     let (mut patch, update) = merkle_tree
         .create_patch(0, &[updated_entry, second_entry], &[])
@@ -408,7 +407,7 @@ where
     let (new_patch, ..) = patch.finalize(&Blake2Hasher, final_update);
     merkle_tree.db.apply_patch(new_patch).unwrap();
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x81a600569c2cda27c7ae4773255acc70ac318a49404fa1035a7734a3aaa82589"
             .parse()
             .unwrap();
@@ -430,12 +429,12 @@ fn patch_is_reduced_for_readonly_workload() {
     let mut merkle_tree = MerkleTree::new(PatchSet::default()).unwrap();
     merkle_tree
         .extend(&[TreeEntry {
-            key: H256::repeat_byte(1),
-            value: H256::repeat_byte(0xff),
+            key: B256::repeat_byte(1),
+            value: B256::repeat_byte(0xff),
         }])
         .unwrap();
 
-    let read_keys = [H256::repeat_byte(1), H256::repeat_byte(2)];
+    let read_keys = [B256::repeat_byte(1), B256::repeat_byte(2)];
     let (mut patch, update) = merkle_tree
         .create_patch::<TreeEntry>(0, &[], &read_keys)
         .unwrap();
@@ -465,18 +464,18 @@ fn patch_is_reduced_for_mixed_workload() {
     let mut merkle_tree = MerkleTree::new(PatchSet::default()).unwrap();
     merkle_tree
         .extend(&[TreeEntry {
-            key: H256::repeat_byte(1),
-            value: H256::repeat_byte(0xff),
+            key: B256::repeat_byte(1),
+            value: B256::repeat_byte(0xff),
         }])
         .unwrap();
 
-    let read_keys = [H256::from_low_u64_be(1), H256::repeat_byte(2)];
+    let read_keys = [U256::from(1).into(), B256::repeat_byte(2)];
     let (mut patch, update) = merkle_tree
         .create_patch(
             0,
             &[TreeEntry {
-                key: H256::repeat_byte(1),
-                value: H256::zero(),
+                key: B256::repeat_byte(1),
+                value: B256::ZERO,
             }],
             &read_keys,
         )
@@ -496,8 +495,8 @@ fn patch_is_reduced_for_mixed_workload() {
 
     let _ = patch.update(update);
     let expected_leaf = Leaf {
-        key: H256::repeat_byte(1),
-        value: H256::zero(),
+        key: B256::repeat_byte(1),
+        value: B256::ZERO,
         next_index: 1,
     };
     assert_eq!(patch.inner().leaves, HashMap::from([(2, expected_leaf)]));
@@ -507,16 +506,14 @@ fn patch_is_reduced_for_mixed_workload() {
 }
 
 fn assert_empty_tree(db: &impl Database) {
-    let indices = db
-        .indices(0, &[H256::zero(), H256::repeat_byte(1)])
-        .unwrap();
+    let indices = db.indices(0, &[B256::ZERO, B256::repeat_byte(1)]).unwrap();
     assert_eq!(
         indices,
         [
             KeyLookup::Existing(0),
             KeyLookup::Missing {
-                prev_key_and_index: (H256::zero(), 0),
-                next_key_and_index: (H256::repeat_byte(0xff), 1),
+                prev_key_and_index: (B256::ZERO, 0),
+                next_key_and_index: (B256::repeat_byte(0xff), 1),
             }
         ]
     );
@@ -547,8 +544,8 @@ fn using_patched_database() {
 
     let mut tree = MerkleTree::new(db).unwrap();
     let new_entry = TreeEntry {
-        key: H256::repeat_byte(1),
-        value: H256::repeat_byte(0x10),
+        key: B256::repeat_byte(1),
+        value: B256::repeat_byte(0x10),
     };
     tree.extend(&[new_entry]).unwrap();
     let db = tree.db;
@@ -561,23 +558,21 @@ fn using_patched_database() {
     assert_eq!(patch.sorted_new_leaves[&new_entry.key].index, 2);
 
     assert_empty_tree(&db);
-    let indices = db
-        .indices(1, &[H256::zero(), H256::repeat_byte(1)])
-        .unwrap();
+    let indices = db.indices(1, &[B256::ZERO, B256::repeat_byte(1)]).unwrap();
     assert_eq!(indices, [KeyLookup::Existing(0), KeyLookup::Existing(2)]);
     let indices = db
-        .indices(1, &[H256::from_low_u64_be(1), H256::repeat_byte(2)])
+        .indices(1, &[U256::from(1).into(), B256::repeat_byte(2)])
         .unwrap();
     assert_eq!(
         indices,
         [
             KeyLookup::Missing {
-                prev_key_and_index: (H256::zero(), 0),
-                next_key_and_index: (H256::repeat_byte(1), 2),
+                prev_key_and_index: (B256::ZERO, 0),
+                next_key_and_index: (B256::repeat_byte(1), 2),
             },
             KeyLookup::Missing {
-                prev_key_and_index: (H256::repeat_byte(1), 2),
-                next_key_and_index: (H256::repeat_byte(0xff), 1),
+                prev_key_and_index: (B256::repeat_byte(1), 2),
+                next_key_and_index: (B256::repeat_byte(0xff), 1),
             }
         ]
     );

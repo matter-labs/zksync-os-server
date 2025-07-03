@@ -2,6 +2,7 @@
 
 use std::{hint::black_box, ops, time::Instant};
 
+use alloy::primitives::{B256, U256};
 use anyhow::Context;
 use clap::Parser;
 use rand::{
@@ -10,8 +11,7 @@ use rand::{
 };
 use tempfile::TempDir;
 use tracing_subscriber::EnvFilter;
-use zksync_basic_types::H256;
-use zksync_crypto_primitives::hasher::{blake2::Blake2Hasher, Hasher};
+use zksync_os_merkle_tree::blake2::{Blake2Hasher, Hasher};
 use zksync_os_merkle_tree::{
     unstable, Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree,
     MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams,
@@ -48,7 +48,7 @@ impl Database for WithBatching<'_> {
     fn indices(
         &self,
         version: u64,
-        keys: &[H256],
+        keys: &[B256],
     ) -> Result<Vec<unstable::KeyLookup>, DeserializeError> {
         self.inner.indices(version, keys)
     }
@@ -205,7 +205,7 @@ impl Cli {
                 .zip(next_value_idx..);
             let kvs = kvs.map(|(key, idx)| TreeEntry {
                 key,
-                value: H256::from_low_u64_be(idx),
+                value: U256::from(idx).into(),
             });
             let kvs = kvs.collect::<Vec<_>>();
 
@@ -244,10 +244,10 @@ impl Cli {
         Ok(())
     }
 
-    fn generate_keys(key_indexes: impl Iterator<Item = u64>) -> impl Iterator<Item = H256> {
+    fn generate_keys(key_indexes: impl Iterator<Item = u64>) -> impl Iterator<Item = B256> {
         key_indexes.map(move |idx| {
-            let key = H256::from_low_u64_be(idx);
-            Blake2Hasher.hash_bytes(key.as_bytes())
+            let key = B256::from(U256::from(idx));
+            Blake2Hasher.hash_bytes(key.as_slice())
         })
     }
 }

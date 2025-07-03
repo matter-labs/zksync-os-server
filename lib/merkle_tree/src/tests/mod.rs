@@ -1,22 +1,22 @@
 //! Tests for the public `MerkleTree` interface.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-
 use super::*;
 use crate::{
     hasher::TreeOperation,
     storage::{PatchSet, Patched},
     types::{Leaf, Node, NodeKey, TreeTags},
 };
+use alloy::primitives::U256;
+use rand::prelude::IndexedRandom;
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod consistency;
 mod prop;
 
 #[test]
 fn empty_tree_hash_is_correct() {
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b"
             .parse()
             .unwrap();
@@ -63,17 +63,17 @@ fn key_ordering() {
     let mut tree = MerkleTree::new(PatchSet::default()).unwrap();
     let entries = [
         TreeEntry {
-            key: H256::from_low_u64_be(0xc0ffeefe),
-            value: H256::repeat_byte(0x10),
+            key: U256::from(0xc0ffeefeu32).into(),
+            value: B256::repeat_byte(0x10),
         },
         TreeEntry {
-            key: H256::from_low_u64_be(0xdeadbeef),
-            value: H256::repeat_byte(0x20),
+            key: U256::from(0xdeadbeefu32).into(),
+            value: B256::repeat_byte(0x20),
         },
     ];
     let output = tree.extend(&entries).unwrap();
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0xc90465eddad7cc858a2fbf61013d7051c143887a887e5a7a19344ac32151b207"
             .parse()
             .unwrap();
@@ -98,8 +98,8 @@ fn key_ordering() {
     assert_eq!(second_leaf.next_index, 1);
 }
 
-fn naive_hash_tree(entries: &[TreeEntry]) -> H256 {
-    let mut indices = BTreeMap::from([(H256::zero(), 0_u64), (H256::repeat_byte(0xff), 1)]);
+fn naive_hash_tree(entries: &[TreeEntry]) -> B256 {
+    let mut indices = BTreeMap::from([(B256::ZERO, 0_u64), (B256::repeat_byte(0xff), 1)]);
     indices.extend(
         entries
             .iter()
@@ -139,8 +139,8 @@ fn test_comparing_tree_hash_against_naive_impl<DB: Database>(mut create_db: impl
 
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let nodes = (0..100).map(|_| TreeEntry {
-        key: H256(rng.gen()),
-        value: H256(rng.gen()),
+        key: rng.random(),
+        value: rng.random(),
     });
     let inserts: Vec<_> = nodes.collect();
     let expected_root_hash = naive_hash_tree(&inserts);
@@ -172,8 +172,8 @@ fn test_comparing_tree_hash_with_updates(db: impl Database) {
 
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let nodes = (0..100).map(|_| TreeEntry {
-        key: H256(rng.gen()),
-        value: H256(rng.gen()),
+        key: rng.random(),
+        value: rng.random(),
     });
     let inserts: Vec<_> = nodes.collect();
     let initial_root_hash = naive_hash_tree(&inserts);
@@ -187,7 +187,7 @@ fn test_comparing_tree_hash_with_updates(db: impl Database) {
 
     let mut updates = inserts;
     for update in &mut updates {
-        update.value = H256(rng.gen());
+        update.value = rng.random();
     }
     let new_root_hash = naive_hash_tree(&updates);
     updates.shuffle(&mut rng);
@@ -228,8 +228,8 @@ fn extending_tree_with_reference_indices() {
         (
             i + 2,
             TreeEntry {
-                key: H256(rng.gen()),
-                value: H256(rng.gen()),
+                key: rng.random(),
+                value: rng.random(),
             },
         )
     });
@@ -238,7 +238,7 @@ fn extending_tree_with_reference_indices() {
 
     let mut updates = inserts;
     for update in &mut updates {
-        update.1.value = H256(rng.gen());
+        update.1.value = rng.random();
     }
     updates.shuffle(&mut rng);
 
@@ -260,8 +260,8 @@ fn extending_tree_with_reference_indices() {
         .extend_with_reference(&[(
             0,
             TreeEntry {
-                key: H256(rng.gen()),
-                value: H256::zero(),
+                key: rng.random(),
+                value: B256::ZERO,
             },
         )])
         .unwrap_err();
@@ -274,12 +274,12 @@ fn test_extending_tree_with_proof(db: impl Database, inserts_count: usize, updat
 
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let nodes = (0..inserts_count).map(|_| TreeEntry {
-        key: H256(rng.gen()),
-        value: H256(rng.gen()),
+        key: rng.random(),
+        value: rng.random(),
     });
     let inserts: Vec<_> = nodes.collect();
 
-    let missing_reads: Vec<_> = (0..inserts_count).map(|_| H256(rng.gen())).collect();
+    let missing_reads: Vec<_> = (0..inserts_count).map(|_| rng.random()).collect();
 
     let mut tree = MerkleTree::new(db).unwrap();
     let (inserts_output, proof) = tree.extend_with_proof(&inserts, &missing_reads).unwrap();
@@ -297,7 +297,7 @@ fn test_extending_tree_with_proof(db: impl Database, inserts_count: usize, updat
         .choose_multiple(&mut rng, updates_count)
         .map(|entry| TreeEntry {
             key: entry.key,
-            value: H256::zero(),
+            value: B256::ZERO,
         })
         .collect();
 
@@ -349,8 +349,8 @@ fn test_incrementally_extending_tree_with_proofs(
 
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let nodes = (0..1_000).map(|_| TreeEntry {
-        key: H256(rng.gen()),
-        value: H256(rng.gen()),
+        key: rng.random(),
+        value: rng.random(),
     });
     let inserts: Vec<_> = nodes.collect();
 
@@ -365,14 +365,14 @@ fn test_incrementally_extending_tree_with_proofs(
                 .choose_multiple(&mut rng, update_count.min(chunk_start_idx))
                 .map(|entry| TreeEntry {
                     key: entry.key,
-                    value: H256::repeat_byte(0xff),
+                    value: B256::repeat_byte(0xff),
                 })
                 .collect();
 
             let existing_reads = inserts[..chunk_start_idx]
                 .choose_multiple(&mut rng, read_count.min(chunk_start_idx))
                 .map(|entry| entry.key);
-            let missing_reads = (0..read_count).map(|_| H256(rng.gen()));
+            let missing_reads = (0..read_count).map(|_| rng.random());
             let mut all_reads: Vec<_> = missing_reads.chain(existing_reads).collect();
             all_reads.shuffle(&mut rng);
 
@@ -423,8 +423,8 @@ fn test_read_proofs(db: impl Database) {
 
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let nodes = (0..1_000).map(|_| TreeEntry {
-        key: H256(rng.gen()),
-        value: H256(rng.gen()),
+        key: rng.random(),
+        value: rng.random(),
     });
     let inserts: Vec<_> = nodes.collect();
     let mut inserted_keys: Vec<_> = inserts.iter().map(|entry| entry.key).collect();
@@ -459,7 +459,7 @@ fn test_read_proofs(db: impl Database) {
         println!("Using chunk size {chunk_size}");
         for proven_keys in inserted_keys.chunks_exact(chunk_size) {
             let mut proven_keys = proven_keys.to_vec();
-            proven_keys.extend((0..chunk_size).map(|_| H256(rng.gen())));
+            proven_keys.extend((0..chunk_size).map(|_| rng.random::<B256>()));
 
             let proof = tree.prove(1, &proven_keys).unwrap();
             let proven_tree_view = proof
@@ -483,8 +483,8 @@ fn test_using_patched_database(db: impl Database) {
 
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
     let nodes = (0..1_000).map(|_| TreeEntry {
-        key: H256(rng.gen()),
-        value: H256(rng.gen()),
+        key: rng.random(),
+        value: rng.random(),
     });
     let inserts: Vec<_> = nodes.collect();
 
@@ -507,7 +507,7 @@ fn test_using_patched_database(db: impl Database) {
                 tree.verify_consistency(version).unwrap();
             }
 
-            if rng.gen_bool(FLUSH_PROBABILITY) {
+            if rng.random_bool(FLUSH_PROBABILITY) {
                 tree.db.flush().unwrap();
             }
         }
@@ -578,22 +578,22 @@ mod rocksdb {
         let mut tree = MerkleTree::new(db).unwrap();
         let all_entries: Vec<_> = (0..50)
             .map(|_| TreeEntry {
-                key: H256(rng.gen()),
-                value: H256(rng.gen()),
+                key: rng.random(),
+                value: rng.random(),
             })
             .collect();
         let mut existing_entry_count = 0;
         while existing_entry_count < all_entries.len() {
-            let new_entry_count = rng.gen_range(0..=(all_entries.len() - existing_entry_count));
+            let new_entry_count = rng.random_range(0..=(all_entries.len() - existing_entry_count));
             let mut new_entries = all_entries
                 [existing_entry_count..(existing_entry_count + new_entry_count)]
                 .to_vec();
 
-            let updated_count = rng.gen_range(0..=existing_entry_count);
+            let updated_count = rng.random_range(0..=existing_entry_count);
             let updated_entries = all_entries[..existing_entry_count]
                 .choose_multiple(&mut rng, updated_count)
                 .map(|entry| TreeEntry {
-                    value: H256(rng.gen()),
+                    value: rng.random(),
                     ..*entry
                 });
             new_entries.extend(updated_entries);

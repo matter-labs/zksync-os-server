@@ -4,7 +4,7 @@ use std::{
     ops, slice,
 };
 
-use zksync_basic_types::H256;
+use alloy::primitives::B256;
 
 pub(crate) use self::patch::{TreeUpdate, WorkingPatchSet};
 pub use self::rocksdb::{MerkleTreeColumnFamily, RocksDBWrapper};
@@ -53,7 +53,7 @@ impl AsEntry for (u64, TreeEntry) {
 
 /// Generic database functionality. Its main implementation is [`RocksDB`].
 pub trait Database: Send + Sync {
-    fn indices(&self, version: u64, keys: &[H256]) -> Result<Vec<KeyLookup>, DeserializeError>;
+    fn indices(&self, version: u64, keys: &[B256]) -> Result<Vec<KeyLookup>, DeserializeError>;
 
     fn try_manifest(&self) -> Result<Option<Manifest>, DeserializeError>;
 
@@ -89,7 +89,7 @@ pub trait Database: Send + Sync {
 }
 
 impl<DB: Database + ?Sized> Database for &mut DB {
-    fn indices(&self, version: u64, keys: &[H256]) -> Result<Vec<KeyLookup>, DeserializeError> {
+    fn indices(&self, version: u64, keys: &[B256]) -> Result<Vec<KeyLookup>, DeserializeError> {
         (**self).indices(version, keys)
     }
 
@@ -167,7 +167,7 @@ pub struct PatchSet {
     manifest: Manifest,
     patches_by_version: HashMap<u64, PartialPatchSet>,
     // We maintain a joint index for all versions to make it easier to use `PatchSet` as a `Database` or in a `Patched` wrapper.
-    sorted_new_leaves: BTreeMap<H256, InsertedKeyEntry>,
+    sorted_new_leaves: BTreeMap<B256, InsertedKeyEntry>,
     // TODO: stale keys
 }
 
@@ -177,26 +177,26 @@ impl PatchSet {
             || self.patches_by_version.contains_key(&version)
     }
 
-    fn index(&self, version: u64, key: &H256) -> KeyLookup {
+    fn index(&self, version: u64, key: &B256) -> KeyLookup {
         let (next_key, next_idx) = self
             .sorted_new_leaves
-            .range(key..)
+            .range(*key..)
             .find(|(_, entry)| entry.inserted_at <= version)
             .map(|(key, entry)| (*key, entry.index))
             // Default to the max guard even if it's not present in the patch set. This is important
             // for using `PatchSet` inside `Patched`.
-            .unwrap_or_else(|| (H256::repeat_byte(0xff), 1));
+            .unwrap_or_else(|| (B256::repeat_byte(0xff), 1));
         if next_key == *key {
             return KeyLookup::Existing(next_idx);
         }
 
         let (prev_key, prev_idx) = self
             .sorted_new_leaves
-            .range(..key)
+            .range(..*key)
             .rev()
             .find(|(_, entry)| entry.inserted_at <= version)
             .map(|(key, entry)| (*key, entry.index))
-            .unwrap_or_else(|| (H256::zero(), 0));
+            .unwrap_or_else(|| (B256::ZERO, 0));
         KeyLookup::Missing {
             prev_key_and_index: (prev_key, prev_idx),
             next_key_and_index: (next_key, next_idx),
@@ -222,7 +222,7 @@ impl PatchSet {
 }
 
 impl Database for PatchSet {
-    fn indices(&self, version: u64, keys: &[H256]) -> Result<Vec<KeyLookup>, DeserializeError> {
+    fn indices(&self, version: u64, keys: &[B256]) -> Result<Vec<KeyLookup>, DeserializeError> {
         use rayon::prelude::*;
 
         let mut lookup = vec![];
@@ -356,7 +356,7 @@ impl<DB: Database> Patched<DB> {
 }
 
 impl<DB: Database> Database for Patched<DB> {
-    fn indices(&self, version: u64, keys: &[H256]) -> Result<Vec<KeyLookup>, DeserializeError> {
+    fn indices(&self, version: u64, keys: &[B256]) -> Result<Vec<KeyLookup>, DeserializeError> {
         let Some(patch) = &self.patch else {
             return self.inner.indices(version, keys);
         };

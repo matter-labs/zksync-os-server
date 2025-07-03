@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, iter};
 
-use zksync_basic_types::H256;
+use alloy::primitives::B256;
 
 use crate::{
     max_nibbles_for_internal_node,
@@ -16,12 +16,12 @@ use crate::{
 ///
 /// To access hashes more efficiently, we keep a flat `Vec` and uniform offsets for `(depth, index_on_level)` pairs.
 /// The latter requires potential padding for rightmost internal nodes; see [`InternalNode::internal_hashes()`].
-/// As a result of these efforts, generating proofs is ~2x more efficient than with layered `Vec<Vec<H256>>`.
+/// As a result of these efforts, generating proofs is ~2x more efficient than with layered `Vec<Vec<B256>>`.
 #[derive(Debug)]
-struct InternalNodeHashes(Vec<H256>);
+struct InternalNodeHashes(Vec<B256>);
 
 impl InternalNode {
-    pub(crate) fn hash<P: TreeParams>(&self, hasher: &P::Hasher, depth: u8) -> H256 {
+    pub(crate) fn hash<P: TreeParams>(&self, hasher: &P::Hasher, depth: u8) -> B256 {
         self.hash_inner::<P>(hasher, depth, true, |_| {})
     }
 
@@ -30,8 +30,8 @@ impl InternalNode {
         hasher: &P::Hasher,
         depth: u8,
         hash_last_level: bool,
-        mut on_level: impl FnMut(&[H256]),
-    ) -> H256 {
+        mut on_level: impl FnMut(&[B256]),
+    ) -> B256 {
         assert!(depth <= max_nibbles_for_internal_node::<P>() * P::INTERNAL_NODE_DEPTH);
 
         let mut hashes: Vec<_> = self.children.iter().map(|child| child.hash).collect();
@@ -69,7 +69,7 @@ impl InternalNode {
             // Pad if necessary so that there are uniform offsets for each level. The padding should never be read.
             // It doesn't waste that much space given that it may be required only for one internal node per level.
             hashes.0.extend(iter::repeat_n(
-                H256::zero(),
+                B256::ZERO,
                 full_level_len - level_hashes.len(),
             ));
             full_level_len /= 2;
@@ -79,7 +79,7 @@ impl InternalNode {
 }
 
 impl Root {
-    pub(crate) fn hash<P: TreeParams>(&self, hasher: &P::Hasher) -> H256 {
+    pub(crate) fn hash<P: TreeParams>(&self, hasher: &P::Hasher) -> B256 {
         self.root_node.hash::<P>(
             hasher,
             max_nibbles_for_internal_node::<P>() * P::INTERNAL_NODE_DEPTH,
@@ -92,7 +92,7 @@ impl Root {
 pub(crate) struct InternalHashes<'a> {
     nodes: &'a HashMap<u64, InternalNode>,
     /// Internal hashes for each node.
-    // TODO: `Vec<(u64, H256)>` for a level may be more efficient
+    // TODO: `Vec<(u64, B256)>` for a level may be more efficient
     internal_hashes: HashMap<u64, InternalNodeHashes>,
     // `internal_node_depth` / `level_offsets` are constants w.r.t. `TreeParams`; we keep them as fields
     // to avoid making `InternalHashes` parametric. (Also, `level_offsets` cannot be computed in compile time
@@ -129,7 +129,7 @@ impl<'a> InternalHashes<'a> {
         }
     }
 
-    pub(crate) fn get(&self, depth_in_node: u8, index_on_level: u64) -> H256 {
+    pub(crate) fn get(&self, depth_in_node: u8, index_on_level: u64) -> B256 {
         let bit_shift = self.internal_node_depth - depth_in_node;
         let node_index = index_on_level >> bit_shift;
         let index_in_node = (index_on_level % (1 << bit_shift)) as usize;
@@ -146,9 +146,8 @@ impl<'a> InternalHashes<'a> {
 
 #[cfg(test)]
 mod tests {
-    use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
-
     use super::*;
+    use crate::blake2::Blake2Hasher;
     use crate::DefaultTreeParams;
 
     #[test]
@@ -160,16 +159,16 @@ mod tests {
         assert_eq!(internal_hashes.level_offsets, [0, 8, 12]);
 
         for i in 0..(16 + 7) {
-            assert_eq!(internal_hashes.get(0, i), H256::zero());
+            assert_eq!(internal_hashes.get(0, i), B256::ZERO);
         }
         assert_eq!(internal_hashes.internal_hashes.len(), 2);
 
-        let expected_hash = Blake2Hasher.hash_branch(&H256::zero(), &H256::zero());
+        let expected_hash = Blake2Hasher.hash_branch(&B256::ZERO, &B256::ZERO);
         for i in 0..(8 + 3) {
             assert_eq!(internal_hashes.get(1, i), expected_hash);
         }
         let expected_boundary_hash =
-            Blake2Hasher.hash_branch(&H256::zero(), &Blake2Hasher.empty_subtree_hash(0));
+            Blake2Hasher.hash_branch(&B256::ZERO, &Blake2Hasher.empty_subtree_hash(0));
         assert_eq!(internal_hashes.get(1, 11), expected_boundary_hash);
 
         let expected_boundary_hash =

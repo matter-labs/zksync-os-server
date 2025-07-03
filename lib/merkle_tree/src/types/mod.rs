@@ -1,9 +1,9 @@
 use std::{fmt, str::FromStr};
 
+use alloy::primitives::B256;
 use anyhow::Context;
-use zksync_basic_types::H256;
-use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
 
+use crate::blake2::Blake2Hasher;
 use crate::{DefaultTreeParams, HashTree, TreeParams};
 
 /// Maximum supported tree depth (to fit indexes into `u64`).
@@ -13,8 +13,8 @@ pub(crate) const MAX_TREE_DEPTH: u8 = 64;
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct Leaf {
-    pub key: H256,
-    pub value: H256,
+    pub key: B256,
+    pub value: B256,
     /// 0-based index of a leaf with the lexicographically next key.
     pub next_index: u64,
 }
@@ -22,15 +22,15 @@ pub struct Leaf {
 impl Leaf {
     /// Minimum guard leaf inserted at the tree at its initialization.
     pub const MIN_GUARD: Self = Self {
-        key: H256::zero(),
-        value: H256::zero(),
+        key: B256::ZERO,
+        value: B256::ZERO,
         next_index: 1,
     };
 
     /// Maximum guard leaf inserted at the tree at its initialization.
     pub const MAX_GUARD: Self = Self {
-        key: H256::repeat_byte(0xff),
-        value: H256::zero(),
+        key: B256::repeat_byte(0xff),
+        value: B256::ZERO,
         // Circular pointer to self; never updated.
         next_index: 1,
     };
@@ -40,7 +40,7 @@ impl Leaf {
 #[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct ChildRef {
     pub(crate) version: u64,
-    pub(crate) hash: H256,
+    pub(crate) hash: B256,
 }
 
 /// Internal node of the tree, potentially amortized to have higher number of child references
@@ -61,7 +61,7 @@ impl InternalNode {
             children: vec![
                 ChildRef {
                     version,
-                    hash: H256::zero()
+                    hash: B256::ZERO
                 };
                 len
             ],
@@ -69,7 +69,7 @@ impl InternalNode {
     }
 
     #[doc(hidden)] // Too low-level; used in the API server
-    pub fn child_refs(&self) -> impl Iterator<Item = (H256, u64)> + '_ {
+    pub fn child_refs(&self) -> impl Iterator<Item = (B256, u64)> + '_ {
         self.children.iter().map(|r| (r.hash, r.version))
     }
 
@@ -85,7 +85,7 @@ impl InternalNode {
     pub(crate) fn ensure_len(&mut self, expected_len: usize, version: u64) {
         self.children.resize_with(expected_len, || ChildRef {
             version,
-            hash: H256::zero(),
+            hash: B256::ZERO,
         });
     }
 }
@@ -130,8 +130,8 @@ pub struct RawNode {
 pub enum KeyLookup {
     Existing(u64),
     Missing {
-        prev_key_and_index: (H256, u64),
-        next_key_and_index: (H256, u64),
+        prev_key_and_index: (B256, u64),
+        next_key_and_index: (B256, u64),
     },
 }
 
@@ -201,20 +201,20 @@ pub struct Root {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TreeEntry {
     /// Tree key.
-    pub key: H256,
+    pub key: B256,
     /// Value associated with the key.
-    pub value: H256,
+    pub value: B256,
 }
 
 impl TreeEntry {
     pub(crate) const MIN_GUARD: Self = Self {
-        key: H256::zero(),
-        value: H256::zero(),
+        key: B256::ZERO,
+        value: B256::ZERO,
     };
 
     pub(crate) const MAX_GUARD: Self = Self {
-        key: H256::repeat_byte(0xff),
-        value: H256::zero(),
+        key: B256::repeat_byte(0xff),
+        value: B256::ZERO,
     };
 }
 
@@ -291,7 +291,7 @@ pub struct Manifest {
 #[derive(Debug, Clone, Copy)]
 pub struct BatchOutput {
     /// New root hash of the tree.
-    pub root_hash: H256,
+    pub root_hash: B256,
     /// New leaf count (including 2 guard entries).
     pub leaf_count: u64,
 }

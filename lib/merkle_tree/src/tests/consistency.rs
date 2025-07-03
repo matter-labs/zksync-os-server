@@ -1,6 +1,6 @@
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::prelude::IndexedRandom;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::TempDir;
-use zksync_basic_types::H256;
 
 use crate::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
 
@@ -21,8 +21,8 @@ fn five_thousand_angry_monkeys_vs_merkle_tree() {
 
     let entries: Vec<_> = (1..=100)
         .map(|_| TreeEntry {
-            key: H256(rng.gen()),
-            value: H256(rng.gen()),
+            key: rng.random(),
+            value: rng.random(),
         })
         .collect();
     tree.extend(&entries).unwrap();
@@ -36,7 +36,7 @@ fn five_thousand_angry_monkeys_vs_merkle_tree() {
 
     for _ in 0..ITER_COUNT {
         let (key, value) = raw_kvs.choose(&mut rng).unwrap();
-        let should_remove = rng.gen();
+        let should_remove = rng.random();
 
         let mut batch = raw_db.new_write_batch();
         if should_remove {
@@ -44,8 +44,8 @@ fn five_thousand_angry_monkeys_vs_merkle_tree() {
             batch.delete_cf(cf, key);
         } else {
             let mut mangled_value = value.to_vec();
-            let mangled_idx = rng.gen_range(0..mangled_value.len());
-            let mangled_bit = rng.gen_range(0..8);
+            let mangled_idx = rng.random_range(0..mangled_value.len());
+            let mangled_bit = rng.random_range(0..8);
             mangled_value[mangled_idx] ^= 1 << mangled_bit;
             println!("mangling bit {mangled_idx}:{mangled_bit} of the value at {key:?}");
             batch.put_cf(cf, key, &mangled_value);

@@ -5,8 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::B256;
 use anyhow::Context as _;
-use zksync_basic_types::H256;
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
@@ -31,8 +31,8 @@ pub(crate) struct InsertedLeaf {
 #[derive(Debug)]
 pub(crate) struct TreeUpdate {
     pub(super) version: u64,
-    pub(super) sorted_new_leaves: BTreeMap<H256, InsertedKeyEntry>,
-    pub(crate) updates: Vec<(u64, H256)>,
+    pub(super) sorted_new_leaves: BTreeMap<B256, InsertedKeyEntry>,
+    pub(crate) updates: Vec<(u64, B256)>,
     /// Inserted leaves together with an index of the previous leaf (which also may be among the inserted leaves).
     pub(crate) inserts: Vec<InsertedLeaf>,
     operations: Vec<TreeOperation>,
@@ -47,14 +47,14 @@ impl TreeUpdate {
     pub(crate) fn for_empty_tree<E: AsEntry>(entries: &[E]) -> anyhow::Result<Self> {
         let mut sorted_new_leaves = BTreeMap::from([
             (
-                H256::zero(),
+                B256::ZERO,
                 InsertedKeyEntry {
                     index: 0,
                     inserted_at: 0,
                 },
             ),
             (
-                H256::repeat_byte(0xff),
+                B256::repeat_byte(0xff),
                 InsertedKeyEntry {
                     index: 1,
                     inserted_at: 0,
@@ -88,7 +88,7 @@ impl TreeUpdate {
             let next_index = match sorted_new_leaves.range(next_range).next() {
                 Some((_, next_entry)) => next_entry.index,
                 None => {
-                    assert_eq!(entry.key, H256::repeat_byte(0xff));
+                    assert_eq!(entry.key, B256::repeat_byte(0xff));
                     1
                 }
             };
@@ -131,7 +131,7 @@ impl TreeUpdate {
 #[derive(Debug)]
 pub(crate) struct FinalTreeUpdate {
     pub(super) version: u64,
-    pub(super) sorted_new_leaves: BTreeMap<H256, InsertedKeyEntry>,
+    pub(super) sorted_new_leaves: BTreeMap<B256, InsertedKeyEntry>,
 }
 
 impl PartialPatchSet {
@@ -549,7 +549,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         &self,
         latest_version: u64,
         entries: &[E],
-        read_keys: &[H256],
+        read_keys: &[B256],
     ) -> anyhow::Result<(WorkingPatchSet<P>, TreeUpdate)> {
         let root = self.db.try_root(latest_version)?.ok_or_else(|| {
             DeserializeError::from(DeserializeErrorKind::MissingNode)

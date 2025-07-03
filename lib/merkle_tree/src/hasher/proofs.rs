@@ -3,8 +3,8 @@ use std::{
     iter,
 };
 
+use alloy::primitives::B256;
 use anyhow::Context;
-use zksync_basic_types::H256;
 
 use crate::{types::Leaf, BatchOutput, HashTree, TreeEntry};
 
@@ -22,15 +22,15 @@ pub enum TreeOperation {
 
 #[derive(Debug)]
 pub struct IntermediateHash {
-    pub value: H256,
+    pub value: B256,
     /// Level + index on level. Redundant and is only checked in tests.
     #[cfg(test)]
     pub location: (u8, u64),
 }
 
 #[cfg(not(test))]
-impl From<H256> for IntermediateHash {
-    fn from(value: H256) -> Self {
+impl From<B256> for IntermediateHash {
+    fn from(value: B256) -> Self {
         Self { value }
     }
 }
@@ -39,9 +39,9 @@ impl From<H256> for IntermediateHash {
 #[derive(Debug)]
 pub struct MerkleTreeView {
     /// Root hash of the tree after the update.
-    pub root_hash: H256,
+    pub root_hash: B256,
     /// Read entries. `None` values mean missing reads.
-    pub read_entries: HashMap<H256, Option<H256>>,
+    pub read_entries: HashMap<B256, Option<B256>>,
 }
 
 /// Merkle proof of batch insertion into [`MerkleTree`](crate::MerkleTree).
@@ -86,7 +86,7 @@ impl BatchTreeProof {
         hasher: &dyn HashTree,
         tree_depth: u8,
         prev_output: BatchOutput,
-        read_keys: &[H256],
+        read_keys: &[B256],
     ) -> anyhow::Result<MerkleTreeView> {
         self.verify(hasher, tree_depth, Some(prev_output), &[], read_keys)
     }
@@ -98,7 +98,7 @@ impl BatchTreeProof {
         tree_depth: u8,
         prev_output: Option<BatchOutput>,
         entries: &[TreeEntry],
-        read_keys: &[H256],
+        read_keys: &[B256],
     ) -> anyhow::Result<MerkleTreeView> {
         let Some(prev_output) = prev_output else {
             return self.verify_for_empty_tree(hasher, tree_depth, entries, read_keys);
@@ -227,7 +227,7 @@ impl BatchTreeProof {
         &self,
         prev_output: &BatchOutput,
         operation: TreeOperation,
-        key: &H256,
+        key: &B256,
     ) -> anyhow::Result<()> {
         match operation {
             TreeOperation::Hit { index } => {
@@ -263,7 +263,7 @@ impl BatchTreeProof {
         hasher: &dyn HashTree,
         tree_depth: u8,
         entries: &[TreeEntry],
-        read_keys: &[H256],
+        read_keys: &[B256],
     ) -> anyhow::Result<MerkleTreeView> {
         // The proof must be entirely empty since we can get all data from `entries`.
         anyhow::ensure!(self.sorted_leaves.is_empty());
@@ -322,7 +322,7 @@ impl BatchTreeProof {
         leaf_count: u64,
         sorted_leaves: impl Iterator<Item = (u64, &'a Leaf)>,
         mut hashes: impl Iterator<Item = &'a IntermediateHash>,
-    ) -> anyhow::Result<H256> {
+    ) -> anyhow::Result<B256> {
         let mut node_hashes: Vec<_> = sorted_leaves
             .map(|(idx, leaf)| (idx, hasher.hash_leaf(leaf)))
             .collect();
@@ -376,9 +376,8 @@ impl BatchTreeProof {
 
 #[cfg(test)]
 mod tests {
-    use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
-
     use super::*;
+    use crate::blake2::Blake2Hasher;
 
     #[test]
     fn insertion_proof_for_empty_tree() {
@@ -390,14 +389,14 @@ mod tests {
         assert_eq!(
             hash,
             "0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b"
-                .parse()
+                .parse::<B256>()
                 .unwrap()
         );
 
         let proof = BatchTreeProof::empty();
         let entry = TreeEntry {
-            key: H256::repeat_byte(0x01),
-            value: H256::repeat_byte(0x10),
+            key: B256::repeat_byte(0x01),
+            value: B256::repeat_byte(0x10),
         };
         let tree_view = proof
             .verify(&Blake2Hasher, 64, None, &[entry], &[])
@@ -405,7 +404,7 @@ mod tests {
         assert_eq!(
             tree_view.root_hash,
             "0x08da20879eebed16fbd14e50b427bb97c8737aa860e6519877757e238df83a15"
-                .parse()
+                .parse::<B256>()
                 .unwrap()
         );
     }
@@ -431,8 +430,8 @@ mod tests {
                 64,
                 Some(empty_tree_output),
                 &[TreeEntry {
-                    key: H256::repeat_byte(0x01),
-                    value: H256::repeat_byte(0x10),
+                    key: B256::repeat_byte(0x01),
+                    value: B256::repeat_byte(0x10),
                 }],
                 &[],
             )
@@ -441,7 +440,7 @@ mod tests {
         assert_eq!(
             tree_view.root_hash,
             "0x08da20879eebed16fbd14e50b427bb97c8737aa860e6519877757e238df83a15"
-                .parse()
+                .parse::<B256>()
                 .unwrap()
         );
     }
@@ -467,12 +466,12 @@ mod tests {
                 64,
                 Some(empty_tree_output),
                 &[],
-                &[H256::repeat_byte(0x01)],
+                &[B256::repeat_byte(0x01)],
             )
             .unwrap();
         assert_eq!(tree_view.root_hash, empty_tree_output.root_hash);
         assert_eq!(tree_view.read_entries.len(), 1);
-        assert_eq!(tree_view.read_entries[&H256::repeat_byte(0x01)], None);
+        assert_eq!(tree_view.read_entries[&B256::repeat_byte(0x01)], None);
     }
 
     #[test]
@@ -496,20 +495,20 @@ mod tests {
                 64,
                 Some(empty_tree_output),
                 &[TreeEntry {
-                    key: H256::repeat_byte(0x01),
-                    value: H256::repeat_byte(0x10),
+                    key: B256::repeat_byte(0x01),
+                    value: B256::repeat_byte(0x10),
                 }],
-                &[H256::repeat_byte(0x02)],
+                &[B256::repeat_byte(0x02)],
             )
             .unwrap();
 
         assert_eq!(
             tree_view.root_hash,
             "0x08da20879eebed16fbd14e50b427bb97c8737aa860e6519877757e238df83a15"
-                .parse()
+                .parse::<B256>()
                 .unwrap()
         );
         assert_eq!(tree_view.read_entries.len(), 1);
-        assert_eq!(tree_view.read_entries[&H256::repeat_byte(0x02)], None);
+        assert_eq!(tree_view.read_entries[&B256::repeat_byte(0x02)], None);
     }
 }

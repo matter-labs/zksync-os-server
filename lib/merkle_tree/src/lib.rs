@@ -1,10 +1,8 @@
 //! Persistent ZK OS Merkle tree.
 
-use std::fmt;
-
+use alloy::primitives::B256;
 use anyhow::Context as _;
-use zksync_basic_types::H256;
-pub use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
+use std::fmt;
 
 pub use self::{
     errors::DeserializeError,
@@ -13,12 +11,15 @@ pub use self::{
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
     types::{BatchOutput, TreeEntry},
 };
+use crate::blake2::Blake2Hasher;
 use crate::{
     metrics::{BatchProofStage, LoadStage, MerkleTreeInfo, METRICS},
     storage::{AsEntry, TreeUpdate, WorkingPatchSet},
     types::{Leaf, MAX_TREE_DEPTH},
 };
 
+// TODO: Move to a separate crate
+pub mod blake2;
 mod consistency;
 mod errors;
 mod hasher;
@@ -107,7 +108,7 @@ where
     P::Hasher: Default,
 {
     /// Returns the hash of the empty tree.
-    pub fn empty_tree_hash() -> H256 {
+    pub fn empty_tree_hash() -> B256 {
         let hasher = P::Hasher::default();
         let min_guard_hash = hasher.hash_leaf(&Leaf::MIN_GUARD);
         let max_guard_hash = hasher.hash_leaf(&Leaf::MAX_GUARD);
@@ -150,7 +151,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
 
     /// Returns the root hash of a tree at the specified `version`, or `None` if the version
     /// was not written yet.
-    pub fn root_hash(&self, version: u64) -> anyhow::Result<Option<H256>> {
+    pub fn root_hash(&self, version: u64) -> anyhow::Result<Option<B256>> {
         let Some(root) = self.db.try_root(version)? else {
             return Ok(None);
         };
@@ -158,7 +159,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     }
 
     /// Returns the root hash and leaf count at the specified version.
-    pub fn root_info(&self, version: u64) -> anyhow::Result<Option<(H256, u64)>> {
+    pub fn root_info(&self, version: u64) -> anyhow::Result<Option<(B256, u64)>> {
         let Some(root) = self.db.try_root(version)? else {
             return Ok(None);
         };
@@ -175,7 +176,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         Ok(manifest.version_count.checked_sub(1))
     }
 
-    pub fn latest_root_hash(&self) -> anyhow::Result<Option<H256>> {
+    pub fn latest_root_hash(&self) -> anyhow::Result<Option<B256>> {
         let Some(version) = self
             .latest_version()
             .context("failed getting latest version")?
@@ -191,7 +192,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     ///
     /// - Returns an error if the version doesn't exist.
     /// - Proxies database errors.
-    pub fn prove(&self, version: u64, keys: &[H256]) -> anyhow::Result<BatchTreeProof> {
+    pub fn prove(&self, version: u64, keys: &[B256]) -> anyhow::Result<BatchTreeProof> {
         let (patch, mut update) = self.create_patch::<TreeEntry>(version, &[], keys)?;
         Ok(patch.create_batch_proof(&self.hasher, vec![], update.take_read_operations()))
     }
@@ -228,7 +229,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     fn extend_inner(
         &mut self,
         entries: &[impl AsEntry],
-        read_keys: Option<&[H256]>,
+        read_keys: Option<&[B256]>,
     ) -> anyhow::Result<(BatchOutput, Option<BatchTreeProof>)> {
         let latest_version = self
             .latest_version()
@@ -317,7 +318,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     pub fn extend_with_proof(
         &mut self,
         entries: &[TreeEntry],
-        read_keys: &[H256],
+        read_keys: &[B256],
     ) -> anyhow::Result<(BatchOutput, BatchTreeProof)> {
         let (output, proof) = self.extend_inner(entries, Some(read_keys))?;
         Ok((output, proof.unwrap()))
