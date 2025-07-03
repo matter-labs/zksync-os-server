@@ -41,6 +41,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"    
 ```
 
+### Regenesis
+Currently it's enough to re-run anvil:
+```
+anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
+```
 
 ## High-level design
 ### Principles
