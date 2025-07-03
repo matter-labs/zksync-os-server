@@ -1,6 +1,6 @@
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::execution::transaction_stream_provider::{
-    Transaction, TransactionStreamProvider, UnifiedTxStream,
+use crate::execution::block_transactions_provider::{
+    Transaction, BlockTransactionsProvider, UnifiedTxStream,
 };
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
@@ -36,9 +36,9 @@ enum SealPolicy {
 ///
 fn command_into_parts(
     block_command: BlockCommand,
-    tx_stream_provider: &mut TransactionStreamProvider,
+    tx_stream_provider: &mut BlockTransactionsProvider,
 ) -> (BatchContext, UnifiedTxStream, SealPolicy, InvalidTxPolicy) {
-    let tx_stream = tx_stream_provider.request_transaction_stream(block_command.clone());
+    let tx_stream = tx_stream_provider.transaction_stream(block_command.clone());
     match block_command {
         BlockCommand::Produce(ctx, deadline) => (
             ctx,
@@ -62,7 +62,7 @@ fn command_into_parts(
 // please be mindful when adding new parameters here
 pub async fn execute_block(
     cmd: BlockCommand,
-    tx_stream_provider: &mut TransactionStreamProvider,
+    tx_stream_provider: &mut BlockTransactionsProvider,
     state: StateHandle,
     max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {

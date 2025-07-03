@@ -13,7 +13,7 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_sequencer::api::run_jsonrpsee_server;
 use zksync_os_sequencer::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use zksync_os_sequencer::config::{BatcherConfig, ProverApiConfig, RpcConfig, SequencerConfig};
-use zksync_os_sequencer::execution::transaction_stream_provider::TransactionStreamProvider;
+use zksync_os_sequencer::execution::block_transactions_provider::BlockTransactionsProvider;
 use zksync_os_sequencer::finality::FinalityTracker;
 use zksync_os_sequencer::model::{BatchJob, ReplayRecord};
 use zksync_os_sequencer::repositories::RepositoryManager;
@@ -213,7 +213,7 @@ pub async fn main() {
     // ========== Initialize TransactionStreamProvider ===========
 
     let next_l1_priority_id = block_replay_storage.last_l1_priority_id().map(|n| n + 1).unwrap_or_default();
-    let tx_stream_provider = TransactionStreamProvider::new(
+    let tx_stream_provider = BlockTransactionsProvider::new(
         next_l1_priority_id,
         l1_mempool.clone(),
         mempool.clone(),

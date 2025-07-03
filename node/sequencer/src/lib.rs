@@ -20,7 +20,7 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
-    execution::{block_executor::execute_block, metrics::EXECUTION_METRICS, transaction_stream_provider::TransactionStreamProvider},
+    execution::{block_executor::execute_block, metrics::EXECUTION_METRICS, block_transactions_provider::BlockTransactionsProvider},
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
@@ -57,7 +57,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
     tree_sink: Sender<BatchOutput>,
 
-    mut tx_stream_provider: TransactionStreamProvider,
+    mut tx_stream_provider: BlockTransactionsProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
