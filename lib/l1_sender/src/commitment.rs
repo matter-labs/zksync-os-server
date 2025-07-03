@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_mini_merkle_tree::MiniMerkleTree;
-use zksync_types::{ExecuteTransactionCommon, Transaction};
+use zksync_os_types::L1Transaction;
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
@@ -99,26 +99,16 @@ pub struct CommitBatchInfo {
 impl CommitBatchInfo {
     pub fn new(
         batch_output: BatchOutput,
-        transactions: Vec<Transaction>,
+        l1_transactions: Vec<L1Transaction>,
         // TODO: This really needs a different name
         tree_output: zksync_os_merkle_tree::BatchOutput,
         chain_id: u64,
     ) -> Self {
-        let mut l1_tx_count = 0;
         let mut priority_operations_hash = keccak256([]);
-        for tx in &transactions {
-            if let ExecuteTransactionCommon::L1(data) = &tx.common_data {
-                l1_tx_count += 1;
-
-                let onchain_metadata = data.onchain_metadata().onchain_data;
-                priority_operations_hash = keccak256(
-                    [
-                        priority_operations_hash.0,
-                        onchain_metadata.onchain_data_hash.0,
-                    ]
-                    .concat(),
-                );
-            }
+        for l1_tx in &l1_transactions {
+            let onchain_data_hash = l1_tx.common_data.hash();
+            priority_operations_hash =
+                keccak256([priority_operations_hash.0, onchain_data_hash.0].concat());
         }
 
         let mut hasher = Blake2s256::new();
@@ -168,7 +158,7 @@ impl CommitBatchInfo {
         Self {
             batch_number: batch_output.header.number,
             new_state_commitment,
-            number_of_layer1_txs: l1_tx_count,
+            number_of_layer1_txs: l1_transactions.len() as u64,
             priority_operations_hash,
             l2_to_l1_logs_root_hash,
             // TODO: Update once enforced, not sure where to source it from yet

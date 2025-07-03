@@ -1,4 +1,3 @@
-use crate::conversions::bytes32_to_h256;
 use anyhow::Context;
 use std::ops::Div;
 use std::path::Path;
@@ -102,8 +101,8 @@ impl TreeManager {
                         .storage_writes
                         .into_iter()
                         .map(|write| TreeEntry {
-                            key: bytes32_to_h256(write.key),
-                            value: bytes32_to_h256(write.value),
+                            key: write.key.as_u8_array().into(),
+                            value: write.value.as_u8_array().into(),
                         })
                         .collect::<Vec<_>>();
 

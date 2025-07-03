@@ -13,15 +13,15 @@ pub mod block_receipt_repository;
 mod metrics;
 pub mod transaction_receipt_repository;
 
-use crate::conversions::h256_to_bytes32;
 use crate::repositories::account_property_repository::extract_account_properties;
 use crate::repositories::metrics::REPOSITORIES_METRICS;
-use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
+use crate::repositories::transaction_receipt_repository::l2_transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
 pub use block_receipt_repository::BlockReceiptRepository;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
+use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::BatchOutput;
-use zksync_types::Transaction;
+use zksync_os_types::{L1Transaction, L2Transaction};
 
 /// Manages repositories that store node data required for RPC but not for VM execution.
 ///
@@ -65,7 +65,8 @@ impl RepositoryManager {
         &self,
         block_number: u64,
         block_output: BatchOutput,
-        transactions: Vec<Transaction>,
+        l1_transactions: Vec<L1Transaction>,
+        l2_transactions: Vec<L2Transaction>,
     ) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
 
@@ -77,10 +78,16 @@ impl RepositoryManager {
             .add_diff(block_number, account_properties);
 
         // Add transaction receipts to the transaction receipt repository
-        for (index, tx) in transactions.iter().enumerate() {
-            let api_tx = transaction_to_api_data(&block_output, index, tx);
-            self.transaction_receipt_repository
-                .insert(h256_to_bytes32(tx.hash()), api_tx);
+        let mut index = 0;
+        for _l1_tx in l1_transactions.into_iter() {
+            index += 1;
+            // TODO: Convert into alloy receipt once we get rid of `zksync_types::L1Tx`
+        }
+        for l2_tx in l2_transactions.into_iter() {
+            let hash = Bytes32::from(l2_tx.hash().0);
+            let api_tx = l2_transaction_to_api_data(&block_output, index, l2_tx);
+            self.transaction_receipt_repository.insert(hash, api_tx);
+            index += 1;
         }
 
         // Add the full block output to the block receipt repository

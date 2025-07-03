@@ -1,4 +1,3 @@
-use crate::conversions::{bytes32_to_h256, tx_abi_encode};
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
 use std::alloc::Global;
@@ -14,6 +13,7 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
+use zksync_os_types::EncodableZksyncOs;
 
 const MAX_INFLIGHT: usize = 30;
 
@@ -95,9 +95,10 @@ impl Batcher {
                         .set(replay_record.context.block_number);
                     let block_number = replay_record.context.block_number;
                     tracing::debug!(
-                        "Batcher dispatcher received block {} with {} transactions",
+                        "Batcher dispatcher received block {} with {} L1 transactions and {} L2 transactions",
                         block_number,
-                        replay_record.transactions.len()
+                        replay_record.l1_transactions.len(),
+                        replay_record.l2_transactions.len()
                     );
                     for tx in worker_block_senders.iter() {
                         tx.send((batch_output.clone(), replay_record.clone()))
@@ -172,11 +173,17 @@ fn worker_loop(
 
             let state_view = state_handle.state_view_at_block(bn).unwrap();
 
-            let transactions = replay_record
-                .transactions
+            let l1_transactions = replay_record
+                .l1_transactions
                 .clone()
                 .into_iter()
-                .map(tx_abi_encode)
+                .map(|l1_tx| l1_tx.encode_zksync_os());
+            let l2_transactions = replay_record
+                .l2_transactions
+                .into_iter()
+                .map(|l2_tx| l2_tx.encode_zksync_os());
+            let transactions = l1_transactions
+                .chain(l2_transactions)
                 .collect::<VecDeque<_>>();
             let list_source = TxListSource { transactions };
 
@@ -205,13 +212,19 @@ fn worker_loop(
             update_tree_with_batch_output(&tree, &batch_output);
 
             let tree_output = zksync_os_merkle_tree::BatchOutput {
-                root_hash: bytes32_to_h256(*tree.read().unwrap().storage_tree.root()),
+                root_hash: tree
+                    .read()
+                    .unwrap()
+                    .storage_tree
+                    .root()
+                    .as_u8_array_ref()
+                    .into(),
                 leaf_count: tree.read().unwrap().storage_tree.next_free_slot,
             };
 
             let commit_batch_info = CommitBatchInfo::new(
                 batch_output,
-                replay_record.transactions,
+                replay_record.l1_transactions,
                 tree_output,
                 CHAIN_ID,
             );

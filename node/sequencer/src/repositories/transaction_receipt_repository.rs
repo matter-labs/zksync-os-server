@@ -1,15 +1,16 @@
-use crate::conversions::b160_to_address;
-use crate::CHAIN_ID;
+use alloy::consensus::transaction::TransactionInfo;
+use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, Transaction, TxType};
+use alloy::primitives::{Address, BlockHash};
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
-use zksync_types::{api, H256, U256, U64};
+use zksync_os_types::L2Transaction;
 
 #[derive(Clone, Debug)]
 pub struct TransactionApiData {
-    pub transaction: api::Transaction,
-    pub receipt: api::TransactionReceipt,
+    pub transaction: alloy::rpc::types::Transaction,
+    pub receipt: alloy::rpc::types::TransactionReceipt,
 }
 
 /// Thread-safe in-memory repository of transaction receipts, keyed by transaction hash.
@@ -56,40 +57,12 @@ impl Default for TransactionReceiptRepository {
     }
 }
 
-pub fn transaction_to_api_data(
+pub fn l2_transaction_to_api_data(
     block_output: &BatchOutput,
     index: usize,
-    tx: &zksync_types::Transaction,
+    tx: L2Transaction,
 ) -> TransactionApiData {
-    // let mut ts = std::time::Instant::now();
-
-    let api_tx = api::Transaction {
-        hash: tx.hash(),
-        nonce: U256::from(tx.nonce().map(|n| n.0).unwrap_or(0)),
-        // block_hash: Some(block_output.header.hash().into()),
-        block_hash: Some(H256::default()),
-        block_number: Some(block_output.header.number.into()),
-        transaction_index: Some(index.into()),
-        from: Some(tx.initiator_account()),
-        to: tx.execute.contract_address,
-        gas_price: Some(U256::from(1)),
-        gas: U256::from(100),
-        chain_id: U256::from(CHAIN_ID),
-        value: tx.execute.value,
-        transaction_type: Some((tx.tx_format() as u64).into()),
-        input: "0x0000".into(),
-        r: Some(U256::zero()),
-        v: Some(0.into()),
-        s: Some(U256::zero()),
-        max_fee_per_gas: Some(U256::from(1)),
-        y_parity: None,
-        max_priority_fee_per_gas: Some(U256::from(1)),
-        //todo: other fields
-        ..Default::default()
-    };
-
-    // tracing::info!("Block {} - saving - api::Transaction in {:?},", block_output.header.number, ts.elapsed());
-    // ts = std::time::Instant::now();
+    let tx_hash = *tx.hash();
     let tx_output = block_output
         .tx_results
         .iter()
@@ -97,37 +70,54 @@ pub fn transaction_to_api_data(
         .nth(index)
         .expect("mismatch in number of transactions and results");
 
-    let api_receipt = api::TransactionReceipt {
-        transaction_hash: tx.hash(),
-        transaction_index: index.into(),
-        // block_hash: block_output.header.hash().into(),
-        block_hash: H256::default(),
-        block_number: block_output.header.number.into(),
-        l1_batch_tx_index: None,
-        l1_batch_number: None,
-        from: tx.initiator_account(),
-        to: tx.execute.contract_address,
+    let tx_receipt = Receipt {
+        status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
         // todo
-        cumulative_gas_used: 7777.into(),
-        gas_used: Some(U256::from(tx_output.gas_used)),
-        contract_address: tx_output.contract_address.map(b160_to_address),
+        cumulative_gas_used: 7777,
+        // todo
         logs: vec![],
-        l2_to_l1_logs: vec![],
-        status: if matches!(tx_output.execution_result, ExecutionResult::Success(_)) {
-            U64::from(1)
-        } else {
-            U64::from(0)
-        },
-        logs_bloom: Default::default(),
-        transaction_type: Some((tx.tx_format() as u32).into()),
-        effective_gas_price: Some(block_output.header.base_fee_per_gas.into()),
+    };
+    let logs_bloom = tx_receipt.bloom_slow();
+    let receipt_with_bloom = ReceiptWithBloom::new(tx_receipt, logs_bloom);
+    let receipt_envelope = match tx.tx_type() {
+        TxType::Legacy => ReceiptEnvelope::Legacy(receipt_with_bloom),
+        TxType::Eip2930 => ReceiptEnvelope::Eip2930(receipt_with_bloom),
+        TxType::Eip1559 => ReceiptEnvelope::Eip1559(receipt_with_bloom),
+        TxType::Eip4844 => ReceiptEnvelope::Eip4844(receipt_with_bloom),
+        TxType::Eip7702 => ReceiptEnvelope::Eip7702(receipt_with_bloom),
+    };
+    let rpc_receipt = alloy::rpc::types::TransactionReceipt {
+        inner: receipt_envelope,
+        transaction_hash: tx_hash,
+        transaction_index: Some(index as u64),
+        // block_hash: Some(BlockHash::from(block_output.header.hash())),
+        block_hash: Some(BlockHash::default()),
+        block_number: Some(block_output.header.number),
+        gas_used: tx_output.gas_used,
+        effective_gas_price: block_output.header.base_fee_per_gas as u128,
+        blob_gas_used: None,
+        blob_gas_price: None,
+        from: tx.signer(),
+        to: tx.to(),
+        contract_address: tx_output
+            .contract_address
+            .map(|c| Address::from(c.to_be_bytes())),
     };
 
-    // tracing::info!("Block {} - saving - api::TransactionReceipt in {:?},", block_output.header.number, ts.elapsed());
-    // ts = std::time::Instant::now();
+    let rpc_transaction = alloy::rpc::types::Transaction::from_transaction(
+        tx,
+        TransactionInfo {
+            hash: Some(tx_hash),
+            index: Some(index as u64),
+            // block_hash: Some(BlockHash::from(block_output.header.hash())),
+            block_hash: Some(BlockHash::default()),
+            block_number: Some(block_output.header.number),
+            base_fee: Some(block_output.header.base_fee_per_gas),
+        },
+    );
 
     TransactionApiData {
-        transaction: api_tx,
-        receipt: api_receipt,
+        transaction: rpc_transaction,
+        receipt: rpc_receipt,
     }
 }
