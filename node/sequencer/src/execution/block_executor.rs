@@ -7,7 +7,8 @@ use itertools::Either;
 use std::{pin::Pin, time::Duration};
 use tokio::time::Sleep;
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
-use zksync_os_mempool::DynL1Pool;
+use zksync_os_mempool::L2TransactionPool;
+use zksync_os_mempool::{DynL1Pool, RethPool};
 use zksync_os_state::StateHandle;
 use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
 
@@ -43,8 +44,8 @@ type TxStream = Pin<Box<dyn Stream<Item = L2Transaction> + Send>>;
 fn command_into_parts(
     block_command: BlockCommand,
     next_l1_priority_id: &mut u64,
-    l1_mempool: DynL1Pool,
-    tx_stream: TxStream,
+    l1_mempool: &DynL1Pool,
+    l2_mempool: &RethPool,
 ) -> (
     BatchContext,
     L1TxStream,
@@ -65,7 +66,7 @@ fn command_into_parts(
                 ctx,
                 // TODO: Make stream actually look in L1 mempool during execution
                 Box::pin(futures::stream::iter(l1_transactions)) as L1TxStream,
-                tx_stream,
+                l2_mempool.best_l2_transactions(),
                 SealPolicy::Deadline(deadline),
                 InvalidTxPolicy::RejectAndContinue,
             )
@@ -88,35 +89,43 @@ fn command_into_parts(
 pub async fn execute_block(
     cmd: BlockCommand,
     next_l1_priority_id: &mut u64,
-    l1_mempool: DynL1Pool,
-    tx_stream: TxStream,
-    state: StateHandle,
+    l1_mempool: &DynL1Pool,
+    l2_mempool: &RethPool,
+    state: &StateHandle,
     max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {
     let metrics_label = match cmd {
         BlockCommand::Produce(_, _) => "produce",
         BlockCommand::Replay(_) => "replay",
     };
-    let (ctx, l1_stream, stream, seal, invalid) =
-        command_into_parts(cmd, next_l1_priority_id, l1_mempool, tx_stream);
-    execute_block_inner(
-        ctx,
-        state,
-        next_l1_priority_id,
-        l1_stream,
-        stream,
-        seal,
-        invalid,
-        metrics_label,
-        max_transactions_in_block,
-    )
-    .await
+    loop {
+        let (ctx, l1_stream, stream, seal, invalid) =
+            command_into_parts(cmd.clone(), next_l1_priority_id, l1_mempool, l2_mempool);
+        let Some(res) = execute_block_inner(
+            ctx,
+            state,
+            next_l1_priority_id,
+            l1_stream,
+            stream,
+            seal,
+            invalid,
+            metrics_label,
+            max_transactions_in_block,
+        )
+        .await?
+        else {
+            // TODO: Subscribe to L1/L2 mempool changes instead of polling
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        };
+        return Ok(res);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_block_inner(
     ctx: BatchContext,
-    state: StateHandle,
+    state: &StateHandle,
     next_l1_priority_id: &mut u64,
     l1_txs: L1TxStream,
     l2_txs: TxStream,
@@ -124,7 +133,7 @@ async fn execute_block_inner(
     fail_policy: InvalidTxPolicy,
     metrics_label: &'static str,
     max_transactions_in_block: usize,
-) -> Result<(BatchOutput, ReplayRecord)> {
+) -> Result<Option<(BatchOutput, ReplayRecord)>> {
     /* ---------- VM & state ----------------------------------------- */
     let state_view = state.state_view_at_block(ctx.block_number)?;
     let mut runner = VmWrapper::new(ctx, state_view);
@@ -243,13 +252,20 @@ async fn execute_block_inner(
 
                     /* ----- stream ended --------------------------- */
                     None => {
-                        if l1_executed.is_empty() && l2_executed.is_empty() && matches!(seal_policy, SealPolicy::Exhausted)
+                        if l1_executed.is_empty() && l2_executed.is_empty()
                         {
-                            // Replay path requires at least one tx.
-                            return Err(anyhow!(
-                                "empty replay for block {}",
-                                ctx.block_number
-                            ));
+                            return match seal_policy {
+                                SealPolicy::Deadline(_) => {
+                                    Ok(None)
+                                },
+                                SealPolicy::Exhausted => {
+                                    // Replay path requires at least one tx.
+                                    Err(anyhow!(
+                                        "empty replay for block {}",
+                                        ctx.block_number
+                                    ))
+                                }
+                            }
                         }
 
                         tracing::info!(
@@ -275,12 +291,12 @@ async fn execute_block_inner(
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
     latency.observe();
-    Ok((
+    Ok(Some((
         output,
         ReplayRecord {
             context: ctx,
             l1_transactions: l1_executed,
             l2_transactions: l2_executed,
         },
-    ))
+    )))
 }

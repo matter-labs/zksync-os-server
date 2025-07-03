@@ -23,14 +23,20 @@ use crate::{
     execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
     model::{BlockCommand, ReplayRecord},
 };
+use alloy::consensus::{Block, BlockBody, Header};
+use alloy::primitives::BlockHash;
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
+use reth_primitives::SealedBlock;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput;
-use zksync_os_mempool::{DynL1Pool, DynPool};
+use zksync_os_mempool::{
+    CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, RethPool, RethTransactionPoolExt,
+};
 use zksync_os_state::StateHandle;
+use zksync_os_types::L2Envelope;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
@@ -59,7 +65,7 @@ pub async fn run_sequencer_actor(
     tree_sink: Sender<BatchOutput>,
 
     l1_mempool: DynL1Pool,
-    mempool: DynPool,
+    l2_mempool: RethPool,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
@@ -91,9 +97,9 @@ pub async fn run_sequencer_actor(
                 let (batch_out, replay) = execute_block(
                     cmd,
                     &mut next_l1_priority_id,
-                    l1_mempool.clone(),
-                    Box::into_pin(mempool.clone()),
-                    state.clone(),
+                    &l1_mempool,
+                    &l2_mempool,
+                    &state,
                     sequencer_config.max_transactions_in_block,
                 )
                 .await
@@ -124,6 +130,34 @@ pub async fn run_sequencer_actor(
                     "▶ Added to state in {:?}. Sending to canonise queue...",
                     stage_started_at.elapsed()
                 );
+
+                // TODO: confirm whether constructing a real block is absolutely necessary here;
+                //       so far it looks like below is sufficient
+                let header = Header {
+                    number: batch_out.header.number,
+                    timestamp: batch_out.header.timestamp,
+                    gas_limit: batch_out.header.gas_limit,
+                    base_fee_per_gas: Some(batch_out.header.base_fee_per_gas),
+                    ..Default::default()
+                };
+                let body = BlockBody::<L2Envelope>::default();
+                let block = Block::new(header, body);
+                let sealed_block =
+                    SealedBlock::new_unchecked(block, BlockHash::from(batch_out.header.hash()));
+                // TODO: update mempool in parallel with state
+                l2_mempool.on_canonical_state_change(CanonicalStateUpdate {
+                    new_tip: &sealed_block,
+                    pending_block_base_fee: 0,
+                    pending_block_blob_fee: None,
+                    // TODO: Pass parsed account property changes here (address, nonce, value)
+                    changed_accounts: vec![],
+                    mined_transactions: replay
+                        .l2_transactions
+                        .iter()
+                        .map(|tx| *tx.hash())
+                        .collect(),
+                    update_kind: PoolUpdateKind::Commit,
+                });
                 tx.send((batch_out, replay))
                     .await
                     .map_err(|_| anyhow::anyhow!("canonise loop stopped"))?;
