@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use zksync_basic_types::H256;
+use alloy::primitives::B256;
 
 use crate::{
     hasher::BatchTreeProof,
@@ -62,7 +62,7 @@ impl<DB: Database, P: TreeParams> MerkleTreeReader<DB, P> {
     }
 
     /// Returns the root hash and leaf count at the specified version.
-    pub fn root_info(&self, version: u64) -> anyhow::Result<Option<(H256, u64)>> {
+    pub fn root_info(&self, version: u64) -> anyhow::Result<Option<(B256, u64)>> {
         self.0.root_info(version)
     }
 
@@ -72,7 +72,7 @@ impl<DB: Database, P: TreeParams> MerkleTreeReader<DB, P> {
     ///
     /// - Returns an error if the version doesn't exist.
     /// - Proxies database errors.
-    pub fn prove(&self, version: u64, keys: &[H256]) -> anyhow::Result<BatchTreeProof> {
+    pub fn prove(&self, version: u64, keys: &[B256]) -> anyhow::Result<BatchTreeProof> {
         self.0.prove(version, keys)
     }
 }

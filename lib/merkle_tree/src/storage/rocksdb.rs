@@ -2,9 +2,9 @@
 
 use std::{ops, path::Path};
 
+use alloy::primitives::B256;
 use anyhow::Context as _;
 use once_cell::sync::OnceCell;
-use zksync_basic_types::H256;
 use zksync_storage::{db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice, RocksDB};
 
 use crate::{
@@ -150,13 +150,13 @@ impl RocksDBWrapper {
     fn multi_get_key_indices(
         &self,
         version: u64,
-        keys: &[H256],
+        keys: &[B256],
     ) -> Result<Vec<Option<u64>>, DeserializeError> {
         use rayon::prelude::*;
 
         keys.par_chunks(self.multi_get_chunk_size)
             .map(|chunk| {
-                let keys_chunk = chunk.iter().map(H256::as_bytes);
+                let keys_chunk = chunk.iter().map(B256::as_slice);
                 self.db
                     .multi_get_cf(MerkleTreeColumnFamily::KeyIndices, keys_chunk)
             })
@@ -174,13 +174,13 @@ impl RocksDBWrapper {
 
     fn find_key_and_value<const REVERSE: bool>(
         iter: &mut rocksdb::DBRawIterator<'_>,
-        key: &H256,
+        key: &B256,
         version: u64,
-    ) -> Option<(H256, u64)> {
+    ) -> Option<(B256, u64)> {
         if REVERSE {
-            iter.seek_for_prev(key.as_bytes());
+            iter.seek_for_prev(key.as_slice());
         } else {
-            iter.seek(key.as_bytes());
+            iter.seek(key.as_slice());
         }
 
         loop {
@@ -189,7 +189,7 @@ impl RocksDBWrapper {
                 .map_err(|err| err.with_context(DeserializeContext::KeyIndex(key.into())))
                 .unwrap();
             if entry.inserted_at <= version {
-                break Some((H256::from_slice(key), entry.index));
+                break Some((B256::from_slice(key), entry.index));
             }
 
             if REVERSE {
@@ -200,7 +200,7 @@ impl RocksDBWrapper {
         }
     }
 
-    fn lookup_key(&self, version: u64, key: H256) -> Result<KeyLookup, DeserializeError> {
+    fn lookup_key(&self, version: u64, key: B256) -> Result<KeyLookup, DeserializeError> {
         let mut options = rocksdb::ReadOptions::default();
         options.fill_cache(false);
         let mut iter = self
@@ -208,13 +208,13 @@ impl RocksDBWrapper {
             .raw_iterator(MerkleTreeColumnFamily::KeyIndices, options);
 
         let next_key_and_idx = Self::find_key_and_value::<false>(&mut iter, &key, version);
-        let (next_key, next_idx) = next_key_and_idx.unwrap_or_else(|| (H256::repeat_byte(0xff), 1));
+        let (next_key, next_idx) = next_key_and_idx.unwrap_or_else(|| (B256::repeat_byte(0xff), 1));
         if next_key == key {
             return Ok(KeyLookup::Existing(next_idx));
         }
 
         let prev_key_and_index = Self::find_key_and_value::<true>(&mut iter, &key, version);
-        let (prev_key, prev_idx) = prev_key_and_index.unwrap_or_else(|| (H256::zero(), 0));
+        let (prev_key, prev_idx) = prev_key_and_index.unwrap_or((B256::ZERO, 0));
 
         Ok(KeyLookup::Missing {
             prev_key_and_index: (prev_key, prev_idx),
@@ -249,7 +249,7 @@ impl Database for RocksDBWrapper {
         version = version,
         keys.len = keys.len(),
     ))]
-    fn indices(&self, version: u64, keys: &[H256]) -> Result<Vec<KeyLookup>, DeserializeError> {
+    fn indices(&self, version: u64, keys: &[B256]) -> Result<Vec<KeyLookup>, DeserializeError> {
         use rayon::prelude::*;
 
         const MIN_KEY_COUNT_TO_REPORT: usize = 1_000;
@@ -348,7 +348,7 @@ impl Database for RocksDBWrapper {
             entry.serialize(&mut node_bytes);
             write_batch.put_cf(
                 MerkleTreeColumnFamily::KeyIndices,
-                key.as_bytes(),
+                key.as_slice(),
                 &node_bytes,
             );
         }
@@ -469,7 +469,7 @@ impl Database for RocksDBWrapper {
                 .map(|(_, raw_leaf)| Leaf::deserialize(&raw_leaf));
             for new_leaf in new_leaves {
                 let new_key = new_leaf?.key;
-                write_batch.delete_cf(MerkleTreeColumnFamily::KeyIndices, new_key.as_bytes());
+                write_batch.delete_cf(MerkleTreeColumnFamily::KeyIndices, new_key.as_slice());
             }
 
             first_new_leaf_index = new_leaf_count;
@@ -484,12 +484,12 @@ impl Database for RocksDBWrapper {
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::U256;
     use std::collections::{BTreeMap, HashMap};
-
     use tempfile::TempDir;
-    use zksync_crypto_primitives::hasher::blake2::Blake2Hasher;
 
     use super::*;
+    use crate::blake2::Blake2Hasher;
     use crate::{
         leaf_nibbles, max_nibbles_for_internal_node, max_node_children, storage::PartialPatchSet,
         types::TreeTags, DefaultTreeParams, MerkleTree, TreeEntry, TreeParams,
@@ -502,21 +502,21 @@ mod tests {
         let patch = PatchSet {
             sorted_new_leaves: BTreeMap::from([
                 (
-                    H256::zero(),
+                    B256::ZERO,
                     InsertedKeyEntry {
                         index: 0,
                         inserted_at: 0,
                     },
                 ),
                 (
-                    H256::repeat_byte(0xff),
+                    B256::repeat_byte(0xff),
                     InsertedKeyEntry {
                         index: 1,
                         inserted_at: 0,
                     },
                 ),
                 (
-                    H256::repeat_byte(1),
+                    B256::repeat_byte(1),
                     InsertedKeyEntry {
                         index: 2,
                         inserted_at: 1,
@@ -528,50 +528,49 @@ mod tests {
         db.apply_patch(patch).unwrap();
 
         assert_eq!(
-            db.lookup_key(0, H256::repeat_byte(1)).unwrap(),
+            db.lookup_key(0, B256::repeat_byte(1)).unwrap(),
             KeyLookup::Missing {
-                prev_key_and_index: (H256::zero(), 0),
-                next_key_and_index: (H256::repeat_byte(0xff), 1),
+                prev_key_and_index: (B256::ZERO, 0),
+                next_key_and_index: (B256::repeat_byte(0xff), 1),
             }
         );
         for version in [1, 2] {
             assert_eq!(
-                db.lookup_key(version, H256::repeat_byte(1)).unwrap(),
+                db.lookup_key(version, B256::repeat_byte(1)).unwrap(),
                 KeyLookup::Existing(2)
             );
         }
 
         assert_eq!(
-            db.lookup_key(0, H256::repeat_byte(2)).unwrap(),
+            db.lookup_key(0, B256::repeat_byte(2)).unwrap(),
             KeyLookup::Missing {
-                prev_key_and_index: (H256::zero(), 0),
-                next_key_and_index: (H256::repeat_byte(0xff), 1),
+                prev_key_and_index: (B256::ZERO, 0),
+                next_key_and_index: (B256::repeat_byte(0xff), 1),
             }
         );
         for version in [1, 2] {
             assert_eq!(
-                db.lookup_key(version, H256::repeat_byte(2)).unwrap(),
+                db.lookup_key(version, B256::repeat_byte(2)).unwrap(),
                 KeyLookup::Missing {
-                    prev_key_and_index: (H256::repeat_byte(1), 2),
-                    next_key_and_index: (H256::repeat_byte(0xff), 1),
+                    prev_key_and_index: (B256::repeat_byte(1), 2),
+                    next_key_and_index: (B256::repeat_byte(0xff), 1),
                 }
             );
         }
 
         assert_eq!(
-            db.lookup_key(0, H256::from_low_u64_be(u64::MAX)).unwrap(),
+            db.lookup_key(0, U256::from(u64::MAX).into()).unwrap(),
             KeyLookup::Missing {
-                prev_key_and_index: (H256::zero(), 0),
-                next_key_and_index: (H256::repeat_byte(0xff), 1),
+                prev_key_and_index: (B256::ZERO, 0),
+                next_key_and_index: (B256::repeat_byte(0xff), 1),
             }
         );
         for version in [1, 2] {
             assert_eq!(
-                db.lookup_key(version, H256::from_low_u64_be(u64::MAX))
-                    .unwrap(),
+                db.lookup_key(version, U256::from(u64::MAX).into()).unwrap(),
                 KeyLookup::Missing {
-                    prev_key_and_index: (H256::zero(), 0),
-                    next_key_and_index: (H256::repeat_byte(1), 2),
+                    prev_key_and_index: (B256::ZERO, 0),
+                    next_key_and_index: (B256::repeat_byte(1), 2),
                 }
             );
         }
@@ -656,10 +655,10 @@ mod tests {
         test_persisting_nodes::<DefaultTreeParams<64, 2>>();
     }
 
-    fn get_all_keys(db: &RocksDBWrapper) -> Vec<H256> {
+    fn get_all_keys(db: &RocksDBWrapper) -> Vec<B256> {
         db.db
             .prefix_iterator_cf(MerkleTreeColumnFamily::KeyIndices, &[])
-            .map(|(raw_key, _)| H256::from_slice(&raw_key))
+            .map(|(raw_key, _)| B256::from_slice(&raw_key))
             .collect()
     }
 
@@ -671,18 +670,18 @@ mod tests {
         let mut tree = MerkleTree::new(db).unwrap();
         tree.extend(&[]).unwrap();
         tree.extend(&[TreeEntry {
-            key: H256::repeat_byte(1),
-            value: H256::repeat_byte(2),
+            key: B256::repeat_byte(1),
+            value: B256::repeat_byte(2),
         }])
         .unwrap();
         tree.extend(&[
             TreeEntry {
-                key: H256::repeat_byte(2),
-                value: H256::repeat_byte(3),
+                key: B256::repeat_byte(2),
+                value: B256::repeat_byte(3),
             },
             TreeEntry {
-                key: H256::repeat_byte(3),
-                value: H256::repeat_byte(4),
+                key: B256::repeat_byte(3),
+                value: B256::repeat_byte(4),
             },
         ])
         .unwrap();
@@ -691,11 +690,11 @@ mod tests {
         assert_eq!(
             all_keys,
             [
-                H256::zero(),
-                H256::repeat_byte(1),
-                H256::repeat_byte(2),
-                H256::repeat_byte(3),
-                H256::repeat_byte(0xff)
+                B256::ZERO,
+                B256::repeat_byte(1),
+                B256::repeat_byte(2),
+                B256::repeat_byte(3),
+                B256::repeat_byte(0xff)
             ]
         );
 
@@ -703,6 +702,6 @@ mod tests {
 
         // Only guards should be retained.
         let all_keys = get_all_keys(&tree.db);
-        assert_eq!(all_keys, [H256::zero(), H256::repeat_byte(0xff)]);
+        assert_eq!(all_keys, [B256::ZERO, B256::repeat_byte(0xff)]);
     }
 }
