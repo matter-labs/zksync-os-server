@@ -1,6 +1,6 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::block_transactions_provider::{
-    Transaction, BlockTransactionsProvider, UnifiedTxStream,
+    BlockTransactionsProvider, UnifiedTransaction, UnifiedTxStream,
 };
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
@@ -129,22 +129,20 @@ async fn execute_block_inner(
             /* -------- stream branch ------------------------------- */
             maybe_tx = txs.next() => {
                 match maybe_tx {
-                    /* ----- got an L1 transaction ---------------------- */
-                    Some(Transaction::L1(l1_tx)) => {
+                    /* ----- got a transaction ---------------------- */
+                    Some(tx) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(l1_tx.clone().encode_zksync_os()).await {
+                        match runner.execute_next_tx(tx.clone().encode_zksync_os()).await {
                             Ok(_res) => {
-                                // tracing::info!(
-                                //     block = ctx.block_number,
-                                //     tx = ?tx.hash(),
-                                //     res = ?res,
-                                //     "L1 tx executed"
-                                // );
                                 latency.observe();
                                 EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
 
-                                l1_executed.push(l1_tx);
+                                // todo Tracking transactions separately for ReplayRecord - consider splitting them later
+                                match tx {
+                                    UnifiedTransaction::L1(l1_tx) => l1_executed.push(l1_tx),
+                                    UnifiedTransaction::L2(l2_tx) => l2_executed.push(l2_tx),
+                                }
 
                                 // arm the timer once, after the first successful tx
                                 if deadline.is_none() {
@@ -159,48 +157,17 @@ async fn execute_block_inner(
                                 }
                             }
                             Err(e) => {
-                                // We ignore `fail_policy` here as we cannot continue after encountering
-                                // an invalid L1 transaction. This essentially halts protocol.
-                                anyhow::bail!("found invalid L1 tx, cannot proceed: {e:?}");
-                            }
-                        }
-                    }
-                    /* ----- got an L2 transaction ---------------------- */
-                    Some(Transaction::L2(l2_tx)) => {
-                        wait_for_tx_latency.observe();
-                        let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(l2_tx.clone().encode_zksync_os()).await {
-                            Ok(_res) => {
-                                // tracing::info!(
-                                //     block = ctx.block_number,
-                                //     tx = ?tx.hash(),
-                                //     res = ?res,
-                                //     "L2 tx executed"
-                                // );
-                                latency.observe();
-                                EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
-
-                                l2_executed.push(l2_tx);
-
-                                // arm the timer once, after the first successful tx
-                                if deadline.is_none() {
-                                    if let Some(dur) = deadline_dur {
-                                        deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                                // we'll need to mark tx as invalid for GETH mempool - use the same hook to bail on invalid l1 transactions 
+                                // (that is, the difference in l1/l2 logic on invalid tx will be handled in block_transactions_provider - 
+                                // for l2 forwarded to mempool, for l1 bailed)
+                                match fail_policy {
+                                    InvalidTxPolicy::RejectAndContinue => {
+                                        tracing::warn!(block = ctx.block_number, ?e,
+                                                       "invalid tx → skipped");
                                     }
-                                }
-
-                                // seal block if max transactions number reached
-                                if l1_executed.len() + l2_executed.len() >= max_transactions_in_block {
-                                    break;
-                                }
-                            }
-                            Err(e) => match fail_policy {
-                                InvalidTxPolicy::RejectAndContinue => {
-                                    tracing::warn!(block = ctx.block_number, ?e,
-                                                   "invalid L2 tx → skipped");
-                                }
-                                InvalidTxPolicy::Abort => {
-                                    return Err(anyhow!("invalid L2 tx: {e:?}"));
+                                    InvalidTxPolicy::Abort => {
+                                        return Err(anyhow!("invalid tx: {e:?}"));
+                                    }
                                 }
                             }
                         }

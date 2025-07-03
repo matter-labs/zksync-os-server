@@ -2,21 +2,30 @@ use crate::model::BlockCommand;
 use futures::{Stream, StreamExt};
 use std::pin::Pin;
 use zksync_os_mempool::{DynL1Pool, DynPool};
-use zksync_os_types::{L1Transaction, L2Transaction};
+use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
 
-// todo: consider replacing with `Either` to prevent adding logic here
 /// A unified transaction that can be either L1 or L2
-/// Do NOT add logic to this enum - we want to treat L1 vs L2 transactions separately
-/// everywhere but during the execution
+/// todo: may get rid of it as we have EncodableZksyncOs trait
 #[derive(Clone, Debug)]
-pub enum Transaction {
+pub enum UnifiedTransaction {
     L1(L1Transaction),
     L2(L2Transaction),
 }
 
-/// A stream of unified transactions
+
+/// todo: may get rid of it as we have EncodableZksyncOs trait
+impl EncodableZksyncOs for UnifiedTransaction {
+    fn encode_zksync_os(self) -> Vec<u8> {
+        match self {
+            UnifiedTransaction::L1(tx) => tx.encode_zksync_os(),
+            UnifiedTransaction::L2(tx) => tx.encode_zksync_os(),
+        }
+    }
+}
+
+/// A stream of unified transactions that implement EncodableZksyncOs
 /// In current implementation, it always starts with L1 transactions followed by L2.
-pub type UnifiedTxStream = Pin<Box<dyn Stream<Item = Transaction> + Send>>;
+pub type UnifiedTxStream = Pin<Box<dyn Stream<Item = UnifiedTransaction> + Send>>;
 
 /// Component that prepares a transaction source for a given block command.
 ///  * Tracks L1 priority ID.
@@ -61,17 +70,17 @@ impl BlockTransactionsProvider {
                 // todo: just like we'll do that with reth mempool.
 
                 // Create stream: L1 transactions first, then L2 transactions
-                let l1_stream = futures::stream::iter(l1_transactions).map(Transaction::L1);
-                let l2_stream = Box::into_pin(self.l2_mempool.clone()).map(Transaction::L2);
+                let l1_stream = futures::stream::iter(l1_transactions).map(UnifiedTransaction::L1);
+                let l2_stream = Box::into_pin(self.l2_mempool.clone()).map(UnifiedTransaction::L2);
 
                 Box::pin(l1_stream.chain(l2_stream))
             }
             BlockCommand::Replay(replay) => {
                 // For replay, use pre-materialized transactions
                 replay.l1_transactions.iter().last().iter().for_each(|tx| self.next_l1_priority_id = tx.common_data.serial_id.0);
-                
-                let l1_stream = futures::stream::iter(replay.l1_transactions).map(Transaction::L1);
-                let l2_stream = futures::stream::iter(replay.l2_transactions).map(Transaction::L2);
+
+                let l1_stream = futures::stream::iter(replay.l1_transactions).map(UnifiedTransaction::L1);
+                let l2_stream = futures::stream::iter(replay.l2_transactions).map(UnifiedTransaction::L2);
 
                 Box::pin(l1_stream.chain(l2_stream))
             }
