@@ -10,6 +10,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_types.workspace = true
+
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types"] }
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
 

@@ -26,13 +26,17 @@ use crate::{
     },
     model::{BlockCommand, ReplayRecord},
 };
+use alloy::consensus::{Block, BlockBody, Header};
+use alloy::primitives::BlockHash;
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
+use reth_primitives::SealedBlock;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput as BlockOutput;
 use zksync_os_state::StateHandle;
+use zksync_os_types::L2Envelope;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //

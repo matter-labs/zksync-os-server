@@ -153,7 +153,7 @@ pub async fn execute_block(
             UnifiedTransaction::L2(tx) => Either::Right(tx),
         });
 
-    Ok((
+    Ok(Some((
         output,
         ReplayRecord::new(
             ctx,
@@ -161,5 +161,5 @@ pub async fn execute_block(
             l1_transactions,
             l2_transactions,
         ),
-    ))
+    )))
 }
