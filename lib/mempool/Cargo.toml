@@ -12,12 +12,12 @@ categories.workspace = true
 [dependencies]
 zksync_os_types.workspace = true
 
-reth-transaction-pool = { workspace = true, features = ["test-utils"] }
+reth-chainspec = { workspace = true }
+reth-storage-api = { workspace = true }
+reth-transaction-pool = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips"] }
 anyhow.workspace = true
 auto_impl.workspace = true
-crossbeam-queue.workspace = true
 dashmap.workspace = true
 futures.workspace = true
-vise.workspace = true

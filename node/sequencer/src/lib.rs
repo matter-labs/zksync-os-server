@@ -12,12 +12,14 @@ pub mod finality;
 pub mod model;
 pub mod prover_api;
 pub mod repositories;
+pub mod reth_state;
 pub mod tree_manager;
 
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use crate::reth_state::ZkClient;
 use crate::{
     block_context_provider::BlockContextProvider,
     execution::{

@@ -1,4 +1,5 @@
 use crate::repositories::AccountPropertyRepository;
+use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::consensus::Transaction;
@@ -10,7 +11,7 @@ use zksync_os_types::{L2Envelope, L2Transaction};
 
 /// Handles transactions received in API
 pub struct TxHandler {
-    mempool: RethPool,
+    mempool: RethPool<ZkClient>,
     // we give access to non-canonized blocks here on purpose
     account_property_repository: AccountPropertyRepository,
 
@@ -20,7 +21,7 @@ pub struct TxHandler {
 }
 impl TxHandler {
     pub fn new(
-        mempool: RethPool,
+        mempool: RethPool<ZkClient>,
         account_property_repository: AccountPropertyRepository,
         max_nonce_ahead: u64,
         max_tx_input_bytes: usize,

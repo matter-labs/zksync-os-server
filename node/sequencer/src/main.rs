@@ -28,6 +28,7 @@ use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use zksync_os_sequencer::prover_api::prover_job_manager::ProverJobManager;
 use zksync_os_sequencer::prover_api::prover_server;
+use zksync_os_sequencer::reth_state::ZkClient;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -158,7 +159,10 @@ pub async fn main() {
         first_block_to_execute
     );
 
-    let (l1_mempool, mempool) = zksync_os_mempool::in_memory(forced_deposit_transaction());
+    let (l1_mempool, mempool) = zksync_os_mempool::in_memory(
+        ZkClient::new(repositories.clone()),
+        forced_deposit_transaction(),
+    );
 
     // ========== Initialize TransactionStreamProvider ===========
 
