@@ -83,7 +83,7 @@ fn command_into_parts(
 // Note: trying to avoid introducing a `Struct` here (e.g. `struct BlockExecutor`)
 // to enforce minimal state space and state transition explicitness
 
-// side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
+// The Side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
 // please be mindful when adding new parameters here
 pub async fn execute_block(
     cmd: BlockCommand,
