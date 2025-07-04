@@ -12,12 +12,14 @@ pub mod finality;
 pub mod model;
 pub mod prover_api;
 pub mod repositories;
+pub mod reth_state;
 pub mod tree_manager;
 
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use crate::reth_state::ZkClient;
 use crate::{
     block_context_provider::BlockContextProvider,
     execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
@@ -65,7 +67,7 @@ pub async fn run_sequencer_actor(
     tree_sink: Sender<BatchOutput>,
 
     l1_mempool: DynL1Pool,
-    l2_mempool: RethPool,
+    l2_mempool: RethPool<ZkClient>,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,

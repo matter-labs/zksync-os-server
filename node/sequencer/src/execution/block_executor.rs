@@ -1,6 +1,7 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{BlockCommand, ReplayRecord};
+use crate::reth_state::ZkClient;
 use anyhow::{anyhow, Result};
 use futures::{Stream, StreamExt};
 use itertools::Either;
@@ -45,7 +46,7 @@ fn command_into_parts(
     block_command: BlockCommand,
     next_l1_priority_id: &mut u64,
     l1_mempool: &DynL1Pool,
-    l2_mempool: &RethPool,
+    l2_mempool: &RethPool<ZkClient>,
 ) -> (
     BatchContext,
     L1TxStream,
@@ -90,7 +91,7 @@ pub async fn execute_block(
     cmd: BlockCommand,
     next_l1_priority_id: &mut u64,
     l1_mempool: &DynL1Pool,
-    l2_mempool: &RethPool,
+    l2_mempool: &RethPool<ZkClient>,
     state: &StateHandle,
     max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {
