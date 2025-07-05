@@ -69,18 +69,18 @@ impl BlockReplayStorage {
 
         let current_latest_block = self.latest_block().unwrap_or(0);
 
-        if record.context.block_number <= current_latest_block {
+        if record.block_context.block_number <= current_latest_block {
             tracing::debug!(
                 "Not appending block {}: already exists in WAL",
-                record.context.block_number
+                record.block_context.block_number
             );
             return;
         }
 
         // Prepare record
-        let block_num = record.context.block_number.to_be_bytes();
+        let block_num = record.block_context.block_number.to_be_bytes();
         let context_value =
-            bincode::serde::encode_to_vec(record.context, bincode::config::standard())
+            bincode::serde::encode_to_vec(record.block_context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
         let l1_txs_value =
             bincode::serde::encode_to_vec(&record.l1_transactions, bincode::config::standard())
@@ -150,7 +150,7 @@ impl BlockReplayStorage {
 
         match (context_result, l1_txs_result, l2_txs_result) {
             (Some(bytes_context), Some(bytes_l1_txs), Some(bytes_l2_txs)) => Some(ReplayRecord {
-                context: bincode::serde::decode_from_slice(
+                block_context: bincode::serde::decode_from_slice(
                     &bytes_context,
                     bincode::config::standard(),
                 )

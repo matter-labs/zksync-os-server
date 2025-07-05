@@ -20,7 +20,10 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
-    execution::{block_executor::execute_block, metrics::EXECUTION_METRICS, block_transactions_provider::BlockTransactionsProvider},
+    execution::{
+        block_executor::execute_block, block_transactions_provider::BlockTransactionsProvider,
+        metrics::EXECUTION_METRICS,
+    },
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
@@ -57,7 +60,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
     tree_sink: Sender<BatchOutput>,
 
-    mut tx_stream_provider: BlockTransactionsProvider,
+    mut block_transaction_provider: BlockTransactionsProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
@@ -75,24 +78,37 @@ pub async fn run_sequencer_actor(
         tracing::info!(block_to_start, "starting sequencer");
 
         async move {
-            let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time);
+            let mut stream = command_source(
+                &wal,
+                block_to_start,
+                sequencer_config.block_time,
+                sequencer_config.max_transactions_in_block,
+            );
 
             while let Some(cmd) = stream.next().await {
                 // todo: also report full latency between command invocations
                 let bn = cmd.block_number();
 
+                tracing::info!(
+                    block = bn,
+                    cmd = cmd.to_string(),
+                    "▶ starting command. Turning into PreparedCommand.."
+                );
                 let mut stage_started_at = Instant::now();
-                tracing::info!(block = bn, cmd = cmd.to_string(), "▶ starting command");
 
+                let prepared_cmd = block_transaction_provider.process_command(cmd);
 
-                let (batch_out, replay) = execute_block(
-                    cmd,
-                    &mut tx_stream_provider,
-                    state.clone(),
-                    sequencer_config.max_transactions_in_block,
-                )
-                .await
-                .context("execute_block")?;
+                tracing::info!(
+                    block_number = bn,
+                    "▶ Prepared command in {:?}. Executing..",
+                    stage_started_at.elapsed()
+                );
+                stage_started_at = Instant::now();
+
+                let (batch_out, replay) = execute_block(prepared_cmd, state.clone())
+                    .await
+                    .context("execute_block")?;
+
                 tracing::info!(
                     block_number = bn,
                     l1_transactions = replay.l1_transactions.len(),
@@ -193,6 +209,7 @@ fn command_source(
     block_replay_wal: &BlockReplayStorage,
     block_to_start: u64,
     block_time: Duration,
+    block_size_limit: usize,
 ) -> BoxStream<BlockCommand> {
     let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
     tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
@@ -207,7 +224,7 @@ fn command_source(
         futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
             Some((
                 BlockContextProvider
-                    .get_produce_command(block_number, block_time)
+                    .get_produce_command(block_number, block_time, block_size_limit)
                     .await,
                 block_number + 1,
             ))

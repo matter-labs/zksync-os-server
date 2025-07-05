@@ -1,114 +1,45 @@
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::execution::block_transactions_provider::{
-    BlockTransactionsProvider, UnifiedTransaction, UnifiedTxStream,
-};
 use crate::execution::vm_wrapper::VmWrapper;
-use crate::model::{BlockCommand, ReplayRecord};
+use crate::model::{
+    InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
+    UnifiedTransaction,
+};
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
-use std::{pin::Pin, time::Duration};
+use itertools::{Either, Itertools};
+use std::{pin::Pin};
 use tokio::time::Sleep;
-use zk_os_forward_system::run::{BatchContext, BatchOutput};
+use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
 use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
 
-/// Behaviour when VM returns an InvalidTransaction error.
-#[derive(Clone, Copy, Debug)]
-enum InvalidTxPolicy {
-    /// Invalid tx is skipped in block and discarded from mempool. Used when building a block.
-    RejectAndContinue,
-    /// Bubble the error up and abort the whole block. Used when replaying a block (ReplayLog / Replica / EN)
-    Abort,
-}
+// Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
+// MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
-#[derive(Clone, Copy, Debug)]
-enum SealPolicy {
-    /// Seal non-empty blocks after deadline. Used when building a block.
-    Deadline(Duration),
-    /// Seal when all txs from tx source are executed. Used when replaying a block (ReplayLog / Replica / EN)
-    Exhausted,
-}
-
-/// Build everything the VM runner needs for this command:
-///   – the context (`BatchContext`)
-///   – the stream of transactions (`UnifiedTxStream`)
-///   – the seal and invalid-tx policies
-///
-fn command_into_parts(
-    block_command: BlockCommand,
-    tx_stream_provider: &mut BlockTransactionsProvider,
-) -> (BatchContext, UnifiedTxStream, SealPolicy, InvalidTxPolicy) {
-    let tx_stream = tx_stream_provider.transaction_stream(block_command.clone());
-    match block_command {
-        BlockCommand::Produce(ctx, deadline) => (
-            ctx,
-            tx_stream,
-            SealPolicy::Deadline(deadline),
-            InvalidTxPolicy::RejectAndContinue,
-        ),
-        BlockCommand::Replay(replay) => (
-            replay.context,
-            tx_stream,
-            SealPolicy::Exhausted,
-            InvalidTxPolicy::Abort,
-        ),
-    }
-}
-
-// Note: trying to avoid introducing a `Struct` here (e.g. `struct BlockExecutor`)
-// to enforce minimal state space and state transition explicitness
-
-// side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
+// a side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
 // please be mindful when adding new parameters here
-pub async fn execute_block(
-    cmd: BlockCommand,
-    tx_stream_provider: &mut BlockTransactionsProvider,
-    state: StateHandle,
-    max_transactions_in_block: usize,
-) -> Result<(BatchOutput, ReplayRecord)> {
-    let metrics_label = match cmd {
-        BlockCommand::Produce(_, _) => "produce",
-        BlockCommand::Replay(_) => "replay",
-    };
-    let (ctx, unified_tx_stream, seal, invalid) = command_into_parts(cmd, tx_stream_provider);
-    execute_block_inner(
-        ctx,
-        state,
-        unified_tx_stream,
-        seal,
-        invalid,
-        metrics_label,
-        max_transactions_in_block,
-    )
-    .await
-}
 
-#[allow(clippy::too_many_arguments)]
-async fn execute_block_inner(
-    ctx: BatchContext,
+pub async fn execute_block(
+    mut command: PreparedBlockCommand,
     state: StateHandle,
-    mut txs: UnifiedTxStream,
-    seal_policy: SealPolicy,
-    fail_policy: InvalidTxPolicy,
-    metrics_label: &'static str,
-    max_transactions_in_block: usize,
 ) -> Result<(BatchOutput, ReplayRecord)> {
+    let ctx = command.block_context;
+
     /* ---------- VM & state ----------------------------------------- */
     let state_view = state.state_view_at_block(ctx.block_number)?;
     let mut runner = VmWrapper::new(ctx, state_view);
-    let mut l1_executed = Vec::<L1Transaction>::new();
-    let mut l2_executed = Vec::<L2Transaction>::new();
+
+    // todo: not sure we need them separate
+    let mut executed_txs = Vec::<UnifiedTransaction>::new();
 
     /* ---------- deadline config ------------------------------------ */
-    let deadline_dur = match seal_policy {
-        SealPolicy::Deadline(d) => Some(d),
-        SealPolicy::Exhausted => None,
+    let deadline_dur = match command.seal_policy {
+        SealPolicy::Decide(d, _) => Some(d),
+        SealPolicy::UntilExhausted => None,
     };
     let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx success
 
     /* ---------- main loop ------------------------------------------ */
-    // todo: not sure tokio::select! is a good solution -
-    // for example now if we deadline mid-transaction, the tx will be lost from mempool
     loop {
         let wait_for_tx_latency = EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
         tokio::select! {
@@ -121,13 +52,13 @@ async fn execute_block_inner(
                 if deadline.is_some()
             => {
                 tracing::info!(block = ctx.block_number,
-                               txs = l2_executed.len(),
+                               txs = executed_txs.len(),
                                "deadline reached → sealing");
                 break;                                     // leave the loop ⇒ seal
             }
 
             /* -------- stream branch ------------------------------- */
-            maybe_tx = txs.next() => {
+            maybe_tx = command.tx_source.next() => {
                 match maybe_tx {
                     /* ----- got a transaction ---------------------- */
                     Some(tx) => {
@@ -136,13 +67,9 @@ async fn execute_block_inner(
                         match runner.execute_next_tx(tx.clone().encode_zksync_os()).await {
                             Ok(_res) => {
                                 latency.observe();
-                                EXECUTION_METRICS.executed_transactions[&metrics_label].inc();
+                                EXECUTION_METRICS.executed_transactions[&command.metrics_label].inc();
 
-                                // todo Tracking transactions separately for ReplayRecord - consider splitting them later
-                                match tx {
-                                    UnifiedTransaction::L1(l1_tx) => l1_executed.push(l1_tx),
-                                    UnifiedTransaction::L2(l2_tx) => l2_executed.push(l2_tx),
-                                }
+                                executed_txs.push(tx);
 
                                 // arm the timer once, after the first successful tx
                                 if deadline.is_none() {
@@ -150,17 +77,28 @@ async fn execute_block_inner(
                                         deadline = Some(Box::pin(tokio::time::sleep(dur)));
                                     }
                                 }
-
-                                // seal block if max transactions number reached
-                                if l1_executed.len() + l2_executed.len() >= max_transactions_in_block {
-                                    break;
+                                match command.seal_policy {
+                                    SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
+                                    tracing::info!(block = ctx.block_number,
+                                                   txs = executed_txs.len(),
+                                                   "tx limit reached → sealing");
+                                        break
+                                    },
+                                    _ => {}
                                 }
                             }
                             Err(e) => {
-                                // we'll need to mark tx as invalid for GETH mempool - use the same hook to bail on invalid l1 transactions 
-                                // (that is, the difference in l1/l2 logic on invalid tx will be handled in block_transactions_provider - 
-                                // for l2 forwarded to mempool, for l1 bailed)
-                                match fail_policy {
+
+                                // todo: Some error types mean that the transaction is invalid but could be valid in the future (NonceTooHigh, GasPriceLessThanBasefee etc),
+                                // todo: some mean it will never be valid (NonceTooLow, BaseFeeGreaterThanMaxFee etc),
+                                // todo: some are in the gray zone (e.g. LackOfFundForMaxFee)
+                                // todo: and some are just fatal protocol errors (e.g. UpgradeTxNotFirst, BlockGasLimitTooHigh).
+                                // todo: we may apply this classification on zksync-os side or on the server side
+
+                                // todo: we'll need to mark tx as invalid for RETH mempool - use the same hook to bail on invalid l1 transactions
+                                // todo: (that is, the difference in l1/l2 logic on invalid tx will be handled in block_transactions_provider -
+                                // todo: for l2 forwarded to mempool, for l1 bailed)
+                                match command.invalid_tx_policy {
                                     InvalidTxPolicy::RejectAndContinue => {
                                         tracing::warn!(block = ctx.block_number, ?e,
                                                        "invalid tx → skipped");
@@ -173,11 +111,13 @@ async fn execute_block_inner(
                         }
                     }
 
-                    /* ----- stream ended --------------------------- */
+                    /* ----- tx stream exhausted  --------------------------- */
                     None => {
-                        if l1_executed.is_empty() && l2_executed.is_empty() && matches!(seal_policy, SealPolicy::Exhausted)
+                        if executed_txs.is_empty() && matches!(command.seal_policy, SealPolicy::UntilExhausted)
                         {
                             // Replay path requires at least one tx.
+
+                            // todo: maybe put this check to `ReplayRecord` instead - and just assert here? Or not even assert.
                             return Err(anyhow!(
                                 "empty replay for block {}",
                                 ctx.block_number
@@ -186,8 +126,7 @@ async fn execute_block_inner(
 
                         tracing::info!(
                             block = ctx.block_number,
-                            l1_txs = l1_executed.len(),
-                            l2_txs = l2_executed.len(),
+                            txs = executed_txs.len(),
                             "stream exhausted → sealing"
                         );
                         break;
@@ -207,12 +146,20 @@ async fn execute_block_inner(
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
     latency.observe();
+
+    // todo: not sure we need to track l1_ and l2_transactions separately in replay_record
+    let (l1_transactions, l2_transactions): (Vec<L1Transaction>, Vec<L2Transaction>) =
+        executed_txs.into_iter().partition_map(|tx| match tx {
+            UnifiedTransaction::L1(tx) => Either::Left(tx),
+            UnifiedTransaction::L2(tx) => Either::Right(tx),
+        });
+
     Ok((
         output,
         ReplayRecord {
-            context: ctx,
-            l1_transactions: l1_executed,
-            l2_transactions: l2_executed,
+            block_context: ctx,
+            l1_transactions,
+            l2_transactions,
         },
     ))
 }

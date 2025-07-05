@@ -1,9 +1,9 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-// todo: experimental approach - reconsider after adding more finality stages
 
+/// NOTE: UNFINISHED FEATURE- PLEASE IGNORE
+/// 
 /// Holds block numbers for various finality stages
-///
 #[derive(Debug, Clone)]
 pub struct FinalityTracker {
     /// the latest canonized block number

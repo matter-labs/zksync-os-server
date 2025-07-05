@@ -212,12 +212,13 @@ pub async fn main() {
 
     // ========== Initialize TransactionStreamProvider ===========
 
-    let next_l1_priority_id = block_replay_storage.last_l1_priority_id().map(|n| n + 1).unwrap_or_default();
-    let tx_stream_provider = BlockTransactionsProvider::new(
-        next_l1_priority_id,
-        l1_mempool.clone(),
-        mempool.clone(),
-    );
+    tracing::warn!("TODO: now we scan blockchain back for the last l1 tranasction - can take a lot of time ... ... ...");
+    let next_l1_priority_id = block_replay_storage
+        .last_l1_priority_id()
+        .map(|n| n + 1)
+        .unwrap_or_default();
+    let tx_stream_provider =
+        BlockTransactionsProvider::new(next_l1_priority_id, l1_mempool.clone(), mempool.clone());
 
     // ========== Initialize L1 watcher (fallible) ===========
 
@@ -351,7 +352,7 @@ pub async fn main() {
 
         }
 
-        // todo: commented out for now because it affects performance - even when doing nothing
+        // todo: was mistakenly disabled at some point - please reenable
         // ── L1 Watcher task ────────────────────────────────────────────────
         // res = l1_watcher_task => {
         //     match res {
