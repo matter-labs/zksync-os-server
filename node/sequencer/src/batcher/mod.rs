@@ -15,6 +15,9 @@ use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
 use zksync_os_types::EncodableZksyncOs;
 
+// used in two places:
+// * number of blocks received by Batcher but not distributed to Workers yet
+// * number of blocks processed by Workers, but not sent to l1 sender yet because of gaps (we need to send in order)
 const MAX_INFLIGHT: usize = 30;
 
 /// This component will genarate l1 batches from the stream of blocks
@@ -22,11 +25,14 @@ const MAX_INFLIGHT: usize = 30;
 ///
 /// Currently, batching is not implemented on zksync-os side, so we do 1 batch == 1 block
 /// Thus, this component only generates prover input.
+/// Additionally, it doesn't use the Persistent Merkle Tree yet -
+/// so we spawn multiple workers with in-memory tree in each.
+/// The component will be heavily reworked once we migrate to the Peristent Tree
 pub struct Batcher {
     block_sender: Receiver<(BatchOutput, ReplayRecord)>,
     // todo: the following two may just need to be a broadcast with backpressure instead (to eth-sender and prover-api)
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
-    // handled by l1-sender
+    // handled by l1-sender. We ensure that they are sent in order.
     commit_batch_info_sender: Option<L1SenderHandle>,
     state_handle: StateHandle,
     bin_path: &'static str,
@@ -66,19 +72,34 @@ impl Batcher {
     pub async fn run_loop(mut self) -> anyhow::Result<()> {
         let mut worker_block_senders = Vec::new();
 
+        // todo: will be reworked when migrating batcher to the persistent tree
+        let commit_tx = self
+            .commit_batch_info_sender
+            .map(|commit_batch_info_sender| {
+                let (commit_tx, commit_rx) = tokio::sync::mpsc::channel(MAX_INFLIGHT);
+                // CommitBatchInfo proxy that ensures order
+                tokio::spawn(async move {
+                    if let Err(e) = ordered_committer(commit_rx, commit_batch_info_sender).await {
+                        tracing::error!("ordered_committer exited: {e:?}");
+                    }
+                });
+                commit_tx
+            });
+
         for worker_id in 0..self.num_workers {
             let (block_sender, block_receiver) = tokio::sync::mpsc::channel(MAX_INFLIGHT);
+
             worker_block_senders.push(block_sender);
             let batch_sender = self.batch_sender.clone();
-            let commit_batch_info_sender = self.commit_batch_info_sender.clone();
             let state_handle = self.state_handle.clone();
+            let commit_tx = commit_tx.clone();
             std::thread::spawn(move || {
                 worker_loop(
                     worker_id,
                     self.num_workers,
                     block_receiver,
                     batch_sender,
-                    commit_batch_info_sender,
+                    commit_tx,
                     state_handle,
                     self.bin_path,
                 )
@@ -123,7 +144,7 @@ fn worker_loop(
     total_workers_count: usize,
     mut block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
     batch_sender: Sender<BatchJob>,
-    commit_batch_info_sender: Option<L1SenderHandle>,
+    commit_batch_info_sender: Option<Sender<CommitBatchInfo>>,
     state_handle: StateHandle,
     bin_path: &'static str,
 ) {
@@ -230,8 +251,8 @@ fn worker_loop(
             );
             tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
 
-            if let Some(handle) = &commit_batch_info_sender {
-                rt.block_on(handle.commit(commit_batch_info.clone()))
+            if let Some(commit_batch_info_sender) = &commit_batch_info_sender {
+                rt.block_on(commit_batch_info_sender.send(commit_batch_info.clone()))
                     .unwrap();
             }
 
@@ -246,6 +267,33 @@ fn worker_loop(
             rt.block_on(batch_sender.send(batch)).unwrap();
         }
     }
+}
+
+/// Receives `CommitBatchInfo`s from all workers, buffers anything that
+/// arrives early, and forwards them strictly in block-number order.
+///
+/// todo: will be removed/replaced when batcher is reworked to use persistent tree
+async fn ordered_committer(
+    mut rx: Receiver<CommitBatchInfo>,
+    l1: L1SenderHandle,
+) -> anyhow::Result<()> {
+    use std::collections::BTreeMap;
+
+    // batcher always starts from the first block for now
+    // since it needs to build the in-memory tree.
+    let mut expected = 1;
+    let mut buffer = BTreeMap::new(); // early arrivals keyed by block_no
+
+    while let Some(info) = rx.recv().await {
+        let bn = info.batch_number;
+        buffer.insert(bn, info);
+
+        while let Some(in_order) = buffer.remove(&expected) {
+            l1.commit(in_order).await?; // <-- now it is definitely in order
+            expected += 1;
+        }
+    }
+    Ok(())
 }
 
 fn update_tree_with_batch_output(tree: &Arc<RwLock<InMemoryTree>>, batch_output: &BatchOutput) {

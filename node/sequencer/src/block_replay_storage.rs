@@ -196,7 +196,9 @@ impl BlockReplayStorage {
     }
 
     /// Loads last executed L1 priority id. Returns `None` if there are no L1 txs available in WAL.
+    /// note: may take significant amount of time
     pub fn last_l1_priority_id(&self) -> Option<u64> {
+        tracing::info!("scanning blocks for the first l1 transaction...");
         let mut block = self.latest_block()?;
         loop {
             // Early return with `None`, we assume there are no replay records available before this
