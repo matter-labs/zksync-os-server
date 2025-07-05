@@ -155,10 +155,11 @@ pub async fn execute_block(
 
     Ok((
         output,
-        ReplayRecord {
-            block_context: ctx,
+        ReplayRecord::new(
+            ctx,
+            command.starting_l1_priority_id,
             l1_transactions,
             l2_transactions,
-        },
+        ),
     ))
 }

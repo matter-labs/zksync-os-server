@@ -44,64 +44,14 @@ pub async fn main() {
         .init();
 
     // =========== load configs ===========
-    // todo: change with the idiomatic approach
-    let mut schema = ConfigSchema::default();
-    schema
-        .insert(&RpcConfig::DESCRIPTION, "rpc")
-        .expect("Failed to insert rpc config");
-    schema
-        .insert(&SequencerConfig::DESCRIPTION, "sequencer")
-        .expect("Failed to insert sequencer config");
-    schema
-        .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
-        .expect("Failed to insert l1_sender config");
-    schema
-        .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
-        .expect("Failed to insert l1_watcher config");
-    schema
-        .insert(&BatcherConfig::DESCRIPTION, "batcher")
-        .expect("Failed to insert batcher config");
-    schema
-        .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
-        .expect("Failed to insert prover api config");
-
-    let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
-
-    let rpc_config = repo
-        .single::<RpcConfig>()
-        .expect("Failed to load rpc config")
-        .parse()
-        .expect("Failed to parse rpc config");
-
-    let sequencer_config = repo
-        .single::<SequencerConfig>()
-        .expect("Failed to load sequencer config")
-        .parse()
-        .expect("Failed to parse sequencer config");
-
-    let l1_sender_config = repo
-        .single::<L1SenderConfig>()
-        .expect("Failed to load L1 sender config")
-        .parse()
-        .expect("Failed to parse L1 sender config");
-
-    let l1_watcher_config = repo
-        .single::<L1WatcherConfig>()
-        .expect("Failed to load L1 watcher config")
-        .parse()
-        .expect("Failed to parse L1 watcher config");
-
-    let batcher_config = repo
-        .single::<BatcherConfig>()
-        .expect("Failed to load L1 watcher config")
-        .parse()
-        .expect("Failed to parse L1 watcher config");
-
-    let prover_api_config = repo
-        .single::<ProverApiConfig>()
-        .expect("Failed to load prover api config")
-        .parse()
-        .expect("Failed to parse prover api config");
+    let (
+        rpc_config,
+        sequencer_config,
+        l1_sender_config,
+        l1_watcher_config,
+        batcher_config,
+        prover_api_config,
+    ) = build_configs();
 
     let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(3312);
 
@@ -204,19 +154,17 @@ pub async fn main() {
         wal_block = wal_block,
         canonized_block = finality_tracker.get_canonized_block(),
         tree_last_processed_block = tree_last_processed_block,
-        first_block_to_execute = first_block_to_execute,
-        "▶ Storage read. Node starting."
+        "▶ Storage read. Node starting with block {}",
+        first_block_to_execute
     );
 
     let (l1_mempool, mempool) = zksync_os_mempool::in_memory(forced_deposit_transaction());
 
     // ========== Initialize TransactionStreamProvider ===========
 
-    tracing::warn!("TODO: now we scan blockchain back for the last l1 tranasction - can take a lot of time ... ... ...");
     let next_l1_priority_id = block_replay_storage
-        .last_l1_priority_id()
-        .map(|n| n + 1)
-        .unwrap_or_default();
+        .get_replay_record(first_block_to_execute)
+        .map_or(0, |block| block.starting_l1_priority_id);
     let tx_stream_provider =
         BlockTransactionsProvider::new(next_l1_priority_id, l1_mempool.clone(), mempool.clone());
 
@@ -404,4 +352,80 @@ pub async fn main() {
             }
         }
     }
+}
+
+fn build_configs() -> (
+    RpcConfig,
+    SequencerConfig,
+    L1SenderConfig,
+    L1WatcherConfig,
+    BatcherConfig,
+    ProverApiConfig,
+) {
+    // todo: change with the idiomatic approach
+    let mut schema = ConfigSchema::default();
+    schema
+        .insert(&RpcConfig::DESCRIPTION, "rpc")
+        .expect("Failed to insert rpc config");
+    schema
+        .insert(&SequencerConfig::DESCRIPTION, "sequencer")
+        .expect("Failed to insert sequencer config");
+    schema
+        .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
+        .expect("Failed to insert l1_sender config");
+    schema
+        .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
+        .expect("Failed to insert l1_watcher config");
+    schema
+        .insert(&BatcherConfig::DESCRIPTION, "batcher")
+        .expect("Failed to insert batcher config");
+    schema
+        .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
+        .expect("Failed to insert prover api config");
+
+    let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
+
+    let rpc_config = repo
+        .single::<RpcConfig>()
+        .expect("Failed to load rpc config")
+        .parse()
+        .expect("Failed to parse rpc config");
+
+    let sequencer_config = repo
+        .single::<SequencerConfig>()
+        .expect("Failed to load sequencer config")
+        .parse()
+        .expect("Failed to parse sequencer config");
+
+    let l1_sender_config = repo
+        .single::<L1SenderConfig>()
+        .expect("Failed to load L1 sender config")
+        .parse()
+        .expect("Failed to parse L1 sender config");
+
+    let l1_watcher_config = repo
+        .single::<L1WatcherConfig>()
+        .expect("Failed to load L1 watcher config")
+        .parse()
+        .expect("Failed to parse L1 watcher config");
+
+    let batcher_config = repo
+        .single::<BatcherConfig>()
+        .expect("Failed to load L1 watcher config")
+        .parse()
+        .expect("Failed to parse L1 watcher config");
+
+    let prover_api_config = repo
+        .single::<ProverApiConfig>()
+        .expect("Failed to load prover api config")
+        .parse()
+        .expect("Failed to parse prover api config");
+    (
+        rpc_config,
+        sequencer_config,
+        l1_sender_config,
+        l1_watcher_config,
+        batcher_config,
+        prover_api_config,
+    )
 }

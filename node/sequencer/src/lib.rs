@@ -89,10 +89,11 @@ pub async fn run_sequencer_actor(
         let mut stage_started_at = Instant::now();
 
         // note: block_transaction_provider has internal mutable state: `last_processed_l1_command`
-        let prepared_cmd = block_transaction_provider.process_command(cmd);
+        let prepared_cmd = block_transaction_provider.process_command(cmd)?;
 
         tracing::info!(
             block_number = bn,
+            starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
             "▶ Prepared command in {:?}. Executing..",
             stage_started_at.elapsed()
         );

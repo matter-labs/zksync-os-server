@@ -5,6 +5,7 @@ use std::time::Duration;
 use zk_os_forward_system::run::BatchContext as BlockContext;
 use zksync_os_l1_sender::commitment::CommitBatchInfo;
 use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
+type L1TxSerialId = u64;
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from WAL
@@ -26,8 +27,40 @@ pub enum BlockCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
     pub block_context: BlockContext,
+    /// L1 transaction serial id (0-based) expected at the beginning of this block.
+    /// If `l1_transactions` is non-empty, equals to the first tx id in this block
+    /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
+    pub starting_l1_priority_id: L1TxSerialId,
+    // todo: not sure we need to have them separate here
     pub l1_transactions: Vec<L1Transaction>,
     pub l2_transactions: Vec<L2Transaction>,
+}
+
+impl ReplayRecord {
+    pub fn new(
+        block_context: BlockContext,
+        starting_l1_priority_id: L1TxSerialId,
+        l1_transactions: Vec<L1Transaction>,
+        l2_transactions: Vec<L2Transaction>,
+    ) -> Self {
+        if let Some(first_l1_tx) = l1_transactions.first() {
+            assert_eq!(
+                first_l1_tx.serial_id().0,
+                starting_l1_priority_id,
+                "First L1 tx serial id must match next_l1_priority_id"
+            );
+        }
+        assert!(
+            l1_transactions.len() + l2_transactions.len() > 0,
+            "Block must contain at least one tx"
+        );
+        Self {
+            block_context,
+            starting_l1_priority_id,
+            l1_transactions,
+            l2_transactions,
+        }
+    }
 }
 
 /// Better name wanted!
@@ -44,6 +77,9 @@ pub struct PreparedBlockCommand {
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
     pub tx_source: BoxStream<'static, UnifiedTransaction>,
+    /// L1 transaction serial id expected at the beginning of this block.
+    /// Not used in execution directly, but required to construct ReplayRecord
+    pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
 }
 
@@ -106,10 +142,11 @@ impl Display for BlockCommand {
         match self {
             BlockCommand::Replay(record) => write!(
                 f,
-                "Replay block {} ({} L1 txs, {} L2 txs)",
+                "Replay block {} ({} L1 txs, {} L2 txs); strating l1 priority id: {}",
                 record.block_context.block_number,
                 record.l1_transactions.len(),
-                record.l2_transactions.len()
+                record.l2_transactions.len(),
+                record.starting_l1_priority_id,
             ),
             BlockCommand::Produce(context, duration) => write!(
                 f,
