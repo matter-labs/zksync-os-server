@@ -1,13 +1,12 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{
-    InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
-    UnifiedTransaction,
+    InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy, UnifiedTransaction,
 };
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
 use itertools::{Either, Itertools};
-use std::{pin::Pin};
+use std::pin::Pin;
 use tokio::time::Sleep;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;

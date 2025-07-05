@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 /// NOTE: UNFINISHED FEATURE- PLEASE IGNORE
-/// 
+///
 /// Holds block numbers for various finality stages
 #[derive(Debug, Clone)]
 pub struct FinalityTracker {

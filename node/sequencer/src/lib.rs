@@ -122,7 +122,7 @@ pub async fn run_sequencer_actor(
                 .iter()
                 .map(|(k, v, _)| (*k, v)),
         )?;
-        
+
         tracing::info!(
             block_number = bn,
             "▶ Added to state in {:?}. Adding to repos...",
