@@ -308,6 +308,25 @@ pub async fn main() {
     // ======= Run tasks ===========
 
     tokio::select! {
+        // ── Sequencer task ───────────────────────────────────────────────
+        res = run_sequencer_actor(
+            first_block_to_execute,
+            blocks_for_batcher_sender,
+            tree_sender,
+            tx_stream_provider,
+            state_handle.clone(),
+            block_replay_storage.clone(),
+            repositories.clone(),
+            finality_tracker.clone(),
+            sequencer_config
+        ) => {
+            match res {
+                Ok(_)  => tracing::warn!("Sequencer server unexpectedly exited"),
+                Err(e) => tracing::error!("Sequencer server failed: {e:#}"),
+            }
+        }
+
+
         // todo: only start after the sequencer caught up?
         // ── JSON-RPC task ────────────────────────────────────────────────
         res = run_jsonrpsee_server(
@@ -316,7 +335,8 @@ pub async fn main() {
             finality_tracker.clone(),
             state_handle.clone(),
             mempool.clone(),
-            block_replay_storage.clone()) => {
+            block_replay_storage.clone()
+        ) => {
             match res {
                 Ok(_)  => tracing::warn!("JSON-RPC server unexpectedly exited"),
                 Err(e) => tracing::error!("JSON-RPC server failed: {e:#}"),
@@ -366,24 +386,6 @@ pub async fn main() {
             match res {
                 Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
                 Err(e) => tracing::error!("L1 sender failed: {e:#}"),
-            }
-        }
-
-        // ── Sequencer task ───────────────────────────────────────────────
-        res = run_sequencer_actor(
-            first_block_to_execute,
-            blocks_for_batcher_sender,
-            tree_sender,
-            tx_stream_provider,
-            state_handle.clone(),
-            block_replay_storage,
-            repositories,
-            finality_tracker,
-            sequencer_config
-        ) => {
-            match res {
-                Ok(_)  => tracing::warn!("Sequencer server unexpectedly exited"),
-                Err(e) => tracing::error!("Sequencer server failed: {e:#}"),
             }
         }
 

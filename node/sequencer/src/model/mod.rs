@@ -113,7 +113,7 @@ impl Display for BlockCommand {
             ),
             BlockCommand::Produce(context, duration) => write!(
                 f,
-                "Produce block {} target block time: {:?}",
+                "Produce block {} target block properties: {:?}",
                 context.block_number, duration
             ),
         }
