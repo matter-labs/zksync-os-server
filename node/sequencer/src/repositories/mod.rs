@@ -64,11 +64,18 @@ impl RepositoryManager {
     pub fn add_block_output_to_repos(
         &self,
         block_number: u64,
-        block_output: BatchOutput,
+        mut block_output: BatchOutput,
         l1_transactions: Vec<L1Transaction>,
         l2_transactions: Vec<L2Transaction>,
     ) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
+
+        // Drop rejected transactions from the block output
+        block_output.tx_results = block_output
+            .tx_results
+            .into_iter()
+            .filter(|result| result.is_ok())
+            .collect();
 
         // Extract account properties from the block output
         let account_properties = extract_account_properties(&block_output);
@@ -78,17 +85,23 @@ impl RepositoryManager {
             .add_diff(block_number, account_properties);
 
         // Add transaction receipts to the transaction receipt repository
-        let mut index = 0;
+        let mut tx_index = 0;
+        let mut log_index = 0;
         for _l1_tx in l1_transactions.into_iter() {
-            index += 1;
+            tx_index += 1;
             // TODO: Convert into alloy receipt once we get rid of `zksync_types::L1Tx`
         }
+
+        let mut block_bloom = alloy::primitives::Bloom::default();
         for l2_tx in l2_transactions.into_iter() {
             let hash = Bytes32::from(l2_tx.hash().0);
-            let api_tx = l2_transaction_to_api_data(&block_output, index, l2_tx);
+            let api_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
+            log_index += api_tx.receipt.logs().len();
+            tx_index += 1;
+            block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
             self.transaction_receipt_repository.insert(hash, api_tx);
-            index += 1;
         }
+        block_output.header.logs_bloom = block_bloom.into_array();
 
         // Add the full block output to the block receipt repository
         self.block_receipt_repository

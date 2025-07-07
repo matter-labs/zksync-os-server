@@ -39,8 +39,8 @@ impl BlockReceiptRepository {
         }
     }
 
-    /// Retrieve the `BatchOutput` for `block`, if still retained.
-    pub fn get_by_block(&self, block: u64) -> Option<BatchOutput> {
-        self.receipts.get(&block).map(|r| r.value().clone())
+    /// Retrieve the `BatchOutput` for `number`, if still retained.
+    pub fn get_by_number(&self, number: u64) -> Option<BatchOutput> {
+        self.receipts.get(&number).map(|r| r.value().clone())
     }
 }

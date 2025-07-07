@@ -1,6 +1,6 @@
 use alloy::consensus::transaction::TransactionInfo;
 use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, Transaction, TxType};
-use alloy::primitives::{Address, BlockHash};
+use alloy::primitives::{Address, BlockHash, LogData, B256};
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_ee::utils::Bytes32;
@@ -49,6 +49,16 @@ impl TransactionReceiptRepository {
     pub fn contains(&self, tx_hash: &Bytes32) -> bool {
         self.receipts.contains_key(tx_hash)
     }
+
+    pub fn get_by_block_number(&self, block_number: u64) -> Vec<TransactionApiData> {
+        self.receipts
+            .iter()
+            .filter_map(|entry| {
+                let tx_data = entry.value();
+                (tx_data.transaction.block_number == Some(block_number)).then(|| tx_data.clone())
+            })
+            .collect()
+    }
 }
 
 impl Default for TransactionReceiptRepository {
@@ -60,22 +70,42 @@ impl Default for TransactionReceiptRepository {
 pub fn l2_transaction_to_api_data(
     block_output: &BatchOutput,
     index: usize,
+    log_index: usize,
     tx: L2Transaction,
 ) -> TransactionApiData {
     let tx_hash = *tx.hash();
-    let tx_output = block_output
-        .tx_results
-        .iter()
-        .filter_map(|result| result.as_ref().ok())
-        .nth(index)
-        .expect("mismatch in number of transactions and results");
+    let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
+    let logs = tx_output
+        .logs
+        .iter()
+        .enumerate()
+        .map(|(i, log)| {
+            let inner = alloy::primitives::Log {
+                address: Address::from(log.address.to_be_bytes()),
+                data: LogData::new(
+                    log.topics.iter().map(|topic| B256::from(topic.as_u8_array())).collect(),
+                    log.data.clone().into()
+                )
+                    .unwrap(),
+            };
+            alloy::rpc::types::Log {
+                inner,
+                block_hash: Some(BlockHash::default()), // todo
+                block_number: Some(block_output.header.number),
+                block_timestamp: Some(block_output.header.timestamp),
+                transaction_hash: Some(tx_hash),
+                transaction_index: Some(index as u64),
+                log_index: Some((log_index + i) as u64),
+                removed: false,
+            }
+        })
+        .collect::<Vec<_>>();
     let tx_receipt = Receipt {
         status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
         // todo
         cumulative_gas_used: 7777,
-        // todo
-        logs: vec![],
+        logs,
     };
     let logs_bloom = tx_receipt.bloom_slow();
     let receipt_with_bloom = ReceiptWithBloom::new(tx_receipt, logs_bloom);
@@ -91,7 +121,7 @@ pub fn l2_transaction_to_api_data(
         transaction_hash: tx_hash,
         transaction_index: Some(index as u64),
         // block_hash: Some(BlockHash::from(block_output.header.hash())),
-        block_hash: Some(BlockHash::default()),
+        block_hash: Some(BlockHash::default()), // todo
         block_number: Some(block_output.header.number),
         gas_used: tx_output.gas_used,
         effective_gas_price: block_output.header.base_fee_per_gas as u128,
