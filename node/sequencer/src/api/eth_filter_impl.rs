@@ -4,6 +4,7 @@ use alloy::eips::BlockId;
 use alloy::primitives::Bloom;
 use alloy::rpc::types::{Filter, FilterBlockOption, Log};
 use jsonrpsee::core::RpcResult;
+use jsonrpsee::types::ErrorObjectOwned;
 
 impl EthNamespace {
     pub async fn logs_impl(&self, filter: Filter) -> RpcResult<Vec<Log>> {
@@ -28,6 +29,20 @@ impl EthNamespace {
             to
         );
 
+        if let Some(max_blocks_per_filter) = self
+            .query_limits
+            .max_blocks_per_filter
+            .filter(|limit| to - from > *limit)
+        {
+            let message = format!("query exceeds max block range {max_blocks_per_filter}");
+            return Err(ErrorObjectOwned::owned(
+                jsonrpsee::types::error::INVALID_PARAMS_CODE,
+                message,
+                None::<()>,
+            ));
+        }
+
+        let is_multi_block_range = from != to;
         let total_scanned_blocks = to - from + 1;
         let mut tp_scanned_blocks = 0u64;
         let mut fp_scanned_blocks = 0u64;
@@ -63,6 +78,23 @@ impl EthNamespace {
                         tp_scanned_blocks += 1;
                     } else {
                         fp_scanned_blocks += 1;
+                    }
+
+                    // size check but only if range is multiple blocks, so we always return all
+                    // logs of a single block
+                    if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response {
+                        if is_multi_block_range && logs.len() > max_logs_per_response {
+                            let suggested_to = number.saturating_sub(1);
+                            let message = format!(
+                                "query exceeds max results {}, retry with the range {}-{}",
+                                max_logs_per_response, from, suggested_to
+                            );
+                            return Err(ErrorObjectOwned::owned(
+                                jsonrpsee::types::error::INVALID_PARAMS_CODE,
+                                message,
+                                None::<()>,
+                            ));
+                        }
                     }
                 } else {
                     negative_scanned_blocks += 1;

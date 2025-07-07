@@ -3,6 +3,7 @@ mod eth_filter_impl;
 mod eth_impl;
 mod metrics;
 mod tx_handler;
+mod types;
 
 use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;

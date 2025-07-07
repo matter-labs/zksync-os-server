@@ -1,3 +1,4 @@
+use super::types::QueryLimits;
 use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::resolve_block_id;
@@ -36,7 +37,8 @@ pub(crate) struct EthNamespace {
     pub(super) repository_manager: RepositoryManager,
 
     pub(super) finality_info: FinalityTracker,
-    chain_id: u64,
+    pub(super) chain_id: u64,
+    pub(super) query_limits: QueryLimits,
 }
 
 impl EthNamespace {
@@ -61,6 +63,8 @@ impl EthNamespace {
             config.max_tx_input_bytes,
         );
 
+        let query_limits =
+            QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         let eth_call_handler = EthCallHandler::new(
             config,
             finality_tracker.clone(),
@@ -74,6 +78,7 @@ impl EthNamespace {
             repository_manager,
             finality_info: finality_tracker,
             chain_id: CHAIN_ID,
+            query_limits,
         }
     }
 }
