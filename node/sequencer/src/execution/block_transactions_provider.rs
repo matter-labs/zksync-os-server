@@ -125,11 +125,9 @@ impl BlockTransactionsProvider {
         block_output: &BatchOutput,
         replay_record: &ReplayRecord,
     ) {
-        replay_record
-            .l1_transactions
-            .last()
-            .iter()
-            .for_each(|tx| self.next_l1_priority_id = tx.common_data.serial_id.0 + 1);
+        if let Some(last_l1_transaction) = replay_record.l1_transactions.last() {
+            self.next_l1_priority_id = last_l1_transaction.common_data.serial_id.0 + 1
+        }
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
         //       so far it looks like below is sufficient
