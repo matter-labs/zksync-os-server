@@ -20,6 +20,13 @@ zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 
+reth-chainspec = { workspace = true }
+reth-trie-common = { workspace = true }
+reth-primitives.workspace = true
+reth-primitives-traits = {workspace = true }
+reth-revm = { workspace = true }
+reth-storage-api = { workspace = true }
+
 zksync_storage.workspace = true
 
 anyhow.workspace = true

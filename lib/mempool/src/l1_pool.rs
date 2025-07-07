@@ -2,6 +2,9 @@ use dashmap::DashMap;
 use std::fmt::Debug;
 use zksync_os_types::L1Transaction;
 
+// todo: not sure we need this separate from L1Watcher -
+// todo: perhaps we should just add a `transactions: DashMap<u64, L1Transaction>` to L1Watcher?
+
 #[auto_impl::auto_impl(&, Box, Arc)]
 pub trait L1Pool: Send + Sync + Debug + 'static {
     /// Alternative for [`Clone::clone`] that is object safe.

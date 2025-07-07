@@ -1,5 +1,6 @@
 use alloy::consensus::transaction::{Recovered, RlpEcdsaEncodableTx};
 use alloy::consensus::{EthereumTxEnvelope, Transaction, TxEip4844Variant};
+use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::primitives::{Address, B256, U256};
 use alloy::sol_types::SolValue;
 use zksync_types::bytecode::BytecodeHash;
@@ -9,10 +10,12 @@ use zksync_types::l1::L1Tx;
 pub type L1Transaction = L1Tx;
 
 // TODO: document
-pub type L2Transaction = Recovered<L2Envelope>;
+pub type L2Transaction<Eip4844 = TxEip4844Variant<BlobTransactionSidecarVariant>> =
+    Recovered<L2Envelope<Eip4844>>;
 
 // TODO: document
-pub type L2Envelope<Eip4844 = TxEip4844Variant> = EthereumTxEnvelope<Eip4844>;
+pub type L2Envelope<Eip4844 = TxEip4844Variant<BlobTransactionSidecarVariant>> =
+    EthereumTxEnvelope<Eip4844>;
 
 pub trait EncodableZksyncOs {
     /// Encode transaction in ZKsync OS generic transaction format. See

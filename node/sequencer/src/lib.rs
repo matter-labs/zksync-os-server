@@ -12,6 +12,7 @@ pub mod finality;
 pub mod model;
 pub mod prover_api;
 pub mod repositories;
+pub mod reth_state;
 pub mod tree_manager;
 
 use crate::block_replay_storage::BlockReplayStorage;
@@ -20,7 +21,10 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::{
     block_context_provider::BlockContextProvider,
-    execution::{block_executor::execute_block, metrics::EXECUTION_METRICS},
+    execution::{
+        block_executor::execute_block, block_transactions_provider::BlockTransactionsProvider,
+        metrics::EXECUTION_METRICS,
+    },
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
@@ -28,8 +32,7 @@ use futures::stream::{BoxStream, StreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
-use zk_os_forward_system::run::BatchOutput;
-use zksync_os_mempool::{DynL1Pool, DynPool};
+use zk_os_forward_system::run::BatchOutput as BlockOutput;
 use zksync_os_state::StateHandle;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
@@ -55,149 +58,143 @@ const CHAIN_ID: u64 = 270;
 pub async fn run_sequencer_actor(
     block_to_start: u64,
 
-    batcher_sink: Sender<(BatchOutput, ReplayRecord)>,
-    tree_sink: Sender<BatchOutput>,
+    batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
+    tree_sink: Sender<BlockOutput>,
 
-    l1_mempool: DynL1Pool,
-    mempool: DynPool,
+    mut block_transaction_provider: BlockTransactionsProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
+    // todo: do it outside - as one of the sinks (only needed in API)
     repositories: RepositoryManager,
     finality_tracker: FinalityTracker,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(2);
+    tracing::info!(block_to_start, "starting sequencer");
 
-    /* ------------------------------------------------------------------ */
-    /*  Stage 1: execute VM and send results                              */
-    /* ------------------------------------------------------------------ */
-    let exec_loop = {
-        let wal = wal.clone();
-        let state = state.clone();
-        // TODO: This doesn't match well with consensus. Consider making `last_l1_priority_id` a part
-        //       of `BlockCommand::Replay`.
-        let mut next_l1_priority_id = wal.last_l1_priority_id().map(|n| n + 1).unwrap_or_default();
-        tracing::info!(block_to_start, next_l1_priority_id, "starting sequencer");
+    let mut stream = command_source(
+        &wal,
+        block_to_start,
+        sequencer_config.block_time,
+        sequencer_config.max_transactions_in_block,
+    );
 
-        async move {
-            let mut stream = command_source(&wal, block_to_start, sequencer_config.block_time);
+    while let Some(cmd) = stream.next().await {
+        // todo: also report full latency between command invocations
+        let bn = cmd.block_number();
 
-            while let Some(cmd) = stream.next().await {
-                // todo: also report full latency between command invocations
-                let bn = cmd.block_number();
+        tracing::info!(
+            block = bn,
+            cmd = cmd.to_string(),
+            "▶ starting command. Turning into PreparedCommand.."
+        );
+        let mut stage_started_at = Instant::now();
 
-                let mut stage_started_at = Instant::now();
-                tracing::info!(block = bn, cmd = cmd.to_string(), "▶ starting command");
-                let (batch_out, replay) = execute_block(
-                    cmd,
-                    &mut next_l1_priority_id,
-                    l1_mempool.clone(),
-                    Box::into_pin(mempool.clone()),
-                    state.clone(),
-                    sequencer_config.max_transactions_in_block,
-                )
+        // note: block_transaction_provider has internal mutable state: `last_processed_l1_command`
+        let prepared_cmd = block_transaction_provider.process_command(cmd)?;
+
+        tracing::info!(
+            block_number = bn,
+            starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
+            "▶ Prepared command in {:?}. Executing..",
+            stage_started_at.elapsed()
+        );
+        stage_started_at = Instant::now();
+
+        let (block_output, replay_record): (BlockOutput, ReplayRecord) =
+            execute_block(prepared_cmd, state.clone())
                 .await
                 .context("execute_block")?;
-                tracing::info!(
-                    block_number = bn,
-                    l1_transactions = replay.l1_transactions.len(),
-                    l2_transactions = replay.l2_transactions.len(),
-                    preimages = batch_out.published_preimages.len(),
-                    storage_writes = batch_out.storage_writes.len(),
-                    "▶ Executed in {:?}. Adding to state...",
-                    stage_started_at.elapsed()
-                );
 
-                stage_started_at = Instant::now();
-                // important: this cannot be done async.
-                // to start next block, we need to have the StorageView as of the end of previous block.
-                state.add_block_result(
-                    bn,
-                    batch_out.storage_writes.clone(),
-                    batch_out
-                        .published_preimages
-                        .iter()
-                        .map(|(k, v, _)| (*k, v)),
-                )?;
-                tracing::info!(
-                    block_number = bn,
-                    "▶ Added to state in {:?}. Sending to canonise queue...",
-                    stage_started_at.elapsed()
-                );
-                tx.send((batch_out, replay))
-                    .await
-                    .map_err(|_| anyhow::anyhow!("canonise loop stopped"))?;
+        tracing::info!(
+            block_number = bn,
+            l1_transactions = replay_record.l1_transactions.len(),
+            l2_transactions = replay_record.l2_transactions.len(),
+            preimages = block_output.published_preimages.len(),
+            storage_writes = block_output.storage_writes.len(),
+            "▶ Executed in {:?}. Adding to state...",
+            stage_started_at.elapsed()
+        );
+        stage_started_at = Instant::now();
 
-                EXECUTION_METRICS.sealed_block[&"execute"].set(bn);
-            }
-            Ok::<(), anyhow::Error>(())
-        }
-    };
+        state.add_block_result(
+            bn,
+            block_output.storage_writes.clone(),
+            block_output
+                .published_preimages
+                .iter()
+                .map(|(k, v, _)| (*k, v)),
+        )?;
 
-    /* ------------------------------------------------------------------ */
-    /*  Stage 2: canonise                                                 */
-    /* ------------------------------------------------------------------ */
-    let canonise_loop = async {
-        while let Some((batch_out, replay)) = rx.recv().await {
-            let bn = batch_out.header.number;
+        tracing::info!(
+            block_number = bn,
+            "▶ Added to state in {:?}. Reporting back to block_transaction_provider (mempools)...",
+            stage_started_at.elapsed()
+        );
+        stage_started_at = Instant::now();
 
-            let mut stage_started_at = Instant::now();
-            tracing::info!(block = bn, "▶ Starting canonization - adding to repos...");
+        // TODO: would updating mempool in parallel with state make sense?
+        block_transaction_provider.on_canonical_state_change(&block_output, &replay_record);
 
-            // todo:  this is only used by api - can and should be done async,
-            //  but need to be careful with `block_number=latest` then -
-            //  we need to make sure that the block is added to the repos before we return its number as `latest`
+        tracing::info!(
+            block_number = bn,
+            "▶ Reported to block_transaction_provider in {:?}. Adding to repos...",
+            stage_started_at.elapsed()
+        );
+        stage_started_at = Instant::now();
 
-            repositories.add_block_output_to_repos(
-                bn,
-                batch_out.clone(),
-                replay.l1_transactions.clone(),
-                replay.l2_transactions.clone(),
-            );
+        // todo:  this is only used by api - can and should be done async, as one of the sink subscribers
+        //  but need to be careful with `block_number=latest` then -
+        //  we need to make sure that the block is added to the repos before we return its number as `latest`
+        //
+        repositories.add_block_output_to_repos(
+            bn,
+            block_output.clone(),
+            replay_record.l1_transactions.clone(),
+            replay_record.l2_transactions.clone(),
+        );
 
-            tracing::info!(
-                block_number = bn,
-                "▶ Added to repos in {:?}. Adding to wal...",
-                stage_started_at.elapsed()
-            );
+        tracing::info!(
+            block_number = bn,
+            "▶ Added to repos in {:?}. Adding to wal...",
+            stage_started_at.elapsed()
+        );
 
-            stage_started_at = Instant::now();
-            wal.append_replay(replay.clone());
-            finality_tracker.advance_canonized(bn);
+        stage_started_at = Instant::now();
 
-            tracing::info!(
-                block_number = bn,
-                "▶ Added to wal and canonized in {:?}. Sending to state diffs sink...",
-                stage_started_at.elapsed()
-            );
+        wal.append_replay(replay_record.clone());
+        finality_tracker.advance_canonized(bn);
 
-            stage_started_at = Instant::now();
+        tracing::info!(
+            block_number = bn,
+            "▶ Added to wal and canonized in {:?}. Sending to sinks...",
+            stage_started_at.elapsed()
+        );
+        stage_started_at = Instant::now();
 
-            batcher_sink.send((batch_out.clone(), replay)).await?;
-            tree_sink.send(batch_out).await?;
+        batcher_sink
+            .send((block_output.clone(), replay_record))
+            .await?;
+        tree_sink.send(block_output).await?;
 
-            tracing::info!(
-                block_number = bn,
-                "✔ sent to sinks in {:?}",
-                stage_started_at.elapsed()
-            );
+        tracing::info!(
+            block_number = bn,
+            "✔ sent to sinks in {:?}",
+            stage_started_at.elapsed()
+        );
 
-            EXECUTION_METRICS.sealed_block[&"canonize"].set(bn);
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-
-    tokio::select! {
-        res = exec_loop      => res?,
-        res = canonise_loop  => res?,
+        EXECUTION_METRICS.sealed_block[&"execute"].set(bn);
     }
-    Ok(())
+    Ok::<(), anyhow::Error>(())
 }
 
+/// In decentralized case, consensus will provide a stream of
+/// interleaved Replay and Produce commands instead.
+/// Currently it's a stream of Replays followed by Produces
 fn command_source(
     block_replay_wal: &BlockReplayStorage,
     block_to_start: u64,
     block_time: Duration,
+    block_size_limit: usize,
 ) -> BoxStream<BlockCommand> {
     let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
     tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
@@ -212,7 +209,7 @@ fn command_source(
         futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
             Some((
                 BlockContextProvider
-                    .get_produce_command(block_number, block_time)
+                    .get_produce_command(block_number, block_time, block_size_limit)
                     .await,
                 block_number + 1,
             ))
