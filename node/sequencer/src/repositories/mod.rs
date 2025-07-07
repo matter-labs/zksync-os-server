@@ -71,9 +71,7 @@ impl RepositoryManager {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
 
         // Drop rejected transactions from the block output
-        block_output
-            .tx_results
-            .retain(|result| result.is_ok());
+        block_output.tx_results.retain(|result| result.is_ok());
 
         // Extract account properties from the block output
         let account_properties = extract_account_properties(&block_output);

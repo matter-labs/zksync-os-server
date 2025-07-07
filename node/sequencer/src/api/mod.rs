@@ -1,4 +1,5 @@
 mod eth_call_handler;
+mod eth_filter_impl;
 mod eth_impl;
 mod metrics;
 mod tx_handler;
