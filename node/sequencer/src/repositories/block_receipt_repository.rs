@@ -1,3 +1,4 @@
+use alloy::primitives::TxHash;
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_os_forward_system::run::BatchOutput;
@@ -11,7 +12,7 @@ pub struct BlockReceiptRepository {
     /// Maximum number of entries to retain.
     blocks_to_retain: usize,
     /// Map from block number → `BatchOutput`.
-    receipts: Arc<DashMap<u64, BatchOutput>>,
+    receipts: Arc<DashMap<u64, (BatchOutput, Vec<TxHash>)>>,
 }
 
 impl BlockReceiptRepository {
@@ -27,9 +28,9 @@ impl BlockReceiptRepository {
     ///
     /// Must be called with `block == latest_block() + 1`. Evicts the
     /// oldest entry if we exceed `blocks_to_retain`.
-    pub fn insert(&self, block: u64, output: BatchOutput) {
+    pub fn insert(&self, block: u64, output: BatchOutput, tx_hashes: Vec<TxHash>) {
         // Store the new receipt
-        self.receipts.insert(block, output);
+        self.receipts.insert(block, (output, tx_hashes));
         // Evict the oldest if over capacity
         // todo: assumes asceding order and no gaps - it holds, but is error-prone - rewrite
         // (consider storing bounds explicitly or infer from `receipts` map)
@@ -40,7 +41,7 @@ impl BlockReceiptRepository {
     }
 
     /// Retrieve the `BatchOutput` for `block`, if still retained.
-    pub fn get_by_block(&self, block: u64) -> Option<BatchOutput> {
+    pub fn get_by_block(&self, block: u64) -> Option<(BatchOutput, Vec<TxHash>)> {
         self.receipts.get(&block).map(|r| r.value().clone())
     }
 }

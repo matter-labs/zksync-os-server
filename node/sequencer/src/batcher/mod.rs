@@ -52,9 +52,9 @@ impl Batcher {
         num_workers: usize,
     ) -> Self {
         let bin_path = if enable_logging {
-            "app_logging_enabled.bin"
+            "../app_logging_enabled.bin"
         } else {
-            "app.bin"
+            "../app.bin"
         };
         Self {
             block_sender,
