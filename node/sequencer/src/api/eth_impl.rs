@@ -8,9 +8,10 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
+use alloy::consensus::BlockBody;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
@@ -114,10 +115,30 @@ impl EthApiServer for EthNamespace {
 
     async fn block_by_number(
         &self,
-        _number: BlockNumberOrTag,
-        _full: bool,
-    ) -> RpcResult<Option<Block>> {
-        todo!()
+        number: BlockNumberOrTag,
+        full: bool,
+    ) -> RpcResult<Option<Block<TxHash>>> {
+        assert!(!full);
+        let number = resolve_block_id(Some(BlockId::Number(number)), &self.finality_info);
+        Ok(self
+            .repository_manager
+            .block_receipt_repository
+            .get_by_block(number)
+            .map(|(block_output, tx_hashes)| {
+                let header = alloy::consensus::Header {
+                    number: block_output.header.number,
+                    timestamp: block_output.header.timestamp,
+                    gas_limit: block_output.header.gas_limit,
+                    base_fee_per_gas: Some(block_output.header.base_fee_per_gas),
+                    ..Default::default()
+                };
+                let body = BlockBody::<TxHash> {
+                    transactions: tx_hashes,
+                    ..Default::default()
+                };
+                let block = alloy::consensus::Block::new(header, body);
+                Block::from_consensus(block, None)
+            }))
     }
 
     async fn block_transaction_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
@@ -341,11 +362,20 @@ impl EthApiServer for EthNamespace {
 
     async fn fee_history(
         &self,
-        _block_count: U64,
+        block_count: U64,
         _newest_block: BlockNumberOrTag,
         _reward_percentiles: Option<Vec<f64>>,
     ) -> RpcResult<FeeHistory> {
-        todo!()
+        // todo: real implementation
+        let block_count: usize = block_count.try_into().unwrap();
+        Ok(FeeHistory {
+            base_fee_per_gas: vec![10000u128; block_count],
+            gas_used_ratio: vec![0.5; block_count],
+            base_fee_per_blob_gas: vec![],
+            blob_gas_used_ratio: vec![],
+            oldest_block: 0,
+            reward: None,
+        })
     }
 
     async fn is_mining(&self) -> RpcResult<bool> {

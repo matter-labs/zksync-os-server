@@ -17,6 +17,7 @@ use crate::repositories::account_property_repository::extract_account_properties
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::l2_transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
+use alloy::primitives::TxHash;
 pub use block_receipt_repository::BlockReceiptRepository;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_ee::utils::Bytes32;
@@ -69,6 +70,11 @@ impl RepositoryManager {
         l2_transactions: Vec<L2Transaction>,
     ) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let tx_hashes = l1_transactions
+            .iter()
+            .map(|tx| TxHash::from(tx.hash().0))
+            .chain(l2_transactions.iter().map(|tx| *tx.hash()))
+            .collect();
 
         // Extract account properties from the block output
         let account_properties = extract_account_properties(&block_output);
@@ -92,7 +98,7 @@ impl RepositoryManager {
 
         // Add the full block output to the block receipt repository
         self.block_receipt_repository
-            .insert(block_number, block_output);
+            .insert(block_number, block_output, tx_hashes);
         latency.observe();
     }
 }
