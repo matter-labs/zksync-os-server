@@ -5,11 +5,11 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
-use zksync_os_types::L2Transaction;
+use zksync_os_types::{L2Envelope, L2Transaction};
 
 #[derive(Clone, Debug)]
 pub struct TransactionApiData {
-    pub transaction: alloy::rpc::types::Transaction,
+    pub transaction: alloy::rpc::types::Transaction<L2Envelope>,
     pub receipt: alloy::rpc::types::TransactionReceipt,
 }
 

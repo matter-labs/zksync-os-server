@@ -28,6 +28,7 @@ use zksync_os_sequencer::batcher::Batcher;
 use zksync_os_sequencer::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use zksync_os_sequencer::prover_api::prover_job_manager::ProverJobManager;
 use zksync_os_sequencer::prover_api::prover_server;
+use zksync_os_sequencer::reth_state::ZkClient;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -158,7 +159,10 @@ pub async fn main() {
         first_block_to_execute
     );
 
-    let (l1_mempool, mempool) = zksync_os_mempool::in_memory(forced_deposit_transaction());
+    let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
+        ZkClient::new(repositories.clone()),
+        forced_deposit_transaction(),
+    );
 
     // ========== Initialize TransactionStreamProvider ===========
 
@@ -166,11 +170,11 @@ pub async fn main() {
         .get_replay_record(first_block_to_execute)
         .map_or(0, |block| block.starting_l1_priority_id);
     let tx_stream_provider =
-        BlockTransactionsProvider::new(next_l1_priority_id, l1_mempool.clone(), mempool.clone());
+        BlockTransactionsProvider::new(next_l1_priority_id, l1_mempool.clone(), l2_mempool.clone());
 
     // ========== Initialize L1 watcher (fallible) ===========
 
-    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone()).await;
+    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool).await;
     let _l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -282,7 +286,7 @@ pub async fn main() {
             repositories.clone(),
             finality_tracker.clone(),
             state_handle.clone(),
-            mempool.clone(),
+            l2_mempool,
             block_replay_storage.clone()
         ) => {
             match res {
