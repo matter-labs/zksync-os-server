@@ -52,8 +52,11 @@ jobs:
     - name: Run clippy
       run: ci_run cargo clippy --all-targets --all-features -- -D warnings
 
-    - name: Run tests
-      run: ci_run cargo test --verbose
+    - name: Run unit tests
+      run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
+
+    - name: Run integration tests
+      run: ci_run cargo test --verbose -p zksync_os_integration_tests
 
     - name: Show sccache logs
       if: always()
