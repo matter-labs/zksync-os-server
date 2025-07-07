@@ -1,4 +1,4 @@
-name: CI
+name: Integration Tests
 
 on:
   push:
@@ -12,9 +12,9 @@ env:
   PASSED_ENV_VARS: RUST_BACKTRACE
 
 jobs:
-  build-and-test:
-    name: Build and Test
-    runs-on: matterlabs-ci-runner-highmem-long
+  integration-tests:
+    name: Integration Tests
+    runs-on: matterlabs-ci-runner-ultra-performance
 
     steps:
     - name: Checkout code
@@ -45,18 +45,19 @@ jobs:
       shell: bash
       run: ci_run sccache --start-server
 
-    - name: Check formatting
-      run: ci_run cargo fmt --all -- --check
-
-    - name: Build project
-      run: ci_run cargo build --verbose --all-targets --workspace --exclude zksync_os_integration_tests
-
     # todo: move linting for both core and integration-tests to a separate job
     - name: Run clippy
-      run: ci_run cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings
+      run: ci_run cargo clippy --all-targets --all-features -p zksync_os_integration_tests -- -D warnings
 
-    - name: Run unit tests
-      run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
+    - name: Install foundry
+      run: |
+        ci_run wget https://foundry.paradigm.xyz -O foundryup.sh
+        ci_run bash foundryup.sh
+        ci_run /root/.foundry/bin/foundryup
+        echo /root/.foundry/bin >> $GITHUB_PATH
+
+    - name: Run integration tests
+      run: ci_run cargo test --verbose -p zksync_os_integration_tests
 
     - name: Show sccache logs
       if: always()
