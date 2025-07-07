@@ -9204,23 +9204,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync_integration_tests"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "fs2",
- "futures",
- "tempfile",
- "test-log",
- "tokio",
- "zksync_os_contract_interface",
- "zksync_os_l1_sender",
- "zksync_os_l1_watcher",
- "zksync_os_sequencer",
-]
-
-[[package]]
 name = "zksync_mini_merkle_tree"
 version = "28.1.0-non-semver-compat"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9236,6 +9219,23 @@ name = "zksync_os_contract_interface"
 version = "0.1.0"
 dependencies = [
  "alloy",
+]
+
+[[package]]
+name = "zksync_os_integration_tests"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "fs2",
+ "futures",
+ "tempfile",
+ "test-log",
+ "tokio",
+ "zksync_os_contract_interface",
+ "zksync_os_l1_sender",
+ "zksync_os_l1_watcher",
+ "zksync_os_sequencer",
 ]
 
 [[package]]
