@@ -14,6 +14,7 @@ publish = false
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_sequencer.workspace = true
+zksync_os_contract_interface.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand"] }
 anyhow.workspace = true
@@ -23,3 +24,4 @@ tempfile.workspace = true
 
 [dev-dependencies]
 test-log.workspace = true
+futures.workspace = true

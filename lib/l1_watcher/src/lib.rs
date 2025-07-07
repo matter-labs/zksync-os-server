@@ -94,6 +94,7 @@ impl L1Watcher {
         let priority_txs = self.process_l1_blocks(from_block, to_block).await?;
         for tx in priority_txs {
             tracing::debug!(
+                id = tx.common_data.serial_id.0,
                 hash = ?tx.hash(),
                 "adding new priority transaction to mempool",
             );

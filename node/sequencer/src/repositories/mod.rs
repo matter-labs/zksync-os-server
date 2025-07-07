@@ -15,7 +15,9 @@ pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
 use crate::repositories::metrics::REPOSITORIES_METRICS;
-use crate::repositories::transaction_receipt_repository::l2_transaction_to_api_data;
+use crate::repositories::transaction_receipt_repository::{
+    l1_transaction_to_api_data, l2_transaction_to_api_data,
+};
 pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::TxHash;
 pub use block_receipt_repository::BlockReceiptRepository;
@@ -85,9 +87,11 @@ impl RepositoryManager {
 
         // Add transaction receipts to the transaction receipt repository
         let mut index = 0;
-        for _l1_tx in l1_transactions.into_iter() {
+        for l1_tx in l1_transactions.into_iter() {
+            let hash = Bytes32::from(l1_tx.hash().0);
+            let api_tx = l1_transaction_to_api_data(&block_output, index, l1_tx);
+            self.transaction_receipt_repository.insert(hash, api_tx);
             index += 1;
-            // TODO: Convert into alloy receipt once we get rid of `zksync_types::L1Tx`
         }
         for l2_tx in l2_transactions.into_iter() {
             let hash = Bytes32::from(l2_tx.hash().0);
