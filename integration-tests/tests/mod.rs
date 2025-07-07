@@ -5,9 +5,9 @@ use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::TransactionRequest;
 use std::str::FromStr;
-use zksync_integration_tests::Tester;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_integration_tests::Tester;
 
 #[test_log::test(tokio::test)]
 async fn basic_transfers() -> anyhow::Result<()> {
