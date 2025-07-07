@@ -154,6 +154,7 @@ impl Bridgehub {
         self.instance.sharedBridge().call().await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn request_l2_transaction_direct(
         &self,
         mint_value: U256,
