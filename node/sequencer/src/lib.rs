@@ -19,7 +19,6 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
-use crate::reth_state::ZkClient;
 use crate::{
     block_context_provider::BlockContextProvider,
     execution::{
@@ -28,17 +27,13 @@ use crate::{
     },
     model::{BlockCommand, ReplayRecord},
 };
-use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::BlockHash;
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
-use reth_primitives::SealedBlock;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BatchOutput as BlockOutput;
 use zksync_os_state::StateHandle;
-use zksync_os_types::L2Envelope;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
@@ -133,6 +128,16 @@ pub async fn run_sequencer_actor(
         tracing::info!(
             block_number = bn,
             "▶ Added to state in {:?}. Adding to repos...",
+            stage_started_at.elapsed()
+        );
+        stage_started_at = Instant::now();
+
+        // TODO: update mempool in parallel with state
+        block_transaction_provider.on_canonical_state_change(&block_output, &replay_record);
+
+        tracing::info!(
+            block_number = bn,
+            "▶ Added to repos in {:?}. Adding to wal...",
             stage_started_at.elapsed()
         );
         stage_started_at = Instant::now();

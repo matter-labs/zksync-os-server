@@ -3,7 +3,6 @@ use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::{
     InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy, UnifiedTransaction,
 };
-use crate::reth_state::ZkClient;
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
 use itertools::{Either, Itertools};
@@ -154,7 +153,7 @@ pub async fn execute_block(
             UnifiedTransaction::L2(tx) => Either::Right(tx),
         });
 
-    Ok(Some((
+    Ok((
         output,
         ReplayRecord::new(
             ctx,
@@ -162,5 +161,5 @@ pub async fn execute_block(
             l1_transactions,
             l2_transactions,
         ),
-    )))
+    ))
 }

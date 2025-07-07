@@ -9191,6 +9191,7 @@ dependencies = [
  "reth-chainspec",
  "reth-storage-api",
  "reth-transaction-pool",
+ "tokio",
  "zksync_os_types",
 ]
 
