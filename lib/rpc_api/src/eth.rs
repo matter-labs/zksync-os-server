@@ -5,7 +5,10 @@ use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, Bytes, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
-use alloy::rpc::types::{Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Filter, Header, Index, Log, SyncStatus, Transaction, TransactionReceipt, TransactionRequest};
+use alloy::rpc::types::{
+    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Filter, Header, Index, Log,
+    SyncStatus, Transaction, TransactionReceipt, TransactionRequest,
+};
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;

@@ -84,10 +84,13 @@ pub fn l2_transaction_to_api_data(
             let inner = alloy::primitives::Log {
                 address: Address::from(log.address.to_be_bytes()),
                 data: LogData::new(
-                    log.topics.iter().map(|topic| B256::from(topic.as_u8_array())).collect(),
-                    log.data.clone().into()
+                    log.topics
+                        .iter()
+                        .map(|topic| B256::from(topic.as_u8_array()))
+                        .collect(),
+                    log.data.clone().into(),
                 )
-                    .unwrap(),
+                .unwrap(),
             };
             alloy::rpc::types::Log {
                 inner,
