@@ -7,8 +7,6 @@ use jsonrpsee::core::RpcResult;
 
 impl EthNamespace {
     pub async fn logs_impl(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency = API_METRICS.response_time[&"get_logs"].start();
-
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
                 let block =
@@ -24,6 +22,10 @@ impl EthNamespace {
             ),
         };
 
+        let total_scanned_blocks = to - from + 1;
+        let mut tp_scanned_blocks = 0u64;
+        let mut fp_scanned_blocks = 0u64;
+        let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
             if let Some(block) = self
@@ -37,18 +39,31 @@ impl EthNamespace {
                         .repository_manager
                         .transaction_receipt_repository
                         .get_by_block_number(number);
+                    let mut at_least_one_log_added = false;
                     for tx_data in receipts {
                         for log in tx_data.receipt.logs() {
                             if filter.matches(&log.inner) {
                                 logs.push(log.clone());
+                                at_least_one_log_added = true;
                             }
                         }
                     }
+                    if at_least_one_log_added {
+                        tp_scanned_blocks += 1;
+                    } else {
+                        fp_scanned_blocks += 1;
+                    }
+                } else {
+                    negative_scanned_blocks += 1;
                 }
             }
         }
 
-        latency.observe();
+        API_METRICS.get_logs_scanned_blocks[&"total"].observe(total_scanned_blocks);
+        API_METRICS.get_logs_scanned_blocks[&"true_positive"].observe(tp_scanned_blocks);
+        API_METRICS.get_logs_scanned_blocks[&"false_positive"].observe(fp_scanned_blocks);
+        API_METRICS.get_logs_scanned_blocks[&"negative"].observe(negative_scanned_blocks);
+
         Ok(logs)
     }
 }

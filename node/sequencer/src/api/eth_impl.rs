@@ -392,6 +392,9 @@ impl EthApiServer for EthNamespace {
     }
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        self.logs_impl(filter).await
+        let latency = API_METRICS.response_time[&"get_logs"].start();
+        let result = self.logs_impl(filter).await;
+        latency.observe();
+        result
     }
 }
