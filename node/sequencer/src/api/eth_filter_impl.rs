@@ -21,6 +21,12 @@ impl EthNamespace {
                 resolve_block_id(to_block.map(BlockId::Number), &self.finality_info),
             ),
         };
+        tracing::trace!(
+            "Processing eth_getLogs request with filter: {:?}, from: {}, to: {}",
+            filter,
+            from,
+            to
+        );
 
         let total_scanned_blocks = to - from + 1;
         let mut tp_scanned_blocks = 0u64;
@@ -35,6 +41,11 @@ impl EthNamespace {
             {
                 let block_bloom = Bloom::new(block.header.logs_bloom);
                 if filter.matches_bloom(block_bloom) {
+                    tracing::trace!(
+                        "Block {} matches bloom filter {:?}, scanning receipts",
+                        number,
+                        filter
+                    );
                     let receipts = self
                         .repository_manager
                         .transaction_receipt_repository
