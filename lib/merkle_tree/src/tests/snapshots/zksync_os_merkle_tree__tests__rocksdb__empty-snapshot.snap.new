@@ -1,8 +1,7 @@
 ---
-source: lib/zk_os_merkle_tree/src/tests/mod.rs
+source: lib/merkle_tree/src/tests/mod.rs
 assertion_line: 568
 expression: "DatabaseSnapshot::new(&raw_db)"
-snapshot_kind: text
 ---
 key_indices:
   "0000000000000000000000000000000000000000000000000000000000000000": "0000"

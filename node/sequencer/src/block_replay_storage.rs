@@ -25,11 +25,9 @@ pub struct BlockReplayStorage {
 /// Column families for WAL storage of block replay commands.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
-    /// ReplayRecord = L2Txs + Context
     Context,
-    /// ReplayRecord = L1Txs + L2Txs + Context
+    StartingL1SerialId,
     L1Txs,
-    /// ReplayRecord = L1Txs + L2Txs + Context
     L2Txs,
     /// Stores the latest appended block number under a fixed key.
     Latest,
@@ -39,6 +37,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     const DB_NAME: &'static str = "block_replay_wal";
     const ALL: &'static [Self] = &[
         BlockReplayColumnFamily::Context,
+        BlockReplayColumnFamily::StartingL1SerialId,
         BlockReplayColumnFamily::L1Txs,
         BlockReplayColumnFamily::L2Txs,
         BlockReplayColumnFamily::Latest,
@@ -47,6 +46,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     fn name(&self) -> &'static str {
         match self {
             BlockReplayColumnFamily::Context => "context",
+            BlockReplayColumnFamily::StartingL1SerialId => "last_processed_l1_tx_id",
             BlockReplayColumnFamily::L1Txs => "l1_txs",
             BlockReplayColumnFamily::L2Txs => "l2_txs",
             BlockReplayColumnFamily::Latest => "latest",
@@ -69,19 +69,24 @@ impl BlockReplayStorage {
 
         let current_latest_block = self.latest_block().unwrap_or(0);
 
-        if record.context.block_number <= current_latest_block {
+        if record.block_context.block_number <= current_latest_block {
             tracing::debug!(
                 "Not appending block {}: already exists in WAL",
-                record.context.block_number
+                record.block_context.block_number
             );
             return;
         }
 
         // Prepare record
-        let block_num = record.context.block_number.to_be_bytes();
+        let block_num = record.block_context.block_number.to_be_bytes();
         let context_value =
-            bincode::serde::encode_to_vec(record.context, bincode::config::standard())
+            bincode::serde::encode_to_vec(record.block_context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
+        let starting_l1_tx_id_value = bincode::serde::encode_to_vec(
+            record.starting_l1_priority_id,
+            bincode::config::standard(),
+        )
+        .expect("Failed to serialize record.last_processed_l1_tx_id");
         let l1_txs_value =
             bincode::serde::encode_to_vec(&record.l1_transactions, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
@@ -102,6 +107,11 @@ impl BlockReplayStorage {
             &block_num,
         );
         batch.put_cf(BlockReplayColumnFamily::Context, &block_num, &context_value);
+        batch.put_cf(
+            BlockReplayColumnFamily::StartingL1SerialId,
+            &block_num,
+            &starting_l1_tx_id_value,
+        );
         batch.put_cf(BlockReplayColumnFamily::L1Txs, &block_num, &l1_txs_value);
         batch.put_cf(BlockReplayColumnFamily::L2Txs, &block_num, &l2_txs_value);
 
@@ -139,6 +149,10 @@ impl BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::Context, &key)
             .expect("Failed to read from Context CF");
+        let last_processed_l1_tx_result = self
+            .db
+            .get_cf(BlockReplayColumnFamily::StartingL1SerialId, &key)
+            .expect("Failed to read from LastProcessedL1TxId CF");
         let l1_txs_result = self
             .db
             .get_cf(BlockReplayColumnFamily::L1Txs, &key)
@@ -148,10 +162,26 @@ impl BlockReplayStorage {
             .get_cf(BlockReplayColumnFamily::L2Txs, &key)
             .expect("Failed to read from Txs CF");
 
-        match (context_result, l1_txs_result, l2_txs_result) {
-            (Some(bytes_context), Some(bytes_l1_txs), Some(bytes_l2_txs)) => Some(ReplayRecord {
-                context: bincode::serde::decode_from_slice(
+        match (
+            context_result,
+            last_processed_l1_tx_result,
+            l1_txs_result,
+            l2_txs_result,
+        ) {
+            (
+                Some(bytes_context),
+                Some(bytes_starting_l1_tx),
+                Some(bytes_l1_txs),
+                Some(bytes_l2_txs),
+            ) => Some(ReplayRecord {
+                block_context: bincode::serde::decode_from_slice(
                     &bytes_context,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                starting_l1_priority_id: bincode::serde::decode_from_slice(
+                    &bytes_starting_l1_tx,
                     bincode::config::standard(),
                 )
                 .expect("Failed to deserialize context")
@@ -177,7 +207,7 @@ impl BlockReplayStorage {
                 })
                 .collect(),
             }),
-            (None, None, None) => None,
+            (None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and L1/L2 Txs must be written atomically"),
         }
     }
@@ -193,22 +223,5 @@ impl BlockReplayStorage {
             }
         });
         Box::pin(stream)
-    }
-
-    /// Loads last executed L1 priority id. Returns `None` if there are no L1 txs available in WAL.
-    /// note: may take significant amount of time
-    pub fn last_l1_priority_id(&self) -> Option<u64> {
-        tracing::info!("scanning blocks for the first l1 transaction...");
-        let mut block = self.latest_block()?;
-        loop {
-            // Early return with `None`, we assume there are no replay records available before this
-            let record = self.get_replay_record(block)?;
-            if let Some(last_l1_tx) = record.l1_transactions.last() {
-                return Some(last_l1_tx.common_data.serial_id.0);
-            }
-            // Early return with `None` on underflow, i.e. we reached genesis without discovering a
-            // single L1 tx
-            block = block.checked_sub(1)?;
-        }
     }
 }

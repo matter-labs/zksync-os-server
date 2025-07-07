@@ -61,7 +61,7 @@ impl EthCallHandler {
             // todo: why `block_number - 1`??
             .get_replay_record(block_number - 1)
             .context("Failed to get block context")?
-            .context;
+            .block_context;
 
         let tx_type = request.minimal_tx_type();
 

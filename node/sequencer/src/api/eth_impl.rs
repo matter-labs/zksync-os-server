@@ -6,6 +6,7 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -20,9 +21,10 @@ use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use zk_ee::utils::Bytes32;
-use zksync_os_mempool::DynPool;
+use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
+use zksync_os_types::L2Envelope;
 
 /// Internal error code.
 pub const INTERNAL_ERROR_CODE: i32 = -32603;
@@ -51,7 +53,7 @@ impl EthNamespace {
         repository_manager: RepositoryManager,
         finality_tracker: FinalityTracker,
         state_handle: StateHandle,
-        mempool: DynPool,
+        mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
     ) -> Self {
         let tx_handler = TxHandler::new(
@@ -167,7 +169,7 @@ impl EthApiServer for EthNamespace {
         todo!()
     }
 
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
         //todo: only expose canonized!!!
         let res = self
             .repository_manager
@@ -364,6 +366,7 @@ impl EthApiServer for EthNamespace {
         let r = self
             .tx_handler
             .send_raw_transaction_impl(bytes)
+            .await
             .map_err(|err| self.map_err(err));
         latency.observe();
 

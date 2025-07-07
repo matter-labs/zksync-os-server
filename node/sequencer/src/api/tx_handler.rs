@@ -1,16 +1,17 @@
 use crate::repositories::AccountPropertyRepository;
+use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
 use alloy::consensus::transaction::SignerRecoverable;
-use alloy::consensus::{Transaction, TxEnvelope};
+use alloy::consensus::Transaction;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{Bytes, B256, U256};
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
-use zksync_os_mempool::DynPool;
-use zksync_os_types::L2Transaction;
+use zksync_os_mempool::{L2TransactionPool, RethPool};
+use zksync_os_types::{L2Envelope, L2Transaction};
 
 /// Handles transactions received in API
 pub struct TxHandler {
-    mempool: DynPool,
+    mempool: RethPool<ZkClient>,
     // we give access to non-canonized blocks here on purpose
     account_property_repository: AccountPropertyRepository,
 
@@ -20,7 +21,7 @@ pub struct TxHandler {
 }
 impl TxHandler {
     pub fn new(
-        mempool: DynPool,
+        mempool: RethPool<ZkClient>,
         account_property_repository: AccountPropertyRepository,
         max_nonce_ahead: u64,
         max_tx_input_bytes: usize,
@@ -33,8 +34,8 @@ impl TxHandler {
         }
     }
 
-    pub fn send_raw_transaction_impl(&self, tx_bytes: Bytes) -> anyhow::Result<B256> {
-        let transaction = TxEnvelope::decode_2718(&mut tx_bytes.as_ref())?;
+    pub async fn send_raw_transaction_impl(&self, tx_bytes: Bytes) -> anyhow::Result<B256> {
+        let transaction = L2Envelope::decode_2718(&mut tx_bytes.as_ref())?;
         if let Some(chain_id) = transaction.chain_id() {
             anyhow::ensure!(chain_id == CHAIN_ID, "wrong chain id {chain_id}");
         }
@@ -76,7 +77,7 @@ impl TxHandler {
         // )?;
 
         let hash = *l2_tx.hash();
-        self.mempool.add_transaction(l2_tx);
+        self.mempool.add_l2_transaction(l2_tx).await?;
 
         Ok(hash)
     }

@@ -8,11 +8,12 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use crate::reth_state::ZkClient;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use anyhow::Context;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::RpcModule;
-use zksync_os_mempool::DynPool;
+use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
 
@@ -23,7 +24,7 @@ pub async fn run_jsonrpsee_server(
     repository_manager: RepositoryManager,
     finality_tracker: FinalityTracker,
     state_handle: StateHandle,
-    mempool: DynPool,
+    mempool: RethPool<ZkClient>,
     block_replay_storage: BlockReplayStorage,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);

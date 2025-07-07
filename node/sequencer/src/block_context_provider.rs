@@ -13,6 +13,7 @@ impl BlockContextProvider {
         &self,
         block_number: u64,
         block_time: Duration,
+        block_size_limit: usize,
     ) -> BlockCommand {
         let gas_limit = 100_000_000;
         let timestamp = (millis_since_epoch() / 1000) as u64;
@@ -28,7 +29,7 @@ impl BlockContextProvider {
             block_hashes: Default::default(),
         };
 
-        BlockCommand::Produce(context, block_time)
+        BlockCommand::Produce(context, (block_time, block_size_limit))
     }
 }
 
