@@ -9232,6 +9232,7 @@ dependencies = [
  "tempfile",
  "test-log",
  "tokio",
+ "tracing",
  "zksync_os_contract_interface",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
