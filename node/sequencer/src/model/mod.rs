@@ -1,39 +1,124 @@
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::time::Duration;
-use zk_os_forward_system::run::BatchContext;
+use zk_os_forward_system::run::BatchContext as BlockContext;
 use zksync_os_l1_sender::commitment::CommitBatchInfo;
-use zksync_os_types::{L1Transaction, L2Transaction};
+use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
+type L1TxSerialId = u64;
 
+/// `BlockCommand`s drive the sequencer execution.
+/// Produced by `CommandProducer` - first blocks are `Replay`ed from WAL
+/// and then `Produce`d indefinitely.
+///
+/// Downstream transform:
+/// `BlockTransactionProvider: (L1Mempool/L1Watcher, L2Mempool, BlockCommand) -> (PreparedBlockCommand)`
 #[derive(Clone, Debug)]
 pub enum BlockCommand {
     /// Replay a block from the WAL.
     Replay(ReplayRecord),
     /// Produce a new block from the mempool.
-    /// Second argument - target block time.
-    Produce(BatchContext, Duration),
-}
-
-impl BlockCommand {
-    pub fn block_number(&self) -> u64 {
-        match self {
-            BlockCommand::Replay(record) => record.context.block_number,
-            BlockCommand::Produce(context, _) => context.block_number,
-        }
-    }
+    /// Second argument - local seal criteria - target block time and max transaction number
+    /// (Avoid container struct for now)
+    Produce(BlockContext, (Duration, usize)),
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
-    pub context: BatchContext,
+    pub block_context: BlockContext,
+    /// L1 transaction serial id (0-based) expected at the beginning of this block.
+    /// If `l1_transactions` is non-empty, equals to the first tx id in this block
+    /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
+    pub starting_l1_priority_id: L1TxSerialId,
+    // todo: not sure we need to have them separate here
     pub l1_transactions: Vec<L1Transaction>,
     pub l2_transactions: Vec<L2Transaction>,
 }
 
-pub enum TransactionSource {
-    Replay(Vec<L1Transaction>, Vec<L2Transaction>),
-    Mempool,
+impl ReplayRecord {
+    pub fn new(
+        block_context: BlockContext,
+        starting_l1_priority_id: L1TxSerialId,
+        l1_transactions: Vec<L1Transaction>,
+        l2_transactions: Vec<L2Transaction>,
+    ) -> Self {
+        if let Some(first_l1_tx) = l1_transactions.first() {
+            assert_eq!(
+                first_l1_tx.serial_id().0,
+                starting_l1_priority_id,
+                "First L1 tx serial id must match next_l1_priority_id"
+            );
+        }
+        assert!(
+            l1_transactions.len() + l2_transactions.len() > 0,
+            "Block must contain at least one tx"
+        );
+        Self {
+            block_context,
+            starting_l1_priority_id,
+            l1_transactions,
+            l2_transactions,
+        }
+    }
+}
+
+/// Better name wanted!
+/// BlockCommand + Tx Source = PreparedBlockCommand
+/// We use `BlockCommand` upstream (`CommandProducer`, `BlockTransactionProvider`),
+/// while doing all preparations that depend on command type (replay vs produce).
+/// Then we switch to `PreparedBlockCommand` in `BlockExecutor`,
+/// which should handle them uniformly.
+///
+/// Downstream transform:
+/// `BlockExecutor: (State, PreparedBlockCommand) -> (BlockOutput, ReplayRecord)`
+pub struct PreparedBlockCommand {
+    pub block_context: BlockContext,
+    pub seal_policy: SealPolicy,
+    pub invalid_tx_policy: InvalidTxPolicy,
+    pub tx_source: BoxStream<'static, UnifiedTransaction>,
+    /// L1 transaction serial id expected at the beginning of this block.
+    /// Not used in execution directly, but required to construct ReplayRecord
+    pub starting_l1_priority_id: L1TxSerialId,
+    pub metrics_label: &'static str,
+}
+
+/// A unified transaction that can be either L1 or L2
+/// We don't call this a "Transaction"
+/// as for most purposes only `L2Transaction` should be considered a "Transaction".
+/// todo: may get rid of it as we have EncodableZksyncOs trait
+#[derive(Clone, Debug)]
+pub enum UnifiedTransaction {
+    L1(L1Transaction),
+    L2(L2Transaction),
+}
+
+/// todo: may get rid of it as we have EncodableZksyncOs trait
+impl EncodableZksyncOs for UnifiedTransaction {
+    fn encode_zksync_os(self) -> Vec<u8> {
+        match self {
+            UnifiedTransaction::L1(tx) => tx.encode_zksync_os(),
+            UnifiedTransaction::L2(tx) => tx.encode_zksync_os(),
+        }
+    }
+}
+
+/// Behaviour when VM returns an InvalidTransaction error.
+#[derive(Clone, Copy, Debug)]
+pub enum InvalidTxPolicy {
+    /// Invalid tx is skipped in block and discarded from mempool. Used when building a block.
+    RejectAndContinue,
+    /// Bubble the error up and abort the whole block. Used when replaying a block (ReplayLog / Replica / EN)
+    Abort,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SealPolicy {
+    /// Seal non-empty blocks after deadline or N transactions. Used when building a block
+    /// (Block Deadline, Block Size)
+    Decide(Duration, usize),
+    /// Seal when all txs from tx source are executed. Used when replaying a block (ReplayLog / Replica / EN)
+    UntilExhausted,
 }
 
 /// Currently used both for prover api and eth-sender - may reconsider later on
@@ -43,19 +128,29 @@ pub struct BatchJob {
     pub commit_batch_info: CommitBatchInfo,
 }
 
+impl BlockCommand {
+    pub fn block_number(&self) -> u64 {
+        match self {
+            BlockCommand::Replay(record) => record.block_context.block_number,
+            BlockCommand::Produce(context, _) => context.block_number,
+        }
+    }
+}
+
 impl Display for BlockCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockCommand::Replay(record) => write!(
                 f,
-                "Replay block {} ({} L1 txs, {} L2 txs)",
-                record.context.block_number,
+                "Replay block {} ({} L1 txs, {} L2 txs); strating l1 priority id: {}",
+                record.block_context.block_number,
                 record.l1_transactions.len(),
-                record.l2_transactions.len()
+                record.l2_transactions.len(),
+                record.starting_l1_priority_id,
             ),
             BlockCommand::Produce(context, duration) => write!(
                 f,
-                "Produce block {} target block time: {:?}",
+                "Produce block {} target block properties: {:?}",
                 context.block_number, duration
             ),
         }

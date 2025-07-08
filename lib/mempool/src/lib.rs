@@ -1,18 +1,36 @@
 mod l1_pool;
-mod pool;
+mod reth;
 mod traits;
 
+pub use crate::reth::RethPool;
+use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
+use reth_storage_api::StateProviderFactory;
+pub use reth_transaction_pool::{
+    CanonicalStateUpdate, PoolUpdateKind, TransactionPool as RethTransactionPool,
+    TransactionPoolExt as RethTransactionPoolExt,
+};
+pub use traits::L2TransactionPool;
+
 use crate::l1_pool::{L1Mempool, L1Pool};
-use crate::pool::Mempool;
-pub use traits::TransactionPool;
+use reth_transaction_pool::blobstore::NoopBlobStore;
+use reth_transaction_pool::validate::EthTransactionValidatorBuilder;
+use reth_transaction_pool::{CoinbaseTipOrdering, PoolConfig};
 use zksync_os_types::L1Transaction;
 
-pub type DynPool = Box<dyn TransactionPool>;
 pub type DynL1Pool = Box<dyn L1Pool>;
 
-pub fn in_memory(forced_tx: L1Transaction) -> (DynL1Pool, DynPool) {
+pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory>(
+    client: Client,
+    forced_tx: L1Transaction,
+) -> (DynL1Pool, RethPool<Client>) {
+    let blob_store = NoopBlobStore::default();
     (
         Box::new(L1Mempool::new(forced_tx)),
-        Box::new(Mempool::new()),
+        RethPool::new(
+            EthTransactionValidatorBuilder::new(client).build(blob_store),
+            CoinbaseTipOrdering::default(),
+            blob_store,
+            PoolConfig::default(),
+        ),
     )
 }

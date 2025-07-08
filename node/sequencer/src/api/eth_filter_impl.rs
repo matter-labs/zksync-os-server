@@ -5,6 +5,7 @@ use alloy::primitives::Bloom;
 use alloy::rpc::types::{Filter, FilterBlockOption, Log};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
+use zk_ee::utils::Bytes32;
 
 impl EthNamespace {
     pub async fn logs_impl(&self, filter: Filter) -> RpcResult<Vec<Log>> {
@@ -49,7 +50,7 @@ impl EthNamespace {
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some(block) = self
+            if let Some((block, tx_hashes)) = self
                 .repository_manager
                 .block_receipt_repository
                 .get_by_number(number)
@@ -61,12 +62,16 @@ impl EthNamespace {
                         number,
                         filter
                     );
-                    let receipts = self
-                        .repository_manager
-                        .transaction_receipt_repository
-                        .get_by_block_number(number);
+                    let tx_receipts = tx_hashes.into_iter().map(|hash| {
+                        self.repository_manager
+                            .transaction_receipt_repository
+                            .get_by_hash(&Bytes32::from(hash.0))
+                            .unwrap_or_else(|| {
+                                panic!("Missing tx receipt for hash: {hash:?} in block {number}")
+                            })
+                    });
                     let mut at_least_one_log_added = false;
-                    for tx_data in receipts {
+                    for tx_data in tx_receipts {
                         for log in tx_data.receipt.logs() {
                             if filter.matches(&log.inner) {
                                 logs.push(log.clone());

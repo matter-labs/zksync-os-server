@@ -7,10 +7,12 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
+use alloy::consensus::BlockBody;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Filter, Header, Index, Log,
@@ -21,9 +23,10 @@ use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use zk_ee::utils::Bytes32;
-use zksync_os_mempool::DynPool;
+use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
+use zksync_os_types::L2Envelope;
 
 /// Internal error code.
 pub const INTERNAL_ERROR_CODE: i32 = -32603;
@@ -53,7 +56,7 @@ impl EthNamespace {
         repository_manager: RepositoryManager,
         finality_tracker: FinalityTracker,
         state_handle: StateHandle,
-        mempool: DynPool,
+        mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
     ) -> Self {
         let tx_handler = TxHandler::new(
@@ -117,10 +120,30 @@ impl EthApiServer for EthNamespace {
 
     async fn block_by_number(
         &self,
-        _number: BlockNumberOrTag,
-        _full: bool,
-    ) -> RpcResult<Option<Block>> {
-        todo!()
+        number: BlockNumberOrTag,
+        full: bool,
+    ) -> RpcResult<Option<Block<TxHash>>> {
+        assert!(!full);
+        let number = resolve_block_id(Some(BlockId::Number(number)), &self.finality_info);
+        Ok(self
+            .repository_manager
+            .block_receipt_repository
+            .get_by_number(number)
+            .map(|(block_output, tx_hashes)| {
+                let header = alloy::consensus::Header {
+                    number: block_output.header.number,
+                    timestamp: block_output.header.timestamp,
+                    gas_limit: block_output.header.gas_limit,
+                    base_fee_per_gas: Some(block_output.header.base_fee_per_gas),
+                    ..Default::default()
+                };
+                let body = BlockBody::<TxHash> {
+                    transactions: tx_hashes,
+                    ..Default::default()
+                };
+                let block = alloy::consensus::Block::new(header, body);
+                Block::from_consensus(block, None)
+            }))
     }
 
     async fn block_transaction_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
@@ -172,7 +195,7 @@ impl EthApiServer for EthNamespace {
         todo!()
     }
 
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
         //todo: only expose canonized!!!
         let res = self
             .repository_manager
@@ -344,11 +367,20 @@ impl EthApiServer for EthNamespace {
 
     async fn fee_history(
         &self,
-        _block_count: U64,
+        block_count: U64,
         _newest_block: BlockNumberOrTag,
         _reward_percentiles: Option<Vec<f64>>,
     ) -> RpcResult<FeeHistory> {
-        todo!()
+        // todo: real implementation
+        let block_count: usize = block_count.try_into().unwrap();
+        Ok(FeeHistory {
+            base_fee_per_gas: vec![10000u128; block_count],
+            gas_used_ratio: vec![0.5; block_count],
+            base_fee_per_blob_gas: vec![],
+            blob_gas_used_ratio: vec![],
+            oldest_block: 0,
+            reward: None,
+        })
     }
 
     async fn is_mining(&self) -> RpcResult<bool> {
@@ -369,6 +401,7 @@ impl EthApiServer for EthNamespace {
         let r = self
             .tx_handler
             .send_raw_transaction_impl(bytes)
+            .await
             .map_err(|err| self.map_err(err));
         latency.observe();
 

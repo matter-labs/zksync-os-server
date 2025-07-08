@@ -51,10 +51,11 @@ impl Batcher {
         enable_logging: bool,
         num_workers: usize,
     ) -> Self {
+        // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
-            "app_logging_enabled.bin"
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../app_logging_enabled.bin")
         } else {
-            "app.bin"
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../app.bin")
         };
         Self {
             block_sender,
@@ -113,8 +114,8 @@ impl Batcher {
                 Some((batch_output, replay_record)) => {
                     BATCHER_METRICS
                         .current_block_number
-                        .set(replay_record.context.block_number);
-                    let block_number = replay_record.context.block_number;
+                        .set(replay_record.block_context.block_number);
+                    let block_number = replay_record.block_context.block_number;
                     tracing::debug!(
                         "Batcher dispatcher received block {} with {} L1 transactions and {} L2 transactions",
                         block_number,
@@ -172,7 +173,7 @@ fn worker_loop(
             break;
         };
 
-        let bn = replay_record.context.block_number;
+        let bn = replay_record.block_context.block_number;
         tracing::debug!(worker_id = worker_id, bn = bn, "Received block");
 
         if bn % total_workers_count as u64 != worker_id as u64 {
@@ -212,7 +213,7 @@ fn worker_loop(
                 BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
             let prover_input = generate_proof_input(
                 PathBuf::from(bin_path),
-                replay_record.context,
+                replay_record.block_context,
                 initial_storage_commitment,
                 tree.clone(),
                 state_view,

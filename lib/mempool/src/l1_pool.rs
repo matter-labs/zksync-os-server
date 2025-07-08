@@ -1,6 +1,10 @@
 use dashmap::DashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 use zksync_os_types::L1Transaction;
+
+// todo: not sure we need this separate from L1Watcher -
+// todo: perhaps we should just add a `transactions: DashMap<u64, L1Transaction>` to L1Watcher?
 
 #[auto_impl::auto_impl(&, Box, Arc)]
 pub trait L1Pool: Send + Sync + Debug + 'static {
@@ -23,14 +27,16 @@ impl Clone for Box<dyn L1Pool> {
 /// Doesn't respect nonces
 #[derive(Clone, Debug)]
 pub struct L1Mempool {
-    transactions: DashMap<u64, L1Transaction>,
+    transactions: Arc<DashMap<u64, L1Transaction>>,
 }
 
 impl L1Mempool {
     pub fn new(forced_transaction: L1Transaction) -> Self {
         let transactions = DashMap::new();
         transactions.insert(forced_transaction.serial_id().0, forced_transaction);
-        Self { transactions }
+        Self {
+            transactions: Arc::new(transactions),
+        }
     }
 }
 

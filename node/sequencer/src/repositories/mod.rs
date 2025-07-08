@@ -15,8 +15,11 @@ pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
 use crate::repositories::metrics::REPOSITORIES_METRICS;
-use crate::repositories::transaction_receipt_repository::l2_transaction_to_api_data;
+use crate::repositories::transaction_receipt_repository::{
+    l1_transaction_to_api_data, l2_transaction_to_api_data,
+};
 pub use account_property_repository::AccountPropertyRepository;
+use alloy::primitives::TxHash;
 pub use block_receipt_repository::BlockReceiptRepository;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_ee::utils::Bytes32;
@@ -69,6 +72,11 @@ impl RepositoryManager {
         l2_transactions: Vec<L2Transaction>,
     ) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let tx_hashes = l1_transactions
+            .iter()
+            .map(|tx| TxHash::from(tx.hash().0))
+            .chain(l2_transactions.iter().map(|tx| *tx.hash()))
+            .collect();
 
         // Drop rejected transactions from the block output
         block_output.tx_results.retain(|result| result.is_ok());
@@ -83,12 +91,17 @@ impl RepositoryManager {
         // Add transaction receipts to the transaction receipt repository
         let mut tx_index = 0;
         let mut log_index = 0;
-        for _l1_tx in l1_transactions.into_iter() {
+        let mut block_bloom = alloy::primitives::Bloom::default();
+
+        for l1_tx in l1_transactions.into_iter() {
+            let hash = Bytes32::from(l1_tx.hash().0);
+            let api_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
+            log_index += api_tx.receipt.logs().len();
             tx_index += 1;
-            // TODO: Convert into alloy receipt once we get rid of `zksync_types::L1Tx`
+            block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
+            self.transaction_receipt_repository.insert(hash, api_tx);
         }
 
-        let mut block_bloom = alloy::primitives::Bloom::default();
         for l2_tx in l2_transactions.into_iter() {
             let hash = Bytes32::from(l2_tx.hash().0);
             let api_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
@@ -101,7 +114,7 @@ impl RepositoryManager {
 
         // Add the full block output to the block receipt repository
         self.block_receipt_repository
-            .insert(block_number, block_output);
+            .insert(block_number, block_output, tx_hashes);
         latency.observe();
     }
 }
