@@ -18,7 +18,7 @@ impl LockedPort {
         let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         let listener = TcpListener::bind(addr)
             .await
-            .context("failed to bind to random port")?;
+            .with_context(|| format!("failed to bind to port={port}"))?;
         let port = listener
             .local_addr()
             .context("failed to get local address for random port")?
