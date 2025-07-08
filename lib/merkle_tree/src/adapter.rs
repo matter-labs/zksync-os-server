@@ -1,7 +1,7 @@
 use crate::{
     leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
-    Database, MerkleTree, TreeParams,
+    Database, HashTree, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
 use zk_ee::utils::Bytes32;
@@ -54,6 +54,13 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
     fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
         let leaf = self.read_leaf(tree_index).unwrap();
 
+        let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
+        let empty_hashes: Vec<_> = core::iter::successors(Some(empty_leaf_hash), |previous| {
+            Some(self.tree.hasher.hash_branch(&previous, &previous))
+        })
+        .take(P::TREE_DEPTH.into())
+        .collect();
+
         let node_keys: Vec<_> = (1..leaf_nibbles::<P>())
             .rev()
             .map(|nibble_count| NodeKey {
@@ -75,7 +82,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
             };
             let hashes = node.internal_hashes::<P>(&self.tree.hasher, i).0;
 
-            let position_in_node = position as u8 & (P::INTERNAL_NODE_DEPTH - 1);
+            let position_in_node = position as u8 & ((1 << P::INTERNAL_NODE_DEPTH) - 1);
             position >>= P::INTERNAL_NODE_DEPTH;
 
             for depth in (0..P::INTERNAL_NODE_DEPTH).rev() {
@@ -87,16 +94,37 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                         node.children
                             .get(index_on_level)
                             .map(|x| x.hash)
-                            .unwrap_or_default()
+                            .unwrap_or(empty_hashes[i as usize])
                     } else {
                         let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
                         let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
                         let skip = needed_for_all - needed_for_this_and_lower_levels;
-                        hashes[skip + index_on_level]
+                        let hash = hashes[skip + index_on_level];
+                        // TODO: this is wrong but not sure how to properly detect empty
+                        if hash == B256::default() {
+                            empty_hashes[i as usize]
+                        } else {
+                            hash
+                        }
                     });
                 i += 1;
             }
         }
+
+        let last = P::TREE_DEPTH as usize - 1;
+        let root = self
+            .tree
+            .db
+            .try_root(self.version)
+            .unwrap()
+            .unwrap()
+            .root_node;
+        sibling_hashes[last] = fixed_bytes_to_bytes32(
+            root.children
+                .get(position as usize ^ 1)
+                .map(|x| x.hash)
+                .unwrap_or(empty_hashes[last]),
+        );
 
         LeafProof::new(
             tree_index,

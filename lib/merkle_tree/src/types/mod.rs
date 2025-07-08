@@ -10,7 +10,7 @@ use crate::{DefaultTreeParams, HashTree, TreeParams};
 pub(crate) const MAX_TREE_DEPTH: u8 = 64;
 
 /// Tree leaf.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct Leaf {
     pub key: B256,
