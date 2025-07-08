@@ -11,6 +11,9 @@ use zksync_os_sequencer::config::{ProverApiConfig, RpcConfig, SequencerConfig};
 
 mod utils;
 
+/// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
+const L1_CHAIN_ID: u64 = 9;
+
 pub struct Tester {
     pub l1_provider: DynProvider,
     pub l2_provider: DynProvider,
@@ -35,7 +38,7 @@ impl Tester {
             };
             anvil
                 .port(l1_locked_port.port)
-                .chain_id(9)
+                .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
                 .arg("../zkos-l1-state.json")
         })?;
