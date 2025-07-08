@@ -19,6 +19,7 @@ use crate::{
 };
 
 // TODO: Move to a separate crate
+mod adapter;
 pub mod blake2;
 mod consistency;
 mod errors;
