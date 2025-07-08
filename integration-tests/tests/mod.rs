@@ -5,6 +5,7 @@ use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::TransactionRequest;
 use std::str::FromStr;
+use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
@@ -18,6 +19,7 @@ async fn basic_transfers() -> anyhow::Result<()> {
 
     let deposit_amount = U256::from(100);
     let mut receipt_futures = vec![];
+    let start = Instant::now();
     for _ in 0..100 {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
@@ -25,16 +27,23 @@ async fn basic_transfers() -> anyhow::Result<()> {
         let receipt_future = tester.l2_provider.send_transaction(tx).await?.get_receipt();
         receipt_futures.push(receipt_future);
     }
+    tracing::info!(elapsed = ?start.elapsed(), "submitted all tx requests");
 
+    let start = Instant::now();
     let receipts = futures::future::join_all(receipt_futures)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
+    tracing::info!(elapsed = ?start.elapsed(), "resolved all tx receipts");
+
+    let start = Instant::now();
     for receipt in receipts {
         assert!(receipt.status(), "transaction failed");
         let balance = tester.l2_provider.get_balance(receipt.to.unwrap()).await?;
         assert_eq!(balance, deposit_amount);
     }
+    tracing::info!(elapsed = ?start.elapsed(), "confirmed final balances");
+
     // Alice should've lost at least `deposit_amount * 100` ETH
     let alice_balance_after = tester.l2_provider.get_balance(alice).await?;
     assert!(alice_balance_after < alice_balance_before - deposit_amount * U256::from(100));
