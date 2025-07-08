@@ -56,7 +56,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
 
         let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
         let empty_hashes: Vec<_> = core::iter::successors(Some(empty_leaf_hash), |previous| {
-            Some(self.tree.hasher.hash_branch(&previous, &previous))
+            Some(self.tree.hasher.hash_branch(previous, previous))
         })
         .take(P::TREE_DEPTH.into())
         .collect();
