@@ -1,18 +1,16 @@
-use std::iter::once;
-
 use crate::{
     leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
     Database, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
-use zk_ee::{kv_markers::UsizeDeserializable, utils::Bytes32};
+use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 
 pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
-    tree: MerkleTree<DB, P>,
-    version: u64,
+    pub tree: MerkleTree<DB, P>,
+    pub version: u64,
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
@@ -56,13 +54,49 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
     fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
         let leaf = self.read_leaf(tree_index).unwrap();
 
-        let hashes = self
-            .tree
-            .prove(self.version, &[leaf.key])
-            .unwrap()
-            .hashes
-            .into_iter()
-            .map(|h| fixed_bytes_to_bytes32(h.value));
+        let node_keys: Vec<_> = (1..leaf_nibbles::<P>())
+            .rev()
+            .map(|nibble_count| NodeKey {
+                version: self.version,
+                nibble_count,
+                index_on_level: tree_index
+                    >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH),
+            })
+            .collect();
+        let nodes = self.tree.db.try_nodes(&node_keys).unwrap();
+
+        let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
+        let mut i = 0;
+        let mut position = tree_index;
+        for node in nodes {
+            let node = match node {
+                Node::Internal(internal_node) => internal_node,
+                Node::Leaf(_) => unreachable!(),
+            };
+            let hashes = node.internal_hashes::<P>(&self.tree.hasher, i).0;
+
+            let position_in_node = position as u8 & (P::INTERNAL_NODE_DEPTH - 1);
+            position >>= P::INTERNAL_NODE_DEPTH;
+
+            for depth in (0..P::INTERNAL_NODE_DEPTH).rev() {
+                let index_on_level =
+                    (position_in_node >> (P::INTERNAL_NODE_DEPTH - depth - 1)) as usize;
+                let index_on_level = index_on_level ^ 1;
+                sibling_hashes[i as usize] =
+                    fixed_bytes_to_bytes32(if depth == P::INTERNAL_NODE_DEPTH - 1 {
+                        node.children
+                            .get(index_on_level)
+                            .map(|x| x.hash)
+                            .unwrap_or_default()
+                    } else {
+                        let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
+                        let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
+                        let skip = needed_for_all - needed_for_this_and_lower_levels;
+                        hashes[skip + index_on_level]
+                    });
+                i += 1;
+            }
+        }
 
         LeafProof::new(
             tree_index,
@@ -71,7 +105,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                 value: fixed_bytes_to_bytes32(leaf.value),
                 next: leaf.next_index,
             },
-            hashes.collect::<Vec<_>>().try_into().unwrap(),
+            sibling_hashes,
         )
     }
 

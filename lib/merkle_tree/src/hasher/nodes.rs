@@ -18,7 +18,7 @@ use crate::{
 /// The latter requires potential padding for rightmost internal nodes; see [`InternalNode::internal_hashes()`].
 /// As a result of these efforts, generating proofs is ~2x more efficient than with layered `Vec<Vec<B256>>`.
 #[derive(Debug)]
-struct InternalNodeHashes(Vec<B256>);
+pub(crate) struct InternalNodeHashes(pub Vec<B256>);
 
 impl InternalNode {
     pub(crate) fn hash<P: TreeParams>(&self, hasher: &P::Hasher, depth: u8) -> B256 {
@@ -59,7 +59,11 @@ impl InternalNode {
         hashes[0]
     }
 
-    fn internal_hashes<P: TreeParams>(&self, hasher: &P::Hasher, depth: u8) -> InternalNodeHashes {
+    pub(crate) fn internal_hashes<P: TreeParams>(
+        &self,
+        hasher: &P::Hasher,
+        depth: u8,
+    ) -> InternalNodeHashes {
         // capacity = 2 + 4 + ... + 2 ** (P::INTERNAL_NODE_DEPTH - 1) = 2 * (2 ** (P::INTERNAL_NODE_DEPTH - 1) - 1) = 2 ** P::INTERNAL_NODE_DEPTH - 2
         let capacity = (1 << P::INTERNAL_NODE_DEPTH) - 2;
         let mut hashes = InternalNodeHashes(Vec::with_capacity(capacity));

@@ -5,6 +5,7 @@ use anyhow::Context as _;
 use std::fmt;
 
 pub use self::{
+    adapter::MerkleTreeVersion,
     errors::DeserializeError,
     hasher::{BatchTreeProof, HashTree, TreeOperation},
     reader::MerkleTreeReader,
