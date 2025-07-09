@@ -1,17 +1,19 @@
+use crate::api::call_fees::{CallFees, CallFeesError};
 use crate::api::resolve_block_id;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
 use crate::finality::FinalityTracker;
 use crate::repositories::AccountPropertyRepository;
-use alloy::consensus::Transaction;
-use alloy::eips::BlockId;
-use alloy::network::TransactionBuilder;
-use alloy::primitives::Bytes;
+use alloy::consensus::transaction::Recovered;
+use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
+use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use anyhow::Context;
-use std::cmp::min;
+use zk_ee::system::errors::InternalError;
+use zk_os_forward_system::run::InvalidTransaction;
 use zksync_os_state::StateHandle;
+use zksync_os_types::L2Envelope;
 
 pub struct EthCallHandler {
     config: RpcConfig,
@@ -41,116 +43,184 @@ impl EthCallHandler {
 
     pub fn call_impl(
         &self,
-        mut request: TransactionRequest,
+        request: TransactionRequest,
         block: Option<BlockId>,
         state_overrides: Option<alloy::rpc::types::state::StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
-    ) -> anyhow::Result<Bytes> {
-        anyhow::ensure!(state_overrides.is_none());
-        anyhow::ensure!(block_overrides.is_none());
+    ) -> Result<Bytes, EthCallError> {
+        if state_overrides.is_some() {
+            return Err(EthCallError::StateOverridesNotSupported);
+        }
+        if block_overrides.is_some() {
+            return Err(EthCallError::BlockOverridesNotSupported);
+        }
 
-        // todo Daniyar
-        // todo: doing `+ 1` to make sure eth_calls are done on top of the current chain
         // consider legacy logic - perhaps differentiate Latest/Commiteed etc
-        let block_number = resolve_block_id(block, &self.finality_info) + 1;
-        tracing::info!("block {:?} resolved to: {:?}", block, block_number);
+        let block_id = block.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
+        let block_number = resolve_block_id(block_id, &self.finality_info);
+        tracing::info!(?block_id, block_number, "resolved block id");
 
         // using previous block context
         let block_context = self
             .block_replay_storage
-            // todo: why `block_number - 1`??
-            .get_replay_record(block_number - 1)
-            .context("Failed to get block context")?
+            .get_replay_record(block_number)
+            .ok_or(EthCallError::BlockNotFound(block_id))?
             .block_context;
 
         let tx_type = request.minimal_tx_type();
 
-        if request.gas.is_none() {
-            request.gas = Some(self.config.eth_call_gas as u64);
-        }
+        let TransactionRequest {
+            from,
+            to,
+            gas_price,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            gas,
+            value,
+            input,
+            nonce,
+            access_list,
+            chain_id,
+            // todo(EIP-4844)
+            blob_versioned_hashes: _,
+            max_fee_per_blob_gas: _,
+            sidecar: _,
+            // todo(EIP-7702)
+            authorization_list: _,
+            // EIP-2718 transaction type - ignored
+            transaction_type: _,
+        } = request;
 
-        if request.nonce.is_none() {
-            let nonce = self
-                .account_property_repository
-                .get_latest(&request.from.unwrap_or_default())
+        let gas_limit = gas.unwrap_or(self.config.eth_call_gas as u64);
+        let nonce = nonce.unwrap_or_else(|| {
+            self.account_property_repository
+                .get_latest(&from.unwrap_or_default())
                 .map(|props| props.nonce)
-                .unwrap_or_default();
-            request.nonce.replace(nonce);
-        }
+                .unwrap_or_default()
+        });
 
-        let call_gas_price = request.gas_price;
-        let call_max_fee_per_gas = request.max_fee_per_gas;
-        let call_max_priority_fee_per_gas = request.max_priority_fee_per_gas;
-        let block_base_fee = u128::try_from(block_context.eip1559_basefee)
-            .expect("block base fee is not a valid u128");
-        match (
-            call_gas_price,
-            call_max_fee_per_gas,
-            call_max_priority_fee_per_gas,
-        ) {
-            (gas_price, None, None) => {
-                // either legacy transaction or no fee fields are specified
-                // when no fields are specified, set gas price to zero
-                request.gas_price.replace(gas_price.unwrap_or_default());
-            }
-            (None, max_fee_per_gas, max_priority_fee_per_gas) => match max_fee_per_gas {
-                Some(max_fee_per_gas) => {
-                    let max_priority_fee_per_gas = max_priority_fee_per_gas.unwrap_or_default();
+        let CallFees {
+            max_priority_fee_per_gas,
+            gas_price,
+        } = CallFees::ensure_fees(
+            gas_price,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            block_context.eip1559_basefee.saturating_to(),
+        )?;
+        let chain_id = chain_id.unwrap_or(self.config.chain_id);
+        let from = from.unwrap_or_default();
+        let to = to.unwrap_or(TxKind::Create);
+        let value = value.unwrap_or_default();
+        let input = input.into_input().unwrap_or_default();
 
-                    // only enforce the fee cap if provided input is not zero
-                    if !(max_fee_per_gas == 0 && max_priority_fee_per_gas == 0)
-                        && max_fee_per_gas < block_base_fee
-                    {
-                        anyhow::bail!("`maxFeePerGas` less than `block.baseFee`");
-                    }
-                    if max_fee_per_gas < max_priority_fee_per_gas {
-                        anyhow::bail!("`maxPriorityFeePerGas` higher than `maxFeePerGas`")
-                    }
-                    request.max_fee_per_gas.replace(min(
-                        max_fee_per_gas,
-                        block_base_fee
-                            .checked_add(max_priority_fee_per_gas)
-                            .ok_or(anyhow::anyhow!("`maxPriorityFeePerGas` is too high"))?,
-                    ));
+        // Mock signature as this is a simulated transaction
+        let signature = Signature::new(Default::default(), Default::default(), false);
+        // Build each transaction type manually to enforce proper handling of all involved fields.
+        // Arguably this is too verbose, but this way we can clearly see which fields are expected to
+        // be present in all supported transaction types.
+        let tx = match tx_type {
+            TxType::Legacy => L2Envelope::from(
+                TxLegacy {
+                    chain_id: Some(chain_id),
+                    nonce,
+                    gas_price,
+                    gas_limit,
+                    to,
+                    value,
+                    input,
                 }
-                None => {
-                    request.max_fee_per_gas.replace(
-                        block_base_fee
-                            .checked_add(max_priority_fee_per_gas.unwrap_or_default())
-                            .ok_or(anyhow::anyhow!("`maxPriorityFeePerGas` is too high"))?,
-                    );
+                .into_signed(signature),
+            ),
+            TxType::Eip2930 => L2Envelope::from(
+                TxEip2930 {
+                    chain_id,
+                    nonce,
+                    gas_price,
+                    gas_limit,
+                    to,
+                    value,
+                    input,
+                    access_list: access_list.unwrap_or_default(),
                 }
-            },
-            // TODO: Handle EIP-4844 fees properly
-            _ => {
-                anyhow::bail!(
-                    "found both `gasPrice` and (`maxFeePerGas` or `maxPriorityFeePerGas`)"
-                )
+                .into_signed(signature),
+            ),
+            TxType::Eip1559 => L2Envelope::from(
+                TxEip1559 {
+                    chain_id,
+                    nonce,
+                    max_priority_fee_per_gas: max_priority_fee_per_gas
+                        .ok_or(EthCallError::MissingPriorityFee)?,
+                    max_fee_per_gas: gas_price,
+                    gas_limit,
+                    to,
+                    value,
+                    input,
+                    access_list: access_list.unwrap_or_default(),
+                }
+                .into_signed(signature),
+            ),
+            TxType::Eip4844 => {
+                return Err(EthCallError::Eip4844NotSupported);
             }
-        }
-
-        // TODO: populate other `request` fields (`chain_id`, `from` etc)
-
-        if let Err(errs) = request.complete_type(tx_type) {
-            for err in errs {
-                tracing::error!(err, "missing field")
+            TxType::Eip7702 => {
+                return Err(EthCallError::Eip7702NotSupported);
             }
-        }
-        let tx = request.build_typed_simulate_transaction()?;
-        // TODO: reth doesn't validate max tx size for `eth_call` since these transactions are
-        //       short-lived and are not added to the mempool. Consider doing the same
-        if tx.input().len() > self.config.max_tx_input_bytes {
-            anyhow::bail!(
-                "oversized input data. max: {}; actual: {}",
-                self.config.max_tx_input_bytes,
-                tx.input().len()
-            );
-        }
+        };
+        let tx = Recovered::new_unchecked(tx, from);
 
-        let storage_view = self.state_handle.state_view_at_block(block_number)?;
+        let storage_view = self
+            .state_handle
+            .state_view_at_block(block_number)
+            // todo: introduce error hierarchy for `zksync_os_state`
+            .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
 
-        let res = execute(tx, block_context, storage_view)?;
+        let res = execute(tx, block_context, storage_view)
+            .map_err(EthCallError::Internal)?
+            .map_err(EthCallError::InvalidTransaction)?;
 
         Ok(Bytes::copy_from_slice(res.as_returned_bytes()))
     }
+}
+
+/// Error types returned by `eth_call` implementation
+#[derive(Debug, thiserror::Error)]
+pub enum EthCallError {
+    // todo: temporary, needs to be supported eventually
+    #[error("state overrides are not supported in `eth_call`")]
+    StateOverridesNotSupported,
+    // todo: temporary, needs to be supported eventually
+    #[error("block overrides are not supported in `eth_call`")]
+    BlockOverridesNotSupported,
+    // todo(EIP-4844)
+    #[error("EIP-4844 transactions are not supported")]
+    Eip4844NotSupported,
+    // todo(EIP-7702)
+    #[error("EIP-7702 transactions are not supported")]
+    Eip7702NotSupported,
+
+    /// Block could not be found by its id (hash/number/tag).
+    #[error("block not found")]
+    BlockNotFound(BlockId),
+    // todo: consider moving this to `zksync_os_state` crate
+    /// Block has been compacted.
+    #[error("state for block {0} is not available")]
+    BlockStateNotAvailable(BlockNumber),
+
+    /// Error while decoding or validating transaction request fees.
+    #[error(transparent)]
+    CallFees(#[from] CallFeesError),
+    /// Missing a mandatary field `maxPriorityFeePerGas`. Only returned if transaction's minimal
+    /// buildable type enforces this field to be present (i.e., not legacy or EIP-2930).
+    #[error("missing `maxPriorityFeePerGas` field for EIP-1559 transaction")]
+    MissingPriorityFee,
+
+    // Below is more or less temporary as the error hierarchy in ZKsync OS is going through a major
+    // refactoring.
+    /// Internal error propagated by ZKsync OS.
+    #[error("internal error: {}", .0.0)]
+    Internal(InternalError),
+    /// Transaction is invalid according to ZKsync OS.
+    #[error("invalid transaction: {0:?}")]
+    InvalidTransaction(InvalidTransaction),
 }
