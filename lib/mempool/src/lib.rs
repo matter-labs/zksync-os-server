@@ -5,6 +5,7 @@ mod traits;
 pub use crate::reth::RethPool;
 use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
 use reth_storage_api::StateProviderFactory;
+pub use reth_transaction_pool::error::PoolError;
 pub use reth_transaction_pool::{
     CanonicalStateUpdate, PoolUpdateKind, TransactionPool as RethTransactionPool,
     TransactionPoolExt as RethTransactionPoolExt,
@@ -22,12 +23,15 @@ pub type DynL1Pool = Box<dyn L1Pool>;
 pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory>(
     client: Client,
     forced_tx: L1Transaction,
+    max_input_bytes: usize,
 ) -> (DynL1Pool, RethPool<Client>) {
     let blob_store = NoopBlobStore::default();
     (
         Box::new(L1Mempool::new(forced_tx)),
         RethPool::new(
-            EthTransactionValidatorBuilder::new(client).build(blob_store),
+            EthTransactionValidatorBuilder::new(client)
+                .with_max_tx_input_bytes(max_input_bytes)
+                .build(blob_store),
             CoinbaseTipOrdering::default(),
             blob_store,
             PoolConfig::default(),

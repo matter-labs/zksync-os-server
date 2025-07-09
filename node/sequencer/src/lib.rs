@@ -18,7 +18,7 @@ pub mod tree_manager;
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
-use crate::config::{BatcherConfig, ProverApiConfig, RpcConfig, SequencerConfig};
+use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::finality::FinalityTracker;
 use crate::model::BatchJob;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
@@ -240,9 +240,11 @@ fn command_source(
     stream.boxed()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     stop_receiver: watch::Receiver<bool>,
     rpc_config: RpcConfig,
+    mempool_config: MempoolConfig,
     sequencer_config: SequencerConfig,
     l1_sender_config: L1SenderConfig,
     l1_watcher_config: L1WatcherConfig,
@@ -348,6 +350,7 @@ pub async fn run(
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
         ZkClient::new(repositories.clone()),
         forced_deposit_transaction(),
+        mempool_config.max_tx_input_bytes,
     );
 
     // ========== Initialize TransactionStreamProvider ===========

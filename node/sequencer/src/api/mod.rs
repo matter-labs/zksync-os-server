@@ -1,6 +1,8 @@
+mod call_fees;
 mod eth_call_handler;
 mod eth_impl;
 mod metrics;
+mod result;
 mod tx_handler;
 
 use crate::api::eth_impl::EthNamespace;
@@ -10,6 +12,7 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::RpcModule;
@@ -64,10 +67,8 @@ pub async fn run_jsonrpsee_server(
 }
 
 // todo: consider best place for this logic - maybe `FinalityInfo` itself?
-pub fn resolve_block_id(block: Option<BlockId>, finality_info: &FinalityTracker) -> u64 {
-    let block_id: BlockId = block.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
-
-    match block_id {
+pub fn resolve_block_id(block: BlockId, finality_info: &FinalityTracker) -> BlockNumber {
+    match block {
         BlockId::Hash(_) => unimplemented!(),
         // TODO: return last sealed block here when available instead
         BlockId::Number(BlockNumberOrTag::Pending) => finality_info.get_canonized_block(),
