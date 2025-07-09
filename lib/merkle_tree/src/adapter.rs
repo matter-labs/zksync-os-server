@@ -16,18 +16,34 @@ pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
     fn read_leaf(&mut self, index: u64) -> Option<Leaf> {
-        self.tree
-            .db
-            .try_nodes(&[NodeKey {
-                version: self.version,
-                nibble_count: leaf_nibbles::<P>(),
-                index_on_level: index,
-            }])
-            .ok()
-            .map(|n| match n[0] {
-                Node::Internal(_) => unreachable!(),
-                Node::Leaf(leaf) => leaf,
-            })
+        self.try_node(NodeKey {
+            version: self.version,
+            nibble_count: leaf_nibbles::<P>(),
+            index_on_level: index,
+        })
+        .map(|n| match n {
+            Node::Internal(_) => unreachable!(),
+            Node::Leaf(leaf) => leaf,
+        })
+    }
+
+    fn try_node(&mut self, mut key: NodeKey) -> Option<Node> {
+        loop {
+            let node = self.tree.db.try_nodes(&[key.clone()]);
+            match node {
+                Ok(vec) => return Some(vec[0].clone()),
+                Err(DeserializeError {
+                    kind: DeserializeErrorKind::MissingNode,
+                    ..
+                }) => {}
+                Err(e) => panic!("{}", e),
+            }
+
+            if key.version == 0 {
+                return None;
+            }
+            key.version -= 1;
+        }
     }
 }
 
@@ -74,28 +90,24 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
             let position_in_node = position as u8 & ((1 << P::INTERNAL_NODE_DEPTH) - 1);
             position >>= P::INTERNAL_NODE_DEPTH;
 
-            let result = &self.tree.db().try_nodes(&[NodeKey {
+            let result = self.try_node(NodeKey {
                 version: self.version,
                 nibble_count,
                 index_on_level: tree_index
                     >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH),
-            }]);
+            });
             let node = match result {
-                Ok(vec) => match &vec[0] {
+                Some(n) => match n {
                     Node::Internal(internal_node) => internal_node,
                     Node::Leaf(_) => unreachable!(),
                 },
-                Err(DeserializeError {
-                    kind: DeserializeErrorKind::MissingNode,
-                    ..
-                }) => {
+                None => {
                     for _ in 0..P::INTERNAL_NODE_DEPTH {
                         sibling_hashes[i] = fixed_bytes_to_bytes32(empty_hashes[i]);
                         i += 1;
                     }
                     continue;
                 }
-                Err(x) => panic!("{}", x),
             };
             let hashes = node.internal_hashes::<P>(&self.tree.hasher, i as u8).0;
 
