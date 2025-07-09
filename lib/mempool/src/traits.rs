@@ -1,9 +1,8 @@
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
-use anyhow::Context as _;
 use futures::Stream;
 use reth_transaction_pool::{
-    BestTransactions, EthPooledTransaction, PoolTransaction, TransactionListenerKind,
+    BestTransactions, EthPooledTransaction, PoolResult, PoolTransaction, TransactionListenerKind,
     TransactionOrigin, TransactionPoolExt, ValidPoolTransaction,
 };
 use std::fmt::Debug;
@@ -19,17 +18,16 @@ pub trait L2TransactionPool:
     TransactionPoolExt<Transaction = EthPooledTransaction> + Send + Sync + Debug + 'static
 {
     /// Convenience method to add a local L2 transaction
-    async fn add_l2_transaction(&self, transaction: L2Transaction) -> anyhow::Result<()> {
+    async fn add_l2_transaction(&self, transaction: L2Transaction) -> PoolResult<TxHash> {
         let (envelope, signer) = transaction.into_parts();
         let envelope = L2Envelope::try_from(envelope)
-            .context("tried to insert an EIP4844 transaction without sidecar into mempool")?;
+            .expect("tried to insert an EIP-4844 transaction without sidecar into mempool");
         let transaction = L2Transaction::new_unchecked(envelope, signer);
         self.add_transaction(
             TransactionOrigin::Local,
             EthPooledTransaction::from_pooled(transaction),
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Convenience method to stream best L2 transactions

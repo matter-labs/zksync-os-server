@@ -4,7 +4,9 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
-use zksync_os_sequencer::config::{BatcherConfig, ProverApiConfig, RpcConfig, SequencerConfig};
+use zksync_os_sequencer::config::{
+    BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig,
+};
 use zksync_os_sequencer::run;
 use zksync_vlog::prometheus::PrometheusExporterConfig;
 
@@ -21,6 +23,7 @@ pub async fn main() {
     // =========== load configs ===========
     let (
         rpc_config,
+        mempool_config,
         sequencer_config,
         l1_sender_config,
         l1_watcher_config,
@@ -41,6 +44,7 @@ pub async fn main() {
         _ = run(
             stop_receiver.clone(),
             rpc_config,
+            mempool_config,
             sequencer_config,
             l1_sender_config,
             l1_watcher_config,
@@ -61,6 +65,7 @@ pub async fn main() {
 
 fn build_configs() -> (
     RpcConfig,
+    MempoolConfig,
     SequencerConfig,
     L1SenderConfig,
     L1WatcherConfig,
@@ -96,6 +101,12 @@ fn build_configs() -> (
         .parse()
         .expect("Failed to parse rpc config");
 
+    let mempool_config = repo
+        .single::<MempoolConfig>()
+        .expect("Failed to load mempool config")
+        .parse()
+        .expect("Failed to parse mempool config");
+
     let sequencer_config = repo
         .single::<SequencerConfig>()
         .expect("Failed to load sequencer config")
@@ -127,6 +138,7 @@ fn build_configs() -> (
         .expect("Failed to parse prover api config");
     (
         rpc_config,
+        mempool_config,
         sequencer_config,
         l1_sender_config,
         l1_watcher_config,

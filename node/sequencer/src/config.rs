@@ -8,13 +8,9 @@ pub struct RpcConfig {
     #[config(default_t = "0.0.0.0:3050".into())]
     pub address: String,
 
-    /// Max size of a transaction to be accepted by API
-    #[config(default_t = 128000)]
-    pub max_tx_input_bytes: usize,
-
-    /// Maximal gap between the nonce of the last executed block and the nonce being submitted
-    #[config(default_t = 1000)]
-    pub max_nonce_ahead: u64,
+    /// Chain ID of the chain node operates on.
+    #[config(default_t = 270)]
+    pub chain_id: u64,
 
     /// Gas limit of transactions executed via eth_call
     #[config(default_t = 10000000)]
@@ -23,6 +19,14 @@ pub struct RpcConfig {
     /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
     #[config(default_t = 1000)]
     pub max_connections: u32,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct MempoolConfig {
+    /// Max input size of a transaction to be accepted by mempool
+    #[config(default_t = 128 * 1024 * 1024)]
+    pub max_tx_input_bytes: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

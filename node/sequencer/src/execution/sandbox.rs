@@ -1,14 +1,15 @@
-use alloy::consensus::Transaction;
 use ruint::aliases::U256;
-use zk_os_forward_system::run::{simulate_tx, BatchContext, TxOutput};
+use zk_ee::system::errors::InternalError;
+use zk_os_forward_system::run::output::TxResult;
+use zk_os_forward_system::run::{simulate_tx, BatchContext};
 use zksync_os_state::StateView;
-use zksync_os_types::EncodableZksyncOs;
+use zksync_os_types::{EncodableZksyncOs, L2Transaction};
 
 pub fn execute(
-    tx: impl Transaction + EncodableZksyncOs,
+    tx: L2Transaction,
     mut block_context: BatchContext,
     state_view: StateView,
-) -> anyhow::Result<TxOutput> {
+) -> Result<TxResult, InternalError> {
     // tracing::info!(
     //     "Executing transaction: {:?} in block: {:?}",
     //     tx,
@@ -19,6 +20,4 @@ pub fn execute(
     block_context.eip1559_basefee = U256::from(0);
 
     simulate_tx(encoded_tx, block_context, state_view.clone(), state_view)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))? // outer error
-        .map_err(|e| anyhow::anyhow!("{e:?}"))
 }

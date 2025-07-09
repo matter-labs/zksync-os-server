@@ -7,8 +7,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
-use zksync_os_sequencer::config::{ProverApiConfig, RpcConfig, SequencerConfig};
+use zksync_os_sequencer::config::{MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 
+pub mod assert_traits;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
@@ -54,6 +55,7 @@ impl Tester {
                 address: format!("0.0.0.0:{}", l2_locked_port.port),
                 ..Default::default()
             },
+            MempoolConfig::default(),
             SequencerConfig {
                 rocks_db_path: rocksdb_path.path().to_path_buf(),
                 ..Default::default()
