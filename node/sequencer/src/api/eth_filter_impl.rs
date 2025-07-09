@@ -4,7 +4,7 @@ use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
-use alloy::eips::BlockId;
+use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::Bloom;
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
@@ -70,16 +70,25 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
         let latency = API_METRICS.response_time[&"get_logs"].start();
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
-                let block =
-                    resolve_block_id(Some(BlockId::Hash(block_hash.into())), &self.finality_info);
+                let block = resolve_block_id(BlockId::Hash(block_hash.into()), &self.finality_info);
                 (block, block)
             }
             FilterBlockOption::Range {
                 from_block,
                 to_block,
             } => (
-                resolve_block_id(from_block.map(BlockId::Number), &self.finality_info),
-                resolve_block_id(to_block.map(BlockId::Number), &self.finality_info),
+                resolve_block_id(
+                    from_block
+                        .map(BlockId::Number)
+                        .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
+                    &self.finality_info,
+                ),
+                resolve_block_id(
+                    to_block
+                        .map(BlockId::Number)
+                        .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
+                    &self.finality_info,
+                ),
             ),
         };
         tracing::trace!(from, to, ?filter, "Processing eth_getLogs request");
