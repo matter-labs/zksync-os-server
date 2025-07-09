@@ -13,7 +13,7 @@ use zk_os_forward_system::run::test_impl::{InMemoryTree, TxListSource};
 use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
-use zksync_os_merkle_tree::{MerkleTreeReader, MerkleTreeVersion, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_state::StateHandle;
 use zksync_os_types::EncodableZksyncOs;
 
@@ -36,7 +36,7 @@ pub struct Batcher {
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
     // handled by l1-sender. We ensure that they are sent in order.
     commit_batch_info_sender: Option<L1SenderHandle>,
-    persistent_tree: MerkleTreeReader<RocksDBWrapper>,
+    persistent_tree: MerkleTree<RocksDBWrapper>,
     state_handle: StateHandle,
     bin_path: &'static str,
     num_workers: usize,
@@ -50,7 +50,7 @@ impl Batcher {
         // handled by l1-sender
         commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
-        persistent_tree: MerkleTreeReader<RocksDBWrapper>,
+        persistent_tree: MerkleTree<RocksDBWrapper>,
 
         enable_logging: bool,
         num_workers: usize,
@@ -154,7 +154,7 @@ fn worker_loop(
     batch_sender: Sender<BatchJob>,
     commit_batch_info_sender: Option<Sender<CommitBatchInfo>>,
     state_handle: StateHandle,
-    persistent_tree: MerkleTreeReader<RocksDBWrapper>,
+    persistent_tree: MerkleTree<RocksDBWrapper>,
     bin_path: &'static str,
 ) {
     tracing::info!(

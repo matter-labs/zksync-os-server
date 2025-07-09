@@ -8,7 +8,6 @@ pub use self::{
     adapter::MerkleTreeVersion,
     errors::DeserializeError,
     hasher::{BatchTreeProof, HashTree, TreeOperation},
-    reader::MerkleTreeReader,
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
     types::{BatchOutput, TreeEntry},
 };
@@ -26,7 +25,6 @@ mod consistency;
 mod errors;
 mod hasher;
 mod metrics;
-mod reader;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -343,5 +341,17 @@ impl<DB: Database, P: TreeParams> MerkleTree<Patched<DB>, P> {
     /// Flushes changes to the underlying storage.
     pub fn flush(&mut self) -> anyhow::Result<()> {
         self.db.flush()
+    }
+}
+
+impl<DB: Database + Clone, P: TreeParams> Clone for MerkleTree<DB, P>
+where
+    P::Hasher: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            hasher: self.hasher.clone(),
+        }
     }
 }

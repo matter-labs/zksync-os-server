@@ -1,7 +1,7 @@
 use crate::{
     leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
-    Database, HashTree, MerkleTreeReader, TreeParams,
+    Database, HashTree, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
 use zk_ee::utils::Bytes32;
@@ -9,14 +9,14 @@ use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLe
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 
 pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
-    pub tree: MerkleTreeReader<DB, P>,
+    pub tree: MerkleTree<DB, P>,
     pub version: u64,
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
     fn read_leaf(&mut self, index: u64) -> Option<Leaf> {
         self.tree
-            .db()
+            .db
             .try_nodes(&[NodeKey {
                 version: self.version,
                 nibble_count: leaf_nibbles::<P>(),
@@ -54,9 +54,9 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
     fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
         let leaf = self.read_leaf(tree_index).unwrap();
 
-        let empty_leaf_hash = self.tree.0.hasher.hash_leaf(&Leaf::default());
+        let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
         let empty_hashes: Vec<_> = core::iter::successors(Some(empty_leaf_hash), |previous| {
-            Some(self.tree.0.hasher.hash_branch(previous, previous))
+            Some(self.tree.hasher.hash_branch(previous, previous))
         })
         .take(P::TREE_DEPTH.into())
         .collect();
@@ -80,7 +80,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                 Node::Internal(internal_node) => internal_node,
                 Node::Leaf(_) => unreachable!(),
             };
-            let hashes = node.internal_hashes::<P>(&self.tree.0.hasher, i).0;
+            let hashes = node.internal_hashes::<P>(&self.tree.hasher, i).0;
 
             let position_in_node = position as u8 & ((1 << P::INTERNAL_NODE_DEPTH) - 1);
             position >>= P::INTERNAL_NODE_DEPTH;
