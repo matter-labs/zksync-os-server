@@ -72,6 +72,7 @@ const CHAIN_ID: u64 = 270;
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
 const PROOF_STORAGE_DB_NAME: &str = "proofs";
+const REPOSITORY_DB_NAME: &str = "repository";
 
 // todo: clean up list of fields passed; split into two function (canonization and sequencing)
 
@@ -163,16 +164,14 @@ pub async fn run_sequencer_actor(
         );
         stage_started_at = Instant::now();
 
-        // todo:  this is only used by api - can and should be done async, as one of the sink subscribers
-        //  but need to be careful with `block_number=latest` then -
-        //  we need to make sure that the block is added to the repos before we return its number as `latest`
-        //
-        repositories.add_block_output_to_repos(
-            bn,
-            block_output.clone(),
-            replay_record.l1_transactions.clone(),
-            replay_record.l2_transactions.clone(),
-        );
+        // todo: do not call if api is not enabled.
+        repositories
+            .populate_in_memory_blocking(
+                block_output.clone(),
+                replay_record.l1_transactions.clone(),
+                replay_record.l2_transactions.clone(),
+            )
+            .await;
 
         tracing::info!(
             block_number = bn,
@@ -266,8 +265,10 @@ pub async fn run(
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
 
-    let repositories = RepositoryManager::new(sequencer_config.blocks_to_retain_in_memory);
-
+    let repositories = RepositoryManager::new(
+        sequencer_config.blocks_to_retain_in_memory,
+        sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+    );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
     )
@@ -531,6 +532,9 @@ pub async fn run(
         }
         _ = state_handle.compact_periodically(Duration::from_millis(100)) => {
             tracing::warn!("compact_periodically unexpectedly exited")
+        }
+        _ = repositories.run_persist_loop() => {
+            tracing::warn!("repositories.run_persist_loop() unexpectedly exited")
         }
     }
 }

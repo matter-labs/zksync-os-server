@@ -10,21 +10,28 @@
 
 pub mod account_property_repository;
 pub mod block_receipt_repository;
+mod db;
 mod metrics;
 pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
+use crate::repositories::db::{RepositoryCF, RepositoryDB};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::{
-    l1_transaction_to_api_data, l2_transaction_to_api_data,
+    l1_transaction_to_api_data, l2_transaction_to_api_data, TransactionApiData,
 };
 pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::TxHash;
+use alloy::rpc::types::Header;
 pub use block_receipt_repository::BlockReceiptRepository;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
-use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_types::{L1Transaction, L2Transaction};
+use zksync_storage::RocksDB;
 
 /// Manages repositories that store node data required for RPC but not for VM execution.
 ///
@@ -34,22 +41,35 @@ use zksync_os_types::{L1Transaction, L2Transaction};
 /// Note:
 /// - This component does **not** manage the canonical `State` (i.e., the data required for VM execution - storage slots and preimages).
 /// - No atomicity guarantees are provided between repository updates.
-/// - Block tip tracking is **not** handled here. It should be maintained separately and advanced
-///   only after a successful invocation of `add_block_output_to_repos`.
 
 #[derive(Clone, Debug)]
 pub struct RepositoryManager {
+    // TODO: get rid of `account_property_repository`
     pub account_property_repository: AccountPropertyRepository,
-    pub block_receipt_repository: BlockReceiptRepository,
-    pub transaction_receipt_repository: TransactionReceiptRepository,
+
+    block_receipt_repository: BlockReceiptRepository,
+    transaction_receipt_repository: TransactionReceiptRepository,
+
+    db: RepositoryDB,
+    latest_block: Arc<AtomicU64>,
+    max_blocks_in_memory: u64,
+    poll_interval: Duration,
 }
 
 impl RepositoryManager {
-    pub fn new(blocks_to_retain: usize) -> Self {
+    pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
+        let db = RocksDB::<RepositoryCF>::new(&db_path).expect("Failed to open db");
+        let db = RepositoryDB::new(db);
+        let db_block_number = db.latest_block_number();
+
         RepositoryManager {
             account_property_repository: AccountPropertyRepository::new(blocks_to_retain),
-            block_receipt_repository: BlockReceiptRepository::new(blocks_to_retain),
+            block_receipt_repository: BlockReceiptRepository::new(),
             transaction_receipt_repository: TransactionReceiptRepository::new(),
+            db,
+            latest_block: Arc::new(AtomicU64::new(db_block_number)),
+            max_blocks_in_memory: blocks_to_retain as u64,
+            poll_interval: Duration::from_millis(10),
         }
     }
 
@@ -64,14 +84,14 @@ impl RepositoryManager {
     /// Notes:
     /// - No atomicity or ordering guarantees are provided for repository updates.
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
-    pub fn add_block_output_to_repos(
+    fn populate_in_memory(
         &self,
-        block_number: u64,
         mut block_output: BatchOutput,
         l1_transactions: Vec<L1Transaction>,
         l2_transactions: Vec<L2Transaction>,
     ) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let block_number = block_output.header.number;
         let tx_hashes = l1_transactions
             .iter()
             .map(|tx| TxHash::from(tx.hash().0))
@@ -94,7 +114,7 @@ impl RepositoryManager {
         let mut block_bloom = alloy::primitives::Bloom::default();
 
         for l1_tx in l1_transactions.into_iter() {
-            let hash = Bytes32::from(l1_tx.hash().0);
+            let hash = TxHash::from(l1_tx.hash().0);
             let api_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
             log_index += api_tx.receipt.logs().len();
             tx_index += 1;
@@ -103,7 +123,7 @@ impl RepositoryManager {
         }
 
         for l2_tx in l2_transactions.into_iter() {
-            let hash = Bytes32::from(l2_tx.hash().0);
+            let hash = TxHash::from(l2_tx.hash().0);
             let api_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
             log_index += api_tx.receipt.logs().len();
             tx_index += 1;
@@ -114,7 +134,70 @@ impl RepositoryManager {
 
         // Add the full block output to the block receipt repository
         self.block_receipt_repository
-            .insert(block_number, block_output, tx_hashes);
+            .insert(&block_output.header, tx_hashes);
+        self.latest_block.store(block_number, Ordering::Relaxed);
         latency.observe();
+    }
+
+    pub async fn run_persist_loop(&self) {
+        let mut timer = tokio::time::interval(self.poll_interval);
+
+        loop {
+            timer.tick().await;
+
+            let db_block_number = self.db.latest_block_number();
+            let latest_block = self.latest_block.load(Ordering::Relaxed);
+            for number in (db_block_number + 1)..=latest_block {
+                let (header, tx_hashes) = self
+                    .block_receipt_repository
+                    .get_by_number(number)
+                    .expect("Missing block receipt");
+                let txs = self
+                    .transaction_receipt_repository
+                    .get_by_hashes(&tx_hashes);
+                self.db.write_block(&header, &txs);
+
+                self.block_receipt_repository.remove_by_number(number);
+                self.transaction_receipt_repository
+                    .remove_by_hashes(&tx_hashes);
+                tracing::info!(number, "Persisted receipts");
+            }
+        }
+    }
+
+    pub async fn populate_in_memory_blocking(
+        &self,
+        block_output: BatchOutput,
+        l1_transactions: Vec<L1Transaction>,
+        l2_transactions: Vec<L2Transaction>,
+    ) {
+        let mut timer = tokio::time::interval(self.poll_interval);
+
+        let mut db_block_number = self.db.latest_block_number();
+        let should_be_persisted_up_to = self
+            .latest_block
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.max_blocks_in_memory);
+        while db_block_number < should_be_persisted_up_to {
+            timer.tick().await;
+            db_block_number = self.db.latest_block_number()
+        }
+        self.populate_in_memory(block_output, l1_transactions, l2_transactions);
+    }
+
+    pub fn get_block_by_number(&self, number: u64) -> Option<(Header, Vec<TxHash>)> {
+        if let Some(res) = self.block_receipt_repository.get_by_number(number) {
+            return Some(res);
+        }
+
+        self.db.get_block_by_number(number)
+    }
+
+    pub fn get_tx_by_hash(&self, tx_hash: TxHash) -> Option<TransactionApiData> {
+        if let Some(res) = self.transaction_receipt_repository.get_by_hash(tx_hash) {
+            return Some(res);
+        }
+
+        self.db.get_tx_by_hash(tx_hash)
     }
 }

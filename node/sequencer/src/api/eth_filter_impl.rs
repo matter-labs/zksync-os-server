@@ -1,14 +1,12 @@
 use super::{resolve_block_id, EthNamespace};
 use crate::api::metrics::API_METRICS;
 use alloy::eips::BlockId;
-use alloy::primitives::Bloom;
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
 };
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
-use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 
 #[async_trait]
@@ -78,13 +76,8 @@ impl EthFilterApiServer<()> for EthNamespace {
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some((block, tx_hashes)) = self
-                .repository_manager
-                .block_receipt_repository
-                .get_by_number(number)
-            {
-                let block_bloom = Bloom::new(block.header.logs_bloom);
-                if filter.matches_bloom(block_bloom) {
+            if let Some((header, tx_hashes)) = self.repository_manager.get_block_by_number(number) {
+                if filter.matches_bloom(header.inner.logs_bloom) {
                     tracing::trace!(
                         number,
                         ?filter,
@@ -92,8 +85,7 @@ impl EthFilterApiServer<()> for EthNamespace {
                     );
                     let tx_receipts = tx_hashes.into_iter().map(|hash| {
                         self.repository_manager
-                            .transaction_receipt_repository
-                            .get_by_hash(&Bytes32::from(hash.0))
+                            .get_tx_by_hash(hash)
                             .unwrap_or_else(|| {
                                 panic!("Missing tx receipt for hash: {hash:?} in block {number}")
                             })

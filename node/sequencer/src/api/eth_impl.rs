@@ -22,7 +22,6 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
-use zk_ee::utils::Bytes32;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
@@ -127,21 +126,13 @@ impl EthApiServer for EthNamespace {
         let number = resolve_block_id(Some(BlockId::Number(number)), &self.finality_info);
         Ok(self
             .repository_manager
-            .block_receipt_repository
-            .get_by_number(number)
-            .map(|(block_output, tx_hashes)| {
-                let header = alloy::consensus::Header {
-                    number: block_output.header.number,
-                    timestamp: block_output.header.timestamp,
-                    gas_limit: block_output.header.gas_limit,
-                    base_fee_per_gas: Some(block_output.header.base_fee_per_gas),
-                    ..Default::default()
-                };
+            .get_block_by_number(number)
+            .map(|(header, tx_hashes)| {
                 let body = BlockBody::<TxHash> {
                     transactions: tx_hashes,
                     ..Default::default()
                 };
-                let block = alloy::consensus::Block::new(header, body);
+                let block = alloy::consensus::Block::new(header.inner, body);
                 Block::from_consensus(block, None)
             }))
     }
@@ -197,10 +188,7 @@ impl EthApiServer for EthNamespace {
 
     async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
         //todo: only expose canonized!!!
-        let res = self
-            .repository_manager
-            .transaction_receipt_repository
-            .get_by_hash(&Bytes32::from(hash.0));
+        let res = self.repository_manager.get_tx_by_hash(hash);
         tracing::info!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
         Ok(res.map(|data| data.transaction))
     }
@@ -247,10 +235,7 @@ impl EthApiServer for EthNamespace {
 
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
         //todo: only expose canonized!!!
-        let res = self
-            .repository_manager
-            .transaction_receipt_repository
-            .get_by_hash(&Bytes32::from(hash.0));
+        let res = self.repository_manager.get_tx_by_hash(hash);
         tracing::debug!("transaction_receipt: hash: {:?}, res: {:?}", hash, res);
         Ok(res.map(|data| data.receipt))
     }

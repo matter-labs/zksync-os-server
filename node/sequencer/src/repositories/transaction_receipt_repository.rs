@@ -7,12 +7,12 @@ use alloy::primitives::{Address, BlockHash, LogData, TxHash, TxKind, B256, U256}
 use alloy::signers::Signature;
 use dashmap::DashMap;
 use reth_primitives::Recovered;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
 use zksync_os_types::{L1Transaction, L2Envelope, L2Transaction};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionApiData {
     pub transaction: alloy::rpc::types::Transaction<L2Envelope>,
     pub receipt: alloy::rpc::types::TransactionReceipt,
@@ -27,7 +27,7 @@ pub struct TransactionApiData {
 #[derive(Clone, Debug)]
 pub struct TransactionReceiptRepository {
     /// Map from tx hash → receipt data
-    receipts: Arc<DashMap<Bytes32, TransactionApiData>>,
+    receipts: Arc<DashMap<TxHash, TransactionApiData>>,
 }
 
 impl TransactionReceiptRepository {
@@ -40,19 +40,40 @@ impl TransactionReceiptRepository {
 
     /// Inserts a receipt for `tx_hash`. If a receipt for the same hash
     /// already exists, it will be overwritten.
-    pub fn insert(&self, tx_hash: Bytes32, data: TransactionApiData) {
+    pub fn insert(&self, tx_hash: TxHash, data: TransactionApiData) {
         self.receipts.insert(tx_hash, data);
     }
 
     /// Retrieves the receipt for `tx_hash`, if present.
     /// Returns a cloned `TransactionApiData`.
-    pub fn get_by_hash(&self, tx_hash: &Bytes32) -> Option<TransactionApiData> {
-        self.receipts.get(tx_hash).map(|r| r.value().clone())
+    pub fn get_by_hash(&self, tx_hash: TxHash) -> Option<TransactionApiData> {
+        self.receipts.get(&tx_hash).map(|r| r.value().clone())
+    }
+
+    /// Retrieves the receipts for `tx_hashes`. Panics if any receipt is not present.
+    pub fn get_by_hashes(&self, tx_hashes: &[TxHash]) -> Vec<TransactionApiData> {
+        tx_hashes
+            .into_iter()
+            .map(|tx_hash| {
+                self.receipts
+                    .get(tx_hash)
+                    .map(|r| r.value().clone())
+                    .unwrap_or_else(|| {
+                        panic!("Missing receipt for transaction hash: {:?}", tx_hash)
+                    })
+            })
+            .collect()
+    }
+
+    pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {
+        for tx_hash in tx_hashes {
+            self.receipts.remove(tx_hash);
+        }
     }
 
     /// Returns `true` if a receipt for `tx_hash` is present.
-    pub fn contains(&self, tx_hash: &Bytes32) -> bool {
-        self.receipts.contains_key(tx_hash)
+    pub fn contains(&self, tx_hash: TxHash) -> bool {
+        self.receipts.contains_key(&tx_hash)
     }
 }
 
