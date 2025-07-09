@@ -35,7 +35,7 @@ mod types;
 /// these types will remain stable.
 #[doc(hidden)]
 pub mod unstable {
-    pub use crate::types::{KeyLookup, Leaf, Manifest, Node, NodeKey, RawNode, Root};
+    pub use crate::types::{KeyLookup, Leaf, Manifest, Node, NodeKey, Root};
 }
 
 /// Marker trait for tree parameters.
