@@ -1,7 +1,8 @@
 use crate::{
+    errors::DeserializeErrorKind,
     leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
-    Database, HashTree, MerkleTree, TreeParams,
+    Database, DeserializeError, HashTree, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
 use zk_ee::utils::Bytes32;
@@ -57,7 +58,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         &mut self,
         tree_index: u64,
     ) -> (u64, FlatStorageLeaf<64>, Box<[Bytes32; 64]>) {
-        let leaf = self.read_leaf(tree_index).unwrap();
+        let leaf = self.read_leaf(tree_index).unwrap_or_default();
 
         let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
         let empty_hashes: Vec<_> = core::iter::successors(Some(empty_leaf_hash), |previous| {
@@ -66,40 +67,48 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         .take(P::TREE_DEPTH.into())
         .collect();
 
-        let node_keys: Vec<_> = (1..leaf_nibbles::<P>())
-            .rev()
-            .map(|nibble_count| NodeKey {
+        let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
+        let mut i = 0;
+        let mut position = tree_index;
+        for nibble_count in (1..leaf_nibbles::<P>()).rev() {
+            let position_in_node = position as u8 & ((1 << P::INTERNAL_NODE_DEPTH) - 1);
+            position >>= P::INTERNAL_NODE_DEPTH;
+
+            let result = &self.tree.db().try_nodes(&[NodeKey {
                 version: self.version,
                 nibble_count,
                 index_on_level: tree_index
                     >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH),
-            })
-            .collect();
-        let nodes = self.tree.db().try_nodes(&node_keys).unwrap();
-
-        let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
-        let mut i = 0;
-        let mut position = tree_index;
-        for node in nodes {
-            let node = match node {
-                Node::Internal(internal_node) => internal_node,
-                Node::Leaf(_) => unreachable!(),
+            }]);
+            let node = match result {
+                Ok(vec) => match &vec[0] {
+                    Node::Internal(internal_node) => internal_node,
+                    Node::Leaf(_) => unreachable!(),
+                },
+                Err(DeserializeError {
+                    kind: DeserializeErrorKind::MissingNode,
+                    ..
+                }) => {
+                    for _ in 0..P::INTERNAL_NODE_DEPTH {
+                        sibling_hashes[i] = fixed_bytes_to_bytes32(empty_hashes[i]);
+                        i += 1;
+                    }
+                    continue;
+                }
+                Err(x) => panic!("{}", x),
             };
-            let hashes = node.internal_hashes::<P>(&self.tree.hasher, i).0;
-
-            let position_in_node = position as u8 & ((1 << P::INTERNAL_NODE_DEPTH) - 1);
-            position >>= P::INTERNAL_NODE_DEPTH;
+            let hashes = node.internal_hashes::<P>(&self.tree.hasher, i as u8).0;
 
             for depth in (0..P::INTERNAL_NODE_DEPTH).rev() {
                 let index_on_level =
                     (position_in_node >> (P::INTERNAL_NODE_DEPTH - depth - 1)) as usize;
                 let index_on_level = index_on_level ^ 1;
-                sibling_hashes[i as usize] =
+                sibling_hashes[i] =
                     fixed_bytes_to_bytes32(if depth == P::INTERNAL_NODE_DEPTH - 1 {
                         node.children
                             .get(index_on_level)
                             .map(|x| x.hash)
-                            .unwrap_or(empty_hashes[i as usize])
+                            .unwrap_or(empty_hashes[i])
                     } else {
                         let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
                         let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
@@ -107,7 +116,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
                         let hash = hashes[skip + index_on_level];
                         // TODO: this is wrong but not sure how to properly detect empty
                         if hash == B256::default() {
-                            empty_hashes[i as usize]
+                            empty_hashes[i]
                         } else {
                             hash
                         }
