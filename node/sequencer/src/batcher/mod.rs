@@ -13,7 +13,7 @@ use zk_os_forward_system::run::test_impl::{InMemoryTree, TxListSource};
 use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
-use zksync_os_merkle_tree::{MerkleTree, MerkleTreeReader, MerkleTreeVersion, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTreeReader, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_state::StateHandle;
 use zksync_os_types::EncodableZksyncOs;
 

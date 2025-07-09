@@ -45,9 +45,9 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
             .db()
             .indices(self.version, &[FixedBytes::from_slice(key.as_u8_ref())])
             .ok()
-            .map(|v| match v[0] {
-                KeyLookup::Existing(x) => x,
-                KeyLookup::Missing { .. } => panic!("checking index of nonexistent key"),
+            .and_then(|v| match v[0] {
+                KeyLookup::Existing(x) => Some(x),
+                KeyLookup::Missing { .. } => None,
             })
     }
 
@@ -70,7 +70,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                     >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH),
             })
             .collect();
-        let nodes = self.tree.db.try_nodes(&node_keys).unwrap();
+        let nodes = self.tree.db().try_nodes(&node_keys).unwrap();
 
         let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
         let mut i = 0;
