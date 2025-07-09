@@ -24,10 +24,8 @@ impl EthNamespace {
             ),
         };
         tracing::trace!(
-            "Processing eth_getLogs request with filter: {:?}, from: {}, to: {}",
-            filter,
-            from,
-            to
+            from, to, ?filter,
+            "Processing eth_getLogs request"
         );
 
         if let Some(max_blocks_per_filter) = self
@@ -58,9 +56,8 @@ impl EthNamespace {
                 let block_bloom = Bloom::new(block.header.logs_bloom);
                 if filter.matches_bloom(block_bloom) {
                     tracing::trace!(
-                        "Block {} matches bloom filter {:?}, scanning receipts",
-                        number,
-                        filter
+                        number, ?filter,
+                        "Block matches bloom filter, scanning receipts",
                     );
                     let tx_receipts = tx_hashes.into_iter().map(|hash| {
                         self.repository_manager
