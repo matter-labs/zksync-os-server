@@ -78,6 +78,9 @@ fn build_configs() -> (
         .insert(&RpcConfig::DESCRIPTION, "rpc")
         .expect("Failed to insert rpc config");
     schema
+        .insert(&MempoolConfig::DESCRIPTION, "mempool")
+        .expect("Failed to insert mempool config");
+    schema
         .insert(&SequencerConfig::DESCRIPTION, "sequencer")
         .expect("Failed to insert sequencer config");
     schema
