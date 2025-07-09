@@ -1,4 +1,4 @@
-use super::{resolve_block_id, EthNamespace};
+use super::{resolve_block_id};
 use crate::api::metrics::API_METRICS;
 use alloy::eips::BlockId;
 use alloy::primitives::Bloom;
@@ -10,9 +10,35 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use crate::api::types::QueryLimits;
+use crate::config::RpcConfig;
+use crate::finality::FinalityTracker;
+use crate::repositories::RepositoryManager;
+
+pub(crate) struct EthFilterNamespace {
+    pub(super) repository_manager: RepositoryManager,
+    pub(super) finality_info: FinalityTracker,
+    pub(super) query_limits: QueryLimits,
+}
+
+impl EthFilterNamespace {
+    pub fn new(
+        config: RpcConfig,
+        repository_manager: RepositoryManager,
+        finality_tracker: FinalityTracker,
+    ) -> Self {
+        let query_limits =
+            QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
+        Self {
+            repository_manager,
+            finality_info: finality_tracker,
+            query_limits,
+        }
+    }
+}
 
 #[async_trait]
-impl EthFilterApiServer<()> for EthNamespace {
+impl EthFilterApiServer<()> for EthFilterNamespace {
     async fn new_filter(&self, _filter: Filter) -> RpcResult<FilterId> {
         todo!()
     }
