@@ -122,6 +122,7 @@ impl TreeManager {
 
                     tracing::info!(
                         block_number = block_number,
+                        next_free_slot = output.leaf_count,
                         "Processed {} entries in tree, output: {:?}",
                         count,
                         output

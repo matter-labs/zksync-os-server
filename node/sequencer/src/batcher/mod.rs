@@ -13,6 +13,7 @@ use zk_os_forward_system::run::test_impl::{InMemoryTree, TxListSource};
 use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
+use zksync_os_merkle_tree::{MerkleTree, MerkleTreeReader, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_state::StateHandle;
 use zksync_os_types::EncodableZksyncOs;
 
@@ -35,6 +36,7 @@ pub struct Batcher {
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
     // handled by l1-sender. We ensure that they are sent in order.
     commit_batch_info_sender: Option<L1SenderHandle>,
+    persistent_tree: MerkleTreeReader<RocksDBWrapper>,
     state_handle: StateHandle,
     bin_path: &'static str,
     num_workers: usize,
@@ -48,6 +50,7 @@ impl Batcher {
         // handled by l1-sender
         commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
+        persistent_tree: MerkleTreeReader<RocksDBWrapper>,
 
         enable_logging: bool,
         num_workers: usize,
@@ -62,6 +65,7 @@ impl Batcher {
             block_sender,
             state_handle,
             batch_sender,
+            persistent_tree,
             commit_batch_info_sender,
             bin_path,
             num_workers,
@@ -95,6 +99,7 @@ impl Batcher {
             let batch_sender = self.batch_sender.clone();
             let state_handle = self.state_handle.clone();
             let commit_tx = commit_tx.clone();
+            let persistent_tree = self.persistent_tree.clone();
             std::thread::spawn(move || {
                 worker_loop(
                     worker_id,
@@ -103,6 +108,7 @@ impl Batcher {
                     batch_sender,
                     commit_tx,
                     state_handle,
+                    persistent_tree,
                     self.bin_path,
                 )
             });
@@ -148,6 +154,7 @@ fn worker_loop(
     batch_sender: Sender<BatchJob>,
     commit_batch_info_sender: Option<Sender<CommitBatchInfo>>,
     state_handle: StateHandle,
+    persistent_tree: MerkleTreeReader<RocksDBWrapper>,
     bin_path: &'static str,
 ) {
     tracing::info!(
@@ -213,11 +220,38 @@ fn worker_loop(
 
             let prover_input_generation_latency =
                 BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
-            let prover_input = generate_proof_input(
+            let prover_input_in_memory_tree = generate_proof_input(
                 PathBuf::from(bin_path),
                 replay_record.block_context,
                 initial_storage_commitment,
                 tree.clone(),
+                state_view.clone(),
+                list_source.clone(),
+            )
+            .expect("proof gen failed");
+
+            let latency = prover_input_generation_latency.observe();
+
+            tracing::info!(
+                worker_id = worker_id,
+                block_number = bn,
+                next_free_slot = tree.read().unwrap().storage_tree.next_free_slot,
+                "Completed prover input computation with in memory tree in {:?}.",
+                latency
+            );
+
+            let tree_view = MerkleTreeVersion {
+                tree: persistent_tree.clone(),
+                version: bn - 1,
+            };
+
+            let prover_input_generation_latency =
+                BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
+            let prover_input_persistent_tree = generate_proof_input(
+                PathBuf::from(bin_path),
+                replay_record.block_context,
+                initial_storage_commitment,
+                tree_view,
                 state_view,
                 list_source,
             )
@@ -230,9 +264,11 @@ fn worker_loop(
                 block_number = bn,
                 tx_count = tx_count,
                 next_free_slot = tree.read().unwrap().storage_tree.next_free_slot,
-                "Completed prover input computation in {:?}.",
+                "Completed prover input computation with persistent memory tree in {:?}.",
                 latency
             );
+
+            assert_eq!(prover_input_in_memory_tree, prover_input_persistent_tree);
 
             update_tree_with_batch_output(&tree, &batch_output);
 
@@ -265,7 +301,7 @@ fn worker_loop(
 
             let batch = BatchJob {
                 block_number: bn,
-                prover_input,
+                prover_input: prover_input_in_memory_tree,
                 commit_batch_info,
             };
             GENERAL_METRICS.block_number[&"batcher"].set(bn);

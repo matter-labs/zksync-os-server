@@ -10,7 +10,7 @@ use crate::{
     Database, DefaultTreeParams, MerkleTree, RocksDBWrapper, TreeParams,
 };
 
-pub struct MerkleTreeReader<DB, P: TreeParams = DefaultTreeParams>(MerkleTree<DB, P>);
+pub struct MerkleTreeReader<DB, P: TreeParams = DefaultTreeParams>(pub MerkleTree<DB, P>);
 
 impl<DB: fmt::Debug, P: TreeParams> fmt::Debug for MerkleTreeReader<DB, P>
 where

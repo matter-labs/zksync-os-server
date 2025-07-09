@@ -52,6 +52,7 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
+use zksync_os_merkle_tree::MerkleTreeReader;
 // Terms:
 // * BlockReplayData     - minimal info to (re)apply the block.
 //
@@ -424,7 +425,7 @@ pub async fn run(
             batch_sender,
             l1_sender_handle,
             state_handle.clone(),
-            // MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
+            MerkleTreeReader::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,
             batcher_config.num_workers,
         );
