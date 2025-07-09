@@ -1,6 +1,7 @@
 use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::resolve_block_id;
+use crate::api::result::{internal_rpc_err, unimplemented_rpc_err, ToRpcResult};
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
@@ -8,10 +9,11 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
-use alloy::consensus::BlockBody;
+use alloy::consensus::Sealable;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
+use alloy::network::primitives::BlockTransactions;
+use alloy::primitives::{Address, Bytes, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
@@ -20,15 +22,11 @@ use alloy::rpc::types::{
 use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use jsonrpsee::types::ErrorObjectOwned;
 use zk_ee::utils::Bytes32;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
 use zksync_os_types::L2Envelope;
-
-/// Internal error code.
-pub const INTERNAL_ERROR_CODE: i32 = -32603;
 
 pub(crate) struct EthNamespace {
     tx_handler: TxHandler,
@@ -43,11 +41,6 @@ pub(crate) struct EthNamespace {
 }
 
 impl EthNamespace {
-    pub fn map_err(&self, err: anyhow::Error) -> ErrorObjectOwned {
-        tracing::warn!("Error in EthNamespace: {}", err);
-        ErrorObjectOwned::owned(INTERNAL_ERROR_CODE, err.to_string(), None::<()>)
-    }
-
     pub fn new(
         config: RpcConfig,
 
@@ -57,12 +50,7 @@ impl EthNamespace {
         mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
     ) -> Self {
-        let tx_handler = TxHandler::new(
-            mempool,
-            repository_manager.account_property_repository.clone(),
-            config.max_nonce_ahead,
-            config.max_tx_input_bytes,
-        );
+        let tx_handler = TxHandler::new(mempool);
 
         let eth_call_handler = EthCallHandler::new(
             config,
@@ -81,45 +69,14 @@ impl EthNamespace {
     }
 }
 
-#[async_trait]
-impl EthApiServer for EthNamespace {
-    async fn protocol_version(&self) -> RpcResult<String> {
-        Ok("zksync_os/0.0.1".to_string())
-    }
-
-    fn syncing(&self) -> RpcResult<SyncStatus> {
-        todo!()
-    }
-
-    async fn author(&self) -> RpcResult<Address> {
-        todo!()
-    }
-
-    fn accounts(&self) -> RpcResult<Vec<Address>> {
-        todo!()
-    }
-
-    fn block_number(&self) -> RpcResult<U256> {
-        // todo (Daniyar): really add plus one?
-        let res = self.finality_info.get_canonized_block() + 1;
-        Ok(U256::from(res))
-    }
-
-    async fn chain_id(&self) -> RpcResult<Option<U64>> {
-        Ok(Some(U64::from(self.chain_id)))
-    }
-
-    async fn block_by_hash(&self, _hash: B256, _full: bool) -> RpcResult<Option<Block>> {
-        todo!()
-    }
-
-    async fn block_by_number(
-        &self,
-        number: BlockNumberOrTag,
-        full: bool,
-    ) -> RpcResult<Option<Block<TxHash>>> {
-        assert!(!full);
-        let number = resolve_block_id(Some(BlockId::Number(number)), &self.finality_info);
+impl EthNamespace {
+    fn block_by_id_impl(&self, id: Option<BlockId>, full: bool) -> RpcResult<Option<Block>> {
+        // todo: to be re-implemented in https://github.com/matter-labs/zksync-os-server/issues/29
+        if full {
+            return Err(internal_rpc_err("full blocks are not supported yet"));
+        }
+        let id = id.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
+        let number = resolve_block_id(id, &self.finality_info);
         Ok(self
             .repository_manager
             .block_receipt_repository
@@ -132,13 +89,58 @@ impl EthApiServer for EthNamespace {
                     base_fee_per_gas: Some(block_output.header.base_fee_per_gas),
                     ..Default::default()
                 };
-                let body = BlockBody::<TxHash> {
-                    transactions: tx_hashes,
-                    ..Default::default()
-                };
-                let block = alloy::consensus::Block::new(header, body);
-                Block::from_consensus(block, None)
+                Block::new(
+                    Header::from_consensus(header.seal_slow(), None, None),
+                    BlockTransactions::Hashes(tx_hashes),
+                )
             }))
+    }
+}
+
+#[async_trait]
+impl EthApiServer for EthNamespace {
+    async fn protocol_version(&self) -> RpcResult<String> {
+        Ok("zksync_os/0.0.1".to_string())
+    }
+
+    fn syncing(&self) -> RpcResult<SyncStatus> {
+        // We do not have decentralization yet, so the node is always synced
+        // todo: report sync status once we have consensus integrated
+        Ok(SyncStatus::None)
+    }
+
+    async fn author(&self) -> RpcResult<Address> {
+        // Author aka coinbase aka etherbase is the account where mining profits are credited to.
+        // As ZKsync OS is not PoW we do not implement this method.
+        Err(unimplemented_rpc_err())
+    }
+
+    fn accounts(&self) -> RpcResult<Vec<Address>> {
+        // ZKsync OS node never manages local accounts (i.e., accounts available for signing on the
+        // node's side).
+        Ok(Vec::new())
+    }
+
+    fn block_number(&self) -> RpcResult<U256> {
+        Ok(U256::from(self.finality_info.get_canonized_block()))
+    }
+
+    async fn chain_id(&self) -> RpcResult<Option<U64>> {
+        Ok(Some(U64::from(self.chain_id)))
+    }
+
+    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<Block>> {
+        // todo: to be re-implemented in https://github.com/matter-labs/zksync-os-server/issues/29
+        self.block_by_id_impl(Some(hash.into()), full)
+    }
+
+    async fn block_by_number(
+        &self,
+        number: BlockNumberOrTag,
+        full: bool,
+    ) -> RpcResult<Option<Block>> {
+        // todo: to be re-implemented in https://github.com/matter-labs/zksync-os-server/issues/29
+        self.block_by_id_impl(Some(number.into()), full)
     }
 
     async fn block_transaction_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
@@ -252,7 +254,10 @@ impl EthApiServer for EthNamespace {
 
     async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
         //todo Daniyar: really add +1?
-        let block_number = resolve_block_id(block_number, &self.finality_info) + 1;
+        let block_number = resolve_block_id(
+            block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
+            &self.finality_info,
+        ) + 1;
         let balance = self
             .repository_manager
             .account_property_repository
@@ -292,7 +297,10 @@ impl EthApiServer for EthNamespace {
             .map(|props| props.nonce)
             .unwrap_or(0);
 
-        let resolved_block = resolve_block_id(block_number, &self.finality_info) + 1;
+        let resolved_block = resolve_block_id(
+            block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
+            &self.finality_info,
+        ) + 1;
 
         tracing::info!(
             ?address,
@@ -332,7 +340,7 @@ impl EthApiServer for EthNamespace {
         let r = self
             .eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
-            .map_err(|err| self.map_err(err));
+            .to_rpc_result();
         latency.observe();
         r
     }
@@ -397,7 +405,7 @@ impl EthApiServer for EthNamespace {
             .tx_handler
             .send_raw_transaction_impl(bytes)
             .await
-            .map_err(|err| self.map_err(err));
+            .to_rpc_result();
         latency.observe();
 
         r
