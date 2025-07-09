@@ -28,12 +28,12 @@ pub struct RpcConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
-    /// Min number of blocks to retain in memory
-    /// it defines the blocks for which the node can handle API requests
-    /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
+    /// Min number of blocks to retain in memory.
+    /// It defines the blocks for which the node can handle API requests.
+    /// Older blocks will be compacted into RocksDB - and thus unavailable for `eth_call`.
     ///
     /// Currently, it affects both the storage logs (see `state` crate)
-    /// and repositories (see `repositories` package in this crate)
+    /// and repositories (see `repositories` package in this crate).
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 

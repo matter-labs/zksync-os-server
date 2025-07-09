@@ -111,6 +111,7 @@ impl StateHandle {
         self.persistent_preimages.add(block_number, new_preimages);
         Ok(())
     }
+
     pub async fn collect_state_metrics(&self, period: Duration) {
         let mut ticker = tokio::time::interval(period);
         let state_handle = self.clone();
@@ -124,7 +125,7 @@ impl StateHandle {
     pub async fn compact_periodically(&self, period: Duration) {
         let mut ticker = tokio::time::interval(period);
         let map = self.storage_map.clone();
-        // can take more than `period` to comact - use proper scheduler
+        // can take more than `period` to compact - use proper scheduler
         loop {
             ticker.tick().await;
             map.compact();

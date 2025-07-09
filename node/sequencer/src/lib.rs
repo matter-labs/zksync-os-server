@@ -65,7 +65,7 @@ use zksync_storage::RocksDB;
 // * State (storage logs + factory deps - see `state` crate)
 // * WAL of BlockReplayData (only in centralized case)
 //
-// Note that for API additional data may be reqiured (block/tx receipts)
+// Note that for API additional data may be required (block/tx receipts).
 
 const CHAIN_ID: u64 = 270;
 

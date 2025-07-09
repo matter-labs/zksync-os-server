@@ -48,10 +48,6 @@ impl PersistentPreimages {
             .unwrap_or(0)
     }
 
-    /// Insert multiple preimages at once.
-    ///
-    /// Each `(key, preimage)` is added if the key is not already present.
-    /// This batch insertion is safe for concurrent use.
     pub fn get(&self, key: Bytes32) -> Option<Vec<u8>> {
         let latency = PREIMAGES_METRICS.get[&"total"].start();
         let res = self
@@ -63,6 +59,10 @@ impl PersistentPreimages {
         res
     }
 
+    /// Insert multiple preimages at once.
+    ///
+    /// Each `(key, preimage)` is added if the key is not already present.
+    /// This batch insertion is safe for concurrent use.
     pub fn add<'a, J>(&self, new_block_number: u64, diffs: J)
     where
         J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
