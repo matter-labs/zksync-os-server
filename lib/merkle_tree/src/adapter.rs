@@ -6,7 +6,7 @@ use crate::{
 use alloy::primitives::{FixedBytes, B256};
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
+use zk_os_forward_system::run::{ReadStorage, ReadStorageTree, SimpleReadStorageTree};
 
 pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
     pub tree: MerkleTree<DB, P>,
@@ -39,8 +39,10 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorage for MerkleTree
     }
 }
 
-impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for MerkleTreeVersion<DB, P> {
-    fn tree_index(&mut self, key: Bytes32) -> Option<u64> {
+impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
+    for MerkleTreeVersion<DB, P>
+{
+    fn simple_tree_index(&mut self, key: Bytes32) -> Option<u64> {
         self.tree
             .db()
             .indices(self.version, &[FixedBytes::from_slice(key.as_u8_ref())])
@@ -51,7 +53,10 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
             })
     }
 
-    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
+    fn simple_merkle_proof(
+        &mut self,
+        tree_index: u64,
+    ) -> (u64, FlatStorageLeaf<64>, Box<[Bytes32; 64]>) {
         let leaf = self.read_leaf(tree_index).unwrap();
 
         let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
@@ -126,7 +131,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                 .unwrap_or(empty_hashes[last]),
         );
 
-        LeafProof::new(
+        (
             tree_index,
             FlatStorageLeaf {
                 key: fixed_bytes_to_bytes32(leaf.key),
@@ -137,7 +142,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
         )
     }
 
-    fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
+    fn simple_prev_tree_index(&mut self, key: Bytes32) -> u64 {
         // TODO this will fail for existing nodes
         let res = &self
             .tree

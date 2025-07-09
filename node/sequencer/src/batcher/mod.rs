@@ -147,6 +147,51 @@ impl Batcher {
     }
 }
 
+struct TreeComparison<A, B>(A, B);
+
+mod hidden {
+    use zk_ee::utils::Bytes32;
+    use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
+    use zk_os_forward_system::run::{ReadStorage, ReadStorageTree, SimpleReadStorageTree};
+
+    impl<A: ReadStorage, B: ReadStorage> ReadStorage for super::TreeComparison<A, B> {
+        fn read(&mut self, key: zk_ee::utils::Bytes32) -> Option<zk_ee::utils::Bytes32> {
+            let a = self.0.read(key);
+            let b = self.1.read(key);
+            assert_eq!(a, b);
+            a
+        }
+    }
+
+    impl<A: ReadStorageTree, B: ReadStorageTree> SimpleReadStorageTree for super::TreeComparison<A, B> {
+        fn simple_tree_index(&mut self, key: zk_ee::utils::Bytes32) -> Option<u64> {
+            let a = self.0.tree_index(key);
+            let b = self.1.tree_index(key);
+            assert_eq!(a, b);
+            a
+        }
+
+        fn simple_merkle_proof(
+            &mut self,
+            tree_index: u64,
+        ) -> (u64, FlatStorageLeaf<64>, Box<[Bytes32; 64]>) {
+            let a = self.0.merkle_proof(tree_index);
+            let b = self.1.merkle_proof(tree_index);
+            assert_eq!(a.index, b.index);
+            assert_eq!(a.leaf, b.leaf);
+            assert_eq!(a.path, b.path);
+            (a.index, a.leaf, a.path)
+        }
+
+        fn simple_prev_tree_index(&mut self, key: zk_ee::utils::Bytes32) -> u64 {
+            let a = self.0.prev_tree_index(key);
+            let b = self.1.prev_tree_index(key);
+            assert_eq!(a, b);
+            a
+        }
+    }
+}
+
 fn worker_loop(
     worker_id: usize,
     total_workers_count: usize,
@@ -218,28 +263,6 @@ fn worker_loop(
             let tx_count = transactions.len();
             let list_source = TxListSource { transactions };
 
-            let prover_input_generation_latency =
-                BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
-            let prover_input_in_memory_tree = generate_proof_input(
-                PathBuf::from(bin_path),
-                replay_record.block_context,
-                initial_storage_commitment,
-                tree.clone(),
-                state_view.clone(),
-                list_source.clone(),
-            )
-            .expect("proof gen failed");
-
-            let latency = prover_input_generation_latency.observe();
-
-            tracing::info!(
-                worker_id = worker_id,
-                block_number = bn,
-                next_free_slot = tree.read().unwrap().storage_tree.next_free_slot,
-                "Completed prover input computation with in memory tree in {:?}.",
-                latency
-            );
-
             let tree_view = MerkleTreeVersion {
                 tree: persistent_tree.clone(),
                 version: bn - 1,
@@ -247,11 +270,11 @@ fn worker_loop(
 
             let prover_input_generation_latency =
                 BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
-            let prover_input_persistent_tree = generate_proof_input(
+            let prover_input = generate_proof_input(
                 PathBuf::from(bin_path),
                 replay_record.block_context,
                 initial_storage_commitment,
-                tree_view,
+                TreeComparison(tree.clone(), tree_view),
                 state_view,
                 list_source,
             )
@@ -267,8 +290,6 @@ fn worker_loop(
                 "Completed prover input computation with persistent memory tree in {:?}.",
                 latency
             );
-
-            assert_eq!(prover_input_in_memory_tree, prover_input_persistent_tree);
 
             update_tree_with_batch_output(&tree, &batch_output);
 
@@ -301,7 +322,7 @@ fn worker_loop(
 
             let batch = BatchJob {
                 block_number: bn,
-                prover_input: prover_input_in_memory_tree,
+                prover_input: prover_input,
                 commit_batch_info,
             };
             GENERAL_METRICS.block_number[&"batcher"].set(bn);
