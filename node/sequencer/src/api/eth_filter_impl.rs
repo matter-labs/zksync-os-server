@@ -2,13 +2,46 @@ use super::{resolve_block_id, EthNamespace};
 use crate::api::metrics::API_METRICS;
 use alloy::eips::BlockId;
 use alloy::primitives::Bloom;
-use alloy::rpc::types::{Filter, FilterBlockOption, Log};
+use alloy::rpc::types::{
+    Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
+};
+use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use zk_ee::utils::Bytes32;
+use zksync_os_rpc_api::filter::EthFilterApiServer;
 
-impl EthNamespace {
-    pub async fn logs_impl(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+#[async_trait]
+impl EthFilterApiServer<()> for EthNamespace {
+    async fn new_filter(&self, _filter: Filter) -> RpcResult<FilterId> {
+        todo!()
+    }
+
+    async fn new_block_filter(&self) -> RpcResult<FilterId> {
+        todo!()
+    }
+
+    async fn new_pending_transaction_filter(
+        &self,
+        _kind: Option<PendingTransactionFilterKind>,
+    ) -> RpcResult<FilterId> {
+        todo!()
+    }
+
+    async fn filter_changes(&self, _id: FilterId) -> RpcResult<FilterChanges<()>> {
+        todo!()
+    }
+
+    async fn filter_logs(&self, _id: FilterId) -> RpcResult<Vec<Log>> {
+        todo!()
+    }
+
+    async fn uninstall_filter(&self, _id: FilterId) -> RpcResult<bool> {
+        todo!()
+    }
+
+    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        let latency = API_METRICS.response_time[&"get_logs"].start();
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
                 let block =
@@ -23,10 +56,7 @@ impl EthNamespace {
                 resolve_block_id(to_block.map(BlockId::Number), &self.finality_info),
             ),
         };
-        tracing::trace!(
-            from, to, ?filter,
-            "Processing eth_getLogs request"
-        );
+        tracing::trace!(from, to, ?filter, "Processing eth_getLogs request");
 
         if let Some(max_blocks_per_filter) = self
             .query_limits
@@ -56,7 +86,8 @@ impl EthNamespace {
                 let block_bloom = Bloom::new(block.header.logs_bloom);
                 if filter.matches_bloom(block_bloom) {
                     tracing::trace!(
-                        number, ?filter,
+                        number,
+                        ?filter,
                         "Block matches bloom filter, scanning receipts",
                     );
                     let tx_receipts = tx_hashes.into_iter().map(|hash| {
@@ -108,6 +139,7 @@ impl EthNamespace {
         API_METRICS.get_logs_scanned_blocks[&"true_positive"].observe(tp_scanned_blocks);
         API_METRICS.get_logs_scanned_blocks[&"false_positive"].observe(fp_scanned_blocks);
         API_METRICS.get_logs_scanned_blocks[&"negative"].observe(negative_scanned_blocks);
+        latency.observe();
 
         Ok(logs)
     }

@@ -6,8 +6,8 @@ use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Filter, Header, Index, Log,
-    SyncStatus, Transaction, TransactionReceipt, TransactionRequest,
+    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
+    Transaction, TransactionReceipt, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
@@ -348,8 +348,4 @@ pub trait EthApi {
     //     address: Address,
     //     block: BlockId,
     // ) -> RpcResult<alloy_rpc_types_eth::AccountInfo>;
-
-    /// Returns logs matching given filter object.
-    #[method(name = "getLogs")]
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>>;
 }

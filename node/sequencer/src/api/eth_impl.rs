@@ -15,8 +15,8 @@ use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Filter, Header, Index, Log,
-    SyncStatus, Transaction, TransactionReceipt, TransactionRequest,
+    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
+    Transaction, TransactionReceipt, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
@@ -427,12 +427,5 @@ impl EthApiServer for EthNamespace {
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
         todo!()
-    }
-
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency = API_METRICS.response_time[&"get_logs"].start();
-        let result = self.logs_impl(filter).await;
-        latency.observe();
-        result
     }
 }
