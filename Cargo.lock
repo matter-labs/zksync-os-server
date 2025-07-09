@@ -71,6 +71,7 @@ dependencies = [
  "alloy-contract",
  "alloy-core",
  "alloy-eips",
+ "alloy-json-rpc",
  "alloy-network",
  "alloy-node-bindings",
  "alloy-provider",
@@ -9324,7 +9325,6 @@ name = "zksync_os_rpc_api"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "alloy-json-rpc",
  "jsonrpsee",
  "zksync_os_types",
 ]
