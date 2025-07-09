@@ -1,5 +1,9 @@
-use super::{resolve_block_id};
+use super::resolve_block_id;
 use crate::api::metrics::API_METRICS;
+use crate::api::types::QueryLimits;
+use crate::config::RpcConfig;
+use crate::finality::FinalityTracker;
+use crate::repositories::RepositoryManager;
 use alloy::eips::BlockId;
 use alloy::primitives::Bloom;
 use alloy::rpc::types::{
@@ -10,10 +14,6 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
-use crate::api::types::QueryLimits;
-use crate::config::RpcConfig;
-use crate::finality::FinalityTracker;
-use crate::repositories::RepositoryManager;
 
 pub(crate) struct EthFilterNamespace {
     pub(super) repository_manager: RepositoryManager,
