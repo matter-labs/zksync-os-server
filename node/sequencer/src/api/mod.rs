@@ -1,10 +1,13 @@
 mod call_fees;
 mod eth_call_handler;
+mod eth_filter_impl;
 mod eth_impl;
 mod metrics;
 mod result;
 mod tx_handler;
+mod types;
 
+use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
@@ -18,6 +21,7 @@ use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::RpcModule;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
+use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_state::StateHandle;
 
 // stripped-down version of `api_server/src/web3/mod.rs`
@@ -36,13 +40,16 @@ pub async fn run_jsonrpsee_server(
     rpc.merge(
         EthNamespace::new(
             config.clone(),
-            repository_manager,
-            finality_tracker,
+            repository_manager.clone(),
+            finality_tracker.clone(),
             state_handle,
             mempool,
             block_replay_storage,
         )
         .into_rpc(),
+    )?;
+    rpc.merge(
+        EthFilterNamespace::new(config.clone(), repository_manager, finality_tracker).into_rpc(),
     )?;
 
     let server_config = ServerConfigBuilder::default()
