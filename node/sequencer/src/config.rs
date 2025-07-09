@@ -19,6 +19,14 @@ pub struct RpcConfig {
     /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
     #[config(default_t = 1000)]
     pub max_connections: u32,
+
+    /// Maximum number of blocks that could be scanned per filter
+    #[config(default_t = 100_000)]
+    pub max_blocks_per_filter: u64,
+
+    /// Maximum number of logs that can be returned in a response
+    #[config(default_t = 20_000)]
+    pub max_logs_per_response: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

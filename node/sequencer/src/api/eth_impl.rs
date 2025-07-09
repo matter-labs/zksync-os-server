@@ -34,10 +34,10 @@ pub(crate) struct EthNamespace {
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
     // reconsider approach to API in this regard
-    repository_manager: RepositoryManager,
+    pub(super) repository_manager: RepositoryManager,
 
-    finality_info: FinalityTracker,
-    chain_id: u64,
+    pub(super) finality_info: FinalityTracker,
+    pub(super) chain_id: u64,
 }
 
 impl EthNamespace {
@@ -80,7 +80,7 @@ impl EthNamespace {
         Ok(self
             .repository_manager
             .block_receipt_repository
-            .get_by_block(number)
+            .get_by_number(number)
             .map(|(block_output, tx_hashes)| {
                 let header = alloy::consensus::Header {
                     number: block_output.header.number,
