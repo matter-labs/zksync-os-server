@@ -1,8 +1,7 @@
 use crate::{
-    errors::DeserializeErrorKind,
     leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
-    Database, DeserializeError, HashTree, MerkleTree, TreeParams,
+    Database, HashTree, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
 use zk_ee::utils::Bytes32;
@@ -15,34 +14,39 @@ pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
-    fn read_leaf(&mut self, index: u64) -> Option<Leaf> {
-        self.try_node(NodeKey {
-            version: self.version,
-            nibble_count: leaf_nibbles::<P>(),
-            index_on_level: index,
-        })
-        .map(|n| match n {
-            Node::Internal(_) => unreachable!(),
-            Node::Leaf(leaf) => leaf,
-        })
-    }
+    fn traverse_to_leaf(&mut self, tree_index: u64) -> Option<Leaf> {
+        let mut current_node = self
+            .tree
+            .db()
+            .try_root(self.version)
+            .unwrap()
+            .unwrap()
+            .root_node;
 
-    fn try_node(&mut self, mut key: NodeKey) -> Option<Node> {
+        let mut nibble_count = 1;
         loop {
-            let node = self.tree.db.try_nodes(&[key.clone()]);
-            match node {
-                Ok(vec) => return Some(vec[0].clone()),
-                Err(DeserializeError {
-                    kind: DeserializeErrorKind::MissingNode,
-                    ..
-                }) => {}
-                Err(e) => panic!("{}", e),
-            }
+            let index_on_level =
+                tree_index >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH);
+            let child_index = index_on_level as usize % (1 << P::INTERNAL_NODE_DEPTH);
 
-            if key.version == 0 {
-                return None;
-            }
-            key.version -= 1;
+            let Some(child) = current_node.children.get(child_index) else {
+                break None;
+            };
+            current_node = match self
+                .tree
+                .db
+                .try_nodes(&[NodeKey {
+                    version: child.version,
+                    nibble_count,
+                    index_on_level,
+                }])
+                .expect("inconsistent child reference")[0]
+                .clone()
+            {
+                Node::Internal(internal) => internal,
+                Node::Leaf(leaf) => break Some(leaf),
+            };
+            nibble_count += 1;
         }
     }
 }
@@ -50,7 +54,7 @@ impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
 impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorage for MerkleTreeVersion<DB, P> {
     fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
         self.tree_index(key).and_then(|index| {
-            self.read_leaf(index)
+            self.traverse_to_leaf(index)
                 .map(|Leaf { value, .. }| fixed_bytes_to_bytes32(value))
         })
     }
