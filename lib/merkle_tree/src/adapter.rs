@@ -74,13 +74,6 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         &mut self,
         tree_index: u64,
     ) -> (u64, FlatStorageLeaf<64>, Box<[Bytes32; 64]>) {
-        let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
-        let empty_hashes: Vec<_> = core::iter::successors(Some(empty_leaf_hash), |previous| {
-            Some(self.tree.hasher.hash_branch(previous, previous))
-        })
-        .take(P::TREE_DEPTH.into())
-        .collect();
-
         let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
 
         let mut current_node = self
@@ -111,14 +104,8 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
 
                     let index = child_index >> (P::INTERNAL_NODE_DEPTH - depth - 1);
 
-                    let hash = hashes[skip + (index ^ 1)];
-                    // TODO: this is wrong but not sure how to properly detect empty
                     i -= 1;
-                    sibling_hashes[i] = fixed_bytes_to_bytes32(if hash == B256::default() {
-                        empty_hashes[i]
-                    } else {
-                        hash
-                    });
+                    sibling_hashes[i] = fixed_bytes_to_bytes32(hashes[skip + (index ^ 1)]);
                 }
             }
 
@@ -128,7 +115,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
                     .children
                     .get(child_index ^ 1)
                     .map(|x| x.hash)
-                    .unwrap_or(empty_hashes[i]),
+                    .unwrap_or(self.tree.hasher.empty_subtree_hash(i as u8)),
             );
 
             let Some(child) = current_node.children.get(child_index) else {
@@ -152,7 +139,8 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         };
 
         for i in 0..i {
-            sibling_hashes[i] = fixed_bytes_to_bytes32(empty_hashes[i]);
+            sibling_hashes[i] =
+                fixed_bytes_to_bytes32(self.tree.hasher.empty_subtree_hash(i as u8));
         }
 
         (

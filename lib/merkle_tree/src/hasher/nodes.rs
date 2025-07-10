@@ -62,7 +62,7 @@ impl InternalNode {
     pub(crate) fn internal_hashes<P: TreeParams>(
         &self,
         hasher: &P::Hasher,
-        depth: u8,
+        mut depth: u8,
     ) -> InternalNodeHashes {
         // capacity = 2 + 4 + ... + 2 ** (P::INTERNAL_NODE_DEPTH - 1) = 2 * (2 ** (P::INTERNAL_NODE_DEPTH - 1) - 1) = 2 ** P::INTERNAL_NODE_DEPTH - 2
         let capacity = (1 << P::INTERNAL_NODE_DEPTH) - 2;
@@ -70,12 +70,12 @@ impl InternalNode {
         let mut full_level_len = 1 << (P::INTERNAL_NODE_DEPTH - 1);
         self.hash_inner::<P>(hasher, depth, false, |level_hashes| {
             hashes.0.extend_from_slice(level_hashes);
-            // Pad if necessary so that there are uniform offsets for each level. The padding should never be read.
-            // It doesn't waste that much space given that it may be required only for one internal node per level.
+            // Pad if necessary so that there are uniform offsets for each level.
             hashes.0.extend(iter::repeat_n(
-                B256::ZERO,
+                hasher.empty_subtree_hash(depth + 1),
                 full_level_len - level_hashes.len(),
             ));
+            depth += 1;
             full_level_len /= 2;
         });
         hashes
