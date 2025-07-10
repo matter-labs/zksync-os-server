@@ -1,8 +1,8 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/filter.rs
 
+use alloy::rpc::json_rpc::RpcObject;
 use alloy::rpc::types::{Filter, FilterChanges, FilterId, Log, PendingTransactionFilterKind};
-use alloy_json_rpc::RpcObject;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 

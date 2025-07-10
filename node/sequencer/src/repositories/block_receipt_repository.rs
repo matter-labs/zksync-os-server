@@ -8,7 +8,7 @@ use zk_os_forward_system::run::output::BlockHeader;
 ///
 /// Inserts must happen in strictly ascending order.
 ///
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct BlockReceiptRepository {
     /// Map from block number → `BatchOutput`.
     receipts: Arc<DashMap<u64, (Header, Vec<TxHash>)>>,
@@ -17,9 +17,7 @@ pub struct BlockReceiptRepository {
 impl BlockReceiptRepository {
     /// Create a new repository.
     pub fn new() -> Self {
-        BlockReceiptRepository {
-            receipts: Arc::new(DashMap::new()),
-        }
+        BlockReceiptRepository::default()
     }
 
     /// Insert the `BatchOutput` for `block`.

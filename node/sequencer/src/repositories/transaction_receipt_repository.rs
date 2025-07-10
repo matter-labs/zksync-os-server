@@ -53,7 +53,7 @@ impl TransactionReceiptRepository {
     /// Retrieves the receipts for `tx_hashes`. Panics if any receipt is not present.
     pub fn get_by_hashes(&self, tx_hashes: &[TxHash]) -> Vec<TransactionApiData> {
         tx_hashes
-            .into_iter()
+            .iter()
             .map(|tx_hash| {
                 self.receipts
                     .get(tx_hash)

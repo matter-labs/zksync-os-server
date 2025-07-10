@@ -1,6 +1,10 @@
-use super::{resolve_block_id, EthNamespace};
+use super::resolve_block_id;
 use crate::api::metrics::API_METRICS;
-use alloy::eips::BlockId;
+use crate::api::types::QueryLimits;
+use crate::config::RpcConfig;
+use crate::finality::FinalityTracker;
+use crate::repositories::RepositoryManager;
+use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
 };
@@ -9,8 +13,30 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 
+pub(crate) struct EthFilterNamespace {
+    pub(super) repository_manager: RepositoryManager,
+    pub(super) finality_info: FinalityTracker,
+    pub(super) query_limits: QueryLimits,
+}
+
+impl EthFilterNamespace {
+    pub fn new(
+        config: RpcConfig,
+        repository_manager: RepositoryManager,
+        finality_tracker: FinalityTracker,
+    ) -> Self {
+        let query_limits =
+            QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
+        Self {
+            repository_manager,
+            finality_info: finality_tracker,
+            query_limits,
+        }
+    }
+}
+
 #[async_trait]
-impl EthFilterApiServer<()> for EthNamespace {
+impl EthFilterApiServer<()> for EthFilterNamespace {
     async fn new_filter(&self, _filter: Filter) -> RpcResult<FilterId> {
         todo!()
     }
@@ -42,16 +68,25 @@ impl EthFilterApiServer<()> for EthNamespace {
         let latency = API_METRICS.response_time[&"get_logs"].start();
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
-                let block =
-                    resolve_block_id(Some(BlockId::Hash(block_hash.into())), &self.finality_info);
+                let block = resolve_block_id(BlockId::Hash(block_hash.into()), &self.finality_info);
                 (block, block)
             }
             FilterBlockOption::Range {
                 from_block,
                 to_block,
             } => (
-                resolve_block_id(from_block.map(BlockId::Number), &self.finality_info),
-                resolve_block_id(to_block.map(BlockId::Number), &self.finality_info),
+                resolve_block_id(
+                    from_block
+                        .map(BlockId::Number)
+                        .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
+                    &self.finality_info,
+                ),
+                resolve_block_id(
+                    to_block
+                        .map(BlockId::Number)
+                        .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
+                    &self.finality_info,
+                ),
             ),
         };
         tracing::trace!(from, to, ?filter, "Processing eth_getLogs request");
