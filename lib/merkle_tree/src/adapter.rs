@@ -74,8 +74,6 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         &mut self,
         tree_index: u64,
     ) -> (u64, FlatStorageLeaf<64>, Box<[Bytes32; 64]>) {
-        let leaf = self.read_leaf(tree_index).unwrap_or_default();
-
         let empty_leaf_hash = self.tree.hasher.hash_leaf(&Leaf::default());
         let empty_hashes: Vec<_> = core::iter::successors(Some(empty_leaf_hash), |previous| {
             Some(self.tree.hasher.hash_branch(previous, previous))
@@ -84,73 +82,78 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         .collect();
 
         let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
-        let mut i = 0;
-        let mut position = tree_index;
-        for nibble_count in (1..leaf_nibbles::<P>()).rev() {
-            let position_in_node = position as u8 & ((1 << P::INTERNAL_NODE_DEPTH) - 1);
-            position >>= P::INTERNAL_NODE_DEPTH;
 
-            let result = self.try_node(NodeKey {
-                version: self.version,
-                nibble_count,
-                index_on_level: tree_index
-                    >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH),
-            });
-            let node = match result {
-                Some(n) => match n {
-                    Node::Internal(internal_node) => internal_node,
-                    Node::Leaf(_) => unreachable!(),
-                },
-                None => {
-                    for _ in 0..P::INTERNAL_NODE_DEPTH {
-                        sibling_hashes[i] = fixed_bytes_to_bytes32(empty_hashes[i]);
-                        i += 1;
-                    }
-                    continue;
-                }
-            };
-            let hashes = node.internal_hashes::<P>(&self.tree.hasher, i as u8).0;
-
-            for depth in (0..P::INTERNAL_NODE_DEPTH).rev() {
-                let index_on_level =
-                    (position_in_node >> (P::INTERNAL_NODE_DEPTH - depth - 1)) as usize;
-                let index_on_level = index_on_level ^ 1;
-                sibling_hashes[i] =
-                    fixed_bytes_to_bytes32(if depth == P::INTERNAL_NODE_DEPTH - 1 {
-                        node.children
-                            .get(index_on_level)
-                            .map(|x| x.hash)
-                            .unwrap_or(empty_hashes[i])
-                    } else {
-                        let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
-                        let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
-                        let skip = needed_for_all - needed_for_this_and_lower_levels;
-                        let hash = hashes[skip + index_on_level];
-                        // TODO: this is wrong but not sure how to properly detect empty
-                        if hash == B256::default() {
-                            empty_hashes[i]
-                        } else {
-                            hash
-                        }
-                    });
-                i += 1;
-            }
-        }
-
-        let last = P::TREE_DEPTH as usize - 1;
-        let root = self
+        let mut current_node = self
             .tree
             .db()
             .try_root(self.version)
             .unwrap()
             .unwrap()
             .root_node;
-        sibling_hashes[last] = fixed_bytes_to_bytes32(
-            root.children
-                .get(position as usize ^ 1)
-                .map(|x| x.hash)
-                .unwrap_or(empty_hashes[last]),
-        );
+
+        let mut i = P::TREE_DEPTH as usize;
+        let mut nibble_count = 1;
+        let leaf = loop {
+            let index_on_level =
+                tree_index >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH);
+            let child_index = index_on_level as usize % (1 << P::INTERNAL_NODE_DEPTH);
+
+            // the root does not contain any nodes apart from its children
+            if nibble_count > 1 {
+                let hashes = current_node
+                    .internal_hashes::<P>(&self.tree.hasher, i as u8 - 3)
+                    .0;
+
+                for depth in 0..P::INTERNAL_NODE_DEPTH - 1 {
+                    let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
+                    let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
+                    let skip = needed_for_all - needed_for_this_and_lower_levels;
+
+                    let index = child_index >> (P::INTERNAL_NODE_DEPTH - depth - 1);
+
+                    let hash = hashes[skip + (index ^ 1)];
+                    // TODO: this is wrong but not sure how to properly detect empty
+                    i -= 1;
+                    sibling_hashes[i] = fixed_bytes_to_bytes32(if hash == B256::default() {
+                        empty_hashes[i]
+                    } else {
+                        hash
+                    });
+                }
+            }
+
+            i -= 1;
+            sibling_hashes[i] = fixed_bytes_to_bytes32(
+                current_node
+                    .children
+                    .get(child_index ^ 1)
+                    .map(|x| x.hash)
+                    .unwrap_or(empty_hashes[i]),
+            );
+
+            let Some(child) = current_node.children.get(child_index) else {
+                break Leaf::default();
+            };
+            current_node = match self
+                .tree
+                .db
+                .try_nodes(&[NodeKey {
+                    version: child.version,
+                    nibble_count,
+                    index_on_level,
+                }])
+                .expect("inconsistent child reference")[0]
+                .clone()
+            {
+                Node::Internal(internal) => internal,
+                Node::Leaf(leaf) => break leaf,
+            };
+            nibble_count += 1;
+        };
+
+        for i in 0..i {
+            sibling_hashes[i] = fixed_bytes_to_bytes32(empty_hashes[i]);
+        }
 
         (
             tree_index,
