@@ -1,12 +1,11 @@
 use crate::api::call_fees::{CallFees, CallFeesError};
-use crate::api::resolve_block_id;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
-use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
-use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::eips::BlockId;
 use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use zk_ee::system::errors::InternalError;
@@ -14,26 +13,26 @@ use zk_os_forward_system::run::InvalidTransaction;
 use zksync_os_state::StateHandle;
 use zksync_os_types::L2Envelope;
 
-pub struct EthCallHandler {
+pub struct EthCallHandler<R> {
     config: RpcConfig,
     state_handle: StateHandle,
 
     block_replay_storage: BlockReplayStorage,
-    repository_manager: RepositoryManager,
+    repository: R,
 }
 
-impl EthCallHandler {
+impl<R: ApiRepository> EthCallHandler<R> {
     pub fn new(
         config: RpcConfig,
         state_handle: StateHandle,
         block_replay_storage: BlockReplayStorage,
-        repository_manager: RepositoryManager,
-    ) -> EthCallHandler {
+        repository: R,
+    ) -> EthCallHandler<R> {
         Self {
             config,
             state_handle,
             block_replay_storage,
-            repository_manager,
+            repository,
         }
     }
 
@@ -51,9 +50,10 @@ impl EthCallHandler {
             return Err(EthCallError::BlockOverridesNotSupported);
         }
 
-        // consider legacy logic - perhaps differentiate Latest/Commiteed etc
-        let block_id = block.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
-        let block_number = resolve_block_id(block_id, &self.repository_manager);
+        let block_id = block.unwrap_or_default();
+        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+            return Err(EthCallError::BlockNotFound(block_id));
+        };
         tracing::info!(?block_id, block_number, "resolved block id");
 
         // using previous block context
@@ -89,8 +89,8 @@ impl EthCallHandler {
 
         let gas_limit = gas.unwrap_or(self.config.eth_call_gas as u64);
         let nonce = nonce.unwrap_or_else(|| {
-            self.repository_manager
-                .account_property_repository
+            self.repository
+                .account_property_repository()
                 .get_latest(&from.unwrap_or_default())
                 .map(|props| props.nonce)
                 .unwrap_or_default()
@@ -220,4 +220,7 @@ pub enum EthCallError {
     /// Transaction is invalid according to ZKsync OS.
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),
+
+    #[error(transparent)]
+    RepositoryError(#[from] RepositoryError),
 }

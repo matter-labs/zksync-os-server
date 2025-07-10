@@ -1,4 +1,5 @@
-use alloy::primitives::{Address, Bloom, TxHash, B256, B64, U256};
+use crate::repositories::api_interface::RepositoryBlock;
+use alloy::primitives::{Address, BlockHash, BlockNumber, Bloom, Sealed, TxHash, B256, B64, U256};
 use dashmap::DashMap;
 use std::sync::Arc;
 
@@ -8,8 +9,9 @@ use std::sync::Arc;
 ///
 #[derive(Clone, Debug, Default)]
 pub struct BlockReceiptRepository {
+    hash_index: Arc<DashMap<BlockNumber, BlockHash>>,
     /// Map from block number → block.
-    receipts: Arc<DashMap<u64, alloy::consensus::Block<TxHash>>>,
+    receipts: Arc<DashMap<BlockHash, alloy::consensus::Block<TxHash>>>,
 }
 
 impl BlockReceiptRepository {
@@ -23,7 +25,7 @@ impl BlockReceiptRepository {
     /// Must be called with `block == latest_block() + 1`.
     pub fn insert(
         &self,
-        header: &zk_os_forward_system::run::output::BlockHeader,
+        header: &Sealed<zk_os_forward_system::run::output::BlockHeader>,
         tx_hashes: Vec<TxHash>,
     ) {
         let number = header.number;
@@ -36,16 +38,27 @@ impl BlockReceiptRepository {
             },
         };
         // Store the new receipt
-        self.receipts.insert(number, block);
+        self.receipts.insert(header.hash(), block);
+        self.hash_index.insert(number, header.hash());
     }
 
-    /// Retrieve the block for `number`, if present.
-    pub fn get_by_number(&self, number: u64) -> Option<alloy::consensus::Block<TxHash>> {
-        self.receipts.get(&number).map(|r| r.value().clone())
+    /// Retrieve the block by its number, if present.
+    pub fn get_by_number(&self, number: BlockNumber) -> Option<RepositoryBlock> {
+        let hash = *self.hash_index.get(&number)?;
+        self.get_by_hash(hash)
     }
 
-    pub fn remove_by_number(&self, number: u64) {
-        self.receipts.remove(&number);
+    /// Retrieve the block by its hash, if present.
+    pub fn get_by_hash(&self, hash: BlockHash) -> Option<RepositoryBlock> {
+        self.receipts
+            .get(&hash)
+            .map(|r| Sealed::new_unchecked(r.value().clone(), hash))
+    }
+
+    pub fn remove_by_number(&self, number: BlockNumber) {
+        if let Some((_, hash)) = self.hash_index.remove(&number) {
+            self.receipts.remove(&hash);
+        }
     }
 }
 

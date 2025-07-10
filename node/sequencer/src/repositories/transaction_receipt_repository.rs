@@ -1,5 +1,5 @@
 use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, TxType};
-use alloy::primitives::{Address, Log, LogData, Sealed, TxHash, B256};
+use alloy::primitives::{Address, Log, LogData, Sealed, TxHash, TxNonce, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -36,6 +36,7 @@ pub struct StoredTxData {
 pub struct TransactionReceiptRepository {
     /// Map from tx hash → (tx, receipt).
     tx_data: Arc<DashMap<TxHash, StoredTxData>>,
+    sender_nonce_index: Arc<DashMap<(Address, TxNonce), TxHash>>,
 }
 
 impl TransactionReceiptRepository {
@@ -43,6 +44,7 @@ impl TransactionReceiptRepository {
     pub fn new() -> Self {
         TransactionReceiptRepository {
             tx_data: Arc::new(DashMap::new()),
+            sender_nonce_index: Arc::new(DashMap::new()),
         }
     }
 
@@ -50,7 +52,10 @@ impl TransactionReceiptRepository {
     /// already exists, it will be overwritten.
     pub fn insert(&self, txs: Vec<(TxHash, StoredTxData)>) {
         for (tx_hash, data) in txs {
+            let sender = data.tx.signer();
+            let nonce = data.tx.nonce();
             self.tx_data.insert(tx_hash, data);
+            self.sender_nonce_index.insert((sender, nonce), tx_hash);
         }
     }
 
@@ -82,6 +87,16 @@ impl TransactionReceiptRepository {
         }
 
         Ok(result)
+    }
+
+    pub fn get_transaction_hash_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: TxNonce,
+    ) -> Option<TxHash> {
+        self.sender_nonce_index
+            .get(&(sender, nonce))
+            .map(|tx_hash| *tx_hash)
     }
 
     pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {

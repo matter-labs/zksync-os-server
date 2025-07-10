@@ -91,7 +91,7 @@ impl AccountPropertyRepository {
     pub fn get_at_block(&self, block: u64, addr: &Address) -> Option<AccountProperties> {
         let base = self.base_block.load(Ordering::Relaxed);
         // Scan diffs newest-first
-        for bn in (base + 1..block).rev() {
+        for bn in (base + 1..=block).rev() {
             if let Some(diff_arc) = self.diffs.get(&bn) {
                 if let Some(props) = diff_arc.get(addr) {
                     return Some(*props);
