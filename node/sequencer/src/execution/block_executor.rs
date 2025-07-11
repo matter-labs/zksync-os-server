@@ -25,7 +25,6 @@ pub async fn execute_block(
     let state_view = state.state_view_at_block(ctx.block_number)?;
     let mut runner = VmWrapper::new(ctx, state_view);
 
-    // todo: not sure we need them separate
     let mut executed_txs = Vec::<ZkTransaction>::new();
 
     /* ---------- deadline config ------------------------------------ */

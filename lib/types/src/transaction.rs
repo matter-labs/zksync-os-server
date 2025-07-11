@@ -67,6 +67,8 @@ pub struct TxL1Priority {
     pub refund_recipient: Address,
     /// data: An unlimited size byte array specifying the input data of the message call.
     pub input: Bytes,
+    /// The set of L2 bytecode hashes whose preimages were shown on L1.
+    pub factory_deps: Vec<B256>,
 }
 
 impl Typed2718 for TxL1Priority {
@@ -89,6 +91,7 @@ impl RlpEcdsaEncodableTx for TxL1Priority {
             + self.to_mint.length()
             + self.refund_recipient.length()
             + self.input.length()
+            + self.factory_deps.length()
     }
 
     fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
@@ -104,6 +107,7 @@ impl RlpEcdsaEncodableTx for TxL1Priority {
         self.to_mint.encode(out);
         self.refund_recipient.encode(out);
         self.input.encode(out);
+        self.factory_deps.encode(out);
     }
 
     fn tx_hash_with_type(&self, _signature: &Signature, _ty: u8) -> TxHash {
@@ -128,6 +132,7 @@ impl RlpEcdsaDecodableTx for TxL1Priority {
             to_mint: Decodable::decode(buf)?,
             refund_recipient: Decodable::decode(buf)?,
             input: Decodable::decode(buf)?,
+            factory_deps: Decodable::decode(buf)?,
         })
     }
 }
@@ -393,7 +398,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
             return Err(L1EnvelopeError::NonEmptyReservedDynamic(tx.reservedDynamic));
         }
 
-        let hash = keccak256(tx.abi_encode_sequence());
+        let hash = keccak256(tx.abi_encode());
         let tx = TxL1Priority {
             hash,
             from: Address::from_slice(&tx.from.to_be_bytes::<32>()[12..]),
@@ -407,6 +412,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
             to_mint: tx.reserved[0],
             refund_recipient: Address::from_slice(&tx.reserved[1].to_be_bytes::<32>()[12..]),
             input: tx.data,
+            factory_deps: tx.factoryDeps.into_iter().map(B256::from).collect(),
         };
         Ok(L1Envelope {
             inner: Signed::new_unchecked(
@@ -687,9 +693,12 @@ impl From<L2Transaction> for TransactionData {
 
 impl From<ZkTransaction> for TransactionData {
     fn from(value: ZkTransaction) -> Self {
-        match value.inner.into_inner() {
+        let (l2_envelope, from) = value.into_parts();
+        let mut tx_data: TransactionData = match l2_envelope {
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
             ZkEnvelope::L2(l2_envelope) => l2_envelope.into(),
-        }
+        };
+        tx_data.from = from;
+        tx_data
     }
 }
