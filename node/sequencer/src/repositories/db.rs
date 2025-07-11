@@ -1,8 +1,9 @@
 use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
+use alloy::consensus::transaction::SignerRecoverable;
 use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
-use alloy::primitives::TxHash;
+use alloy::primitives::{Address, TxHash};
 use alloy::rlp::{Decodable, Encodable};
-use zksync_os_types::L2Transaction;
+use zksync_os_types::{L2Envelope, L2Transaction};
 use zksync_storage::db::NamedColumnFamily;
 use zksync_storage::RocksDB;
 
@@ -48,7 +49,7 @@ impl NamedColumnFamily for RepositoryCF {
             RepositoryCF::BlockNumberToHash => "block_number_to_hash",
             RepositoryCF::Tx => "tx",
             RepositoryCF::TxReceipt => "tx_receipt",
-            RepositoryCF::TxMeta => "tx_receipt",
+            RepositoryCF::TxMeta => "tx_meta",
             RepositoryCF::InitiatorAndNonceToHash => "initiator_and_nonce_to_hash",
             RepositoryCF::Meta => "meta",
         }
@@ -101,7 +102,16 @@ impl RepositoryDB {
         let receipt_bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap()?;
         let meta_bytes = self.db.get_cf(RepositoryCF::TxMeta, &hash.0).unwrap()?;
 
-        let tx = L2Transaction::decode(&mut tx_bytes.as_slice()).unwrap();
+        let tx_bytes_mut = &mut &mut tx_bytes.as_slice();
+        let tx_envelope = L2Envelope::decode(tx_bytes_mut).unwrap();
+        let signer = if tx_bytes_mut.is_empty() {
+            // l2 tx
+            tx_envelope.recover_signer().unwrap()
+        } else {
+            // l1->l2 tx
+            Address::from_slice(tx_bytes_mut)
+        };
+        let tx = L2Transaction::new_unchecked(tx_envelope, signer);
         let receipt = ReceiptEnvelope::decode(&mut receipt_bytes.as_slice()).unwrap();
         let meta = TxMeta::decode(&mut meta_bytes.as_slice()).unwrap();
 
@@ -129,6 +139,10 @@ impl RepositoryDB {
             let tx_hash = tx.tx.hash();
             let mut tx_bytes = Vec::new();
             tx.tx.encode(&mut tx_bytes);
+            // Kludge for L1 txs.
+            if tx.tx.signature().r().is_zero() {
+                tx_bytes.extend_from_slice(tx.tx.signer().as_slice());
+            }
             batch.put_cf(RepositoryCF::Tx, tx_hash.as_slice(), &tx_bytes);
 
             let mut receipt_bytes = Vec::new();
