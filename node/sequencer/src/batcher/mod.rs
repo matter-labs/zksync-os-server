@@ -2,7 +2,7 @@ use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
 use std::alloc::Global;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -118,10 +118,9 @@ impl Batcher {
                         .set(replay_record.block_context.block_number);
                     let block_number = replay_record.block_context.block_number;
                     tracing::debug!(
-                        "Batcher dispatcher received block {} with {} L1 transactions and {} L2 transactions",
+                        "Batcher dispatcher received block {} with {} transactions",
                         block_number,
-                        replay_record.l1_transactions.len(),
-                        replay_record.l2_transactions.len()
+                        replay_record.transactions.len()
                     );
                     for tx in worker_block_senders.iter() {
                         tx.send((batch_output.clone(), replay_record.clone()))
@@ -196,18 +195,12 @@ fn worker_loop(
 
             let state_view = state_handle.state_view_at_block(bn).unwrap();
 
-            let l1_transactions = replay_record
-                .l1_transactions
+            let transactions = replay_record
+                .transactions
                 .clone()
                 .into_iter()
-                .map(|l1_tx| l1_tx.encode_zksync_os());
-            let l2_transactions = replay_record
-                .l2_transactions
-                .into_iter()
-                .map(|l2_tx| l2_tx.encode_zksync_os());
-            let transactions = l1_transactions
-                .chain(l2_transactions)
-                .collect::<VecDeque<_>>();
+                .map(|tx| tx.encode_zksync_os())
+                .collect();
             let tx_count = transactions.len();
             let list_source = TxListSource { transactions };
 
@@ -249,7 +242,7 @@ fn worker_loop(
 
             let commit_batch_info = CommitBatchInfo::new(
                 batch_output,
-                replay_record.l1_transactions,
+                &replay_record.transactions,
                 tree_output,
                 CHAIN_ID,
             );

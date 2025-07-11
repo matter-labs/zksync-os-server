@@ -26,7 +26,7 @@ use zk_ee::utils::Bytes32;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_os_types::L2Envelope;
+use zksync_os_types::ZkEnvelope;
 
 pub(crate) struct EthNamespace {
     tx_handler: TxHandler,
@@ -192,7 +192,7 @@ impl EthApiServer for EthNamespace {
         todo!()
     }
 
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
         //todo: only expose canonized!!!
         let res = self
             .repository_manager

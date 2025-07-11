@@ -15,16 +15,13 @@ pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
 use crate::repositories::metrics::REPOSITORIES_METRICS;
-use crate::repositories::transaction_receipt_repository::{
-    l1_transaction_to_api_data, l2_transaction_to_api_data,
-};
+use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
-use alloy::primitives::TxHash;
 pub use block_receipt_repository::BlockReceiptRepository;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::BatchOutput;
-use zksync_os_types::{L1Transaction, L2Transaction};
+use zksync_os_types::ZkTransaction;
 
 /// Manages repositories that store node data required for RPC but not for VM execution.
 ///
@@ -68,15 +65,9 @@ impl RepositoryManager {
         &self,
         block_number: u64,
         mut block_output: BatchOutput,
-        l1_transactions: Vec<L1Transaction>,
-        l2_transactions: Vec<L2Transaction>,
+        transactions: Vec<ZkTransaction>,
     ) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
-        let tx_hashes = l1_transactions
-            .iter()
-            .map(|tx| TxHash::from(tx.hash().0))
-            .chain(l2_transactions.iter().map(|tx| *tx.hash()))
-            .collect();
 
         // Drop rejected transactions from the block output
         block_output.tx_results.retain(|result| result.is_ok());
@@ -92,23 +83,16 @@ impl RepositoryManager {
         let mut tx_index = 0;
         let mut log_index = 0;
         let mut block_bloom = alloy::primitives::Bloom::default();
-
-        for l1_tx in l1_transactions.into_iter() {
-            let hash = Bytes32::from(l1_tx.hash().0);
-            let api_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
+        let mut tx_hashes = Vec::new();
+        for tx in transactions {
+            let tx_hash = *tx.hash();
+            tx_hashes.push(tx_hash);
+            let tx_hash = Bytes32::from(tx_hash.0);
+            let api_tx = transaction_to_api_data(&block_output, tx_index, log_index, tx);
             log_index += api_tx.receipt.logs().len();
             tx_index += 1;
             block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
-            self.transaction_receipt_repository.insert(hash, api_tx);
-        }
-
-        for l2_tx in l2_transactions.into_iter() {
-            let hash = Bytes32::from(l2_tx.hash().0);
-            let api_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
-            log_index += api_tx.receipt.logs().len();
-            tx_index += 1;
-            block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
-            self.transaction_receipt_repository.insert(hash, api_tx);
+            self.transaction_receipt_repository.insert(tx_hash, api_tx);
         }
         block_output.header.logs_bloom = block_bloom.into_array();
 

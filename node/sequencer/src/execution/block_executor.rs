@@ -1,17 +1,14 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{
-    InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy, UnifiedTransaction,
-};
+use crate::model::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
-use itertools::{Either, Itertools};
 use std::pin::Pin;
 use tokio::time::Sleep;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
-use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
+use zksync_os_types::{EncodableZksyncOs, ZkTransaction};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -29,7 +26,7 @@ pub async fn execute_block(
     let mut runner = VmWrapper::new(ctx, state_view);
 
     // todo: not sure we need them separate
-    let mut executed_txs = Vec::<UnifiedTransaction>::new();
+    let mut executed_txs = Vec::<ZkTransaction>::new();
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match command.seal_policy {
@@ -146,20 +143,8 @@ pub async fn execute_block(
         .observe(output.storage_writes.len() as u64);
     latency.observe();
 
-    // todo: not sure we need to track l1_ and l2_transactions separately in replay_record
-    let (l1_transactions, l2_transactions): (Vec<L1Transaction>, Vec<L2Transaction>) =
-        executed_txs.into_iter().partition_map(|tx| match tx {
-            UnifiedTransaction::L1(tx) => Either::Left(tx),
-            UnifiedTransaction::L2(tx) => Either::Right(tx),
-        });
-
     Ok((
         output,
-        ReplayRecord::new(
-            ctx,
-            command.starting_l1_priority_id,
-            l1_transactions,
-            l2_transactions,
-        ),
+        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
     ))
 }
