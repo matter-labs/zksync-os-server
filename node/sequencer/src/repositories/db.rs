@@ -1,7 +1,8 @@
-use crate::repositories::transaction_receipt_repository::TransactionApiData;
-use alloy::consensus::Transaction;
+use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
+use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
 use alloy::primitives::TxHash;
-use alloy::rpc::types::Header;
+use alloy::rlp::{Decodable, Encodable};
+use zksync_os_types::L2Transaction;
 use zksync_storage::db::NamedColumnFamily;
 use zksync_storage::RocksDB;
 
@@ -11,8 +12,12 @@ pub enum RepositoryCF {
     BlockData,
     // block number => block hash
     BlockNumberToHash,
-    // tx hash => (tx receipt, tx envelop)
-    TxData,
+    // tx hash => tx
+    Tx,
+    // tx hash => receipt envelope
+    TxReceipt,
+    // tx hash => tx meta
+    TxMeta,
     // (initiator address, nonce) => tx hash
     InitiatorAndNonceToHash,
     // meta fields: currently only latest block number
@@ -30,7 +35,9 @@ impl NamedColumnFamily for RepositoryCF {
     const ALL: &'static [Self] = &[
         RepositoryCF::BlockData,
         RepositoryCF::BlockNumberToHash,
-        RepositoryCF::TxData,
+        RepositoryCF::Tx,
+        RepositoryCF::TxReceipt,
+        RepositoryCF::TxMeta,
         RepositoryCF::InitiatorAndNonceToHash,
         RepositoryCF::Meta,
     ];
@@ -39,7 +46,9 @@ impl NamedColumnFamily for RepositoryCF {
         match self {
             RepositoryCF::BlockData => "block_data",
             RepositoryCF::BlockNumberToHash => "block_number_to_hash",
-            RepositoryCF::TxData => "tx_data",
+            RepositoryCF::Tx => "tx",
+            RepositoryCF::TxReceipt => "tx_receipt",
+            RepositoryCF::TxMeta => "tx_receipt",
             RepositoryCF::InitiatorAndNonceToHash => "initiator_and_nonce_to_hash",
             RepositoryCF::Meta => "meta",
         }
@@ -64,7 +73,7 @@ impl RepositoryDB {
             .unwrap_or(0)
     }
 
-    pub fn get_block_by_number(&self, number: u64) -> Option<(Header, Vec<TxHash>)> {
+    pub fn get_block_by_number(&self, number: u64) -> Option<Block<TxHash>> {
         let block_number_bytes = number.to_be_bytes();
         let block_hash_bytes = self
             .db
@@ -74,39 +83,34 @@ impl RepositoryDB {
             .db
             .get_cf(RepositoryCF::BlockData, &block_hash_bytes)
             .unwrap();
-        bytes.map(|bytes| {
-            let header_len = u64::from_be_bytes(bytes[0..8].to_vec().try_into().unwrap()) as usize;
-            let header = serde_json::from_slice(&bytes[8..(8 + header_len)]).unwrap();
-            // let header = bincode::serde::decode_from_slice(&bytes[8..(8 + header_len)], bincode::config::standard()).unwrap().0;
-            // let header = ciborium::from_reader(&bytes[8..(8 + header_len)]).unwrap();
-
-            let bytes_left = bytes.len() - (8 + header_len);
-            assert_eq!(bytes_left % 32, 0, "Invalid block data length");
-            let number_of_hashes = bytes_left / 32;
-            let tx_hashes = (0..number_of_hashes)
-                .map(|i| {
-                    TxHash::from_slice(
-                        &bytes[(8 + header_len + i * 32)..(8 + header_len + (i + 1) * 32)],
-                    )
-                })
-                .collect();
-
-            (header, tx_hashes)
-        })
+        bytes.map(|bytes| Block::decode(&mut bytes.as_slice()).unwrap())
     }
 
-    pub fn get_tx_by_hash(&self, hash: TxHash) -> Option<TransactionApiData> {
-        let bytes = self.db.get_cf(RepositoryCF::TxData, &hash.0).unwrap();
-        bytes.map(|bytes| {
-            serde_json::from_slice(&bytes).unwrap()
-            // bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap().0
-            // ciborium::from_reader(&bytes[..]).unwrap()
-        })
+    pub fn get_tx_by_hash(&self, hash: TxHash) -> Option<L2Transaction> {
+        let bytes = self.db.get_cf(RepositoryCF::Tx, &hash.0).unwrap();
+        bytes.map(|bytes| L2Transaction::decode(&mut bytes.as_slice()).unwrap())
     }
 
-    pub fn write_block(&self, header: &Header, txs: &[TransactionApiData]) {
-        let block_number = header.number;
-        let block_hash = header.hash.0;
+    pub fn get_tx_receipt_by_hash(&self, hash: TxHash) -> Option<ReceiptEnvelope> {
+        let bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap();
+        bytes.map(|bytes| ReceiptEnvelope::decode(&mut bytes.as_slice()).unwrap())
+    }
+
+    pub fn get_stored_tx_by_hash(&self, hash: TxHash) -> Option<StoredTxData> {
+        let tx_bytes = self.db.get_cf(RepositoryCF::Tx, &hash.0).unwrap()?;
+        let receipt_bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap()?;
+        let meta_bytes = self.db.get_cf(RepositoryCF::TxMeta, &hash.0).unwrap()?;
+
+        let tx = L2Transaction::decode(&mut tx_bytes.as_slice()).unwrap();
+        let receipt = ReceiptEnvelope::decode(&mut receipt_bytes.as_slice()).unwrap();
+        let meta = TxMeta::decode(&mut meta_bytes.as_slice()).unwrap();
+
+        Some(StoredTxData { tx, receipt, meta })
+    }
+
+    pub fn write_block(&self, block: &Block<TxHash>, txs: &[StoredTxData]) {
+        let block_number = block.number;
+        let block_hash = block.hash_slow();
         let block_number_bytes = block_number.to_be_bytes();
         let block_hash_bytes = block_hash.to_vec();
 
@@ -117,35 +121,33 @@ impl RepositoryDB {
             &block_hash_bytes,
         );
 
-        let header_bytes = serde_json::to_vec(&header).unwrap();
-        // let header_bytes = bincode::serde::encode_to_vec(&header, bincode::config::standard()).unwrap();
-        // let mut header_bytes = Vec::new();
-        // ciborium::into_writer(header, &mut header_bytes).unwrap();
-        let mut block_data = Vec::with_capacity(8 + header_bytes.len() + txs.len() * 32);
-        block_data.extend_from_slice(&(header_bytes.len() as u64).to_be_bytes());
-        block_data.extend_from_slice(&header_bytes);
-        for tx in txs {
-            block_data.extend_from_slice(&tx.receipt.transaction_hash.0);
-        }
-        batch.put_cf(RepositoryCF::BlockData, &block_hash, &block_data);
+        let mut block_bytes = Vec::new();
+        block.encode(&mut block_bytes);
+        batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
 
         for tx in txs {
-            let tx_hash = tx.receipt.transaction_hash.0;
-            let tx_data_bytes = serde_json::to_vec(tx).unwrap();
-            // let tx_data_bytes = bincode::serde::encode_to_vec(tx, bincode::config::standard()).unwrap();
-            // let mut tx_data_bytes = Vec::new();
-            // ciborium::into_writer(tx, &mut tx_data_bytes).unwrap();
-            batch.put_cf(RepositoryCF::TxData, &tx_hash, &tx_data_bytes);
+            let tx_hash = tx.tx.hash();
+            let mut tx_bytes = Vec::new();
+            tx.tx.encode(&mut tx_bytes);
+            batch.put_cf(RepositoryCF::Tx, tx_hash.as_slice(), &tx_bytes);
 
-            let initiator = tx.receipt.from.0;
-            let nonce = tx.transaction.nonce();
+            let mut receipt_bytes = Vec::new();
+            tx.receipt.encode(&mut receipt_bytes);
+            batch.put_cf(RepositoryCF::TxReceipt, tx_hash.as_slice(), &receipt_bytes);
+
+            let mut tx_meta_bytes = Vec::new();
+            tx.meta.encode(&mut tx_meta_bytes);
+            batch.put_cf(RepositoryCF::TxMeta, tx_hash.as_slice(), &tx_meta_bytes);
+
+            let initiator = tx.tx.signer();
+            let nonce = tx.tx.nonce();
             let mut initiator_and_nonce_key = Vec::with_capacity(20 + 8);
             initiator_and_nonce_key.extend_from_slice(initiator.as_slice());
             initiator_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());
             batch.put_cf(
                 RepositoryCF::InitiatorAndNonceToHash,
                 &initiator_and_nonce_key,
-                &tx_hash,
+                tx_hash.as_slice(),
             );
         }
 

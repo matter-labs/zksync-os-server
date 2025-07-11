@@ -18,11 +18,11 @@ use crate::repositories::account_property_repository::extract_account_properties
 use crate::repositories::db::{RepositoryCF, RepositoryDB};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::{
-    l1_transaction_to_api_data, l2_transaction_to_api_data, TransactionApiData,
+    l1_transaction_to_api_data, l2_transaction_to_api_data, StoredTxData,
 };
 pub use account_property_repository::AccountPropertyRepository;
+use alloy::consensus::{Block, ReceiptEnvelope};
 use alloy::primitives::TxHash;
-use alloy::rpc::types::Header;
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -115,20 +115,20 @@ impl RepositoryManager {
 
         for l1_tx in l1_transactions.into_iter() {
             let hash = TxHash::from(l1_tx.hash().0);
-            let api_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
-            log_index += api_tx.receipt.logs().len();
+            let stored_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
             tx_index += 1;
-            block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
-            self.transaction_receipt_repository.insert(hash, api_tx);
+            log_index += stored_tx.receipt.logs().len() as u64;
+            block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+            self.transaction_receipt_repository.insert(hash, stored_tx);
         }
 
         for l2_tx in l2_transactions.into_iter() {
             let hash = TxHash::from(l2_tx.hash().0);
-            let api_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
-            log_index += api_tx.receipt.logs().len();
+            let stored_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
             tx_index += 1;
-            block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
-            self.transaction_receipt_repository.insert(hash, api_tx);
+            log_index += stored_tx.receipt.logs().len() as u64;
+            block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+            self.transaction_receipt_repository.insert(hash, stored_tx);
         }
         block_output.header.logs_bloom = block_bloom.into_array();
 
@@ -148,18 +148,18 @@ impl RepositoryManager {
             let db_block_number = self.db.latest_block_number();
             let latest_block = self.latest_block.load(Ordering::Relaxed);
             for number in (db_block_number + 1)..=latest_block {
-                let (header, tx_hashes) = self
+                let block = self
                     .block_receipt_repository
                     .get_by_number(number)
                     .expect("Missing block receipt");
                 let txs = self
                     .transaction_receipt_repository
-                    .get_by_hashes(&tx_hashes);
-                self.db.write_block(&header, &txs);
+                    .get_by_hashes(&block.body.transactions);
+                self.db.write_block(&block, &txs);
 
                 self.block_receipt_repository.remove_by_number(number);
                 self.transaction_receipt_repository
-                    .remove_by_hashes(&tx_hashes);
+                    .remove_by_hashes(&block.body.transactions);
                 tracing::info!(number, "Persisted receipts");
             }
         }
@@ -185,7 +185,7 @@ impl RepositoryManager {
         self.populate_in_memory(block_output, l1_transactions, l2_transactions);
     }
 
-    pub fn get_block_by_number(&self, number: u64) -> Option<(Header, Vec<TxHash>)> {
+    pub fn get_block_by_number(&self, number: u64) -> Option<Block<TxHash>> {
         if let Some(res) = self.block_receipt_repository.get_by_number(number) {
             return Some(res);
         }
@@ -193,11 +193,33 @@ impl RepositoryManager {
         self.db.get_block_by_number(number)
     }
 
-    pub fn get_tx_by_hash(&self, tx_hash: TxHash) -> Option<TransactionApiData> {
-        if let Some(res) = self.transaction_receipt_repository.get_by_hash(tx_hash) {
+    pub fn get_tx_by_hash(&self, tx_hash: TxHash) -> Option<L2Transaction> {
+        if let Some(res) = self.transaction_receipt_repository.get_tx_by_hash(tx_hash) {
             return Some(res);
         }
 
         self.db.get_tx_by_hash(tx_hash)
+    }
+
+    pub fn get_tx_receipt_by_hash(&self, tx_hash: TxHash) -> Option<ReceiptEnvelope> {
+        if let Some(res) = self
+            .transaction_receipt_repository
+            .get_receipt_by_hash(tx_hash)
+        {
+            return Some(res);
+        }
+
+        self.db.get_tx_receipt_by_hash(tx_hash)
+    }
+
+    pub fn get_stored_tx_by_hash(&self, tx_hash: TxHash) -> Option<StoredTxData> {
+        if let Some(res) = self
+            .transaction_receipt_repository
+            .get_stored_tx_by_hash(tx_hash)
+        {
+            return Some(res);
+        }
+
+        self.db.get_stored_tx_by_hash(tx_hash)
     }
 }

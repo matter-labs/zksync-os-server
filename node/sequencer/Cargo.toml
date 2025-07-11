@@ -31,6 +31,8 @@ zksync_storage.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256"] }
+# In order to use RlpDecodable, RlpEncodable alloy-rlp crate must be imported directly.
+alloy-rlp.workspace = true
 blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }

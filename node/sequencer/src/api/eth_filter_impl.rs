@@ -4,6 +4,7 @@ use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use alloy::consensus::Sealable;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
@@ -111,27 +112,39 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some((header, tx_hashes)) = self.repository_manager.get_block_by_number(number) {
-                if filter.matches_bloom(header.inner.logs_bloom) {
+            if let Some(block) = self.repository_manager.get_block_by_number(number) {
+                let sealed_header = block.header.seal_slow();
+                let mut log_index_in_block = 0u64;
+                if filter.matches_bloom(sealed_header.logs_bloom) {
                     tracing::trace!(
                         number,
                         ?filter,
                         "Block matches bloom filter, scanning receipts",
                     );
-                    let tx_receipts = tx_hashes.into_iter().map(|hash| {
+                    let stored_txs = block.body.transactions.into_iter().map(|hash| {
                         self.repository_manager
-                            .get_tx_by_hash(hash)
+                            .get_stored_tx_by_hash(hash)
                             .unwrap_or_else(|| {
                                 panic!("Missing tx receipt for hash: {hash:?} in block {number}")
                             })
                     });
                     let mut at_least_one_log_added = false;
-                    for tx_data in tx_receipts {
-                        for log in tx_data.receipt.logs() {
-                            if filter.matches(&log.inner) {
-                                logs.push(log.clone());
+                    for tx in stored_txs {
+                        for inner_log in tx.receipt.logs() {
+                            if filter.matches(inner_log) {
+                                logs.push(Log {
+                                    inner: inner_log.clone(),
+                                    block_hash: Some(sealed_header.hash()),
+                                    block_number: Some(sealed_header.number),
+                                    block_timestamp: Some(sealed_header.timestamp),
+                                    transaction_hash: Some(*tx.tx.hash()),
+                                    transaction_index: Some(tx.meta.tx_index_in_block),
+                                    log_index: Some(log_index_in_block),
+                                    removed: false,
+                                });
                                 at_least_one_log_added = true;
                             }
+                            log_index_in_block += 1;
                         }
                     }
                     if at_least_one_log_added {

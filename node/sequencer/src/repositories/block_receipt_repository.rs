@@ -1,5 +1,5 @@
+use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, Bloom, TxHash, B256, B64, U256};
-use alloy::rpc::types::Header;
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_os_forward_system::run::output::BlockHeader;
@@ -10,8 +10,8 @@ use zk_os_forward_system::run::output::BlockHeader;
 ///
 #[derive(Clone, Debug, Default)]
 pub struct BlockReceiptRepository {
-    /// Map from block number → `BatchOutput`.
-    receipts: Arc<DashMap<u64, (Header, Vec<TxHash>)>>,
+    /// Map from block number → block.
+    receipts: Arc<DashMap<u64, Block<TxHash>>>,
 }
 
 impl BlockReceiptRepository {
@@ -24,13 +24,21 @@ impl BlockReceiptRepository {
     ///
     /// Must be called with `block == latest_block() + 1`.
     pub fn insert(&self, header: &BlockHeader, tx_hashes: Vec<TxHash>) {
+        let number = header.number;
+        let block = Block {
+            header: alloy_header(header),
+            body: BlockBody {
+                transactions: tx_hashes.clone(),
+                ommers: vec![],
+                withdrawals: None,
+            },
+        };
         // Store the new receipt
-        self.receipts
-            .insert(header.number, (alloy_header(header), tx_hashes));
+        self.receipts.insert(number, block);
     }
 
-    /// Retrieve the block header and tx hashes for `number`, if present.
-    pub fn get_by_number(&self, number: u64) -> Option<(Header, Vec<TxHash>)> {
+    /// Retrieve the block for `number`, if present.
+    pub fn get_by_number(&self, number: u64) -> Option<Block<TxHash>> {
         self.receipts.get(&number).map(|r| r.value().clone())
     }
 
@@ -40,7 +48,7 @@ impl BlockReceiptRepository {
 }
 
 fn alloy_header(header: &BlockHeader) -> Header {
-    let inner = alloy::consensus::Header {
+    Header {
         parent_hash: B256::new(header.parent_hash.as_u8_array()),
         ommers_hash: B256::new(header.ommers_hash.as_u8_array()),
         beneficiary: Address::new(header.beneficiary.to_be_bytes()),
@@ -62,11 +70,5 @@ fn alloy_header(header: &BlockHeader) -> Header {
         excess_blob_gas: None,
         parent_beacon_block_root: None,
         requests_hash: None,
-    };
-    Header {
-        hash: header.hash().into(),
-        inner,
-        total_difficulty: None,
-        size: None,
     }
 }

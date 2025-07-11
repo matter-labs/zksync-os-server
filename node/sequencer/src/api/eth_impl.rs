@@ -9,14 +9,14 @@ use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
-use alloy::consensus::Sealable;
+use alloy::consensus::{Sealable, Transaction as _};
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{Address, Bytes, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
+    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, Log, SyncStatus,
     Transaction, TransactionReceipt, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
@@ -79,10 +79,10 @@ impl EthNamespace {
         Ok(self
             .repository_manager
             .get_block_by_number(number)
-            .map(|(header, tx_hashes)| {
+            .map(|block| {
                 Block::new(
-                    Header::from_consensus(header.inner.seal_slow(), None, None),
-                    BlockTransactions::Hashes(tx_hashes),
+                    Header::from_consensus(block.header.seal_slow(), None, None),
+                    BlockTransactions::Hashes(block.body.transactions),
                 )
             }))
     }
@@ -185,9 +185,16 @@ impl EthApiServer for EthNamespace {
 
     async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
         //todo: only expose canonized!!!
-        let res = self.repository_manager.get_tx_by_hash(hash);
+        let stored_tx = self.repository_manager.get_stored_tx_by_hash(hash);
+        let res = stored_tx.map(|stored_tx| Transaction {
+            inner: stored_tx.tx,
+            block_hash: Some(stored_tx.meta.block_hash),
+            block_number: Some(stored_tx.meta.block_number),
+            transaction_index: Some(stored_tx.meta.tx_index_in_block),
+            effective_gas_price: Some(stored_tx.meta.effective_gas_price),
+        });
         tracing::info!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
-        Ok(res.map(|data| data.transaction))
+        Ok(res)
     }
 
     async fn raw_transaction_by_block_hash_and_index(
@@ -232,9 +239,40 @@ impl EthApiServer for EthNamespace {
 
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
         //todo: only expose canonized!!!
-        let res = self.repository_manager.get_tx_by_hash(hash);
+        let stored_tx = self.repository_manager.get_stored_tx_by_hash(hash);
+        let res = stored_tx.map(|stored_tx| {
+            let mut log_index_in_tx = 0;
+            let inner_receipt = stored_tx.receipt.map_logs(|inner_log| {
+                let log = Log {
+                    inner: inner_log.clone(),
+                    block_hash: Some(stored_tx.meta.block_hash),
+                    block_number: Some(stored_tx.meta.block_number),
+                    block_timestamp: Some(stored_tx.meta.block_timestamp),
+                    transaction_hash: Some(hash),
+                    transaction_index: Some(stored_tx.meta.tx_index_in_block),
+                    log_index: Some(stored_tx.meta.number_of_logs_before_this_tx + log_index_in_tx),
+                    removed: false,
+                };
+                log_index_in_tx += 1;
+                log
+            });
+            TransactionReceipt {
+                inner: inner_receipt,
+                transaction_hash: hash,
+                transaction_index: Some(stored_tx.meta.tx_index_in_block),
+                block_hash: Some(stored_tx.meta.block_hash),
+                block_number: Some(stored_tx.meta.block_number),
+                gas_used: stored_tx.meta.gas_used,
+                effective_gas_price: stored_tx.meta.effective_gas_price,
+                blob_gas_used: None,
+                blob_gas_price: None,
+                from: stored_tx.tx.signer(),
+                to: stored_tx.tx.to(),
+                contract_address: stored_tx.meta.contract_address,
+            }
+        });
         tracing::debug!("transaction_receipt: hash: {:?}, res: {:?}", hash, res);
-        Ok(res.map(|data| data.receipt))
+        Ok(res)
     }
 
     async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
