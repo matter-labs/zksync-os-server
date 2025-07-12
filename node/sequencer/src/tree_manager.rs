@@ -1,3 +1,4 @@
+use crate::metrics::GENERAL_METRICS;
 use anyhow::Context;
 use std::ops::Div;
 use std::path::Path;
@@ -133,6 +134,9 @@ impl TreeManager {
                     TREE_METRICS.block_time.observe(started_at.elapsed());
 
                     TREE_METRICS.processing_range.observe(count as u64);
+                    GENERAL_METRICS.block_number[&"tree_manager"].set(block_number);
+                    GENERAL_METRICS.executed_transactions[&"tree_manager"]
+                        .inc_by(batch_output.tx_results.len() as u64);
                 }
                 None => {
                     // Channel closed, exit the loop

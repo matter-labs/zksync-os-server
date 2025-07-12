@@ -9,6 +9,7 @@ pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
 pub mod finality;
+mod metrics;
 pub mod model;
 pub mod prover_api;
 pub mod repositories;
@@ -20,6 +21,7 @@ use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::finality::FinalityTracker;
+use crate::metrics::GENERAL_METRICS;
 use crate::model::BatchJob;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
@@ -31,7 +33,6 @@ use crate::{
     block_context_provider::BlockContextProvider,
     execution::{
         block_executor::execute_block, block_transactions_provider::BlockTransactionsProvider,
-        metrics::EXECUTION_METRICS,
     },
     model::{BlockCommand, ReplayRecord},
 };
@@ -203,7 +204,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        EXECUTION_METRICS.sealed_block[&"execute"].set(bn);
+        GENERAL_METRICS.block_number[&"execute"].set(bn);
     }
     Ok::<(), anyhow::Error>(())
 }
