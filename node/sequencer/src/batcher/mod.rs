@@ -1,3 +1,4 @@
+use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
 use std::alloc::Global;
@@ -20,7 +21,7 @@ use zksync_os_types::EncodableZksyncOs;
 // * number of blocks processed by Workers, but not sent to l1 sender yet because of gaps (we need to send in order)
 const MAX_INFLIGHT: usize = 30;
 
-/// This component will genarate l1 batches from the stream of blocks
+/// This component will generate l1 batches from the stream of blocks
 /// It will also generate Prover Input for each batch.
 ///
 /// Currently, batching is not implemented on zksync-os side, so we do 1 batch == 1 block
@@ -181,7 +182,7 @@ fn worker_loop(
             update_tree_with_batch_output(&tree, &batch_output);
             continue;
         } else {
-            // my job! Computing prover input and sending result to batche_sender
+            // my job! Computing prover input and sending the result to batcher_sender
             tracing::info!(
                 worker_id = worker_id,
                 block_number = bn,
@@ -207,6 +208,7 @@ fn worker_loop(
             let transactions = l1_transactions
                 .chain(l2_transactions)
                 .collect::<VecDeque<_>>();
+            let tx_count = transactions.len();
             let list_source = TxListSource { transactions };
 
             let prover_input_generation_latency =
@@ -226,6 +228,7 @@ fn worker_loop(
             tracing::info!(
                 worker_id = worker_id,
                 block_number = bn,
+                tx_count = tx_count,
                 next_free_slot = tree.read().unwrap().storage_tree.next_free_slot,
                 "Completed prover input computation in {:?}.",
                 latency
@@ -265,6 +268,8 @@ fn worker_loop(
                 prover_input,
                 commit_batch_info,
             };
+            GENERAL_METRICS.block_number[&"batcher"].set(bn);
+            GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
             rt.block_on(batch_sender.send(batch)).unwrap();
         }
     }
