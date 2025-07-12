@@ -86,7 +86,10 @@ impl ProverJobManager {
         }
     }
 
-    pub async fn listen_for_batch_jobs(self: Arc<Self>, mut rx: Receiver<BatchJob>) {
+    pub async fn listen_for_batch_jobs(
+        self: Arc<Self>,
+        mut rx: Receiver<BatchJob>,
+    ) -> anyhow::Result<()> {
         while let Some(job) = rx.recv().await {
             while self.jobs.len() >= self.max_jobs_count {
                 // wait for `jobs` to be empty
@@ -102,6 +105,7 @@ impl ProverJobManager {
                 },
             );
         }
+        Ok(())
     }
 
     /// Picks the **smallest** block number that is either **pending** or whose
