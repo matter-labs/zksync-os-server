@@ -11,7 +11,6 @@ use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -29,7 +28,6 @@ pub async fn run_jsonrpsee_server(
     config: RpcConfig,
 
     repository_manager: RepositoryManager,
-    finality_tracker: FinalityTracker,
     state_handle: StateHandle,
     mempool: RethPool<ZkClient>,
     block_replay_storage: BlockReplayStorage,
@@ -41,16 +39,13 @@ pub async fn run_jsonrpsee_server(
         EthNamespace::new(
             config.clone(),
             repository_manager.clone(),
-            finality_tracker.clone(),
             state_handle,
             mempool,
             block_replay_storage,
         )
         .into_rpc(),
     )?;
-    rpc.merge(
-        EthFilterNamespace::new(config.clone(), repository_manager, finality_tracker).into_rpc(),
-    )?;
+    rpc.merge(EthFilterNamespace::new(config.clone(), repository_manager).into_rpc())?;
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
@@ -73,17 +68,17 @@ pub async fn run_jsonrpsee_server(
     Ok(())
 }
 
-// todo: consider best place for this logic - maybe `FinalityInfo` itself?
-pub fn resolve_block_id(block: BlockId, finality_info: &FinalityTracker) -> BlockNumber {
+// todo: consider best place for this logic
+pub fn resolve_block_id(block: BlockId, repository_manager: &RepositoryManager) -> BlockNumber {
     match block {
         BlockId::Hash(_) => unimplemented!(),
         // TODO: return last sealed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Pending) => finality_info.get_canonized_block(),
-        BlockId::Number(BlockNumberOrTag::Latest) => finality_info.get_canonized_block(),
+        BlockId::Number(BlockNumberOrTag::Pending) => repository_manager.get_canonized_block(),
+        BlockId::Number(BlockNumberOrTag::Latest) => repository_manager.get_canonized_block(),
         // TODO: return last committed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Safe) => finality_info.get_canonized_block(),
+        BlockId::Number(BlockNumberOrTag::Safe) => repository_manager.get_canonized_block(),
         // TODO: return last executed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Finalized) => finality_info.get_canonized_block(),
+        BlockId::Number(BlockNumberOrTag::Finalized) => repository_manager.get_canonized_block(),
         BlockId::Number(BlockNumberOrTag::Earliest) => unimplemented!(),
         BlockId::Number(BlockNumberOrTag::Number(number)) => {
             // note: we don't check whether the requested Block Number is less than `BLOCKS_TO_RETAIN` behind -

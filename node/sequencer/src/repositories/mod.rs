@@ -25,9 +25,8 @@ use alloy::consensus::{Block, ReceiptEnvelope};
 use alloy::primitives::TxHash;
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::watch;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_types::{L1Transaction, L2Transaction};
@@ -51,7 +50,7 @@ pub struct RepositoryManager {
     transaction_receipt_repository: TransactionReceiptRepository,
 
     db: RepositoryDB,
-    latest_block: Arc<AtomicU64>,
+    latest_block: watch::Sender<u64>,
     max_blocks_in_memory: u64,
     poll_interval: Duration,
 }
@@ -67,7 +66,7 @@ impl RepositoryManager {
             block_receipt_repository: BlockReceiptRepository::new(),
             transaction_receipt_repository: TransactionReceiptRepository::new(),
             db,
-            latest_block: Arc::new(AtomicU64::new(db_block_number)),
+            latest_block: watch::channel(db_block_number).0,
             max_blocks_in_memory: blocks_to_retain as u64,
             poll_interval: Duration::from_millis(10),
         }
@@ -86,7 +85,7 @@ impl RepositoryManager {
         let mut db_block_number = self.db.latest_block_number();
         let should_be_persisted_up_to = self
             .latest_block
-            .load(Ordering::Relaxed)
+            .borrow()
             .saturating_sub(self.max_blocks_in_memory);
         while db_block_number < should_be_persisted_up_to {
             timer.tick().await;
@@ -157,7 +156,7 @@ impl RepositoryManager {
         // Add the full block output to the block receipt repository
         self.block_receipt_repository
             .insert(&block_output.header, tx_hashes);
-        self.latest_block.store(block_number, Ordering::Relaxed);
+        self.latest_block.send_replace(block_number);
         latency.observe();
     }
 
@@ -168,7 +167,7 @@ impl RepositoryManager {
             timer.tick().await;
 
             let db_block_number = self.db.latest_block_number();
-            let latest_block = self.latest_block.load(Ordering::Relaxed);
+            let latest_block = *self.latest_block.borrow();
             for number in (db_block_number + 1)..=latest_block {
                 let block = self
                     .block_receipt_repository
@@ -223,5 +222,9 @@ impl RepositoryManager {
         }
 
         self.db.get_stored_tx_by_hash(tx_hash)
+    }
+
+    pub fn get_canonized_block(&self) -> u64 {
+        *self.latest_block.borrow()
     }
 }

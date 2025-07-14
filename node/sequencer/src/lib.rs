@@ -8,7 +8,6 @@ pub mod block_context_provider;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
-pub mod finality;
 pub mod model;
 pub mod prover_api;
 pub mod repositories;
@@ -19,7 +18,6 @@ use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
-use crate::finality::FinalityTracker;
 use crate::model::BatchJob;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
@@ -88,7 +86,6 @@ pub async fn run_sequencer_actor(
     wal: BlockReplayStorage,
     // todo: do it outside - as one of the sinks (only needed in API)
     repositories: RepositoryManager,
-    finality_tracker: FinalityTracker,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
     tracing::info!(block_to_start, "starting sequencer");
@@ -183,7 +180,6 @@ pub async fn run_sequencer_actor(
         stage_started_at = Instant::now();
 
         wal.append_replay(replay_record.clone());
-        finality_tracker.advance_canonized(bn);
 
         tracing::info!(
             block_number = bn,
@@ -334,16 +330,11 @@ pub async fn run(
             + 1
     };
 
-    // ========== Initialize block finality trackers ===========
-
-    // note: unfinished feature, not really used yet
-    let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
-
     tracing::info!(
         storage_map_block = storage_map_block,
         preimages_block = preimages_block,
         wal_block = wal_block,
-        canonized_block = finality_tracker.get_canonized_block(),
+        canonized_block = repositories.get_canonized_block(),
         tree_last_processed_block = tree_last_processed_block,
         "▶ Storage read. Node starting with block {}",
         first_block_to_execute
@@ -460,7 +451,6 @@ pub async fn run(
             state_handle.clone(),
             block_replay_storage.clone(),
             repositories.clone(),
-            finality_tracker.clone(),
             sequencer_config
         ) => {
             match res {
@@ -475,7 +465,6 @@ pub async fn run(
         res = run_jsonrpsee_server(
             rpc_config,
             repositories.clone(),
-            finality_tracker.clone(),
             state_handle.clone(),
             l2_mempool,
             block_replay_storage.clone()

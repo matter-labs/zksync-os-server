@@ -3,7 +3,6 @@ use crate::api::eth_impl::build_api_log;
 use crate::api::metrics::API_METRICS;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
-use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
 use alloy::consensus::Sealable;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -17,21 +16,15 @@ use zksync_os_rpc_api::filter::EthFilterApiServer;
 
 pub(crate) struct EthFilterNamespace {
     pub(super) repository_manager: RepositoryManager,
-    pub(super) finality_info: FinalityTracker,
     pub(super) query_limits: QueryLimits,
 }
 
 impl EthFilterNamespace {
-    pub fn new(
-        config: RpcConfig,
-        repository_manager: RepositoryManager,
-        finality_tracker: FinalityTracker,
-    ) -> Self {
+    pub fn new(config: RpcConfig, repository_manager: RepositoryManager) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         Self {
             repository_manager,
-            finality_info: finality_tracker,
             query_limits,
         }
     }
@@ -70,7 +63,8 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
         let latency = API_METRICS.response_time[&"get_logs"].start();
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
-                let block = resolve_block_id(BlockId::Hash(block_hash.into()), &self.finality_info);
+                let block =
+                    resolve_block_id(BlockId::Hash(block_hash.into()), &self.repository_manager);
                 (block, block)
             }
             FilterBlockOption::Range {
@@ -81,13 +75,13 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
                     from_block
                         .map(BlockId::Number)
                         .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
-                    &self.finality_info,
+                    &self.repository_manager,
                 ),
                 resolve_block_id(
                     to_block
                         .map(BlockId::Number)
                         .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
-                    &self.finality_info,
+                    &self.repository_manager,
                 ),
             ),
         };

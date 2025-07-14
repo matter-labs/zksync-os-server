@@ -5,7 +5,6 @@ use crate::api::result::{internal_rpc_err, unimplemented_rpc_err, ToRpcResult};
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::finality::FinalityTracker;
 use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
@@ -36,7 +35,6 @@ pub(crate) struct EthNamespace {
     // reconsider approach to API in this regard
     pub(super) repository_manager: RepositoryManager,
 
-    pub(super) finality_info: FinalityTracker,
     pub(super) chain_id: u64,
 }
 
@@ -45,7 +43,6 @@ impl EthNamespace {
         config: RpcConfig,
 
         repository_manager: RepositoryManager,
-        finality_tracker: FinalityTracker,
         state_handle: StateHandle,
         mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
@@ -54,16 +51,14 @@ impl EthNamespace {
 
         let eth_call_handler = EthCallHandler::new(
             config,
-            finality_tracker.clone(),
             state_handle,
             block_replay_storage,
-            repository_manager.account_property_repository.clone(),
+            repository_manager.clone(),
         );
         Self {
             tx_handler,
             eth_call_handler,
             repository_manager,
-            finality_info: finality_tracker,
             chain_id: CHAIN_ID,
         }
     }
@@ -76,7 +71,7 @@ impl EthNamespace {
             return Err(internal_rpc_err("full blocks are not supported yet"));
         }
         let id = id.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
-        let number = resolve_block_id(id, &self.finality_info);
+        let number = resolve_block_id(id, &self.repository_manager);
         Ok(self
             .repository_manager
             .get_block_by_number(number)
@@ -114,7 +109,7 @@ impl EthApiServer for EthNamespace {
     }
 
     fn block_number(&self) -> RpcResult<U256> {
-        Ok(U256::from(self.finality_info.get_canonized_block()))
+        Ok(U256::from(self.repository_manager.get_canonized_block()))
     }
 
     async fn chain_id(&self) -> RpcResult<Option<U64>> {
@@ -271,7 +266,7 @@ impl EthApiServer for EthNamespace {
         //todo Daniyar: really add +1?
         let block_number = resolve_block_id(
             block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
-            &self.finality_info,
+            &self.repository_manager,
         ) + 1;
         let balance = self
             .repository_manager
@@ -314,7 +309,7 @@ impl EthApiServer for EthNamespace {
 
         let resolved_block = resolve_block_id(
             block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
-            &self.finality_info,
+            &self.repository_manager,
         ) + 1;
 
         tracing::info!(
