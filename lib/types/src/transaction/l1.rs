@@ -1,6 +1,6 @@
 use alloy::consensus::transaction::{RlpEcdsaDecodableTx, RlpEcdsaEncodableTx};
 use alloy::consensus::{Signed, Transaction, Typed2718};
-use alloy::eips::eip2718::Eip2718Result;
+use alloy::eips::eip2718::{Eip2718Error, Eip2718Result};
 use alloy::eips::eip2930::AccessList;
 use alloy::eips::eip7702::SignedAuthorization;
 use alloy::eips::{Decodable2718, Encodable2718};
@@ -327,10 +327,9 @@ impl Decodable2718 for L1Envelope {
         })
     }
 
-    fn fallback_decode(buf: &mut &[u8]) -> Eip2718Result<Self> {
-        Ok(Self {
-            inner: Signed::<TxL1Priority>::fallback_decode(buf)?,
-        })
+    fn fallback_decode(_buf: &mut &[u8]) -> Eip2718Result<Self> {
+        // Do not try to decode untyped transactions
+        Err(Eip2718Error::UnexpectedType(0))
     }
 }
 
