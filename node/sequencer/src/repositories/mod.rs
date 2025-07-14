@@ -22,7 +22,7 @@ use crate::repositories::transaction_receipt_repository::{
 };
 pub use account_property_repository::AccountPropertyRepository;
 use alloy::consensus::{Block, ReceiptEnvelope};
-use alloy::primitives::TxHash;
+use alloy::primitives::{Bloom, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -129,18 +129,19 @@ impl RepositoryManager {
         self.account_property_repository
             .add_diff(block_number, account_properties);
 
-        // Add transaction receipts to the transaction receipt repository
+        // Prepare the block output and transactions for storage
         let mut tx_index = 0;
         let mut log_index = 0;
-        let mut block_bloom = alloy::primitives::Bloom::default();
+        let mut block_bloom = Bloom::default();
 
+        let mut stored_txs = Vec::new();
         for l1_tx in l1_transactions.into_iter() {
             let hash = TxHash::from(l1_tx.hash().0);
             let stored_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
             tx_index += 1;
             log_index += stored_tx.receipt.logs().len() as u64;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-            self.transaction_receipt_repository.insert(hash, stored_tx);
+            stored_txs.push((hash, stored_tx));
         }
 
         for l2_tx in l2_transactions.into_iter() {
@@ -149,11 +150,12 @@ impl RepositoryManager {
             tx_index += 1;
             log_index += stored_tx.receipt.logs().len() as u64;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-            self.transaction_receipt_repository.insert(hash, stored_tx);
+            stored_txs.push((hash, stored_tx));
         }
         block_output.header.logs_bloom = block_bloom.into_array();
 
-        // Add the full block output to the block receipt repository
+        // Add data to repositories.
+            self.transaction_receipt_repository.insert(stored_txs);
         self.block_receipt_repository
             .insert(&block_output.header, tx_hashes);
         self.latest_block.send_replace(block_number);

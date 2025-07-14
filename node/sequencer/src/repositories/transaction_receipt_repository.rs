@@ -49,10 +49,12 @@ impl TransactionReceiptRepository {
         }
     }
 
-    /// Inserts data for `tx_hash`. If a data for the same hash
+    /// Inserts data for multiple txs. If a data for the same hash
     /// already exists, it will be overwritten.
-    pub fn insert(&self, tx_hash: TxHash, data: StoredTxData) {
-        self.tx_data.insert(tx_hash, data);
+    pub fn insert(&self, txs: Vec<(TxHash, StoredTxData)>) {
+        for (tx_hash, data) in txs {
+            self.tx_data.insert(tx_hash, data);
+        }
     }
 
     /// Retrieves the transaction for `tx_hash`, if present.
