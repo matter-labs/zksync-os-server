@@ -48,7 +48,10 @@ impl ReplayRecord {
         //         "First L1 tx serial id must match next_l1_priority_id"
         //     );
         // }
-        assert!(transactions.len() > 0, "Block must contain at least one tx");
+        assert!(
+            !transactions.is_empty(),
+            "Block must contain at least one tx"
+        );
         Self {
             block_context,
             starting_l1_priority_id,

@@ -95,7 +95,7 @@ impl BlockTransactionsProvider {
                 block_context,
                 seal_policy: SealPolicy::UntilExhausted,
                 invalid_tx_policy: InvalidTxPolicy::Abort,
-                tx_source: Box::pin(futures::stream::iter(transactions.into_iter())),
+                tx_source: Box::pin(futures::stream::iter(transactions)),
                 starting_l1_priority_id,
                 metrics_label: "replay",
             }),

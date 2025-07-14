@@ -80,17 +80,15 @@ impl RepositoryManager {
             .add_diff(block_number, account_properties);
 
         // Add transaction receipts to the transaction receipt repository
-        let mut tx_index = 0;
         let mut log_index = 0;
         let mut block_bloom = alloy::primitives::Bloom::default();
         let mut tx_hashes = Vec::new();
-        for tx in transactions {
+        for (tx_index, tx) in transactions.into_iter().enumerate() {
             let tx_hash = *tx.hash();
             tx_hashes.push(tx_hash);
             let tx_hash = Bytes32::from(tx_hash.0);
             let api_tx = transaction_to_api_data(&block_output, tx_index, log_index, tx);
             log_index += api_tx.receipt.logs().len();
-            tx_index += 1;
             block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
             self.transaction_receipt_repository.insert(tx_hash, api_tx);
         }

@@ -2,7 +2,7 @@ use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
 use std::alloc::Global;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -195,7 +195,7 @@ fn worker_loop(
 
             let state_view = state_handle.state_view_at_block(bn).unwrap();
 
-            let transactions = replay_record
+            let transactions: VecDeque<Vec<u8>> = replay_record
                 .transactions
                 .clone()
                 .into_iter()
