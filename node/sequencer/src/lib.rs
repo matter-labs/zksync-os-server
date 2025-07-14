@@ -149,17 +149,7 @@ pub async fn run_sequencer_actor(
 
         tracing::info!(
             block_number = bn,
-            "▶ Added to state in {:?}. Reporting back to block_transaction_provider (mempools)...",
-            stage_started_at.elapsed()
-        );
-        stage_started_at = Instant::now();
-
-        // TODO: would updating mempool in parallel with state make sense?
-        block_transaction_provider.on_canonical_state_change(&block_output, &replay_record);
-
-        tracing::info!(
-            block_number = bn,
-            "▶ Reported to block_transaction_provider in {:?}. Adding to repos...",
+            "▶ Added to state in {:?}. Adding to repos...",
             stage_started_at.elapsed()
         );
         stage_started_at = Instant::now();
@@ -175,7 +165,18 @@ pub async fn run_sequencer_actor(
 
         tracing::info!(
             block_number = bn,
-            "▶ Added to repos in {:?}. Adding to wal...",
+            "▶ Added to repos in {:?}. Reporting back to block_transaction_provider (mempools)...",
+            stage_started_at.elapsed()
+        );
+
+        stage_started_at = Instant::now();
+
+        // TODO: would updating mempool in parallel with state make sense?
+        block_transaction_provider.on_canonical_state_change(&block_output, &replay_record);
+
+        tracing::info!(
+            block_number = bn,
+            "▶ Reported to block_transaction_provider in {:?}. Adding to wal...",
             stage_started_at.elapsed()
         );
 
