@@ -1,4 +1,5 @@
 use super::resolve_block_id;
+use crate::api::eth_impl::build_api_log;
 use crate::api::metrics::API_METRICS;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
@@ -132,16 +133,12 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
                     for tx in stored_txs {
                         for inner_log in tx.receipt.logs() {
                             if filter.matches(inner_log) {
-                                logs.push(Log {
-                                    inner: inner_log.clone(),
-                                    block_hash: Some(sealed_header.hash()),
-                                    block_number: Some(sealed_header.number),
-                                    block_timestamp: Some(sealed_header.timestamp),
-                                    transaction_hash: Some(*tx.tx.hash()),
-                                    transaction_index: Some(tx.meta.tx_index_in_block),
-                                    log_index: Some(log_index_in_block),
-                                    removed: false,
-                                });
+                                logs.push(build_api_log(
+                                    *tx.tx.hash(),
+                                    inner_log.clone(),
+                                    tx.meta,
+                                    log_index_in_block - tx.meta.number_of_logs_before_this_tx,
+                                ));
                                 at_least_one_log_added = true;
                             }
                             log_index_in_block += 1;

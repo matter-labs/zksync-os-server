@@ -9,7 +9,7 @@ use std::sync::Arc;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
 use zksync_os_types::{L1Transaction, L2Envelope, L2Transaction};
 
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+#[derive(Debug, Clone, Copy, RlpEncodable, RlpDecodable)]
 #[rlp(trailing)]
 pub struct TxMeta {
     pub block_hash: B256,

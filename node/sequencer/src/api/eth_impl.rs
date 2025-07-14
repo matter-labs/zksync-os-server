@@ -6,6 +6,7 @@ use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
+use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
@@ -13,7 +14,7 @@ use alloy::consensus::{Sealable, Transaction as _};
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::primitives::BlockTransactions;
-use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, Log, SyncStatus,
@@ -243,16 +244,7 @@ impl EthApiServer for EthNamespace {
         let res = stored_tx.map(|stored_tx| {
             let mut log_index_in_tx = 0;
             let inner_receipt = stored_tx.receipt.map_logs(|inner_log| {
-                let log = Log {
-                    inner: inner_log.clone(),
-                    block_hash: Some(stored_tx.meta.block_hash),
-                    block_number: Some(stored_tx.meta.block_number),
-                    block_timestamp: Some(stored_tx.meta.block_timestamp),
-                    transaction_hash: Some(hash),
-                    transaction_index: Some(stored_tx.meta.tx_index_in_block),
-                    log_index: Some(stored_tx.meta.number_of_logs_before_this_tx + log_index_in_tx),
-                    removed: false,
-                };
+                let log = build_api_log(hash, inner_log, stored_tx.meta, log_index_in_tx);
                 log_index_in_tx += 1;
                 log
             });
@@ -453,5 +445,23 @@ impl EthApiServer for EthNamespace {
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
         todo!()
+    }
+}
+
+pub(super) fn build_api_log(
+    tx_hash: TxHash,
+    primitive_log: alloy::primitives::Log,
+    tx_meta: TxMeta,
+    log_index_in_tx: u64,
+) -> Log {
+    Log {
+        inner: primitive_log,
+        block_hash: Some(tx_meta.block_hash),
+        block_number: Some(tx_meta.block_number),
+        block_timestamp: Some(tx_meta.block_timestamp),
+        transaction_hash: Some(tx_hash),
+        transaction_index: Some(tx_meta.tx_index_in_block),
+        log_index: Some(tx_meta.number_of_logs_before_this_tx + log_index_in_tx),
+        removed: false,
     }
 }
