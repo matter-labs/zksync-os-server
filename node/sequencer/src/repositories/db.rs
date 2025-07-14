@@ -4,7 +4,7 @@ use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
 use alloy::primitives::{Address, TxHash};
 use alloy::rlp::{Decodable, Encodable};
 use zksync_os_types::{L2Envelope, L2Transaction};
-use zksync_storage::db::NamedColumnFamily;
+use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
 #[derive(Clone, Copy, Debug)]
@@ -136,38 +136,42 @@ impl RepositoryDB {
         batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
 
         for tx in txs {
-            let tx_hash = tx.tx.hash();
-            let mut tx_bytes = Vec::new();
-            tx.tx.encode(&mut tx_bytes);
-            // Kludge for L1 txs.
-            if tx.tx.signature().r().is_zero() {
-                tx_bytes.extend_from_slice(tx.tx.signer().as_slice());
-            }
-            batch.put_cf(RepositoryCF::Tx, tx_hash.as_slice(), &tx_bytes);
-
-            let mut receipt_bytes = Vec::new();
-            tx.receipt.encode(&mut receipt_bytes);
-            batch.put_cf(RepositoryCF::TxReceipt, tx_hash.as_slice(), &receipt_bytes);
-
-            let mut tx_meta_bytes = Vec::new();
-            tx.meta.encode(&mut tx_meta_bytes);
-            batch.put_cf(RepositoryCF::TxMeta, tx_hash.as_slice(), &tx_meta_bytes);
-
-            let initiator = tx.tx.signer();
-            let nonce = tx.tx.nonce();
-            let mut initiator_and_nonce_key = Vec::with_capacity(20 + 8);
-            initiator_and_nonce_key.extend_from_slice(initiator.as_slice());
-            initiator_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());
-            batch.put_cf(
-                RepositoryCF::InitiatorAndNonceToHash,
-                &initiator_and_nonce_key,
-                tx_hash.as_slice(),
-            );
+            Self::add_tx_to_write_batch(&mut batch, tx);
         }
 
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
 
         self.db.write(batch).unwrap();
+    }
+
+    fn add_tx_to_write_batch(batch: &mut WriteBatch<RepositoryCF>, tx: &StoredTxData) {
+        let tx_hash = tx.tx.hash();
+        let mut tx_bytes = Vec::new();
+        tx.tx.encode(&mut tx_bytes);
+        // Kludge for L1 txs.
+        if tx.tx.signature().r().is_zero() {
+            tx_bytes.extend_from_slice(tx.tx.signer().as_slice());
+        }
+        batch.put_cf(RepositoryCF::Tx, tx_hash.as_slice(), &tx_bytes);
+
+        let mut receipt_bytes = Vec::new();
+        tx.receipt.encode(&mut receipt_bytes);
+        batch.put_cf(RepositoryCF::TxReceipt, tx_hash.as_slice(), &receipt_bytes);
+
+        let mut tx_meta_bytes = Vec::new();
+        tx.meta.encode(&mut tx_meta_bytes);
+        batch.put_cf(RepositoryCF::TxMeta, tx_hash.as_slice(), &tx_meta_bytes);
+
+        let initiator = tx.tx.signer();
+        let nonce = tx.tx.nonce();
+        let mut initiator_and_nonce_key = Vec::with_capacity(20 + 8);
+        initiator_and_nonce_key.extend_from_slice(initiator.as_slice());
+        initiator_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());
+        batch.put_cf(
+            RepositoryCF::InitiatorAndNonceToHash,
+            &initiator_and_nonce_key,
+            tx_hash.as_slice(),
+        );
     }
 }
