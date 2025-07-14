@@ -155,7 +155,7 @@ impl RepositoryManager {
         block_output.header.logs_bloom = block_bloom.into_array();
 
         // Add data to repositories.
-            self.transaction_receipt_repository.insert(stored_txs);
+        self.transaction_receipt_repository.insert(stored_txs);
         self.block_receipt_repository
             .insert(&block_output.header, tx_hashes);
         self.latest_block.send_replace(block_number);
