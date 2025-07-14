@@ -74,19 +74,22 @@ impl TransactionReceiptRepository {
         self.tx_data.get(&tx_hash).map(|r| r.value().clone())
     }
 
-    /// Retrieves the tx data for `tx_hashes`. Panics if any is missing.
-    pub fn get_by_hashes(&self, tx_hashes: &[TxHash]) -> Vec<StoredTxData> {
-        tx_hashes
-            .iter()
-            .map(|tx_hash| {
-                self.tx_data
-                    .get(tx_hash)
-                    .map(|r| r.value().clone())
-                    .unwrap_or_else(|| {
-                        panic!("Missing receipt for transaction hash: {:?}", tx_hash)
-                    })
-            })
-            .collect()
+    /// Retrieves the tx data for `tx_hashes`. Returns error if any is missing.
+    pub fn get_by_hashes(&self, tx_hashes: &[TxHash]) -> anyhow::Result<Vec<StoredTxData>> {
+        let mut result = Vec::new();
+
+        for tx_hash in tx_hashes {
+            if let Some(data) = self.tx_data.get(tx_hash) {
+                result.push(data.value().clone());
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Missing receipt for transaction hash: {:?}",
+                    tx_hash
+                ));
+            }
+        }
+
+        Ok(result)
     }
 
     pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {

@@ -177,7 +177,8 @@ impl RepositoryManager {
                     .expect("Missing block receipt");
                 let txs = self
                     .transaction_receipt_repository
-                    .get_by_hashes(&block.body.transactions);
+                    .get_by_hashes(&block.body.transactions)
+                    .unwrap();
                 self.db.write_block(&block, &txs);
 
                 self.block_receipt_repository.remove_by_number(number);
