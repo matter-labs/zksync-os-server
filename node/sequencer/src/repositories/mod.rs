@@ -73,6 +73,28 @@ impl RepositoryManager {
         }
     }
 
+    /// Calls `populate_in_memory` while respecting `self.max_blocks_in_memory`.
+    /// Blocks until the database has enough blocks persisted to allow in-memory population.
+    pub async fn populate_in_memory_blocking(
+        &self,
+        block_output: BatchOutput,
+        l1_transactions: Vec<L1Transaction>,
+        l2_transactions: Vec<L2Transaction>,
+    ) {
+        let mut timer = tokio::time::interval(self.poll_interval);
+
+        let mut db_block_number = self.db.latest_block_number();
+        let should_be_persisted_up_to = self
+            .latest_block
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.max_blocks_in_memory);
+        while db_block_number < should_be_persisted_up_to {
+            timer.tick().await;
+            db_block_number = self.db.latest_block_number()
+        }
+        self.populate_in_memory(block_output, l1_transactions, l2_transactions);
+    }
+
     /// Adds a block's output to all relevant repositories.
     ///
     /// This method processes a `BatchOutput` and distributes its contents across the appropriate
@@ -163,26 +185,6 @@ impl RepositoryManager {
                 tracing::info!(number, "Persisted receipts");
             }
         }
-    }
-
-    pub async fn populate_in_memory_blocking(
-        &self,
-        block_output: BatchOutput,
-        l1_transactions: Vec<L1Transaction>,
-        l2_transactions: Vec<L2Transaction>,
-    ) {
-        let mut timer = tokio::time::interval(self.poll_interval);
-
-        let mut db_block_number = self.db.latest_block_number();
-        let should_be_persisted_up_to = self
-            .latest_block
-            .load(Ordering::Relaxed)
-            .saturating_sub(self.max_blocks_in_memory);
-        while db_block_number < should_be_persisted_up_to {
-            timer.tick().await;
-            db_block_number = self.db.latest_block_number()
-        }
-        self.populate_in_memory(block_output, l1_transactions, l2_transactions);
     }
 
     pub fn get_block_by_number(&self, number: u64) -> Option<Block<TxHash>> {
