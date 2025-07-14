@@ -2,10 +2,12 @@ use crate::model::{
     BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
     UnifiedTransaction,
 };
+use crate::repositories::account_property_repository::extract_account_properties;
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::BlockHash;
 use futures::StreamExt;
+use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_mempool::{
@@ -142,13 +144,21 @@ impl BlockTransactionsProvider {
         let block = Block::new(header, body);
         let sealed_block =
             SealedBlock::new_unchecked(block, BlockHash::from(block_output.header.hash()));
+        let accounts_properties = extract_account_properties(block_output);
         self.l2_mempool
             .on_canonical_state_change(CanonicalStateUpdate {
                 new_tip: &sealed_block,
                 pending_block_base_fee: 0,
                 pending_block_blob_fee: None,
                 // TODO: Pass parsed account property changes here (address, nonce, value)
-                changed_accounts: vec![],
+                changed_accounts: accounts_properties
+                    .into_iter()
+                    .map(|(address, props)| ChangedAccount {
+                        address,
+                        nonce: props.nonce,
+                        balance: props.balance,
+                    })
+                    .collect(),
                 mined_transactions: replay_record
                     .l2_transactions
                     .iter()
