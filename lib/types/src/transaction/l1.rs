@@ -227,6 +227,8 @@ impl Transaction for TxL1Priority {
     }
 }
 
+/// Transaction envelope for L1->L2 priority transactions. Mostly needed as an intermediary level for
+/// `ZkEnvelope`.
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub struct L1Envelope {
     pub inner: Signed<TxL1Priority>,
@@ -370,8 +372,8 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
             return Err(L1EnvelopeError::NonZeroPaymaster(tx.paymaster));
         }
         if !tx.factoryDeps.is_empty() {
-            // todo: allow factory deps for now as L1 setup generates a few transactions that have
-            //       them by default
+            // fixme: we allow factory deps for now as current L1 setup contains a few transactions
+            //        that have them by default
             // return Err(L1EnvelopeError::NonEmptyFactoryDeps(
             //     tx.factoryDeps.into_iter().map(B256::from).collect(),
             // ));
@@ -419,7 +421,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
     }
 }
 
-/// Error types from decoding and validating L1 priority transactions.
+/// Error types from decoding and validating L1->L2 priority transactions.
 #[derive(Debug, thiserror::Error)]
 pub enum L1EnvelopeError {
     #[error("invalid transaction type: {0}")]

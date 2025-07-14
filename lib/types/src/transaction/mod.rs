@@ -17,6 +17,10 @@ use std::hash::Hash;
 // `TransactionEnvelope` derive macro below depends on this being present
 use alloy::rlp as alloy_rlp;
 
+/// ZKsync OS transaction envelope describing both [EIP-2718] envelopes and custom L1->L2 transaction
+/// envelope.
+///
+/// [EIP-2718]: https://eips.ethereum.org/EIPS/eip-2718
 #[derive(Clone, Debug, TransactionEnvelope)]
 #[envelope(alloy_consensus = alloy::consensus, tx_type_name = ZkTxType)]
 pub enum ZkEnvelope {
@@ -27,6 +31,7 @@ pub enum ZkEnvelope {
 }
 
 impl ZkEnvelope {
+    /// Returns the [`ZkTxType`] of the inner transaction.
     pub const fn tx_type(&self) -> ZkTxType {
         match self {
             Self::L1(_) => ZkTxType::L1,
@@ -34,6 +39,7 @@ impl ZkEnvelope {
         }
     }
 
+    /// Recovers the signer of inner transaction and returns a `ZkTransaction`.
     pub fn try_into_recovered(self) -> Result<ZkTransaction, RecoveryError> {
         match self {
             Self::L1(l1_tx) => Ok(ZkTransaction::from(l1_tx)),
@@ -44,6 +50,9 @@ impl ZkEnvelope {
     }
 }
 
+/// ZKsync OS transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth
+/// we mostly operate on this type as ZKsync OS expects signer to be provided externally (e.g., from
+/// the sequencer). This could change in the future.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkTransaction {
     #[serde(flatten)]

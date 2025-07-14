@@ -1,4 +1,5 @@
 use alloy::consensus::transaction::Recovered;
+use alloy::consensus::EthereumTxEnvelope;
 use alloy::primitives::TxHash;
 use futures::Stream;
 use reth_transaction_pool::{
@@ -20,9 +21,9 @@ pub trait L2TransactionPool:
     /// Convenience method to add a local L2 transaction
     async fn add_l2_transaction(&self, transaction: L2Transaction) -> PoolResult<TxHash> {
         let (envelope, signer) = transaction.into_parts();
-        let envelope = L2Envelope::try_from(envelope)
+        let envelope = EthereumTxEnvelope::try_from(envelope)
             .expect("tried to insert an EIP-4844 transaction without sidecar into mempool");
-        let transaction = L2Transaction::new_unchecked(envelope, signer);
+        let transaction = Recovered::new_unchecked(envelope, signer);
         self.add_transaction(
             TransactionOrigin::Local,
             EthPooledTransaction::from_pooled(transaction),
