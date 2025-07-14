@@ -23,6 +23,8 @@ use alloy::transports::TransportResult;
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 
+/// A version of `Provider<Ethereum> + WalletProvider<Ethereum, Wallet = EthereumWallet>` that is
+/// object safe. Has a blanket implementation for the aforementioned constraints.
 pub trait EthWalletProvider: Provider<Ethereum> + 'static {
     fn dyn_clone(&self) -> Box<dyn EthWalletProvider>;
 
@@ -50,6 +52,8 @@ where
     }
 }
 
+/// A version of `DynProvider` that exposes `wallet()` and `wallet_mut()` as defined in
+/// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
 pub struct EthDynProvider(Box<dyn EthWalletProvider + 'static>);
 
 impl EthDynProvider {
@@ -64,6 +68,18 @@ impl Clone for EthDynProvider {
         EthDynProvider(self.dyn_clone())
     }
 }
+
+impl std::fmt::Debug for EthDynProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DynProvider")
+            .field(&"<dyn Provider>")
+            .finish()
+    }
+}
+
+//
+// The rest of the file contains trait implementations for `EthDynProvider` that just invoke `self.0.<method>` inside
+//
 
 #[async_trait::async_trait]
 impl Provider<Ethereum> for EthDynProvider {
@@ -453,13 +469,5 @@ impl EthWalletProvider for EthDynProvider {
 
     fn wallet_mut(&mut self) -> &mut EthereumWallet {
         self.0.wallet_mut()
-    }
-}
-
-impl std::fmt::Debug for EthDynProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("DynProvider")
-            .field(&"<dyn Provider>")
-            .finish()
     }
 }
