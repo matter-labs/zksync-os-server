@@ -9,6 +9,7 @@
 //! and provides unified methods for managing block outputs.
 
 pub mod account_property_repository;
+pub mod api_interface;
 pub mod block_receipt_repository;
 mod db;
 mod metrics;
@@ -18,10 +19,9 @@ use crate::repositories::account_property_repository::extract_account_properties
 use crate::repositories::db::{RepositoryCF, RepositoryDB};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::{
-    l1_transaction_to_api_data, l2_transaction_to_api_data, StoredTxData,
+    l1_transaction_to_api_data, l2_transaction_to_api_data,
 };
 pub use account_property_repository::AccountPropertyRepository;
-use alloy::consensus::{Block, ReceiptEnvelope};
 use alloy::primitives::{Bloom, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
@@ -187,47 +187,5 @@ impl RepositoryManager {
                 tracing::info!(number, "Persisted receipts");
             }
         }
-    }
-
-    pub fn get_block_by_number(&self, number: u64) -> Option<Block<TxHash>> {
-        if let Some(res) = self.block_receipt_repository.get_by_number(number) {
-            return Some(res);
-        }
-
-        self.db.get_block_by_number(number)
-    }
-
-    pub fn get_tx_by_hash(&self, tx_hash: TxHash) -> Option<L2Transaction> {
-        if let Some(res) = self.transaction_receipt_repository.get_tx_by_hash(tx_hash) {
-            return Some(res);
-        }
-
-        self.db.get_tx_by_hash(tx_hash)
-    }
-
-    pub fn get_tx_receipt_by_hash(&self, tx_hash: TxHash) -> Option<ReceiptEnvelope> {
-        if let Some(res) = self
-            .transaction_receipt_repository
-            .get_receipt_by_hash(tx_hash)
-        {
-            return Some(res);
-        }
-
-        self.db.get_tx_receipt_by_hash(tx_hash)
-    }
-
-    pub fn get_stored_tx_by_hash(&self, tx_hash: TxHash) -> Option<StoredTxData> {
-        if let Some(res) = self
-            .transaction_receipt_repository
-            .get_stored_tx_by_hash(tx_hash)
-        {
-            return Some(res);
-        }
-
-        self.db.get_stored_tx_by_hash(tx_hash)
-    }
-
-    pub fn get_canonized_block(&self) -> u64 {
-        *self.latest_block.borrow()
     }
 }

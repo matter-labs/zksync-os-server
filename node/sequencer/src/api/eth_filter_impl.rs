@@ -3,6 +3,7 @@ use crate::api::eth_impl::build_api_log;
 use crate::api::metrics::API_METRICS;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
+use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
 use alloy::consensus::Sealable;
 use alloy::eips::{BlockId, BlockNumberOrTag};

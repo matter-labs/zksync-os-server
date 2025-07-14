@@ -5,6 +5,7 @@ use crate::api::result::{internal_rpc_err, unimplemented_rpc_err, ToRpcResult};
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
+use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;

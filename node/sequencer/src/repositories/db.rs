@@ -88,16 +88,6 @@ impl RepositoryDB {
         bytes.map(|bytes| Block::decode(&mut bytes.as_slice()).unwrap())
     }
 
-    pub fn get_tx_by_hash(&self, hash: TxHash) -> Option<L2Transaction> {
-        let bytes = self.db.get_cf(RepositoryCF::Tx, &hash.0).unwrap();
-        bytes.map(|bytes| L2Transaction::decode(&mut bytes.as_slice()).unwrap())
-    }
-
-    pub fn get_tx_receipt_by_hash(&self, hash: TxHash) -> Option<ReceiptEnvelope> {
-        let bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap();
-        bytes.map(|bytes| ReceiptEnvelope::decode(&mut bytes.as_slice()).unwrap())
-    }
-
     pub fn get_stored_tx_by_hash(&self, hash: TxHash) -> Option<StoredTxData> {
         let tx_bytes = self.db.get_cf(RepositoryCF::Tx, &hash.0).unwrap()?;
         let receipt_bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap()?;

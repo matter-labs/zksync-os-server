@@ -11,6 +11,7 @@ use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
+use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use alloy::eips::{BlockId, BlockNumberOrTag};
