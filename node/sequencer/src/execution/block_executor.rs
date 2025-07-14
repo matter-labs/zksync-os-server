@@ -8,7 +8,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
-use zksync_os_types::{EncodableZksyncOs, ZkTransaction};
+use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -59,7 +59,7 @@ pub async fn execute_block(
                     Some(tx) => {
                         wait_for_tx_latency.observe();
                         let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(tx.clone().encode_zksync_os()).await {
+                        match runner.execute_next_tx(tx.clone().encode()).await {
                             Ok(_res) => {
                                 latency.observe();
                                 GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();

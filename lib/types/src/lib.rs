@@ -1,10 +1,11 @@
 mod transaction;
 
 pub use transaction::{
-    EncodableZksyncOs, L1Envelope, L1EnvelopeError, L2Envelope, L2Transaction, TxL1Priority,
-    ZkEnvelope, ZkTransaction, ZkTxType, REAL_L1_PRIORITY_TX_TYPE_ID,
+    L1Envelope, L1EnvelopeError, L2Envelope, L2Transaction, TxL1Priority, ZkEnvelope,
+    ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
 
+use crate::transaction::REAL_L1_PRIORITY_TX_TYPE_ID;
 use alloy::primitives::{Bytes, U256};
 use std::str::FromStr;
 use zksync_os_contract_interface::L2CanonicalTransaction;

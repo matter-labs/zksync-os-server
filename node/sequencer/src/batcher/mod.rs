@@ -14,7 +14,7 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
-use zksync_os_types::EncodableZksyncOs;
+use zksync_os_types::ZksyncOsEncode;
 
 // used in two places:
 // * number of blocks received by Batcher but not distributed to Workers yet
@@ -199,7 +199,7 @@ fn worker_loop(
                 .transactions
                 .clone()
                 .into_iter()
-                .map(|tx| tx.encode_zksync_os())
+                .map(|tx| tx.encode())
                 .collect();
             let tx_count = transactions.len();
             let list_source = TxListSource { transactions };
