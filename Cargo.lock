@@ -9366,6 +9366,7 @@ dependencies = [
  "reth-primitives-traits",
  "reth-revm",
  "reth-storage-api",
+ "reth-transaction-pool",
  "reth-trie-common",
  "ruint",
  "serde",

@@ -1,24 +1,40 @@
 use super::resolve_block_id;
 use crate::api::metrics::API_METRICS;
+use crate::api::result::ToRpcResult;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
 use crate::finality::FinalityTracker;
 use crate::repositories::RepositoryManager;
+use crate::reth_state::ZkClient;
+use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::Bloom;
+use alloy::primitives::{Bloom, TxHash, B256, U128};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
+    Transaction,
 };
 use async_trait::async_trait;
+use dashmap::DashMap;
 use jsonrpsee::core::RpcResult;
-use jsonrpsee::types::ErrorObjectOwned;
+use reth_transaction_pool::{EthPooledTransaction, NewSubpoolTransactionStream, TransactionPool};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::MissedTickBehavior;
 use zk_ee::utils::Bytes32;
+use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_types::L2Envelope;
 
+#[derive(Clone)]
 pub(crate) struct EthFilterNamespace {
-    pub(super) repository_manager: RepositoryManager,
-    pub(super) finality_info: FinalityTracker,
-    pub(super) query_limits: QueryLimits,
+    repository_manager: RepositoryManager,
+    finality_info: FinalityTracker,
+    query_limits: QueryLimits,
+    /// Duration since the last filter poll, after which the filter is considered stale
+    stale_filter_ttl: Duration,
+    mempool: RethPool<ZkClient>,
+    active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
 }
 
 impl EthFilterNamespace {
@@ -26,48 +42,139 @@ impl EthFilterNamespace {
         config: RpcConfig,
         repository_manager: RepositoryManager,
         finality_tracker: FinalityTracker,
+        mempool: RethPool<ZkClient>,
     ) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
-        Self {
+        let this = Self {
             repository_manager,
             finality_info: finality_tracker,
             query_limits,
-        }
+            stale_filter_ttl: config.stale_filter_ttl,
+            mempool,
+            active_filters: Arc::new(DashMap::new()),
+        };
+
+        // todo: dangling task, respect stop_receiver and register task when there is a proper system
+        let this_clone = this.clone();
+        tokio::spawn(async move {
+            this_clone.watch_and_clear_stale_filters().await;
+        });
+
+        this
     }
 }
 
-#[async_trait]
-impl EthFilterApiServer<()> for EthFilterNamespace {
-    async fn new_filter(&self, _filter: Filter) -> RpcResult<FilterId> {
-        todo!()
+impl EthFilterNamespace {
+    fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
+        let last_poll_block_number = self.finality_info.get_canonized_block();
+        let id = FilterId::Str(format!("0x{:x}", U128::random()));
+
+        self.active_filters.insert(
+            id.clone(),
+            ActiveFilter {
+                block: last_poll_block_number,
+                last_poll_timestamp: Instant::now(),
+                kind,
+            },
+        );
+        Ok(id)
     }
 
-    async fn new_block_filter(&self) -> RpcResult<FilterId> {
-        todo!()
-    }
-
-    async fn new_pending_transaction_filter(
+    async fn filter_changes_impl(
         &self,
-        _kind: Option<PendingTransactionFilterKind>,
-    ) -> RpcResult<FilterId> {
-        todo!()
+        id: FilterId,
+    ) -> EthFilterResult<FilterChanges<Transaction<L2Envelope>>> {
+        let latest_block = self.finality_info.get_canonized_block();
+
+        // start_block is the block from which we should start fetching changes, the next block from
+        // the last time changes were polled, in other words the best block at last poll + 1
+        let (start_block, kind) = {
+            let mut filter = self
+                .active_filters
+                .get_mut(&id)
+                .ok_or(EthFilterError::FilterNotFound(id))?;
+
+            if filter.block > latest_block {
+                // no new blocks since the last poll
+                return Ok(FilterChanges::Empty);
+            }
+
+            // update filter
+            // we fetch all changes from [filter.block..best_block], so we advance the filter's
+            // block to `best_block +1`, the next from which we should start fetching changes again
+            let mut block = latest_block + 1;
+            std::mem::swap(&mut filter.block, &mut block);
+            filter.last_poll_timestamp = Instant::now();
+
+            (block, filter.kind.clone())
+        };
+
+        match kind {
+            FilterKind::PendingTransaction(filter) => Ok(filter.drain().await),
+            FilterKind::Block => {
+                let mut block_hashes = Vec::new();
+                for block_number in start_block..=latest_block {
+                    let Some((block_output, _)) = self
+                        .repository_manager
+                        .block_receipt_repository
+                        .get_by_number(block_number)
+                    else {
+                        return Err(EthFilterError::InvalidBlockRangeParams);
+                    };
+                    block_hashes.push(B256::from(block_output.header.hash()));
+                }
+                Ok(FilterChanges::Hashes(block_hashes))
+            }
+            FilterKind::Log(filter) => {
+                let (from_block_number, to_block_number) = match filter.block_option {
+                    FilterBlockOption::Range {
+                        from_block,
+                        to_block,
+                    } => {
+                        let from = resolve_block_id(
+                            from_block.unwrap_or_default().into(),
+                            &self.finality_info,
+                        );
+                        let to = resolve_block_id(
+                            to_block.unwrap_or_default().into(),
+                            &self.finality_info,
+                        );
+                        (from, to)
+                    }
+                    FilterBlockOption::AtBlockHash(_) => {
+                        // blockHash is equivalent to fromBlock = toBlock = the block number with
+                        // hash blockHash
+                        // get_logs_in_block_range is inclusive
+                        (start_block, latest_block)
+                    }
+                };
+                let logs =
+                    self.get_logs_in_block_range(*filter, from_block_number, to_block_number)?;
+                Ok(FilterChanges::Logs(logs))
+            }
+        }
     }
 
-    async fn filter_changes(&self, _id: FilterId) -> RpcResult<FilterChanges<()>> {
-        todo!()
+    fn filter_logs_impl(&self, id: FilterId) -> EthFilterResult<Vec<Log>> {
+        let filter = {
+            if let FilterKind::Log(ref filter) = self
+                .active_filters
+                .get(&id)
+                .ok_or_else(|| EthFilterError::FilterNotFound(id.clone()))?
+                .kind
+            {
+                filter.clone()
+            } else {
+                // Not a log filter
+                return Err(EthFilterError::FilterNotFound(id));
+            }
+        };
+
+        self.logs_impl(*filter)
     }
 
-    async fn filter_logs(&self, _id: FilterId) -> RpcResult<Vec<Log>> {
-        todo!()
-    }
-
-    async fn uninstall_filter(&self, _id: FilterId) -> RpcResult<bool> {
-        todo!()
-    }
-
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency = API_METRICS.response_time[&"get_logs"].start();
+    fn logs_impl(&self, filter: Filter) -> EthFilterResult<Vec<Log>> {
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
                 let block = resolve_block_id(BlockId::Hash(block_hash.into()), &self.finality_info);
@@ -91,19 +198,22 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
                 ),
             ),
         };
-        tracing::trace!(from, to, ?filter, "Processing eth_getLogs request");
+        tracing::trace!(from, to, ?filter, "getting filtered logs");
+        self.get_logs_in_block_range(filter, from, to)
+    }
 
+    fn get_logs_in_block_range(
+        &self,
+        filter: Filter,
+        from: u64,
+        to: u64,
+    ) -> EthFilterResult<Vec<Log>> {
         if let Some(max_blocks_per_filter) = self
             .query_limits
             .max_blocks_per_filter
             .filter(|limit| to - from > *limit)
         {
-            let message = format!("query exceeds max block range {max_blocks_per_filter}");
-            return Err(ErrorObjectOwned::owned(
-                jsonrpsee::types::error::INVALID_PARAMS_CODE,
-                message,
-                None::<()>,
-            ));
+            return Err(EthFilterError::QueryExceedsMaxBlocks(max_blocks_per_filter));
         }
 
         let is_multi_block_range = from != to;
@@ -153,15 +263,11 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
                     if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response {
                         if is_multi_block_range && logs.len() > max_logs_per_response {
                             let suggested_to = number.saturating_sub(1);
-                            let message = format!(
-                                "query exceeds max results {}, retry with the range {}-{}",
-                                max_logs_per_response, from, suggested_to
-                            );
-                            return Err(ErrorObjectOwned::owned(
-                                jsonrpsee::types::error::INVALID_PARAMS_CODE,
-                                message,
-                                None::<()>,
-                            ));
+                            return Err(EthFilterError::QueryExceedsMaxResults {
+                                max_logs: max_logs_per_response,
+                                from_block: from,
+                                to_block: suggested_to,
+                            });
                         }
                     }
                 } else {
@@ -174,8 +280,216 @@ impl EthFilterApiServer<()> for EthFilterNamespace {
         API_METRICS.get_logs_scanned_blocks[&"true_positive"].observe(tp_scanned_blocks);
         API_METRICS.get_logs_scanned_blocks[&"false_positive"].observe(fp_scanned_blocks);
         API_METRICS.get_logs_scanned_blocks[&"negative"].observe(negative_scanned_blocks);
+
+        Ok(logs)
+    }
+
+    /// Endless future that [`Self::clear_stale_filters`] every `stale_filter_ttl` interval.
+    /// Nonetheless, this endless future frees the thread at every await point.
+    async fn watch_and_clear_stale_filters(&self) {
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + self.stale_filter_ttl,
+            self.stale_filter_ttl,
+        );
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            self.clear_stale_filters(Instant::now()).await;
+        }
+    }
+
+    /// Clears all filters that have not been polled for longer than the configured
+    /// `stale_filter_ttl` at the given instant.
+    pub async fn clear_stale_filters(&self, now: Instant) {
+        self.active_filters.retain(|id, filter| {
+            let is_valid = (now - filter.last_poll_timestamp) < self.stale_filter_ttl;
+
+            if !is_valid {
+                tracing::trace!(?id, "evicting stale filter");
+            }
+
+            is_valid
+        })
+    }
+}
+
+#[async_trait]
+impl EthFilterApiServer for EthFilterNamespace {
+    async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
+        self.install_filter(FilterKind::Log(Box::new(filter)))
+    }
+
+    async fn new_block_filter(&self) -> RpcResult<FilterId> {
+        self.install_filter(FilterKind::Block)
+    }
+
+    async fn new_pending_transaction_filter(
+        &self,
+        kind: Option<PendingTransactionFilterKind>,
+    ) -> RpcResult<FilterId> {
+        let transaction_kind = match kind.unwrap_or_default() {
+            PendingTransactionFilterKind::Hashes => {
+                let receiver = self.mempool.pending_transactions_listener();
+                let pending_txs_receiver = PendingTransactionsReceiver::new(receiver);
+                FilterKind::PendingTransaction(PendingTransactionKind::Hashes(pending_txs_receiver))
+            }
+            PendingTransactionFilterKind::Full => {
+                let stream = self.mempool.new_pending_pool_transactions_listener();
+                let full_txs_receiver = FullTransactionsReceiver::new(stream);
+                FilterKind::PendingTransaction(PendingTransactionKind::FullTransaction(
+                    full_txs_receiver,
+                ))
+            }
+        };
+
+        self.install_filter(transaction_kind)
+    }
+
+    async fn filter_changes(
+        &self,
+        id: FilterId,
+    ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>> {
+        self.filter_changes_impl(id).await.to_rpc_result()
+    }
+
+    async fn filter_logs(&self, id: FilterId) -> RpcResult<Vec<Log>> {
+        self.filter_logs_impl(id).to_rpc_result()
+    }
+
+    async fn uninstall_filter(&self, id: FilterId) -> RpcResult<bool> {
+        if self.active_filters.remove(&id).is_some() {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        let latency = API_METRICS.response_time[&"get_logs"].start();
+        let logs = self.logs_impl(filter).to_rpc_result()?;
         latency.observe();
 
         Ok(logs)
     }
+}
+
+/// An active installed filter
+#[derive(Debug)]
+struct ActiveFilter {
+    /// At which block the filter was polled last.
+    block: u64,
+    /// Last time this filter was polled.
+    last_poll_timestamp: Instant,
+    /// What kind of filter it is.
+    kind: FilterKind,
+}
+
+#[derive(Clone, Debug)]
+enum FilterKind {
+    Log(Box<Filter>),
+    Block,
+    PendingTransaction(PendingTransactionKind),
+}
+
+/// Represents the kind of pending transaction data that can be retrieved.
+///
+/// This enum differentiates between two kinds of pending transaction data:
+/// - Just the transaction hashes.
+/// - Full transaction details.
+#[derive(Debug, Clone)]
+enum PendingTransactionKind {
+    Hashes(PendingTransactionsReceiver),
+    FullTransaction(FullTransactionsReceiver),
+}
+
+impl PendingTransactionKind {
+    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
+        match self {
+            Self::Hashes(receiver) => receiver.drain().await,
+            Self::FullTransaction(receiver) => receiver.drain().await,
+        }
+    }
+}
+
+/// A receiver for pending transactions that returns all new transactions since the last poll.
+#[derive(Debug, Clone)]
+struct PendingTransactionsReceiver {
+    receiver: Arc<Mutex<mpsc::Receiver<TxHash>>>,
+}
+
+impl PendingTransactionsReceiver {
+    fn new(receiver: mpsc::Receiver<TxHash>) -> Self {
+        Self {
+            receiver: Arc::new(Mutex::new(receiver)),
+        }
+    }
+
+    /// Returns all new pending transactions received since the last poll.
+    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
+        let mut pending_txs = Vec::new();
+        let mut prepared_stream = self.receiver.lock().await;
+
+        while let Ok(tx_hash) = prepared_stream.try_recv() {
+            pending_txs.push(tx_hash);
+        }
+
+        // Convert the vector of hashes into FilterChanges::Hashes
+        FilterChanges::Hashes(pending_txs)
+    }
+}
+
+/// A structure to manage and provide access to a stream of full transaction details.
+#[derive(Debug, Clone)]
+struct FullTransactionsReceiver {
+    txs_stream: Arc<Mutex<NewSubpoolTransactionStream<EthPooledTransaction>>>,
+}
+
+impl FullTransactionsReceiver {
+    fn new(txs_stream: NewSubpoolTransactionStream<EthPooledTransaction>) -> Self {
+        Self {
+            txs_stream: Arc::new(Mutex::new(txs_stream)),
+        }
+    }
+
+    /// Returns all new pending transactions received since the last poll.
+    async fn drain(&self) -> FilterChanges<Transaction<L2Envelope>> {
+        let mut pending_txs = Vec::new();
+        let mut prepared_stream = self.txs_stream.lock().await;
+
+        while let Ok(tx) = prepared_stream.try_recv() {
+            let (tx, signer) = tx.transaction.to_consensus().into_parts();
+            let tx = L2Envelope::from(tx);
+            pending_txs.push(Transaction::from_transaction(
+                Recovered::new_unchecked(tx, signer),
+                TransactionInfo::default(),
+            ));
+        }
+        FilterChanges::Transactions(pending_txs)
+    }
+}
+
+type EthFilterResult<T> = Result<T, EthFilterError>;
+
+/// Errors that can occur in the handler implementation
+#[derive(Debug, thiserror::Error)]
+pub enum EthFilterError {
+    /// Filter not found.
+    #[error("filter not found")]
+    FilterNotFound(FilterId),
+    /// Invalid block range.
+    #[error("invalid block range params")]
+    InvalidBlockRangeParams,
+    /// Query scope is too broad.
+    #[error("query exceeds max block range {0}")]
+    QueryExceedsMaxBlocks(u64),
+    /// Query result is too large.
+    #[error("query exceeds max results {max_logs}, retry with the range {from_block}-{to_block}")]
+    QueryExceedsMaxResults {
+        /// Maximum number of logs allowed per response
+        max_logs: usize,
+        /// Start block of the suggested retry range
+        from_block: u64,
+        /// End block of the suggested retry range (last successfully processed block)
+        to_block: u64,
+    },
 }

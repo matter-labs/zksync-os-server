@@ -43,13 +43,19 @@ pub async fn run_jsonrpsee_server(
             repository_manager.clone(),
             finality_tracker.clone(),
             state_handle,
-            mempool,
+            mempool.clone(),
             block_replay_storage,
         )
         .into_rpc(),
     )?;
     rpc.merge(
-        EthFilterNamespace::new(config.clone(), repository_manager, finality_tracker).into_rpc(),
+        EthFilterNamespace::new(
+            config.clone(),
+            repository_manager,
+            finality_tracker,
+            mempool,
+        )
+        .into_rpc(),
     )?;
 
     let server_config = ServerConfigBuilder::default()
