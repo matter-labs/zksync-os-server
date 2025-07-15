@@ -116,8 +116,8 @@ pub fn l1_transaction_to_api_data(
         inner: receipt_envelope,
         transaction_hash: tx_hash,
         transaction_index: Some(index as u64),
-        // block_hash: Some(BlockHash::from(block_output.header.hash())),
-        block_hash: Some(BlockHash::default()), // todo
+        block_hash: Some(BlockHash::from(block_output.header.hash())),
+        // block_hash: Some(BlockHash::default()), // todo
         block_number: Some(block_output.header.number),
         gas_used: tx_output.gas_used,
         effective_gas_price: block_output.header.base_fee_per_gas as u128,
@@ -148,8 +148,8 @@ pub fn l1_transaction_to_api_data(
         TransactionInfo {
             hash: Some(tx_hash),
             index: Some(index as u64),
-            // block_hash: Some(BlockHash::from(block_output.header.hash())),
-            block_hash: Some(BlockHash::default()),
+            block_hash: Some(BlockHash::from(block_output.header.hash())),
+            // block_hash: Some(BlockHash::default()),
             block_number: Some(block_output.header.number),
             base_fee: Some(block_output.header.base_fee_per_gas),
         },
@@ -217,8 +217,8 @@ pub fn l2_transaction_to_api_data(
         inner: receipt_envelope,
         transaction_hash: tx_hash,
         transaction_index: Some(index as u64),
-        // block_hash: Some(BlockHash::from(block_output.header.hash())),
-        block_hash: Some(BlockHash::default()), // todo
+        block_hash: Some(BlockHash::from(block_output.header.hash())),
+        // block_hash: Some(BlockHash::default()), // todo
         block_number: Some(block_output.header.number),
         gas_used: tx_output.gas_used,
         effective_gas_price: block_output.header.base_fee_per_gas as u128,
@@ -236,8 +236,8 @@ pub fn l2_transaction_to_api_data(
         TransactionInfo {
             hash: Some(tx_hash),
             index: Some(index as u64),
-            // block_hash: Some(BlockHash::from(block_output.header.hash())),
-            block_hash: Some(BlockHash::default()),
+            block_hash: Some(BlockHash::from(block_output.header.hash())),
+            // block_hash: Some(BlockHash::default()),
             block_number: Some(block_output.header.number),
             base_fee: Some(block_output.header.base_fee_per_gas),
         },

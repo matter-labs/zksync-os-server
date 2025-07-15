@@ -9238,6 +9238,7 @@ dependencies = [
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_sequencer",
+ "zksync_os_types",
 ]
 
 [[package]]
