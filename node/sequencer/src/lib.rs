@@ -306,7 +306,7 @@ pub async fn run(
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
-    let (tree_ready_block_sender, _tree_ready_block_receiver) = watch::channel(0u64);
+    let (tree_ready_block_sender, tree_ready_block_receiver) = watch::channel(0u64);
 
     // ========== Initialize tree manager ===========
 
@@ -417,13 +417,13 @@ pub async fn run(
     };
 
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
-
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
             l1_sender_handle,
+            tree_ready_block_receiver,
             state_handle.clone(),
             MerkleTree::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,

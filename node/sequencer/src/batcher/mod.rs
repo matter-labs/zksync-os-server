@@ -5,7 +5,7 @@ use futures::StreamExt;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc::Receiver, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_forward_system::run::test_impl::TxListSource;
@@ -29,6 +29,8 @@ pub struct Batcher {
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
     // handled by l1-sender. We ensure that they are sent in order.
     commit_batch_info_sender: Option<L1SenderHandle>,
+    /// notifications about tree version to allow the batcher to wait until the tree is ready
+    tree_version_watch: watch::Receiver<u64>,
     persistent_tree: MerkleTree<RocksDBWrapper>,
     state_handle: StateHandle,
     bin_path: &'static str,
@@ -41,6 +43,7 @@ impl Batcher {
         batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
         // handled by l1-sender
         commit_batch_info_sender: Option<L1SenderHandle>,
+        tree_version_watch: watch::Receiver<u64>,
         state_handle: StateHandle,
         persistent_tree: MerkleTree<RocksDBWrapper>,
 
@@ -57,6 +60,7 @@ impl Batcher {
             block_receiver,
             state_handle,
             batch_sender,
+            tree_version_watch,
             persistent_tree,
             commit_batch_info_sender,
             bin_path,
@@ -68,6 +72,14 @@ impl Batcher {
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> anyhow::Result<()> {
         ReceiverStream::new(self.block_receiver)
+            .then(|(batch_output, replay_record)|{
+                // delay the stream so the necessary tree version is available
+                let mut tree_version = self.tree_version_watch.clone();
+                async move {
+                    tree_version.wait_for(|&tree_version| tree_version >= replay_record.block_context.block_number - 1).await.unwrap();
+                    (batch_output, replay_record)
+                }
+            })
             .map(|(batch_output, replay_record)| {
                 BATCHER_METRICS
                     .current_block_number
@@ -83,25 +95,62 @@ impl Batcher {
                 let persistent_tree = self.persistent_tree.clone();
                 let state_handle = self.state_handle.clone();
                 tokio::task::spawn_blocking(move || {
-                    compute_prover_input(
-                        replay_record,
+                    (
+                        compute_prover_input(
+                            &replay_record,
+                            state_handle,
+                            persistent_tree.clone(),
+                            self.bin_path,
+                        ),
                         batch_output,
-                        state_handle,
-                        persistent_tree.clone(),
-                        self.bin_path,
+                        replay_record,
                     )
                 })
             })
             .buffered(self.maximum_in_flight_blocks)
-            .for_each(async |result| {
-                let batch_job = result.unwrap();
+            .then(|result|{
+                let (a, b, replay_record) = result.unwrap();
+                // delay the stream so the necessary tree version is available
+                let mut tree_version = self.tree_version_watch.clone();
+                async move {
+                    tree_version.wait_for(|&tree_version| tree_version >= replay_record.block_context.block_number).await.unwrap();
+                    (a, b, replay_record)
+                }
+            })
+            .for_each(async |(prover_input, batch_output, replay_record)| {
+                let block_number = replay_record.block_context.block_number;
+
+                let (root_hash, leaf_count) = self.persistent_tree.root_info(block_number).unwrap().unwrap();
+                let tree_output = zksync_os_merkle_tree::BatchOutput {
+                    root_hash,
+                    leaf_count,
+                };
+
+                let tx_count = replay_record.l1_transactions.len() + replay_record.l2_transactions.len();
+                let commit_batch_info = CommitBatchInfo::new(
+                    batch_output,
+                    replay_record.l1_transactions,
+                    tree_output,
+                    CHAIN_ID,
+                );
+                tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
+
+                let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
+                tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
+
+                GENERAL_METRICS.block_number[&"batcher"].set(block_number);
+                GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
                 if let Some(l1) = &self.commit_batch_info_sender {
-                    l1.commit(batch_job.commit_batch_info.clone())
+                    l1.commit(commit_batch_info.clone())
                         .await
                         .unwrap();
                 }
-                self.batch_sender.send(batch_job).await.unwrap();
+                self.batch_sender.send(BatchJob {
+                    block_number,
+                    prover_input,
+                    commit_batch_info,
+                }).await.unwrap();
             })
             .await;
 
@@ -110,12 +159,11 @@ impl Batcher {
 }
 
 fn compute_prover_input(
-    replay_record: ReplayRecord,
-    batch_output: BatchOutput,
+    replay_record: &ReplayRecord,
     state_handle: StateHandle,
     persistent_tree: MerkleTree<RocksDBWrapper>,
     bin_path: &'static str,
-) -> BatchJob {
+) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
     let version = block_number - 1;
 
@@ -139,7 +187,6 @@ fn compute_prover_input(
     let transactions = l1_transactions
         .chain(l2_transactions)
         .collect::<VecDeque<_>>();
-    let tx_count = transactions.len();
     let list_source = TxListSource { transactions };
 
     let tree_view = MerkleTreeVersion {
@@ -168,31 +215,7 @@ fn compute_prover_input(
         latency
     );
 
-    let (root_hash, leaf_count) = persistent_tree.root_info(block_number).unwrap().unwrap();
-    let tree_output = zksync_os_merkle_tree::BatchOutput {
-        root_hash,
-        leaf_count,
-    };
-
-    let commit_batch_info = CommitBatchInfo::new(
-        batch_output,
-        replay_record.l1_transactions,
-        tree_output,
-        CHAIN_ID,
-    );
-    tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
-
-    let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
-    tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
-
-    GENERAL_METRICS.block_number[&"batcher"].set(block_number);
-    GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
-
-    BatchJob {
-        block_number,
-        prover_input,
-        commit_batch_info,
-    }
+    prover_input
 }
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
