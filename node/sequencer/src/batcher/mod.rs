@@ -38,6 +38,7 @@ pub struct Batcher {
 }
 
 impl Batcher {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         block_receiver: tokio::sync::mpsc::Receiver<(BatchOutput, ReplayRecord)>,
         batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
