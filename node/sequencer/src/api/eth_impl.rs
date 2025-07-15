@@ -34,10 +34,10 @@ pub(crate) struct EthNamespace {
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
     // reconsider approach to API in this regard
-    repository_manager: RepositoryManager,
+    pub(super) repository_manager: RepositoryManager,
 
-    finality_info: FinalityTracker,
-    chain_id: u64,
+    pub(super) finality_info: FinalityTracker,
+    pub(super) chain_id: u64,
 }
 
 impl EthNamespace {
@@ -80,7 +80,7 @@ impl EthNamespace {
         Ok(self
             .repository_manager
             .block_receipt_repository
-            .get_by_block(number)
+            .get_by_number(number)
             .map(|(block_output, tx_hashes)| {
                 let header = alloy::consensus::Header {
                     number: block_output.header.number,
@@ -313,12 +313,28 @@ impl EthApiServer for EthNamespace {
         Ok(U256::from(nonce))
     }
 
-    async fn get_code(
-        &self,
-        _address: Address,
-        _block_number: Option<BlockId>,
-    ) -> RpcResult<Bytes> {
-        todo!()
+    async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<Bytes> {
+        let resolved_block = resolve_block_id(
+            block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
+            &self.finality_info,
+        );
+
+        let Some(props) = self
+            .repository_manager
+            .account_property_repository
+            .get_at_block(resolved_block, &address)
+        else {
+            return Ok(Bytes::default());
+        };
+        Ok(Bytes::from(
+            self.repository_manager
+                .bytecode_repository
+                .get_at_block(
+                    resolved_block,
+                    &B256::from(props.bytecode_hash.as_u8_array()),
+                )
+                .unwrap_or_default(),
+        ))
     }
 
     async fn header_by_number(&self, _hash: BlockNumberOrTag) -> RpcResult<Option<Header>> {

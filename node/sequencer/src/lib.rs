@@ -9,6 +9,7 @@ pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
 pub mod finality;
+mod metrics;
 pub mod model;
 pub mod prover_api;
 pub mod repositories;
@@ -20,6 +21,7 @@ use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::finality::FinalityTracker;
+use crate::metrics::GENERAL_METRICS;
 use crate::model::BatchJob;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
@@ -31,7 +33,6 @@ use crate::{
     block_context_provider::BlockContextProvider,
     execution::{
         block_executor::execute_block, block_transactions_provider::BlockTransactionsProvider,
-        metrics::EXECUTION_METRICS,
     },
     model::{BlockCommand, ReplayRecord},
 };
@@ -203,7 +204,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        EXECUTION_METRICS.sealed_block[&"execute"].set(bn);
+        GENERAL_METRICS.block_number[&"execute"].set(bn);
     }
     Ok::<(), anyhow::Error>(())
 }
@@ -300,7 +301,7 @@ pub async fn run(
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
 
-    let (batch_sender, batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(100);
+    let (batch_sender, mut batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(100);
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
@@ -393,6 +394,11 @@ pub async fn run(
             last_committed_batch_number,
         ),
         Err(err) => {
+            // todo: this is inconsistent with the behaviour when prover api / batcher are disabled:
+            //  * here, we return `l1_sender_handle` as `None` and upstream components don't send to it
+            //  * in prover api and batcher, we still have the channel defined and
+            //    we run a dummy consumer instead of the actual component
+            //  **Choose one approach to optional components and stick to it**
             tracing::error!(?err, "failed to start L1 sender; proceeding without it");
             let mut stop_receiver = stop_receiver.clone();
             (
@@ -436,16 +442,42 @@ pub async fn run(
         })
     };
 
-    // ======= Initialize Prover Api Server (todo: should be optional) ========
+    // ======= Initialize Prover Api Server (if configured) ========
 
-    let prover_job_manager = Arc::new(ProverJobManager::new(
-        proof_storage,
-        prover_api_config.job_timeout,
-        prover_api_config.max_unproved_blocks,
-    ));
-    let prover_server_job =
-        prover_server::run(prover_job_manager.clone(), prover_api_config.address);
-
+    let (prover_job_manager_task, prover_server_task): (
+        BoxFuture<anyhow::Result<()>>,
+        BoxFuture<anyhow::Result<()>>,
+    ) = if prover_api_config.component_enabled {
+        let prover_job_manager = Arc::new(ProverJobManager::new(
+            proof_storage,
+            prover_api_config.job_timeout,
+            prover_api_config.max_unproved_blocks,
+        ));
+        (
+            Box::pin(prover_server::run(
+                prover_job_manager.clone(),
+                prover_api_config.address,
+            )),
+            Box::pin(prover_job_manager.listen_for_batch_jobs(batch_receiver)),
+        )
+    } else {
+        tracing::info!("Prover API via configuration; draining channel to avoid backpressure");
+        let mut stop_receiver = stop_receiver.clone();
+        (
+            Box::pin(async move {
+                while batch_receiver.recv().await.is_some() { // Drop messages silently to prevent backpressure
+                }
+                Ok(())
+            }),
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            }),
+        )
+    };
     // ======= Run tasks ===========
 
     tokio::select! {
@@ -501,11 +533,11 @@ pub async fn run(
         }
 
         // ── Prover Server tasks (todo: should be conditioned) ──────────────────────────────────
-        _res = prover_job_manager.listen_for_batch_jobs(batch_receiver) => {
+        _res = prover_job_manager_task => {
             tracing::warn!("Prover job manager task exited")
         }
 
-        res = prover_server_job => {
+        res = prover_server_task => {
             match res {
                 Ok(_)  => tracing::warn!("prover_server_job task exited"),
                 Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),

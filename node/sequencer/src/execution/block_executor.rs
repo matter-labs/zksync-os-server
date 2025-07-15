@@ -1,5 +1,6 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
+use crate::metrics::GENERAL_METRICS;
 use crate::model::{
     InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy, UnifiedTransaction,
 };
@@ -11,7 +12,6 @@ use tokio::time::Sleep;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_state::StateHandle;
 use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
-
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -66,7 +66,7 @@ pub async fn execute_block(
                         match runner.execute_next_tx(tx.clone().encode_zksync_os()).await {
                             Ok(_res) => {
                                 latency.observe();
-                                EXECUTION_METRICS.executed_transactions[&command.metrics_label].inc();
+                                GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();
 
                                 executed_txs.push(tx);
 

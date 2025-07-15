@@ -49,8 +49,12 @@ RUN useradd -m -u ${UID} app && \
 
 # ---- copy binary + prover blobs ----
 COPY --from=builder /app/target/release/zksync_os_sequencer /usr/local/bin/
-COPY --from=builder /app/app.bin /app/app_logging_enabled.bin /
-RUN chmod +x /app.bin /app_logging_enabled.bin
+
+COPY --from=builder /app/app.bin /app/app_logging_enabled.bin /app/
+
+# reuired to support mod.rs in batcher: `concat!(env!("CARGO_MANIFEST_DIR"), "/../../app.bin")`
+RUN mkdir -p /app/node/sequencer
+RUN chmod +x /app/app.bin /app/app_logging_enabled.bin
 
 USER app
 WORKDIR /
