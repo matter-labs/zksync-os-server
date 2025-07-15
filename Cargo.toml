@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "lib/checkpoint_state",
     "lib/contract_interface",
     "lib/l1_sender",
     "lib/l1_watcher",

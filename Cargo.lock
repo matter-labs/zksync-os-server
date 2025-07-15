@@ -9216,6 +9216,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_checkpoint_state"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap",
+ "forward_system",
+ "ruint",
+ "smart-config",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.19",
+ "vise",
+ "zk_ee",
+ "zksync_storage",
+]
+
+[[package]]
 name = "zksync_os_contract_interface"
 version = "0.1.0"
 dependencies = [
