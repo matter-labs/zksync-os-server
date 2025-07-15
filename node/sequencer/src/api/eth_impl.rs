@@ -313,12 +313,28 @@ impl EthApiServer for EthNamespace {
         Ok(U256::from(nonce))
     }
 
-    async fn get_code(
-        &self,
-        _address: Address,
-        _block_number: Option<BlockId>,
-    ) -> RpcResult<Bytes> {
-        todo!()
+    async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<Bytes> {
+        let resolved_block = resolve_block_id(
+            block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
+            &self.finality_info,
+        );
+
+        let Some(props) = self
+            .repository_manager
+            .account_property_repository
+            .get_at_block(resolved_block, &address)
+        else {
+            return Ok(Bytes::default());
+        };
+        Ok(Bytes::from(
+            self.repository_manager
+                .bytecode_repository
+                .get_at_block(
+                    resolved_block,
+                    &B256::from(props.bytecode_hash.as_u8_array()),
+                )
+                .unwrap_or_default(),
+        ))
     }
 
     async fn header_by_number(&self, _hash: BlockNumberOrTag) -> RpcResult<Option<Header>> {
