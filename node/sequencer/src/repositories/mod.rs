@@ -21,7 +21,7 @@ use crate::repositories::transaction_receipt_repository::{
     l1_transaction_to_api_data, l2_transaction_to_api_data,
 };
 pub use account_property_repository::AccountPropertyRepository;
-use alloy::primitives::TxHash;
+use alloy::primitives::{BlockHash, Sealed, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_ee::utils::Bytes32;
@@ -99,9 +99,12 @@ impl RepositoryManager {
         let mut log_index = 0;
         let mut block_bloom = alloy::primitives::Bloom::default();
 
+        let hash = BlockHash::from(block_output.header.hash());
+        let sealed_block_output = Sealed::new_unchecked(block_output, hash);
         for l1_tx in l1_transactions.into_iter() {
             let hash = Bytes32::from(l1_tx.hash().0);
-            let api_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
+            let api_tx =
+                l1_transaction_to_api_data(&sealed_block_output, tx_index, log_index, l1_tx);
             log_index += api_tx.receipt.logs().len();
             tx_index += 1;
             block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
@@ -110,12 +113,14 @@ impl RepositoryManager {
 
         for l2_tx in l2_transactions.into_iter() {
             let hash = Bytes32::from(l2_tx.hash().0);
-            let api_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
+            let api_tx =
+                l2_transaction_to_api_data(&sealed_block_output, tx_index, log_index, l2_tx);
             log_index += api_tx.receipt.logs().len();
             tx_index += 1;
             block_bloom.accrue_bloom(api_tx.receipt.inner.logs_bloom());
             self.transaction_receipt_repository.insert(hash, api_tx);
         }
+        let mut block_output = sealed_block_output.unseal();
         block_output.header.logs_bloom = block_bloom.into_array();
 
         // Add the full block output to the block receipt repository

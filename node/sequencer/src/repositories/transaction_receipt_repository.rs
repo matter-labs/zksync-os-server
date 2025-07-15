@@ -3,7 +3,7 @@ use alloy::consensus::transaction::TransactionInfo;
 use alloy::consensus::{
     Receipt, ReceiptEnvelope, ReceiptWithBloom, Signed, Transaction, TxLegacy, TxType,
 };
-use alloy::primitives::{Address, BlockHash, LogData, TxHash, TxKind, B256, U256};
+use alloy::primitives::{Address, LogData, Sealed, TxHash, TxKind, B256, U256};
 use alloy::signers::Signature;
 use dashmap::DashMap;
 use reth_primitives::Recovered;
@@ -63,7 +63,7 @@ impl Default for TransactionReceiptRepository {
 }
 
 pub fn l1_transaction_to_api_data(
-    block_output: &BatchOutput,
+    block_output: &Sealed<BatchOutput>,
     index: usize,
     log_index: usize,
     tx: L1Transaction,
@@ -90,7 +90,7 @@ pub fn l1_transaction_to_api_data(
             };
             alloy::rpc::types::Log {
                 inner,
-                block_hash: Some(BlockHash::default()), // todo
+                block_hash: Some(block_output.hash()),
                 block_number: Some(block_output.header.number),
                 block_timestamp: Some(block_output.header.timestamp),
                 transaction_hash: Some(tx_hash),
@@ -116,8 +116,7 @@ pub fn l1_transaction_to_api_data(
         inner: receipt_envelope,
         transaction_hash: tx_hash,
         transaction_index: Some(index as u64),
-        block_hash: Some(BlockHash::from(block_output.header.hash())),
-        // block_hash: Some(BlockHash::default()), // todo
+        block_hash: Some(block_output.hash()),
         block_number: Some(block_output.header.number),
         gas_used: tx_output.gas_used,
         effective_gas_price: block_output.header.base_fee_per_gas as u128,
@@ -148,8 +147,7 @@ pub fn l1_transaction_to_api_data(
         TransactionInfo {
             hash: Some(tx_hash),
             index: Some(index as u64),
-            block_hash: Some(BlockHash::from(block_output.header.hash())),
-            // block_hash: Some(BlockHash::default()),
+            block_hash: Some(block_output.hash()),
             block_number: Some(block_output.header.number),
             base_fee: Some(block_output.header.base_fee_per_gas),
         },
@@ -162,7 +160,7 @@ pub fn l1_transaction_to_api_data(
 }
 
 pub fn l2_transaction_to_api_data(
-    block_output: &BatchOutput,
+    block_output: &Sealed<BatchOutput>,
     index: usize,
     log_index: usize,
     tx: L2Transaction,
@@ -188,7 +186,7 @@ pub fn l2_transaction_to_api_data(
             };
             alloy::rpc::types::Log {
                 inner,
-                block_hash: Some(BlockHash::default()), // todo
+                block_hash: Some(block_output.hash()),
                 block_number: Some(block_output.header.number),
                 block_timestamp: Some(block_output.header.timestamp),
                 transaction_hash: Some(tx_hash),
@@ -217,8 +215,7 @@ pub fn l2_transaction_to_api_data(
         inner: receipt_envelope,
         transaction_hash: tx_hash,
         transaction_index: Some(index as u64),
-        block_hash: Some(BlockHash::from(block_output.header.hash())),
-        // block_hash: Some(BlockHash::default()), // todo
+        block_hash: Some(block_output.hash()),
         block_number: Some(block_output.header.number),
         gas_used: tx_output.gas_used,
         effective_gas_price: block_output.header.base_fee_per_gas as u128,
@@ -236,8 +233,7 @@ pub fn l2_transaction_to_api_data(
         TransactionInfo {
             hash: Some(tx_hash),
             index: Some(index as u64),
-            block_hash: Some(BlockHash::from(block_output.header.hash())),
-            // block_hash: Some(BlockHash::default()),
+            block_hash: Some(block_output.hash()),
             block_number: Some(block_output.header.number),
             base_fee: Some(block_output.header.base_fee_per_gas),
         },
