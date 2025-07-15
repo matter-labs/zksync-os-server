@@ -106,7 +106,7 @@ pub async fn run_sequencer_actor(
         tracing::info!(
             block = bn,
             cmd = cmd.to_string(),
-            "▶ starting command. Turning into PreparedCommand.."
+            "▶ starting command. Turning into PreparedCommand."
         );
         let mut stage_started_at = Instant::now();
 

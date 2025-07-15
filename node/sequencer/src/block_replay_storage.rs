@@ -61,6 +61,7 @@ impl BlockReplayStorage {
     pub fn new(db: RocksDB<BlockReplayColumnFamily>) -> Self {
         Self { db }
     }
+
     /// Appends a replay command (context + raw transactions) to the WAL.
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
     pub fn append_replay(&self, record: ReplayRecord) {
