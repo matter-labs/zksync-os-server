@@ -427,7 +427,7 @@ pub async fn run(
             state_handle.clone(),
             MerkleTree::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
             batcher_config.logging_enabled,
-            batcher_config.num_workers,
+            batcher_config.maximum_in_flight_blocks,
         );
         Box::pin(batcher.run_loop())
     } else {

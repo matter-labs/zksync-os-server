@@ -75,8 +75,10 @@ pub struct BatcherConfig {
     #[config(default_t = false)]
     pub logging_enabled: bool,
 
-    #[config(default_t = 1)]
-    pub num_workers: usize,
+    /// How many blocks should be worked on at once.
+    /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
+    #[config(default_t = 10)]
+    pub maximum_in_flight_blocks: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

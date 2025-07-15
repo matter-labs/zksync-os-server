@@ -5,7 +5,7 @@ use anyhow::Context as _;
 use std::fmt;
 
 pub use self::{
-    adapter::MerkleTreeVersion,
+    adapter::{fixed_bytes_to_bytes32, MerkleTreeVersion},
     errors::DeserializeError,
     hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},

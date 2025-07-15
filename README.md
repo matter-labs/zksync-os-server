@@ -20,7 +20,7 @@ batcher_component_enabled=false sequencer_blocks_to_retain_in_memory=16 cargo ru
 ### Docker
 ```
 sudo docker build -t zksync_os_sequencer .
-sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e batcher_num_workers=15  -v /mnt/localssd/db:/db   zksync_os_sequencer
+sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e maximum_in_flight_blocks=15  -v /mnt/localssd/db:/db   zksync_os_sequencer
 ```
 
 ### Exposed Ports
