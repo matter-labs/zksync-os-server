@@ -4,7 +4,7 @@ use std::fmt::Display;
 use std::time::Duration;
 use zk_os_forward_system::run::BatchContext as BlockContext;
 use zksync_os_l1_sender::commitment::CommitBatchInfo;
-use zksync_os_types::ZkTransaction;
+use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
 type L1TxSerialId = u64;
 
@@ -41,13 +41,16 @@ impl ReplayRecord {
         starting_l1_priority_id: L1TxSerialId,
         transactions: Vec<ZkTransaction>,
     ) -> Self {
-        // if let Some(first_l1_tx) = l1_transactions.first() {
-        //     assert_eq!(
-        //         first_l1_tx.nonce(),
-        //         starting_l1_priority_id,
-        //         "First L1 tx serial id must match next_l1_priority_id"
-        //     );
-        // }
+        let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
+            ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
+            ZkEnvelope::L2(_) => None,
+        });
+        if let Some(first_l1_tx_priority_id) = first_l1_tx_priority_id {
+            assert_eq!(
+                first_l1_tx_priority_id, starting_l1_priority_id,
+                "First L1 tx priority id must match next_l1_priority_id"
+            );
+        }
         assert!(
             !transactions.is_empty(),
             "Block must contain at least one tx"
