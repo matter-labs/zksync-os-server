@@ -104,7 +104,7 @@ pub fn transaction_to_api_data(
     let receipt_with_bloom = ReceiptWithBloom::new(tx_receipt, logs_bloom);
     let receipt_envelope = match tx.tx_type() {
         // TODO: For now, pretend like L1 transactions are legacy for the purposes of API
-        //       Needs to be changed when we migrate L1 transactions to alloy
+        //       Needs to be changed when we add L1-specific receipt type
         ZkTxType::L1 => ReceiptEnvelope::Legacy(receipt_with_bloom),
         ZkTxType::L2(TxType::Legacy) => ReceiptEnvelope::Legacy(receipt_with_bloom),
         ZkTxType::L2(TxType::Eip2930) => ReceiptEnvelope::Eip2930(receipt_with_bloom),
