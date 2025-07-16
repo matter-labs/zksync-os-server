@@ -151,26 +151,28 @@ impl RepositoryManager {
         let mut timer = tokio::time::interval(self.poll_interval);
 
         loop {
-            timer.tick().await;
-
             let db_block_number = self.db.latest_block_number();
             let latest_block = *self.latest_block.borrow();
-            for number in (db_block_number + 1)..=latest_block {
-                let block = self
-                    .block_receipt_repository
-                    .get_by_number(number)
-                    .expect("Missing block receipt");
-                let txs = self
-                    .transaction_receipt_repository
-                    .get_by_hashes(&block.body.transactions)
-                    .unwrap();
-                self.db.write_block(&block, &txs);
-
-                self.block_receipt_repository.remove_by_number(number);
-                self.transaction_receipt_repository
-                    .remove_by_hashes(&block.body.transactions);
-                tracing::info!(number, "Persisted receipts");
+            if db_block_number + 1 > latest_block {
+                timer.tick().await;
+                continue;
             }
+
+            let number = db_block_number + 1;
+            let block = self
+                .block_receipt_repository
+                .get_by_number(number)
+                .expect("Missing block receipt");
+            let txs = self
+                .transaction_receipt_repository
+                .get_by_hashes(&block.body.transactions)
+                .unwrap();
+            self.db.write_block(&block, &txs);
+
+            self.block_receipt_repository.remove_by_number(number);
+            self.transaction_receipt_repository
+                .remove_by_hashes(&block.body.transactions);
+            tracing::info!(number, "Persisted receipts");
         }
     }
 }
