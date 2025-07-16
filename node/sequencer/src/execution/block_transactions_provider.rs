@@ -107,14 +107,14 @@ impl BlockTransactionsProvider {
         block_output: &BatchOutput,
         replay_record: &ReplayRecord,
     ) {
-        let mut mined_transactions = Vec::new();
+        let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
                 ZkEnvelope::L1(l1_tx) => {
                     self.next_l1_priority_id = l1_tx.priority_id() + 1;
                 }
                 ZkEnvelope::L2(l2_tx) => {
-                    mined_transactions.push(*l2_tx.hash());
+                    l2_transactions.push(*l2_tx.hash());
                 }
             }
         }
@@ -139,7 +139,7 @@ impl BlockTransactionsProvider {
                 pending_block_blob_fee: None,
                 // TODO: Pass parsed account property changes here (address, nonce, value)
                 changed_accounts: vec![],
-                mined_transactions,
+                mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
     }
