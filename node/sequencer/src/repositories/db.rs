@@ -4,6 +4,7 @@ use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
 use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::TxHash;
 use alloy::rlp::{Decodable, Encodable};
+use tokio::sync::watch;
 use zksync_os_types::{L2Transaction, ZkEnvelope};
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
@@ -60,19 +61,36 @@ impl NamedColumnFamily for RepositoryCF {
 #[derive(Clone, Debug)]
 pub struct RepositoryDB {
     db: RocksDB<RepositoryCF>,
+    latest_block_number: watch::Sender<u64>,
 }
 
 impl RepositoryDB {
     pub fn new(db: RocksDB<RepositoryCF>) -> Self {
-        Self { db }
-    }
-
-    pub fn latest_block_number(&self) -> u64 {
-        self.db
+        let latest_block_number_value = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
-            .unwrap_or(0)
+            .unwrap_or(0);
+
+        Self {
+            db,
+            latest_block_number: watch::channel(latest_block_number_value).0,
+        }
+    }
+
+    pub fn latest_block_number(&self) -> u64 {
+        *self.latest_block_number.borrow()
+    }
+
+    /// Waits until the latest block number is at least `block_number`.
+    /// Returns the latest block number once it is reached.
+    pub async fn wait_for_block_number(&self, block_number: u64) -> u64 {
+        *self
+            .latest_block_number
+            .subscribe()
+            .wait_for(|value| *value >= block_number)
+            .await
+            .unwrap()
     }
 
     pub fn get_block_by_number(&self, number: u64) -> Option<Block<TxHash>> {
@@ -93,15 +111,6 @@ impl RepositoryDB {
         let receipt_bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap()?;
         let meta_bytes = self.db.get_cf(RepositoryCF::TxMeta, &hash.0).unwrap()?;
 
-        // let tx_bytes_mut = &mut ;
-        // let tx_envelope = L2Envelope::network_decode(tx_bytes_mut).unwrap();
-        // let signer = if tx_bytes_mut.is_empty() {
-        //     // l2 tx
-        //     tx_envelope.recover_signer().unwrap()
-        // } else {
-        //     // l1->l2 tx
-        //     Address::from_slice(tx_bytes_mut)
-        // };
         let tx_envelope = ZkEnvelope::decode_2718(&mut tx_bytes.as_slice()).unwrap();
         let tx = match tx_envelope {
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
@@ -141,6 +150,7 @@ impl RepositoryDB {
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
 
         self.db.write(batch).unwrap();
+        self.latest_block_number.send_replace(block_number);
     }
 
     fn add_tx_to_write_batch(batch: &mut WriteBatch<RepositoryCF>, tx: &StoredTxData) {

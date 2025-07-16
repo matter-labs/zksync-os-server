@@ -25,7 +25,6 @@ pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::{Bloom, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio::sync::watch;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_os_forward_system::run::BatchOutput;
@@ -53,7 +52,6 @@ pub struct RepositoryManager {
     db: RepositoryDB,
     latest_block: watch::Sender<u64>,
     max_blocks_in_memory: u64,
-    poll_interval: Duration,
 }
 
 impl RepositoryManager {
@@ -70,7 +68,6 @@ impl RepositoryManager {
             db,
             latest_block: watch::channel(db_block_number).0,
             max_blocks_in_memory: blocks_to_retain as u64,
-            poll_interval: Duration::from_millis(10),
         }
     }
 
@@ -81,17 +78,14 @@ impl RepositoryManager {
         block_output: BatchOutput,
         transactions: Vec<ZkTransaction>,
     ) {
-        let mut timer = tokio::time::interval(self.poll_interval);
-
-        let mut db_block_number = self.db.latest_block_number();
         let should_be_persisted_up_to = self
             .latest_block
             .borrow()
             .saturating_sub(self.max_blocks_in_memory);
-        while db_block_number < should_be_persisted_up_to {
-            timer.tick().await;
-            db_block_number = self.db.latest_block_number()
-        }
+        let _ = self
+            .db
+            .wait_for_block_number(should_be_persisted_up_to)
+            .await;
         self.populate_in_memory(block_output, transactions);
     }
 
@@ -148,15 +142,14 @@ impl RepositoryManager {
     }
 
     pub async fn run_persist_loop(&self) {
-        let mut timer = tokio::time::interval(self.poll_interval);
-
         loop {
             let db_block_number = self.db.latest_block_number();
-            let latest_block = *self.latest_block.borrow();
-            if db_block_number + 1 > latest_block {
-                timer.tick().await;
-                continue;
-            }
+            let _ = self
+                .latest_block
+                .subscribe()
+                .wait_for(|value| *value > db_block_number)
+                .await
+                .unwrap();
 
             let number = db_block_number + 1;
             let block = self
