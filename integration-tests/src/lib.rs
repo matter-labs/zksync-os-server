@@ -14,6 +14,7 @@ use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 
 pub mod assert_traits;
+pub mod contracts;
 pub mod dyn_wallet_provider;
 mod utils;
 
