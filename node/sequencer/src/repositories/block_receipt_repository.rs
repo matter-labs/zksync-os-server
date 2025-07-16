@@ -1,8 +1,6 @@
-use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, Bloom, TxHash, B256, B64, U256};
 use dashmap::DashMap;
 use std::sync::Arc;
-use zk_os_forward_system::run::output::BlockHeader;
 
 /// In-memory repository of the most recent N `BatchOutput`s, keyed by block number.
 ///
@@ -11,7 +9,7 @@ use zk_os_forward_system::run::output::BlockHeader;
 #[derive(Clone, Debug, Default)]
 pub struct BlockReceiptRepository {
     /// Map from block number → block.
-    receipts: Arc<DashMap<u64, Block<TxHash>>>,
+    receipts: Arc<DashMap<u64, alloy::consensus::Block<TxHash>>>,
 }
 
 impl BlockReceiptRepository {
@@ -23,11 +21,15 @@ impl BlockReceiptRepository {
     /// Insert the `BatchOutput` for `block`.
     ///
     /// Must be called with `block == latest_block() + 1`.
-    pub fn insert(&self, header: &BlockHeader, tx_hashes: Vec<TxHash>) {
+    pub fn insert(
+        &self,
+        header: &zk_os_forward_system::run::output::BlockHeader,
+        tx_hashes: Vec<TxHash>,
+    ) {
         let number = header.number;
-        let block = Block {
+        let block = alloy::consensus::Block {
             header: alloy_header(header),
-            body: BlockBody {
+            body: alloy::consensus::BlockBody {
                 transactions: tx_hashes.clone(),
                 ommers: vec![],
                 withdrawals: None,
@@ -38,7 +40,7 @@ impl BlockReceiptRepository {
     }
 
     /// Retrieve the block for `number`, if present.
-    pub fn get_by_number(&self, number: u64) -> Option<Block<TxHash>> {
+    pub fn get_by_number(&self, number: u64) -> Option<alloy::consensus::Block<TxHash>> {
         self.receipts.get(&number).map(|r| r.value().clone())
     }
 
@@ -47,8 +49,10 @@ impl BlockReceiptRepository {
     }
 }
 
-fn alloy_header(header: &BlockHeader) -> Header {
-    Header {
+fn alloy_header(
+    header: &zk_os_forward_system::run::output::BlockHeader,
+) -> alloy::consensus::Header {
+    alloy::consensus::Header {
         parent_hash: B256::new(header.parent_hash.as_u8_array()),
         ommers_hash: B256::new(header.ommers_hash.as_u8_array()),
         beneficiary: Address::new(header.beneficiary.to_be_bytes()),
