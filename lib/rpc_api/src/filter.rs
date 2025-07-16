@@ -1,15 +1,17 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/filter.rs
 
-use alloy::rpc::json_rpc::RpcObject;
-use alloy::rpc::types::{Filter, FilterChanges, FilterId, Log, PendingTransactionFilterKind};
+use alloy::rpc::types::{
+    Filter, FilterChanges, FilterId, Log, PendingTransactionFilterKind, Transaction,
+};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
+use zksync_os_types::L2Envelope;
 
 /// Rpc Interface for poll-based ethereum filter API.
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "eth"))]
 #[cfg_attr(feature = "server", rpc(server, client, namespace = "eth"))]
-pub trait EthFilterApi<T: RpcObject> {
+pub trait EthFilterApi {
     /// Creates a new filter and returns its id.
     #[method(name = "newFilter")]
     async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId>;
@@ -27,7 +29,10 @@ pub trait EthFilterApi<T: RpcObject> {
 
     /// Returns all filter changes since last poll.
     #[method(name = "getFilterChanges")]
-    async fn filter_changes(&self, id: FilterId) -> RpcResult<FilterChanges<T>>;
+    async fn filter_changes(
+        &self,
+        id: FilterId,
+    ) -> RpcResult<FilterChanges<Transaction<L2Envelope>>>;
 
     /// Returns all logs matching given filter (in a range 'from' - 'to').
     #[method(name = "getFilterLogs")]
