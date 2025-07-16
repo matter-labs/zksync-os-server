@@ -1,7 +1,4 @@
-use crate::model::{
-    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
-    UnifiedTransaction,
-};
+use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash};
@@ -18,7 +15,7 @@ use zksync_os_mempool::{
     CanonicalStateUpdate, DynL1Pool, L2TransactionPool, PoolUpdateKind, RethPool,
     RethTransactionPoolExt,
 };
-use zksync_os_types::L2Envelope;
+use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -72,21 +69,21 @@ impl BlockTransactionsProvider {
                     l1_transactions.push(l1_tx.clone());
 
                     anyhow::ensure!(
-                        l1_tx.common_data.serial_id.0 == next_l1_priority_id,
+                        l1_tx.priority_id() == next_l1_priority_id,
                         "L1 priority ID mismatch: expected {}, got {}",
                         next_l1_priority_id,
-                        l1_tx.common_data.serial_id.0
+                        l1_tx.priority_id()
                     );
 
                     next_l1_priority_id += 1;
                 }
 
                 // Create stream: L1 transactions first, then L2 transactions
-                let l1_stream = futures::stream::iter(l1_transactions).map(UnifiedTransaction::L1);
+                let l1_stream = futures::stream::iter(l1_transactions).map(ZkTransaction::from);
                 let l2_stream = self
                     .l2_mempool
                     .best_l2_transactions()
-                    .map(UnifiedTransaction::L2);
+                    .map(ZkTransaction::from);
                 Ok(PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(l1_stream.chain(l2_stream)),
@@ -99,30 +96,15 @@ impl BlockTransactionsProvider {
             BlockCommand::Replay(ReplayRecord {
                 block_context,
                 starting_l1_priority_id,
-                l1_transactions,
-                l2_transactions,
-            }) => {
-                if let Some(first) = l1_transactions.first() {
-                    anyhow::ensure!(
-                        first.common_data.serial_id.0 == starting_l1_priority_id,
-                        "L1 priority ID mismatch: expected {}, got {}",
-                        starting_l1_priority_id,
-                        first.common_data.serial_id.0
-                    )
-                }
-
-                let l1_stream = futures::stream::iter(l1_transactions).map(UnifiedTransaction::L1);
-                let l2_stream = futures::stream::iter(l2_transactions).map(UnifiedTransaction::L2);
-
-                Ok(PreparedBlockCommand {
-                    block_context,
-                    seal_policy: SealPolicy::UntilExhausted,
-                    invalid_tx_policy: InvalidTxPolicy::Abort,
-                    tx_source: Box::pin(l1_stream.chain(l2_stream)),
-                    starting_l1_priority_id,
-                    metrics_label: "replay",
-                })
-            }
+                transactions,
+            }) => Ok(PreparedBlockCommand {
+                block_context,
+                seal_policy: SealPolicy::UntilExhausted,
+                invalid_tx_policy: InvalidTxPolicy::Abort,
+                tx_source: Box::pin(futures::stream::iter(transactions)),
+                starting_l1_priority_id,
+                metrics_label: "replay",
+            }),
         }
     }
 
@@ -131,8 +113,16 @@ impl BlockTransactionsProvider {
         block_output: &BatchOutput,
         replay_record: &ReplayRecord,
     ) {
-        if let Some(last_l1_transaction) = replay_record.l1_transactions.last() {
-            self.next_l1_priority_id = last_l1_transaction.common_data.serial_id.0 + 1
+        let mut l2_transactions = Vec::new();
+        for tx in &replay_record.transactions {
+            match tx.envelope() {
+                ZkEnvelope::L1(l1_tx) => {
+                    self.next_l1_priority_id = l1_tx.priority_id() + 1;
+                }
+                ZkEnvelope::L2(l2_tx) => {
+                    l2_transactions.push(*l2_tx.hash());
+                }
+            }
         }
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
@@ -155,11 +145,7 @@ impl BlockTransactionsProvider {
                 pending_block_base_fee: 0,
                 pending_block_blob_fee: None,
                 changed_accounts,
-                mined_transactions: replay_record
-                    .l2_transactions
-                    .iter()
-                    .map(|tx| *tx.hash())
-                    .collect(),
+                mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
     }

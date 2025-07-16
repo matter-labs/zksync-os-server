@@ -3,7 +3,7 @@ use zk_ee::system::errors::InternalError;
 use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::{simulate_tx, BatchContext};
 use zksync_os_state::StateView;
-use zksync_os_types::{EncodableZksyncOs, L2Transaction};
+use zksync_os_types::{L2Transaction, ZksyncOsEncode};
 
 pub fn execute(
     tx: L2Transaction,
@@ -15,7 +15,7 @@ pub fn execute(
     //     tx,
     //     block_context.block_number
     // );
-    let encoded_tx = tx.encode_zksync_os();
+    let encoded_tx = tx.encode();
 
     block_context.eip1559_basefee = U256::from(0);
 

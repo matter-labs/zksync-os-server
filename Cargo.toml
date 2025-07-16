@@ -77,7 +77,6 @@ test-log = "0.2.18"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
-zksync_types = "28.1.0-non-semver-compat"
 zksync_mini_merkle_tree = "28.1.0-non-semver-compat"
 
 # Reth dependencies
