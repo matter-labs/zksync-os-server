@@ -1,12 +1,13 @@
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::network::{TransactionBuilder, TxSigner};
 use alloy::primitives::{Address, BlockHash, IntoLogData, TxHash, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::Provider;
 use alloy::rpc::json_rpc::RpcRecv;
 use alloy::rpc::types::{Filter, Log, Transaction, TransactionRequest};
 use alloy::sol_types::SolEvent;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
+use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::Tester;
 
 trait FilterSuite: Sized {
@@ -187,7 +188,7 @@ impl FilterSuite for PendingTxSuite<true> {
 }
 
 struct NewLogsSuite {
-    event_emitter: EventEmitterInstance<DynProvider>,
+    event_emitter: EventEmitterInstance<EthDynProvider>,
 }
 
 impl FilterSuite for NewLogsSuite {
