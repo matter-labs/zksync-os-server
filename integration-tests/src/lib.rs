@@ -10,6 +10,7 @@ use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 
 pub mod assert_traits;
+pub mod contracts;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
