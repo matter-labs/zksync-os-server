@@ -22,7 +22,7 @@ use crate::repositories::db::{RepositoryCF, RepositoryDB};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
-use alloy::primitives::{Bloom, TxHash};
+use alloy::primitives::{BlockHash, Bloom, Sealed, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
 use tokio::sync::watch;
@@ -124,13 +124,16 @@ impl RepositoryManager {
         let mut log_index = 0;
         let mut block_bloom = Bloom::default();
         let mut stored_txs = Vec::new();
+        let hash = BlockHash::from(block_output.header.hash());
+        let sealed_block_output = Sealed::new_unchecked(block_output, hash);
         for (tx_index, tx) in transactions.into_iter().enumerate() {
             let tx_hash = *tx.hash();
-            let stored_tx = transaction_to_api_data(&block_output, tx_index, log_index, tx);
+            let stored_tx = transaction_to_api_data(&sealed_block_output, tx_index, log_index, tx);
             log_index += stored_tx.receipt.logs().len() as u64;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
             stored_txs.push((tx_hash, stored_tx));
         }
+        let mut block_output = sealed_block_output.unseal();
         block_output.header.logs_bloom = block_bloom.into_array();
 
         // Add data to repositories.

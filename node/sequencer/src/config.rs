@@ -1,3 +1,4 @@
+use smart_config::metadata::TimeUnit;
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::{path::PathBuf, time::Duration};
 
@@ -27,6 +28,10 @@ pub struct RpcConfig {
     /// Maximum number of logs that can be returned in a response
     #[config(default_t = 20_000)]
     pub max_logs_per_response: usize,
+
+    /// Duration since the last filter poll, after which the filter is considered stale
+    #[config(default_t = 15 * TimeUnit::Minutes)]
+    pub stale_filter_ttl: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
