@@ -46,14 +46,7 @@ pub async fn run_jsonrpsee_server(
         )
         .into_rpc(),
     )?;
-    rpc.merge(
-        EthFilterNamespace::new(
-            config.clone(),
-            repository_manager,
-            mempool,
-        )
-        .into_rpc(),
-    )?;
+    rpc.merge(EthFilterNamespace::new(config.clone(), repository_manager, mempool).into_rpc())?;
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
