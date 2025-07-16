@@ -4,7 +4,7 @@ use crate::IBridgehub::{
 use alloy::contract::SolCallBuilder;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, B256, U256};
-use alloy::providers::DynProvider;
+use alloy::providers::Provider;
 
 alloy::sol! {
     // `Messaging.sol`
@@ -117,13 +117,13 @@ alloy::sol! {
     }
 }
 
-pub struct Bridgehub {
-    instance: IBridgehubInstance<DynProvider, Ethereum>,
+pub struct Bridgehub<P: Provider> {
+    instance: IBridgehubInstance<P, Ethereum>,
     l2_chain_id: u64,
 }
 
-impl Bridgehub {
-    pub fn new(address: Address, provider: DynProvider<Ethereum>, l2_chain_id: u64) -> Self {
+impl<P: Provider> Bridgehub<P> {
+    pub fn new(address: Address, provider: P, l2_chain_id: u64) -> Self {
         let instance = IBridgehub::new(address, provider);
         Self {
             instance,
@@ -146,7 +146,7 @@ impl Bridgehub {
     pub async fn validator_timelock_address(&self) -> alloy::contract::Result<Address> {
         let chain_type_manager_address = self.chain_type_manager_address().await?;
         let chain_type_manager =
-            IChainTypeManager::new(chain_type_manager_address, self.instance.provider().clone());
+            IChainTypeManager::new(chain_type_manager_address, self.instance.provider());
         chain_type_manager.validatorTimelock().call().await
     }
 
@@ -164,7 +164,7 @@ impl Bridgehub {
         l2_gas_limit: U256,
         l2_gas_per_pubdata_byte_limit: U256,
         refund_recipient: Address,
-    ) -> SolCallBuilder<&DynProvider, requestL2TransactionDirectCall> {
+    ) -> SolCallBuilder<&P, requestL2TransactionDirectCall> {
         self.instance
             .requestL2TransactionDirect(L2TransactionRequestDirect {
                 chainId: U256::try_from(self.l2_chain_id).unwrap(),
@@ -206,7 +206,7 @@ impl Bridgehub {
     // TODO: Consider creating a separate `ZkChain` struct
     pub async fn stored_batch_hash(&self, batch_number: u64) -> alloy::contract::Result<B256> {
         let zk_chain_address = self.zk_chain_address().await?;
-        let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider().clone());
+        let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider());
         zk_chain
             .storedBatchHash(U256::from(batch_number))
             .call()
