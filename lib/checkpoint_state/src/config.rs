@@ -8,7 +8,8 @@ pub struct StateConfig {
     /// Only use when replaying/starting from genesis
     pub erase_storage_on_start: bool,
 
-    pub checkpoints_to_retain: usize,
+    // todo: change name to checkpoints_to_retain
+    pub blocks_to_retain_in_memory: usize,
 
     /// Path to the RocksDB directory for state storage
     pub rocks_db_path: PathBuf,
