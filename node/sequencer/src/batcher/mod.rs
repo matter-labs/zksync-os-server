@@ -1,7 +1,7 @@
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -113,8 +113,8 @@ impl Batcher {
                 })
             })
             .buffered(self.maximum_in_flight_blocks)
-            .then(|result| {
-                let (a, b, replay_record) = result.unwrap();
+            .map_err(|e| anyhow::anyhow!(e))
+            .and_then(|(a, b, replay_record)| {
                 // delay the stream so the necessary tree version is available
                 let mut tree_version = self.tree_version_watch.clone();
                 async move {
@@ -122,9 +122,8 @@ impl Batcher {
                         .wait_for(|&tree_version| {
                             tree_version >= replay_record.block_context.block_number
                         })
-                        .await
-                        .unwrap();
-                    (a, b, replay_record)
+                        .await?;
+                    Ok((a, b, replay_record))
                 }
             })
             .try_for_each(async |(prover_input, batch_output, replay_record)| {
@@ -165,6 +164,8 @@ impl Batcher {
                         commit_batch_info,
                     })
                     .await?;
+
+                Ok(())
             })
             .await
     }
