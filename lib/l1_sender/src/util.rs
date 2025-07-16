@@ -1,8 +1,11 @@
 use crate::commitment::StoredBatchInfo;
 use alloy::primitives::keccak256;
+use alloy::providers::DynProvider;
 use zksync_os_contract_interface::Bridgehub;
 
-pub async fn load_genesis_stored_batch(bridgehub: &Bridgehub) -> anyhow::Result<StoredBatchInfo> {
+pub async fn load_genesis_stored_batch(
+    bridgehub: &Bridgehub<DynProvider>,
+) -> anyhow::Result<StoredBatchInfo> {
     let genesis_stored_batch = StoredBatchInfo {
         batch_number: 0,
         // TODO: Make dynamic; can this be resolved without genesis configuration?

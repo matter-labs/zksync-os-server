@@ -3,9 +3,10 @@ mod rocksdb;
 
 pub use crate::config::L1WatcherConfig;
 use zksync_os_mempool::DynL1Pool;
-use zksync_os_types::L1Transaction;
+use zksync_os_types::L1Envelope;
 
 use crate::rocksdb::L1WatcherRocksdbStorage;
+use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, BlockNumber};
@@ -94,7 +95,7 @@ impl L1Watcher {
         let priority_txs = self.process_l1_blocks(from_block, to_block).await?;
         for tx in priority_txs {
             tracing::debug!(
-                serial_id = tx.common_data.serial_id.0,
+                serial_id = tx.nonce(),
                 hash = ?tx.hash(),
                 "adding new priority transaction to mempool",
             );
@@ -121,7 +122,7 @@ impl L1Watcher {
         &self,
         from: BlockNumber,
         to: BlockNumber,
-    ) -> anyhow::Result<Vec<L1Transaction>> {
+    ) -> anyhow::Result<Vec<L1Envelope>> {
         let filter = Filter::new()
             .from_block(from)
             .to_block(to)
@@ -131,10 +132,8 @@ impl L1Watcher {
         let priority_txs = priority_logs
             .into_iter()
             .map(|log| {
-                // TODO: Get rid of this conversion by parsing L1Tx from alloy log
-                let zksync_log: zksync_types::web3::Log =
-                    serde_json::from_value(serde_json::to_value(log)?)?;
-                anyhow::Ok(L1Transaction::try_from(zksync_log)?)
+                let priority_request = NewPriorityRequest::decode_log(&log.inner)?;
+                anyhow::Ok(L1Envelope::try_from(priority_request.data.transaction)?)
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -145,10 +144,8 @@ impl L1Watcher {
             let first = priority_txs.first().unwrap();
             let last = priority_txs.last().unwrap();
             tracing::info!(
-                first_serial_id = %first.serial_id(),
-                last_serial_id = %last.serial_id(),
-                first_block = %first.eth_block(),
-                last_block = %last.eth_block(),
+                first_serial_id = %first.nonce(),
+                last_serial_id = %last.nonce(),
                 "received priority transactions",
             );
         }

@@ -4,7 +4,8 @@ use std::fmt::Display;
 use std::time::Duration;
 use zk_os_forward_system::run::BatchContext as BlockContext;
 use zksync_os_l1_sender::commitment::CommitBatchInfo;
-use zksync_os_types::{EncodableZksyncOs, L1Transaction, L2Transaction};
+use zksync_os_types::{ZkEnvelope, ZkTransaction};
+
 type L1TxSerialId = u64;
 
 /// `BlockCommand`s drive the sequencer execution.
@@ -31,34 +32,33 @@ pub struct ReplayRecord {
     /// If `l1_transactions` is non-empty, equals to the first tx id in this block
     /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
     pub starting_l1_priority_id: L1TxSerialId,
-    // todo: not sure we need to have them separate here
-    pub l1_transactions: Vec<L1Transaction>,
-    pub l2_transactions: Vec<L2Transaction>,
+    pub transactions: Vec<ZkTransaction>,
 }
 
 impl ReplayRecord {
     pub fn new(
         block_context: BlockContext,
         starting_l1_priority_id: L1TxSerialId,
-        l1_transactions: Vec<L1Transaction>,
-        l2_transactions: Vec<L2Transaction>,
+        transactions: Vec<ZkTransaction>,
     ) -> Self {
-        if let Some(first_l1_tx) = l1_transactions.first() {
+        let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
+            ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
+            ZkEnvelope::L2(_) => None,
+        });
+        if let Some(first_l1_tx_priority_id) = first_l1_tx_priority_id {
             assert_eq!(
-                first_l1_tx.serial_id().0,
-                starting_l1_priority_id,
-                "First L1 tx serial id must match next_l1_priority_id"
+                first_l1_tx_priority_id, starting_l1_priority_id,
+                "First L1 tx priority id must match next_l1_priority_id"
             );
         }
         assert!(
-            l1_transactions.len() + l2_transactions.len() > 0,
+            !transactions.is_empty(),
             "Block must contain at least one tx"
         );
         Self {
             block_context,
             starting_l1_priority_id,
-            l1_transactions,
-            l2_transactions,
+            transactions,
         }
     }
 }
@@ -76,31 +76,11 @@ pub struct PreparedBlockCommand {
     pub block_context: BlockContext,
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
-    pub tx_source: BoxStream<'static, UnifiedTransaction>,
+    pub tx_source: BoxStream<'static, ZkTransaction>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
-}
-
-/// A unified transaction that can be either L1 or L2
-/// We don't call this a "Transaction"
-/// as for most purposes only `L2Transaction` should be considered a "Transaction".
-/// todo: may get rid of it as we have EncodableZksyncOs trait
-#[derive(Clone, Debug)]
-pub enum UnifiedTransaction {
-    L1(L1Transaction),
-    L2(L2Transaction),
-}
-
-/// todo: may get rid of it as we have EncodableZksyncOs trait
-impl EncodableZksyncOs for UnifiedTransaction {
-    fn encode_zksync_os(self) -> Vec<u8> {
-        match self {
-            UnifiedTransaction::L1(tx) => tx.encode_zksync_os(),
-            UnifiedTransaction::L2(tx) => tx.encode_zksync_os(),
-        }
-    }
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.
@@ -142,10 +122,9 @@ impl Display for BlockCommand {
         match self {
             BlockCommand::Replay(record) => write!(
                 f,
-                "Replay block {} ({} L1 txs, {} L2 txs); strating l1 priority id: {}",
+                "Replay block {} ({} txs); strating l1 priority id: {}",
                 record.block_context.block_number,
-                record.l1_transactions.len(),
-                record.l2_transactions.len(),
+                record.transactions.len(),
                 record.starting_l1_priority_id,
             ),
             BlockCommand::Produce(context, duration) => write!(

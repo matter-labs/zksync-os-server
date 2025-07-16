@@ -16,7 +16,7 @@ use zksync_os_merkle_tree::{
     fixed_bytes_to_bytes32, MerkleTree, MerkleTreeVersion, RocksDBWrapper,
 };
 use zksync_os_state::StateHandle;
-use zksync_os_types::EncodableZksyncOs;
+use zksync_os_types::ZksyncOsEncode;
 
 /// This component will generates l1 batches from the stream of blocks
 /// It also generates Prover Input for each batch.
@@ -73,11 +73,16 @@ impl Batcher {
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> anyhow::Result<()> {
         ReceiverStream::new(self.block_receiver)
-            .then(|(batch_output, replay_record)|{
+            .then(|(batch_output, replay_record)| {
                 // delay the stream so the necessary tree version is available
                 let mut tree_version = self.tree_version_watch.clone();
                 async move {
-                    tree_version.wait_for(|&tree_version| tree_version >= replay_record.block_context.block_number - 1).await.unwrap();
+                    tree_version
+                        .wait_for(|&tree_version| {
+                            tree_version >= replay_record.block_context.block_number - 1
+                        })
+                        .await
+                        .unwrap();
                     (batch_output, replay_record)
                 }
             })
@@ -87,10 +92,9 @@ impl Batcher {
                     .set(replay_record.block_context.block_number);
                 let block_number = replay_record.block_context.block_number;
                 tracing::debug!(
-                    "Batcher started processing block {} with {} L1 transactions and {} L2 transactions",
+                    "Batcher started processing block {} with {} transactions",
                     block_number,
-                    replay_record.l1_transactions.len(),
-                    replay_record.l2_transactions.len()
+                    replay_record.transactions.len(),
                 );
 
                 let persistent_tree = self.persistent_tree.clone();
@@ -109,28 +113,37 @@ impl Batcher {
                 })
             })
             .buffered(self.maximum_in_flight_blocks)
-            .then(|result|{
+            .then(|result| {
                 let (a, b, replay_record) = result.unwrap();
                 // delay the stream so the necessary tree version is available
                 let mut tree_version = self.tree_version_watch.clone();
                 async move {
-                    tree_version.wait_for(|&tree_version| tree_version >= replay_record.block_context.block_number).await.unwrap();
+                    tree_version
+                        .wait_for(|&tree_version| {
+                            tree_version >= replay_record.block_context.block_number
+                        })
+                        .await
+                        .unwrap();
                     (a, b, replay_record)
                 }
             })
             .for_each(async |(prover_input, batch_output, replay_record)| {
                 let block_number = replay_record.block_context.block_number;
 
-                let (root_hash, leaf_count) = self.persistent_tree.root_info(block_number).unwrap().unwrap();
+                let (root_hash, leaf_count) = self
+                    .persistent_tree
+                    .root_info(block_number)
+                    .unwrap()
+                    .unwrap();
                 let tree_output = zksync_os_merkle_tree::BatchOutput {
                     root_hash,
                     leaf_count,
                 };
 
-                let tx_count = replay_record.l1_transactions.len() + replay_record.l2_transactions.len();
+                let tx_count = replay_record.transactions.len();
                 let commit_batch_info = CommitBatchInfo::new(
                     batch_output,
-                    replay_record.l1_transactions,
+                    &replay_record.transactions,
                     tree_output,
                     CHAIN_ID,
                 );
@@ -143,15 +156,16 @@ impl Batcher {
                 GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
                 if let Some(l1) = &self.commit_batch_info_sender {
-                    l1.commit(commit_batch_info.clone())
-                        .await
-                        .unwrap();
+                    l1.commit(commit_batch_info.clone()).await.unwrap();
                 }
-                self.batch_sender.send(BatchJob {
-                    block_number,
-                    prover_input,
-                    commit_batch_info,
-                }).await.unwrap();
+                self.batch_sender
+                    .send(BatchJob {
+                        block_number,
+                        prover_input,
+                        commit_batch_info,
+                    })
+                    .await
+                    .unwrap();
             })
             .await;
 
@@ -176,17 +190,10 @@ fn compute_prover_input(
 
     let state_view = state_handle.state_view_at_block(block_number).unwrap();
 
-    let l1_transactions = replay_record
-        .l1_transactions
-        .clone()
-        .into_iter()
-        .map(|l1_tx| l1_tx.encode_zksync_os());
-    let l2_transactions = replay_record
-        .l2_transactions
+    let transactions = replay_record
+        .transactions
         .iter()
-        .map(|l2_tx| l2_tx.clone().encode_zksync_os());
-    let transactions = l1_transactions
-        .chain(l2_transactions)
+        .map(|tx| tx.clone().encode())
         .collect::<VecDeque<_>>();
     let list_source = TxListSource { transactions };
 

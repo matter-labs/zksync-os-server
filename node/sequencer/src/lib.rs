@@ -130,8 +130,7 @@ pub async fn run_sequencer_actor(
 
         tracing::info!(
             block_number = bn,
-            l1_transactions = replay_record.l1_transactions.len(),
-            l2_transactions = replay_record.l2_transactions.len(),
+            transactions = replay_record.transactions.len(),
             preimages = block_output.published_preimages.len(),
             storage_writes = block_output.storage_writes.len(),
             "▶ Executed in {:?}. Adding to state...",
@@ -172,8 +171,7 @@ pub async fn run_sequencer_actor(
         repositories.add_block_output_to_repos(
             bn,
             block_output.clone(),
-            replay_record.l1_transactions.clone(),
-            replay_record.l2_transactions.clone(),
+            replay_record.transactions.clone(),
         );
 
         tracing::info!(

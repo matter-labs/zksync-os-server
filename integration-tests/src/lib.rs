@@ -1,6 +1,7 @@
+use crate::dyn_wallet_provider::EthDynProvider;
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
-use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use std::str::FromStr;
 use tokio::sync::watch;
@@ -10,14 +11,15 @@ use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 
 pub mod assert_traits;
+pub mod dyn_wallet_provider;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 9;
 
 pub struct Tester {
-    pub l1_provider: DynProvider,
-    pub l2_provider: DynProvider,
+    pub l1_provider: EthDynProvider,
+    pub l2_provider: EthDynProvider,
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -98,8 +100,8 @@ impl Tester {
         let l1_wallet = l1_provider.wallet().clone();
 
         Ok(Tester {
-            l1_provider: DynProvider::new(l1_provider),
-            l2_provider: DynProvider::new(l2_provider),
+            l1_provider: EthDynProvider::new(l1_provider),
+            l2_provider: EthDynProvider::new(l2_provider),
             l1_wallet,
             l2_wallet,
             stop_sender,

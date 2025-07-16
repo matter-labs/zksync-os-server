@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::L1Transaction;
+use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
@@ -99,16 +99,23 @@ pub struct CommitBatchInfo {
 impl CommitBatchInfo {
     pub fn new(
         batch_output: BatchOutput,
-        l1_transactions: Vec<L1Transaction>,
+        transactions: &[ZkTransaction],
         // TODO: This really needs a different name
         tree_output: zksync_os_merkle_tree::BatchOutput,
         chain_id: u64,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
-        for l1_tx in &l1_transactions {
-            let onchain_data_hash = l1_tx.common_data.hash();
-            priority_operations_hash =
-                keccak256([priority_operations_hash.0, onchain_data_hash.0].concat());
+        let mut number_of_layer1_txs = 0;
+        for tx in transactions {
+            match tx.envelope() {
+                ZkEnvelope::L1(l1_tx) => {
+                    let onchain_data_hash = l1_tx.hash();
+                    priority_operations_hash =
+                        keccak256([priority_operations_hash.0, onchain_data_hash.0].concat());
+                    number_of_layer1_txs += 1;
+                }
+                ZkEnvelope::L2(_) => {}
+            }
         }
 
         let mut hasher = Blake2s256::new();
@@ -158,7 +165,7 @@ impl CommitBatchInfo {
         Self {
             batch_number: batch_output.header.number,
             new_state_commitment,
-            number_of_layer1_txs: l1_transactions.len() as u64,
+            number_of_layer1_txs,
             priority_operations_hash,
             l2_to_l1_logs_root_hash,
             // TODO: Update once enforced, not sure where to source it from yet
