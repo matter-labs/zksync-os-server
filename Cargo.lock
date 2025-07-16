@@ -9323,6 +9323,7 @@ name = "zksync_os_sequencer"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "anyhow",
  "async-trait",
  "axum 0.7.9",
