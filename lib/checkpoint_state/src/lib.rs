@@ -1,25 +1,19 @@
-use crate::persistent_state::StateCF;
-use crate::state_view::StorageMapView;
 use crate::storage_metrics::StorageMetrics;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{
-    LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
-};
-use zksync_storage::RocksDB;
+use zk_os_forward_system::run::StorageWrite;
 
 mod config;
 mod metrics;
 mod persistent_state;
-mod state_view;
 mod storage_metrics;
 
 pub use config::StateConfig;
 pub use persistent_state::PersistentState;
+
+pub type StateView = PersistentState;
 
 /// Container for the two state components.
 /// Thread-safe and cheaply clonable.
@@ -41,15 +35,13 @@ impl StateHandle {
         if config.erase_storage_on_start {
             if fs::exists(config.rocks_db_path.clone()).unwrap() {
                 tracing::info!("Erasing state storage");
-                fs::remove_dir_all(config.rocks_db_path).unwrap();
+                fs::remove_dir_all(config.rocks_db_path.clone()).unwrap();
             } else {
                 tracing::info!("State storage is already empty - not erasing");
             }
         }
 
-        let state_db =
-            RocksDB::<StateCF>::new(&config.rocks_db_path).expect("Failed to open State DB");
-        let persistent_state = PersistentState::new(state_db);
+        let persistent_state = PersistentState::new(config.rocks_db_path.clone());
 
         tracing::info!(
             block = persistent_state.block_number(),
@@ -64,19 +56,38 @@ impl StateHandle {
     }
 
     /// Returns (state_block_number, preimages_block_number)
-    ///
-    /// Hint: we can return `min` of these two values
-    /// for all intents and purposes - only returning both values for easier logging/context
     pub fn latest_block_numbers(&self) -> (u64, u64) {
         let latest_block = self.persistent_state.block_number();
         (latest_block, latest_block)
     }
 
     pub fn state_view_at_block(&self, block_number: u64) -> anyhow::Result<StateView> {
-        Ok(StateView {
-            storage_map_view: self.storage_map.view_at(block_number)?,
-            preimages: self.persistent_preimages.clone(),
-        })
+        let latest_block = self.persistent_state.block_number();
+        let oldest_block = latest_block - self.checkpoints_to_retain as u64;
+
+        if block_number > latest_block {
+            return Err(anyhow::anyhow!(
+                "Block number {block_number} is greater than the current block number {latest_block}"
+            ));
+        } else if block_number < oldest_block {
+            return Err(anyhow::anyhow!(
+                "Block number {block_number} is older than the oldest checkpoint {oldest_block}"
+            ));
+        } else {
+            let checkpoint_path = self
+                .path
+                .join(Self::CHECKPOINT_PATH)
+                .join(block_number.to_string());
+
+            if fs::exists(checkpoint_path.clone())? {
+                let persistent_state = PersistentState::new(checkpoint_path);
+                return Ok(persistent_state);
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Checkpoint for block {block_number} does not exist"
+                ));
+            }
+        }
     }
 
     pub fn add_block_result<'a, J>(
@@ -88,35 +99,33 @@ impl StateHandle {
     where
         J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
     {
-        let latest_block = self.persistent_state.block_number();
-
-        if block_number != latest_block + 1 {
+        if block_number != self.persistent_state.block_number() + 1 {
             return Err(anyhow::anyhow!(
-                "Block number {} is not the next block after latest block {}",
-                block_number,
-                latest_block
+                "Block number {block_number} is not the next block after latest block {}",
+                self.persistent_state.block_number()
             ));
         }
 
-        // Create a checkpoint for the current state before adding the block.
+        // Add the block to the state.
+        self.persistent_state
+            .write_block(block_number, storage_diffs, new_preimages);
+
+        // Create a checkpoint for the current state. We do a checkpoint here because we always want to provide a
+        // stable view of the state for reading, so we can't let the other crates read directly from the main DB.
         let checkpoint_path = self
             .path
             .join(Self::CHECKPOINT_PATH)
-            .join(latest_block.to_string());
+            .join(block_number.to_string());
         let checkpointer = self.persistent_state.rocks.checkpoint()?;
         checkpointer.create_checkpoint(checkpoint_path)?;
 
-        // Add the block to the state.
-        self.persistent_state
-            .add_block(block_number, storage_diffs, new_preimages);
-
         // Delete the oldest checkpoint that is no longer needed.
-        let oldest_block = latest_block - self.checkpoints_to_retain as u64;
+        let oldest_block = block_number - self.checkpoints_to_retain as u64;
         let checkpoint_path = self
             .path
             .join(Self::CHECKPOINT_PATH)
             .join(oldest_block.to_string());
-        if fs::exists(checkpoint_path) {
+        if fs::exists(checkpoint_path.clone())? {
             fs::remove_dir_all(checkpoint_path)?;
         }
 
@@ -135,55 +144,5 @@ impl StateHandle {
 
     pub async fn compact_periodically(&self, _period: Duration) {
         // no op
-    }
-
-    //////////////////////
-    // Internal methods //
-    //////////////////////
-
-    pub fn view_at(&self, block_number: u64) -> anyhow::Result<StorageMapView> {
-        let latest_block = self.latest_block.load(Ordering::Relaxed);
-        let persistent_block_upper_bound = self
-            .persistent_storage_map
-            .persistent_block_upper_bound
-            .load(Ordering::Relaxed);
-        let persistent_block_lower_bound = self
-            .persistent_storage_map
-            .persistent_block_lower_bound
-            .load(Ordering::Relaxed);
-        tracing::debug!(
-            "Creating StorageMapView for block {} with persistence bounds {} to {} and latest block {}",
-            block_number,
-            persistent_block_lower_bound,
-            persistent_block_upper_bound,
-            latest_block
-        );
-
-        // we cannot provide keys for block N when it's already compacted
-        // because view_at(N) should return view for the BEGINNING of block N
-        if block_number <= persistent_block_upper_bound {
-            return Err(anyhow::anyhow!(
-                "Cannot create StorageView for potentially compacted block {} (potentially compacted until {}, at least until {})",
-                block_number,
-                persistent_block_upper_bound,
-                persistent_block_lower_bound
-            ));
-        }
-
-        if block_number > latest_block + 1 {
-            return Err(anyhow::anyhow!(
-                "Cannot create StorageView for block {} - latest known block number is {}",
-                block_number,
-                latest_block
-            ));
-        }
-
-        Ok(StorageMapView {
-            block: block_number,
-            // it's important to use lower_bound here since later blocks are not guaranteed to be in rocksDB yet
-            base_block: persistent_block_lower_bound,
-            diffs: self.diffs.clone(),
-            persistent_storage_map: self.persistent_storage_map.clone(),
-        })
     }
 }

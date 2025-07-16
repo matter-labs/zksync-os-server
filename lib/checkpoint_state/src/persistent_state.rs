@@ -1,7 +1,37 @@
+use std::path::PathBuf;
+
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::StorageWrite;
+use zk_os_forward_system::run::{
+    LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
+};
 use zksync_storage::db::NamedColumnFamily;
 use zksync_storage::RocksDB;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StateCF {
+    Storage,
+    Preimage,
+    Meta,
+}
+
+impl NamedColumnFamily for StateCF {
+    const DB_NAME: &'static str = "state";
+    const ALL: &'static [Self] = &[StateCF::Storage, StateCF::Preimage, StateCF::Meta];
+
+    fn name(&self) -> &'static str {
+        match self {
+            StateCF::Storage => "storage",
+            StateCF::Preimage => "preimage",
+            StateCF::Meta => "meta",
+        }
+    }
+}
+
+impl StateCF {
+    pub(crate) fn block_key() -> &'static [u8] {
+        b"block"
+    }
+}
 
 /// Wrapper for map of storage diffs that are persisted in RocksDB.
 ///
@@ -13,8 +43,10 @@ pub struct PersistentState {
 }
 
 impl PersistentState {
-    pub fn new(rocks: RocksDB<StateCF>) -> Self {
-        Self { rocks }
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            rocks: RocksDB::<StateCF>::new(&path).expect("Failed to open State DB"),
+        }
     }
 
     pub fn block_number(&self) -> u64 {
@@ -25,7 +57,7 @@ impl PersistentState {
             .unwrap_or(0)
     }
 
-    pub fn get_storage_slot(&self, key: Bytes32) -> Option<Bytes32> {
+    pub fn read_storage_slot(&self, key: Bytes32) -> Option<Bytes32> {
         self.rocks
             .get_cf(StateCF::Storage, key.as_u8_array_ref())
             .ok()
@@ -39,7 +71,7 @@ impl PersistentState {
             })
     }
 
-    pub fn get_preimage(&self, key: Bytes32) -> Option<Vec<u8>> {
+    pub fn read_preimage(&self, key: Bytes32) -> Option<Vec<u8>> {
         //let latency = PREIMAGES_METRICS.get[&"total"].start();
         let res = self
             .rocks
@@ -50,7 +82,7 @@ impl PersistentState {
         res
     }
 
-    pub(crate) fn add_block<'a, J>(
+    pub(crate) fn write_block<'a, J>(
         &self,
         block_number: u64,
         storage_diffs: Vec<StorageWrite>,
@@ -85,28 +117,29 @@ impl PersistentState {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum StateCF {
-    Storage,
-    Preimage,
-    Meta,
-}
-
-impl NamedColumnFamily for StateCF {
-    const DB_NAME: &'static str = "state";
-    const ALL: &'static [Self] = &[StateCF::Storage, StateCF::Preimage, StateCF::Meta];
-
-    fn name(&self) -> &'static str {
-        match self {
-            StateCF::Storage => "storage",
-            StateCF::Preimage => "preimage",
-            StateCF::Meta => "meta",
-        }
+impl PreimageSource for PersistentState {
+    fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
+        self.read_preimage(hash)
     }
 }
 
-impl StateCF {
-    pub(crate) fn block_key() -> &'static [u8] {
-        b"block"
+impl ReadStorage for PersistentState {
+    fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
+        self.read_storage_slot(key)
+    }
+}
+
+// temporarily implement ReadStorageTree as interface requires that.
+impl ReadStorageTree for PersistentState {
+    fn tree_index(&mut self, _key: Bytes32) -> Option<u64> {
+        unreachable!("VM forward run should not invoke the tree")
+    }
+
+    fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
+        unreachable!("VM forward run should not invoke the tree")
+    }
+
+    fn prev_tree_index(&mut self, _key: Bytes32) -> u64 {
+        unreachable!("VM forward run should not invoke the tree")
     }
 }
