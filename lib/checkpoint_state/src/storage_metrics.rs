@@ -1,5 +1,4 @@
-use crate::persistent_preimages::PreimagesCF;
-use crate::{StateHandle, StorageMapCF};
+use crate::{PersistentState, StateHandle};
 use std::collections::HashSet;
 use zk_ee::utils::Bytes32;
 

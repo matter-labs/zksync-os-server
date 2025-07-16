@@ -1,4 +1,4 @@
-use crate::storage_metrics::StorageMetrics;
+//use crate::storage_metrics::StorageMetrics;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use zk_os_forward_system::run::StorageWrite;
 mod config;
 mod metrics;
 mod persistent_state;
-mod storage_metrics;
+//mod storage_metrics;
 
 pub use config::StateConfig;
 pub use persistent_state::PersistentState;
@@ -132,14 +132,14 @@ impl StateHandle {
         Ok(())
     }
 
-    pub async fn collect_state_metrics(&self, period: Duration) {
-        let mut ticker = tokio::time::interval(period);
-        let state_handle = self.clone();
-        loop {
-            ticker.tick().await;
-            let m = StorageMetrics::collect_metrics(state_handle.clone());
-            tracing::debug!("{:?}", m);
-        }
+    pub async fn collect_state_metrics(&self, _period: Duration) {
+        // let mut ticker = tokio::time::interval(period);
+        // let state_handle = self.clone();
+        // loop {
+        //     ticker.tick().await;
+        //     let m = StorageMetrics::collect_metrics(state_handle.clone());
+        //     tracing::debug!("{:?}", m);
+        // }
     }
 
     pub async fn compact_periodically(&self, _period: Duration) {
