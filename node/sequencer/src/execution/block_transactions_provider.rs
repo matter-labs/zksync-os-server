@@ -1,9 +1,15 @@
 use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::BlockHash;
+use alloy::primitives::{Address, BlockHash};
 use futures::StreamExt;
+use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
+use std::collections::HashMap;
+use zk_ee::common_structs::PreimageType;
+use zk_os_basic_system::system_implementation::flat_storage_model::{
+    AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
+};
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_mempool::{
     CanonicalStateUpdate, DynL1Pool, L2TransactionPool, PoolUpdateKind, RethPool,
@@ -132,15 +138,65 @@ impl BlockTransactionsProvider {
         let block = Block::new(header, body);
         let sealed_block =
             SealedBlock::new_unchecked(block, BlockHash::from(block_output.header.hash()));
+        let changed_accounts = extract_changed_accounts(block_output);
         self.l2_mempool
             .on_canonical_state_change(CanonicalStateUpdate {
                 new_tip: &sealed_block,
                 pending_block_base_fee: 0,
                 pending_block_blob_fee: None,
-                // TODO: Pass parsed account property changes here (address, nonce, value)
-                changed_accounts: vec![],
+                changed_accounts,
                 mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
     }
+}
+
+/// Extract changed accounts from a BatchOutput.
+///
+/// This method processes the published preimages and storage writes to extract
+/// accounts that were updated during block execution.
+pub fn extract_changed_accounts(block_output: &BatchOutput) -> Vec<ChangedAccount> {
+    // First, collect all account properties from published preimages
+    let mut account_properties_preimages = HashMap::new();
+    for (hash, preimage, preimage_type) in &block_output.published_preimages {
+        match preimage_type {
+            PreimageType::Bytecode => {}
+            PreimageType::AccountData => {
+                account_properties_preimages.insert(
+                    *hash,
+                    AccountProperties::decode(
+                        &preimage
+                            .clone()
+                            .try_into()
+                            .expect("Preimage should be exactly 124 bytes"),
+                    ),
+                );
+            }
+        }
+    }
+
+    // Then, map storage writes to account addresses
+    let mut result = Vec::new();
+    for log in &block_output.storage_writes {
+        if log.account == ACCOUNT_PROPERTIES_STORAGE_ADDRESS {
+            let account_address = Address::from_slice(&log.account_key.as_u8_array()[12..]);
+
+            if let Some(properties) = account_properties_preimages.get(&log.value) {
+                result.push(ChangedAccount {
+                    address: account_address,
+                    nonce: properties.nonce,
+                    balance: properties.balance,
+                });
+            } else {
+                tracing::error!(
+                    %account_address,
+                    ?log.value,
+                    "account properties preimage not found"
+                );
+                panic!();
+            }
+        }
+    }
+
+    result
 }

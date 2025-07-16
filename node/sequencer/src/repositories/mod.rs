@@ -10,10 +10,12 @@
 
 pub mod account_property_repository;
 pub mod block_receipt_repository;
+pub mod bytecode_property_respository;
 mod metrics;
 pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
+use crate::repositories::bytecode_property_respository::BytecodeRepository;
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
@@ -37,6 +39,7 @@ use zksync_os_types::ZkTransaction;
 #[derive(Clone, Debug)]
 pub struct RepositoryManager {
     pub account_property_repository: AccountPropertyRepository,
+    pub bytecode_repository: BytecodeRepository,
     pub block_receipt_repository: BlockReceiptRepository,
     pub transaction_receipt_repository: TransactionReceiptRepository,
 }
@@ -45,6 +48,7 @@ impl RepositoryManager {
     pub fn new(blocks_to_retain: usize) -> Self {
         RepositoryManager {
             account_property_repository: AccountPropertyRepository::new(blocks_to_retain),
+            bytecode_repository: BytecodeRepository::new(blocks_to_retain),
             block_receipt_repository: BlockReceiptRepository::new(blocks_to_retain),
             transaction_receipt_repository: TransactionReceiptRepository::new(),
         }
@@ -73,11 +77,13 @@ impl RepositoryManager {
         block_output.tx_results.retain(|result| result.is_ok());
 
         // Extract account properties from the block output
-        let account_properties = extract_account_properties(&block_output);
+        let (account_properties, bytecodes) = extract_account_properties(&block_output);
 
         // Add account properties to the account property repository
         self.account_property_repository
             .add_diff(block_number, account_properties);
+        // Add bytecodes to the bytecode repository
+        self.bytecode_repository.add_diff(block_number, bytecodes);
 
         // Add transaction receipts to the transaction receipt repository
         let mut log_index = 0;

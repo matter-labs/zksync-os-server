@@ -9204,8 +9204,10 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
  "fs2",
  "futures",
+ "serde_json",
  "tempfile",
  "test-log",
  "tokio",
@@ -9337,6 +9339,7 @@ dependencies = [
  "jsonrpsee",
  "parking_lot",
  "reth-chainspec",
+ "reth-execution-types",
  "reth-primitives",
  "reth-primitives-traits",
  "reth-revm",
