@@ -3,8 +3,7 @@ use crate::api::resolve_block_id;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
-use crate::finality::FinalityTracker;
-use crate::repositories::AccountPropertyRepository;
+use crate::repositories::RepositoryManager;
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -17,27 +16,24 @@ use zksync_os_types::L2Envelope;
 
 pub struct EthCallHandler {
     config: RpcConfig,
-    finality_info: FinalityTracker,
     state_handle: StateHandle,
 
     block_replay_storage: BlockReplayStorage,
-    account_property_repository: AccountPropertyRepository,
+    repository_manager: RepositoryManager,
 }
 
 impl EthCallHandler {
     pub fn new(
         config: RpcConfig,
-        finality_tracker: FinalityTracker,
         state_handle: StateHandle,
         block_replay_storage: BlockReplayStorage,
-        account_property_repository: AccountPropertyRepository,
+        repository_manager: RepositoryManager,
     ) -> EthCallHandler {
         Self {
             config,
-            finality_info: finality_tracker,
             state_handle,
             block_replay_storage,
-            account_property_repository,
+            repository_manager,
         }
     }
 
@@ -57,7 +53,7 @@ impl EthCallHandler {
 
         // consider legacy logic - perhaps differentiate Latest/Commiteed etc
         let block_id = block.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
-        let block_number = resolve_block_id(block_id, &self.finality_info);
+        let block_number = resolve_block_id(block_id, &self.repository_manager);
         tracing::info!(?block_id, block_number, "resolved block id");
 
         // using previous block context
@@ -93,7 +89,8 @@ impl EthCallHandler {
 
         let gas_limit = gas.unwrap_or(self.config.eth_call_gas as u64);
         let nonce = nonce.unwrap_or_else(|| {
-            self.account_property_repository
+            self.repository_manager
+                .account_property_repository
                 .get_latest(&from.unwrap_or_default())
                 .map(|props| props.nonce)
                 .unwrap_or_default()
