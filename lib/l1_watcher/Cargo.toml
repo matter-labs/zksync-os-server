@@ -15,7 +15,6 @@ zksync_os_mempool.workspace = true
 zksync_os_types.workspace = true
 
 zksync_storage.workspace = true
-zksync_types.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
 anyhow.workspace = true

@@ -10,6 +10,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_types.workspace = true
+zksync_os_contract_interface.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types"] }
+alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "k256"] }
+serde.workspace = true
+thiserror.workspace = true

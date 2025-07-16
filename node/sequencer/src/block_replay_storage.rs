@@ -1,11 +1,10 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::{BlockCommand, ReplayRecord};
-use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::{Decodable2718, Encodable2718};
 use futures::stream::{self, BoxStream, StreamExt};
 use std::convert::TryInto;
 use zk_os_forward_system::run::BatchContext;
-use zksync_os_types::L2Envelope;
+use zksync_os_types::ZkEnvelope;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
@@ -27,8 +26,7 @@ pub struct BlockReplayStorage {
 pub enum BlockReplayColumnFamily {
     Context,
     StartingL1SerialId,
-    L1Txs,
-    L2Txs,
+    Txs,
     /// Stores the latest appended block number under a fixed key.
     Latest,
 }
@@ -38,8 +36,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     const ALL: &'static [Self] = &[
         BlockReplayColumnFamily::Context,
         BlockReplayColumnFamily::StartingL1SerialId,
-        BlockReplayColumnFamily::L1Txs,
-        BlockReplayColumnFamily::L2Txs,
+        BlockReplayColumnFamily::Txs,
         BlockReplayColumnFamily::Latest,
     ];
 
@@ -47,8 +44,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         match self {
             BlockReplayColumnFamily::Context => "context",
             BlockReplayColumnFamily::StartingL1SerialId => "last_processed_l1_tx_id",
-            BlockReplayColumnFamily::L1Txs => "l1_txs",
-            BlockReplayColumnFamily::L2Txs => "l2_txs",
+            BlockReplayColumnFamily::Txs => "txs",
             BlockReplayColumnFamily::Latest => "latest",
         }
     }
@@ -65,7 +61,7 @@ impl BlockReplayStorage {
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
     pub fn append_replay(&self, record: ReplayRecord) {
         let latency = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
-        assert!(!record.l1_transactions.is_empty() || !record.l2_transactions.is_empty());
+        assert!(!record.transactions.is_empty());
 
         let current_latest_block = self.latest_block().unwrap_or(0);
 
@@ -87,16 +83,13 @@ impl BlockReplayStorage {
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.last_processed_l1_tx_id");
-        let l1_txs_value =
-            bincode::serde::encode_to_vec(&record.l1_transactions, bincode::config::standard())
-                .expect("Failed to serialize record.transactions");
-        let l2_txs_2718_encoded = record
-            .l2_transactions
+        let txs_2718_encoded = record
+            .transactions
             .into_iter()
-            .map(|l2_tx| l2_tx.encoded_2718())
+            .map(|tx| tx.inner.encoded_2718())
             .collect::<Vec<_>>();
-        let l2_txs_value =
-            bincode::serde::encode_to_vec(&l2_txs_2718_encoded, bincode::config::standard())
+        let txs_value =
+            bincode::serde::encode_to_vec(&txs_2718_encoded, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
 
         // Batch both writes: replay entry and latest pointer
@@ -112,8 +105,7 @@ impl BlockReplayStorage {
             &block_num,
             &starting_l1_tx_id_value,
         );
-        batch.put_cf(BlockReplayColumnFamily::L1Txs, &block_num, &l1_txs_value);
-        batch.put_cf(BlockReplayColumnFamily::L2Txs, &block_num, &l2_txs_value);
+        batch.put_cf(BlockReplayColumnFamily::Txs, &block_num, &txs_value);
 
         self.db.write(batch).expect("Failed to write to WAL");
         latency.observe();
@@ -153,62 +145,44 @@ impl BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::StartingL1SerialId, &key)
             .expect("Failed to read from LastProcessedL1TxId CF");
-        let l1_txs_result = self
+        let txs_result = self
             .db
-            .get_cf(BlockReplayColumnFamily::L1Txs, &key)
-            .expect("Failed to read from Txs CF");
-        let l2_txs_result = self
-            .db
-            .get_cf(BlockReplayColumnFamily::L2Txs, &key)
+            .get_cf(BlockReplayColumnFamily::Txs, &key)
             .expect("Failed to read from Txs CF");
 
-        match (
-            context_result,
-            last_processed_l1_tx_result,
-            l1_txs_result,
-            l2_txs_result,
-        ) {
-            (
-                Some(bytes_context),
-                Some(bytes_starting_l1_tx),
-                Some(bytes_l1_txs),
-                Some(bytes_l2_txs),
-            ) => Some(ReplayRecord {
-                block_context: bincode::serde::decode_from_slice(
-                    &bytes_context,
-                    bincode::config::standard(),
-                )
-                .expect("Failed to deserialize context")
-                .0,
-                starting_l1_priority_id: bincode::serde::decode_from_slice(
-                    &bytes_starting_l1_tx,
-                    bincode::config::standard(),
-                )
-                .expect("Failed to deserialize context")
-                .0,
-                l1_transactions: bincode::serde::decode_from_slice(
-                    &bytes_l1_txs,
-                    bincode::config::standard(),
-                )
-                .expect("Failed to deserialize L1 transactions")
-                .0,
-                l2_transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
-                    &bytes_l2_txs,
-                    bincode::config::standard(),
-                )
-                .expect("Failed to deserialize L2 transactions")
-                .0
-                .into_iter()
-                .map(|bytes| {
-                    L2Envelope::decode_2718(&mut bytes.as_slice())
-                        .expect("Failed to decode 2718 L2 transaction")
-                        .try_into_recovered()
-                        .expect("Failed to recover L2 transaction's signer")
+        match (context_result, last_processed_l1_tx_result, txs_result) {
+            (Some(bytes_context), Some(bytes_starting_l1_tx), Some(bytes_txs)) => {
+                Some(ReplayRecord {
+                    block_context: bincode::serde::decode_from_slice(
+                        &bytes_context,
+                        bincode::config::standard(),
+                    )
+                    .expect("Failed to deserialize context")
+                    .0,
+                    starting_l1_priority_id: bincode::serde::decode_from_slice(
+                        &bytes_starting_l1_tx,
+                        bincode::config::standard(),
+                    )
+                    .expect("Failed to deserialize context")
+                    .0,
+                    transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
+                        &bytes_txs,
+                        bincode::config::standard(),
+                    )
+                    .expect("Failed to deserialize transactions")
+                    .0
+                    .into_iter()
+                    .map(|bytes| {
+                        ZkEnvelope::decode_2718(&mut bytes.as_slice())
+                            .expect("Failed to decode 2718 transaction")
+                            .try_into_recovered()
+                            .expect("Failed to recover transaction's signer")
+                    })
+                    .collect(),
                 })
-                .collect(),
-            }),
-            (None, None, None, None) => None,
-            _ => panic!("Inconsistent state: Context and L1/L2 Txs must be written atomically"),
+            }
+            (None, None, None) => None,
+            _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
     }
 

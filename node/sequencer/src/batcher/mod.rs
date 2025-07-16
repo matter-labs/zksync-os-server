@@ -14,7 +14,7 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
-use zksync_os_types::EncodableZksyncOs;
+use zksync_os_types::ZksyncOsEncode;
 
 // used in two places:
 // * number of blocks received by Batcher but not distributed to Workers yet
@@ -118,10 +118,9 @@ impl Batcher {
                         .set(replay_record.block_context.block_number);
                     let block_number = replay_record.block_context.block_number;
                     tracing::debug!(
-                        "Batcher dispatcher received block {} with {} L1 transactions and {} L2 transactions",
+                        "Batcher dispatcher received block {} with {} transactions",
                         block_number,
-                        replay_record.l1_transactions.len(),
-                        replay_record.l2_transactions.len()
+                        replay_record.transactions.len()
                     );
                     for tx in worker_block_senders.iter() {
                         tx.send((batch_output.clone(), replay_record.clone()))
@@ -196,18 +195,12 @@ fn worker_loop(
 
             let state_view = state_handle.state_view_at_block(bn).unwrap();
 
-            let l1_transactions = replay_record
-                .l1_transactions
+            let transactions: VecDeque<Vec<u8>> = replay_record
+                .transactions
                 .clone()
                 .into_iter()
-                .map(|l1_tx| l1_tx.encode_zksync_os());
-            let l2_transactions = replay_record
-                .l2_transactions
-                .into_iter()
-                .map(|l2_tx| l2_tx.encode_zksync_os());
-            let transactions = l1_transactions
-                .chain(l2_transactions)
-                .collect::<VecDeque<_>>();
+                .map(|tx| tx.encode())
+                .collect();
             let tx_count = transactions.len();
             let list_source = TxListSource { transactions };
 
@@ -249,7 +242,7 @@ fn worker_loop(
 
             let commit_batch_info = CommitBatchInfo::new(
                 batch_output,
-                replay_record.l1_transactions,
+                &replay_record.transactions,
                 tree_output,
                 CHAIN_ID,
             );

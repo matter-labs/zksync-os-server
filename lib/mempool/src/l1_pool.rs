@@ -1,7 +1,8 @@
+use alloy::consensus::Transaction;
 use dashmap::DashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use zksync_os_types::L1Transaction;
+use zksync_os_types::L1Envelope;
 
 // todo: not sure we need this separate from L1Watcher -
 // todo: perhaps we should just add a `transactions: DashMap<u64, L1Transaction>` to L1Watcher?
@@ -11,9 +12,9 @@ pub trait L1Pool: Send + Sync + Debug + 'static {
     /// Alternative for [`Clone::clone`] that is object safe.
     fn dyn_clone(&self) -> Box<dyn L1Pool>;
 
-    fn add_transaction(&self, transaction: L1Transaction);
+    fn add_transaction(&self, transaction: L1Envelope);
 
-    fn get(&self, id: u64) -> Option<L1Transaction>;
+    fn get(&self, id: u64) -> Option<L1Envelope>;
 }
 
 impl Clone for Box<dyn L1Pool> {
@@ -27,13 +28,13 @@ impl Clone for Box<dyn L1Pool> {
 /// Doesn't respect nonces
 #[derive(Clone, Debug)]
 pub struct L1Mempool {
-    transactions: Arc<DashMap<u64, L1Transaction>>,
+    transactions: Arc<DashMap<u64, L1Envelope>>,
 }
 
 impl L1Mempool {
-    pub fn new(forced_transaction: L1Transaction) -> Self {
+    pub fn new(forced_transaction: L1Envelope) -> Self {
         let transactions = DashMap::new();
-        transactions.insert(forced_transaction.serial_id().0, forced_transaction);
+        transactions.insert(forced_transaction.nonce(), forced_transaction);
         Self {
             transactions: Arc::new(transactions),
         }
@@ -45,15 +46,15 @@ impl L1Pool for L1Mempool {
         Box::new(self.clone())
     }
 
-    fn add_transaction(&self, transaction: L1Transaction) {
+    fn add_transaction(&self, transaction: L1Envelope) {
         // Do not overwrite forced transactions
         // FIXME: get rid of forced transactions and this respectively
         self.transactions
-            .entry(transaction.common_data.serial_id.0)
+            .entry(transaction.nonce())
             .or_insert(transaction);
     }
 
-    fn get(&self, id: u64) -> Option<L1Transaction> {
+    fn get(&self, id: u64) -> Option<L1Envelope> {
         self.transactions.get(&id).map(|t| t.clone())
     }
 }
