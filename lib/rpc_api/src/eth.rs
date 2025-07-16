@@ -12,7 +12,7 @@ use alloy::rpc::types::{
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use zksync_os_types::L2Envelope;
+use zksync_os_types::ZkEnvelope;
 
 /// Eth rpc interface: <https://ethereum.github.io/execution-apis/docs/reference/json-rpc-api>
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "eth"))]
@@ -105,7 +105,7 @@ pub trait EthApi {
 
     /// Returns the information about a transaction requested by transaction hash.
     #[method(name = "getTransactionByHash")]
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>>;
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
 
     /// Returns information about a raw transaction by block hash and transaction index position.
     #[method(name = "getRawTransactionByBlockHashAndIndex")]

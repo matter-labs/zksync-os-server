@@ -23,6 +23,8 @@ fs2.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 test-log.workspace = true
