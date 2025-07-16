@@ -24,6 +24,7 @@ tempfile.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+backon.workspace = true
 
 [dev-dependencies]
 test-log.workspace = true
