@@ -127,7 +127,7 @@ impl Batcher {
                     (a, b, replay_record)
                 }
             })
-            .for_each(async |(prover_input, batch_output, replay_record)| {
+            .try_for_each(async |(prover_input, batch_output, replay_record)| {
                 let block_number = replay_record.block_context.block_number;
 
                 let (root_hash, leaf_count) = self
@@ -156,7 +156,7 @@ impl Batcher {
                 GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
                 if let Some(l1) = &self.commit_batch_info_sender {
-                    l1.commit(commit_batch_info.clone()).await.unwrap();
+                    l1.commit(commit_batch_info.clone()).await?;
                 }
                 self.batch_sender
                     .send(BatchJob {
@@ -164,12 +164,9 @@ impl Batcher {
                         prover_input,
                         commit_batch_info,
                     })
-                    .await
-                    .unwrap();
+                    .await?;
             })
-            .await;
-
-        Ok(())
+            .await
     }
 }
 
