@@ -10,7 +10,7 @@ use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
-use alloy::consensus::{Sealable, Transaction as _};
+use alloy::consensus::Sealable;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::primitives::BlockTransactions;
@@ -26,7 +26,7 @@ use jsonrpsee::core::RpcResult;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_os_types::L2Envelope;
+use zksync_os_types::ZkEnvelope;
 
 pub(crate) struct EthNamespace {
     tx_handler: TxHandler,
@@ -180,11 +180,11 @@ impl EthApiServer for EthNamespace {
         todo!()
     }
 
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
         //todo: only expose canonized!!!
         let stored_tx = self.repository_manager.get_stored_tx_by_hash(hash);
         let res = stored_tx.map(|stored_tx| Transaction {
-            inner: stored_tx.tx,
+            inner: stored_tx.tx.inner,
             block_hash: Some(stored_tx.meta.block_hash),
             block_number: Some(stored_tx.meta.block_number),
             transaction_index: Some(stored_tx.meta.tx_index_in_block),
@@ -324,12 +324,28 @@ impl EthApiServer for EthNamespace {
         Ok(U256::from(nonce))
     }
 
-    async fn get_code(
-        &self,
-        _address: Address,
-        _block_number: Option<BlockId>,
-    ) -> RpcResult<Bytes> {
-        todo!()
+    async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<Bytes> {
+        let resolved_block = resolve_block_id(
+            block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
+            &self.repository_manager,
+        );
+
+        let Some(props) = self
+            .repository_manager
+            .account_property_repository
+            .get_at_block(resolved_block, &address)
+        else {
+            return Ok(Bytes::default());
+        };
+        Ok(Bytes::from(
+            self.repository_manager
+                .bytecode_repository
+                .get_at_block(
+                    resolved_block,
+                    &B256::from(props.bytecode_hash.as_u8_array()),
+                )
+                .unwrap_or_default(),
+        ))
     }
 
     async fn header_by_number(&self, _hash: BlockNumberOrTag) -> RpcResult<Option<Header>> {

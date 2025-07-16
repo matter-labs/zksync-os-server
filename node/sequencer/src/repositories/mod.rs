@@ -11,16 +11,16 @@
 pub mod account_property_repository;
 pub mod api_interface;
 pub mod block_receipt_repository;
+pub mod bytecode_property_respository;
 mod db;
 mod metrics;
 pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
+use crate::repositories::bytecode_property_respository::BytecodeRepository;
 use crate::repositories::db::{RepositoryCF, RepositoryDB};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
-use crate::repositories::transaction_receipt_repository::{
-    l1_transaction_to_api_data, l2_transaction_to_api_data,
-};
+use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::{Bloom, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_os_forward_system::run::BatchOutput;
-use zksync_os_types::{L1Transaction, L2Transaction};
+use zksync_os_types::ZkTransaction;
 use zksync_storage::RocksDB;
 
 /// Manages repositories that store node data required for RPC but not for VM execution.
@@ -43,8 +43,9 @@ use zksync_storage::RocksDB;
 
 #[derive(Clone, Debug)]
 pub struct RepositoryManager {
-    // TODO: get rid of `account_property_repository`
+    // TODO: get rid of `account_property_repository` and `bytecode_repository`
     pub account_property_repository: AccountPropertyRepository,
+    pub bytecode_repository: BytecodeRepository,
 
     block_receipt_repository: BlockReceiptRepository,
     transaction_receipt_repository: TransactionReceiptRepository,
@@ -63,6 +64,7 @@ impl RepositoryManager {
 
         RepositoryManager {
             account_property_repository: AccountPropertyRepository::new(blocks_to_retain),
+            bytecode_repository: BytecodeRepository::new(blocks_to_retain),
             block_receipt_repository: BlockReceiptRepository::new(),
             transaction_receipt_repository: TransactionReceiptRepository::new(),
             db,
@@ -77,8 +79,7 @@ impl RepositoryManager {
     pub async fn populate_in_memory_blocking(
         &self,
         block_output: BatchOutput,
-        l1_transactions: Vec<L1Transaction>,
-        l2_transactions: Vec<L2Transaction>,
+        transactions: Vec<ZkTransaction>,
     ) {
         let mut timer = tokio::time::interval(self.poll_interval);
 
@@ -91,7 +92,7 @@ impl RepositoryManager {
             timer.tick().await;
             db_block_number = self.db.latest_block_number()
         }
-        self.populate_in_memory(block_output, l1_transactions, l2_transactions);
+        self.populate_in_memory(block_output, transactions);
     }
 
     /// Adds a block's output to all relevant repositories.
@@ -105,52 +106,36 @@ impl RepositoryManager {
     /// Notes:
     /// - No atomicity or ordering guarantees are provided for repository updates.
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
-    fn populate_in_memory(
-        &self,
-        mut block_output: BatchOutput,
-        l1_transactions: Vec<L1Transaction>,
-        l2_transactions: Vec<L2Transaction>,
-    ) {
+    fn populate_in_memory(&self, mut block_output: BatchOutput, transactions: Vec<ZkTransaction>) {
         let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
-        let tx_hashes = l1_transactions
+        let tx_hashes = transactions
             .iter()
             .map(|tx| TxHash::from(tx.hash().0))
-            .chain(l2_transactions.iter().map(|tx| *tx.hash()))
             .collect();
 
         // Drop rejected transactions from the block output
         block_output.tx_results.retain(|result| result.is_ok());
 
         // Extract account properties from the block output
-        let account_properties = extract_account_properties(&block_output);
+        let (account_properties, bytecodes) = extract_account_properties(&block_output);
 
         // Add account properties to the account property repository
         self.account_property_repository
             .add_diff(block_number, account_properties);
+        // Add bytecodes to the bytecode repository
+        self.bytecode_repository.add_diff(block_number, bytecodes);
 
-        // Prepare the block output and transactions for storage
-        let mut tx_index = 0;
+        // Add transaction receipts to the transaction receipt repository
         let mut log_index = 0;
         let mut block_bloom = Bloom::default();
-
         let mut stored_txs = Vec::new();
-        for l1_tx in l1_transactions.into_iter() {
-            let hash = TxHash::from(l1_tx.hash().0);
-            let stored_tx = l1_transaction_to_api_data(&block_output, tx_index, log_index, l1_tx);
-            tx_index += 1;
+        for (tx_index, tx) in transactions.into_iter().enumerate() {
+            let tx_hash = *tx.hash();
+            let stored_tx = transaction_to_api_data(&block_output, tx_index, log_index, tx);
             log_index += stored_tx.receipt.logs().len() as u64;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-            stored_txs.push((hash, stored_tx));
-        }
-
-        for l2_tx in l2_transactions.into_iter() {
-            let hash = TxHash::from(l2_tx.hash().0);
-            let stored_tx = l2_transaction_to_api_data(&block_output, tx_index, log_index, l2_tx);
-            tx_index += 1;
-            log_index += stored_tx.receipt.logs().len() as u64;
-            block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-            stored_txs.push((hash, stored_tx));
+            stored_txs.push((tx_hash, stored_tx));
         }
         block_output.header.logs_bloom = block_bloom.into_array();
 

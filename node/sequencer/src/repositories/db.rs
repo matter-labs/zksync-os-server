@@ -2,9 +2,9 @@ use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
 use alloy::eips::{Decodable2718, Encodable2718};
-use alloy::primitives::{Address, TxHash};
+use alloy::primitives::TxHash;
 use alloy::rlp::{Decodable, Encodable};
-use zksync_os_types::{L2Envelope, L2Transaction};
+use zksync_os_types::{L2Transaction, ZkEnvelope};
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
 
@@ -93,17 +93,24 @@ impl RepositoryDB {
         let receipt_bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap()?;
         let meta_bytes = self.db.get_cf(RepositoryCF::TxMeta, &hash.0).unwrap()?;
 
-        let tx_bytes_mut = &mut &mut tx_bytes.as_slice();
-        let tx_envelope = L2Envelope::network_decode(tx_bytes_mut).unwrap();
-        let signer = if tx_bytes_mut.is_empty() {
-            // l2 tx
-            tx_envelope.recover_signer().unwrap()
-        } else {
-            // l1->l2 tx
-            Address::from_slice(tx_bytes_mut)
+        // let tx_bytes_mut = &mut ;
+        // let tx_envelope = L2Envelope::network_decode(tx_bytes_mut).unwrap();
+        // let signer = if tx_bytes_mut.is_empty() {
+        //     // l2 tx
+        //     tx_envelope.recover_signer().unwrap()
+        // } else {
+        //     // l1->l2 tx
+        //     Address::from_slice(tx_bytes_mut)
+        // };
+        let tx_envelope = ZkEnvelope::decode_2718(&mut tx_bytes.as_slice()).unwrap();
+        let tx = match tx_envelope {
+            ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
+            ZkEnvelope::L2(l2_envelope) => {
+                let signer = l2_envelope.recover_signer().unwrap();
+                L2Transaction::new_unchecked(l2_envelope, signer).into()
+            }
         };
-        let tx = L2Transaction::new_unchecked(tx_envelope, signer);
-        let receipt = ReceiptEnvelope::network_decode(&mut receipt_bytes.as_slice()).unwrap();
+        let receipt = ReceiptEnvelope::decode_2718(&mut receipt_bytes.as_slice()).unwrap();
         let meta = TxMeta::decode(&mut meta_bytes.as_slice()).unwrap();
 
         Some(StoredTxData { tx, receipt, meta })
@@ -139,15 +146,11 @@ impl RepositoryDB {
     fn add_tx_to_write_batch(batch: &mut WriteBatch<RepositoryCF>, tx: &StoredTxData) {
         let tx_hash = tx.tx.hash();
         let mut tx_bytes = Vec::new();
-        tx.tx.network_encode(&mut tx_bytes);
-        // Kludge for L1 txs.
-        if tx.tx.signature().r().is_zero() {
-            tx_bytes.extend_from_slice(tx.tx.signer().as_slice());
-        }
+        tx.tx.inner.encode_2718(&mut tx_bytes);
         batch.put_cf(RepositoryCF::Tx, tx_hash.as_slice(), &tx_bytes);
 
         let mut receipt_bytes = Vec::new();
-        tx.receipt.network_encode(&mut receipt_bytes);
+        tx.receipt.encode_2718(&mut receipt_bytes);
         batch.put_cf(RepositoryCF::TxReceipt, tx_hash.as_slice(), &receipt_bytes);
 
         let mut tx_meta_bytes = Vec::new();
@@ -155,7 +158,7 @@ impl RepositoryDB {
         batch.put_cf(RepositoryCF::TxMeta, tx_hash.as_slice(), &tx_meta_bytes);
 
         let initiator = tx.tx.signer();
-        let nonce = tx.tx.nonce();
+        let nonce = tx.tx.inner.nonce();
         let mut initiator_and_nonce_key = Vec::with_capacity(20 + 8);
         initiator_and_nonce_key.extend_from_slice(initiator.as_slice());
         initiator_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());

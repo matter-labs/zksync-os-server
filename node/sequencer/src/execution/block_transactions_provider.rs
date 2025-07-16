@@ -1,18 +1,21 @@
-use crate::model::{
-    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
-    UnifiedTransaction,
-};
+use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::BlockHash;
+use alloy::primitives::{Address, BlockHash};
 use futures::StreamExt;
+use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
+use std::collections::HashMap;
+use zk_ee::common_structs::PreimageType;
+use zk_os_basic_system::system_implementation::flat_storage_model::{
+    AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
+};
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_mempool::{
     CanonicalStateUpdate, DynL1Pool, L2TransactionPool, PoolUpdateKind, RethPool,
     RethTransactionPoolExt,
 };
-use zksync_os_types::L2Envelope;
+use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -66,21 +69,21 @@ impl BlockTransactionsProvider {
                     l1_transactions.push(l1_tx.clone());
 
                     anyhow::ensure!(
-                        l1_tx.common_data.serial_id.0 == next_l1_priority_id,
+                        l1_tx.priority_id() == next_l1_priority_id,
                         "L1 priority ID mismatch: expected {}, got {}",
                         next_l1_priority_id,
-                        l1_tx.common_data.serial_id.0
+                        l1_tx.priority_id()
                     );
 
                     next_l1_priority_id += 1;
                 }
 
                 // Create stream: L1 transactions first, then L2 transactions
-                let l1_stream = futures::stream::iter(l1_transactions).map(UnifiedTransaction::L1);
+                let l1_stream = futures::stream::iter(l1_transactions).map(ZkTransaction::from);
                 let l2_stream = self
                     .l2_mempool
                     .best_l2_transactions()
-                    .map(UnifiedTransaction::L2);
+                    .map(ZkTransaction::from);
                 Ok(PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(l1_stream.chain(l2_stream)),
@@ -93,30 +96,15 @@ impl BlockTransactionsProvider {
             BlockCommand::Replay(ReplayRecord {
                 block_context,
                 starting_l1_priority_id,
-                l1_transactions,
-                l2_transactions,
-            }) => {
-                if let Some(first) = l1_transactions.first() {
-                    anyhow::ensure!(
-                        first.common_data.serial_id.0 == starting_l1_priority_id,
-                        "L1 priority ID mismatch: expected {}, got {}",
-                        starting_l1_priority_id,
-                        first.common_data.serial_id.0
-                    )
-                }
-
-                let l1_stream = futures::stream::iter(l1_transactions).map(UnifiedTransaction::L1);
-                let l2_stream = futures::stream::iter(l2_transactions).map(UnifiedTransaction::L2);
-
-                Ok(PreparedBlockCommand {
-                    block_context,
-                    seal_policy: SealPolicy::UntilExhausted,
-                    invalid_tx_policy: InvalidTxPolicy::Abort,
-                    tx_source: Box::pin(l1_stream.chain(l2_stream)),
-                    starting_l1_priority_id,
-                    metrics_label: "replay",
-                })
-            }
+                transactions,
+            }) => Ok(PreparedBlockCommand {
+                block_context,
+                seal_policy: SealPolicy::UntilExhausted,
+                invalid_tx_policy: InvalidTxPolicy::Abort,
+                tx_source: Box::pin(futures::stream::iter(transactions)),
+                starting_l1_priority_id,
+                metrics_label: "replay",
+            }),
         }
     }
 
@@ -125,8 +113,16 @@ impl BlockTransactionsProvider {
         block_output: &BatchOutput,
         replay_record: &ReplayRecord,
     ) {
-        if let Some(last_l1_transaction) = replay_record.l1_transactions.last() {
-            self.next_l1_priority_id = last_l1_transaction.common_data.serial_id.0 + 1
+        let mut l2_transactions = Vec::new();
+        for tx in &replay_record.transactions {
+            match tx.envelope() {
+                ZkEnvelope::L1(l1_tx) => {
+                    self.next_l1_priority_id = l1_tx.priority_id() + 1;
+                }
+                ZkEnvelope::L2(l2_tx) => {
+                    l2_transactions.push(*l2_tx.hash());
+                }
+            }
         }
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
@@ -142,19 +138,65 @@ impl BlockTransactionsProvider {
         let block = Block::new(header, body);
         let sealed_block =
             SealedBlock::new_unchecked(block, BlockHash::from(block_output.header.hash()));
+        let changed_accounts = extract_changed_accounts(block_output);
         self.l2_mempool
             .on_canonical_state_change(CanonicalStateUpdate {
                 new_tip: &sealed_block,
                 pending_block_base_fee: 0,
                 pending_block_blob_fee: None,
-                // TODO: Pass parsed account property changes here (address, nonce, value)
-                changed_accounts: vec![],
-                mined_transactions: replay_record
-                    .l2_transactions
-                    .iter()
-                    .map(|tx| *tx.hash())
-                    .collect(),
+                changed_accounts,
+                mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
     }
+}
+
+/// Extract changed accounts from a BatchOutput.
+///
+/// This method processes the published preimages and storage writes to extract
+/// accounts that were updated during block execution.
+pub fn extract_changed_accounts(block_output: &BatchOutput) -> Vec<ChangedAccount> {
+    // First, collect all account properties from published preimages
+    let mut account_properties_preimages = HashMap::new();
+    for (hash, preimage, preimage_type) in &block_output.published_preimages {
+        match preimage_type {
+            PreimageType::Bytecode => {}
+            PreimageType::AccountData => {
+                account_properties_preimages.insert(
+                    *hash,
+                    AccountProperties::decode(
+                        &preimage
+                            .clone()
+                            .try_into()
+                            .expect("Preimage should be exactly 124 bytes"),
+                    ),
+                );
+            }
+        }
+    }
+
+    // Then, map storage writes to account addresses
+    let mut result = Vec::new();
+    for log in &block_output.storage_writes {
+        if log.account == ACCOUNT_PROPERTIES_STORAGE_ADDRESS {
+            let account_address = Address::from_slice(&log.account_key.as_u8_array()[12..]);
+
+            if let Some(properties) = account_properties_preimages.get(&log.value) {
+                result.push(ChangedAccount {
+                    address: account_address,
+                    nonce: properties.nonce,
+                    balance: properties.balance,
+                });
+            } else {
+                tracing::error!(
+                    %account_address,
+                    ?log.value,
+                    "account properties preimage not found"
+                );
+                panic!();
+            }
+        }
+    }
+
+    result
 }
