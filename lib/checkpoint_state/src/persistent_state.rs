@@ -9,7 +9,7 @@ use zksync_storage::RocksDB;
 #[derive(Debug, Clone)]
 pub struct PersistentState {
     /// RocksDB handle - cheap to clone
-    pub rocks: RocksDB<StateCF>,
+    pub(crate) rocks: RocksDB<StateCF>,
 }
 
 impl PersistentState {
@@ -50,7 +50,7 @@ impl PersistentState {
         res
     }
 
-    pub fn add_block<'a, J>(
+    pub(crate) fn add_block<'a, J>(
         &self,
         block_number: u64,
         storage_diffs: Vec<StorageWrite>,
@@ -59,11 +59,6 @@ impl PersistentState {
         J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
     {
         //let latency = PREIMAGES_METRICS.set[&"total"].start();
-
-        if block_number != self.block_number() + 1 {
-            // todo: log or return error
-            return;
-        }
 
         let mut batch = self.rocks.new_write_batch();
 
@@ -111,7 +106,7 @@ impl NamedColumnFamily for StateCF {
 }
 
 impl StateCF {
-    pub fn block_key() -> &'static [u8] {
+    pub(crate) fn block_key() -> &'static [u8] {
         b"block"
     }
 }

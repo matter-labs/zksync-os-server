@@ -35,6 +35,8 @@ pub struct StateHandle {
 }
 
 impl StateHandle {
+    const CHECKPOINT_PATH: &str = "checkpoint_";
+
     pub fn new(config: StateConfig) -> Self {
         if config.erase_storage_on_start {
             if fs::exists(config.rocks_db_path.clone()).unwrap() {
@@ -77,9 +79,6 @@ impl StateHandle {
         })
     }
 
-    /// Adds a block result to the state components
-    /// No atomicity guarantees
-    /// PreimageType is currently ignored
     pub fn add_block_result<'a, J>(
         &self,
         block_number: u64,
@@ -89,8 +88,38 @@ impl StateHandle {
     where
         J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
     {
-        self.storage_map.add_diff(block_number, storage_diffs);
-        self.persistent_preimages.add(block_number, new_preimages);
+        let latest_block = self.persistent_state.block_number();
+
+        if block_number != latest_block + 1 {
+            return Err(anyhow::anyhow!(
+                "Block number {} is not the next block after latest block {}",
+                block_number,
+                latest_block
+            ));
+        }
+
+        // Create a checkpoint for the current state before adding the block.
+        let checkpoint_path = self
+            .path
+            .join(Self::CHECKPOINT_PATH)
+            .join(latest_block.to_string());
+        let checkpointer = self.persistent_state.rocks.checkpoint()?;
+        checkpointer.create_checkpoint(checkpoint_path)?;
+
+        // Add the block to the state.
+        self.persistent_state
+            .add_block(block_number, storage_diffs, new_preimages);
+
+        // Delete the oldest checkpoint that is no longer needed.
+        let oldest_block = latest_block - self.checkpoints_to_retain as u64;
+        let checkpoint_path = self
+            .path
+            .join(Self::CHECKPOINT_PATH)
+            .join(oldest_block.to_string());
+        if fs::exists(checkpoint_path) {
+            fs::remove_dir_all(checkpoint_path)?;
+        }
+
         Ok(())
     }
 
@@ -104,14 +133,8 @@ impl StateHandle {
         }
     }
 
-    pub async fn compact_periodically(&self, period: Duration) {
-        let mut ticker = tokio::time::interval(period);
-        let map = self.storage_map.clone();
-        // can take more than `period` to compact - use proper scheduler
-        loop {
-            ticker.tick().await;
-            map.compact();
-        }
+    pub async fn compact_periodically(&self, _period: Duration) {
+        // no op
     }
 
     //////////////////////

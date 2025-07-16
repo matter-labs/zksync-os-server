@@ -17,7 +17,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 smart-config.workspace = true
 
-zksync_storage.workspace = true
+zksync_storage = { git = "https://github.com/matter-labs/zksync-era.git", branch = "bf-checkpoints", package = "zksync_storage" }
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 dashmap.workspace = true
