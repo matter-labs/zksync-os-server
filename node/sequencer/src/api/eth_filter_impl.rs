@@ -1,14 +1,15 @@
 use super::resolve_block_id;
+use crate::api::eth_impl::build_api_log;
 use crate::api::metrics::API_METRICS;
 use crate::api::result::ToRpcResult;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
-use crate::finality::FinalityTracker;
+use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{Bloom, TxHash, B256, U128};
+use alloy::primitives::{TxHash, B256, U128};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
@@ -21,7 +22,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::MissedTickBehavior;
-use zk_ee::utils::Bytes32;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_types::L2Envelope;
@@ -29,7 +29,6 @@ use zksync_os_types::L2Envelope;
 #[derive(Clone)]
 pub(crate) struct EthFilterNamespace {
     repository_manager: RepositoryManager,
-    finality_info: FinalityTracker,
     query_limits: QueryLimits,
     /// Duration since the last filter poll, after which the filter is considered stale
     stale_filter_ttl: Duration,
@@ -41,14 +40,12 @@ impl EthFilterNamespace {
     pub fn new(
         config: RpcConfig,
         repository_manager: RepositoryManager,
-        finality_tracker: FinalityTracker,
         mempool: RethPool<ZkClient>,
     ) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         let this = Self {
             repository_manager,
-            finality_info: finality_tracker,
             query_limits,
             stale_filter_ttl: config.stale_filter_ttl,
             mempool,
@@ -67,7 +64,7 @@ impl EthFilterNamespace {
 
 impl EthFilterNamespace {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
-        let last_poll_block_number = self.finality_info.get_canonized_block();
+        let last_poll_block_number = self.repository_manager.get_canonized_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
 
         self.active_filters.insert(
@@ -85,7 +82,7 @@ impl EthFilterNamespace {
         &self,
         id: FilterId,
     ) -> EthFilterResult<FilterChanges<Transaction<L2Envelope>>> {
-        let latest_block = self.finality_info.get_canonized_block();
+        let latest_block = self.repository_manager.get_canonized_block();
 
         // start_block is the block from which we should start fetching changes, the next block from
         // the last time changes were polled, in other words the best block at last poll + 1
@@ -115,14 +112,11 @@ impl EthFilterNamespace {
             FilterKind::Block => {
                 let mut block_hashes = Vec::new();
                 for block_number in start_block..=latest_block {
-                    let Some((block_output, _)) = self
-                        .repository_manager
-                        .block_receipt_repository
-                        .get_by_number(block_number)
+                    let Some(block) = self.repository_manager.get_block_by_number(block_number)
                     else {
                         return Err(EthFilterError::InvalidBlockRangeParams);
                     };
-                    block_hashes.push(B256::from(block_output.header.hash()));
+                    block_hashes.push(B256::from(block.header.hash_slow()));
                 }
                 Ok(FilterChanges::Hashes(block_hashes))
             }
@@ -134,11 +128,11 @@ impl EthFilterNamespace {
                     } => {
                         let from = resolve_block_id(
                             from_block.unwrap_or_default().into(),
-                            &self.finality_info,
+                            &self.repository_manager,
                         );
                         let to = resolve_block_id(
                             to_block.unwrap_or_default().into(),
-                            &self.finality_info,
+                            &self.repository_manager,
                         );
                         (from, to)
                     }
@@ -177,7 +171,8 @@ impl EthFilterNamespace {
     fn logs_impl(&self, filter: Filter) -> EthFilterResult<Vec<Log>> {
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
-                let block = resolve_block_id(BlockId::Hash(block_hash.into()), &self.finality_info);
+                let block =
+                    resolve_block_id(BlockId::Hash(block_hash.into()), &self.repository_manager);
                 (block, block)
             }
             FilterBlockOption::Range {
@@ -188,13 +183,13 @@ impl EthFilterNamespace {
                     from_block
                         .map(BlockId::Number)
                         .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
-                    &self.finality_info,
+                    &self.repository_manager,
                 ),
                 resolve_block_id(
                     to_block
                         .map(BlockId::Number)
                         .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
-                    &self.finality_info,
+                    &self.repository_manager,
                 ),
             ),
         };
@@ -223,33 +218,34 @@ impl EthFilterNamespace {
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some((block, tx_hashes)) = self
-                .repository_manager
-                .block_receipt_repository
-                .get_by_number(number)
-            {
-                let block_bloom = Bloom::new(block.header.logs_bloom);
-                if filter.matches_bloom(block_bloom) {
+            if let Some(block) = self.repository_manager.get_block_by_number(number) {
+                let mut log_index_in_block = 0u64;
+                if filter.matches_bloom(block.header.logs_bloom) {
                     tracing::trace!(
                         number,
                         ?filter,
                         "Block matches bloom filter, scanning receipts",
                     );
-                    let tx_receipts = tx_hashes.into_iter().map(|hash| {
+                    let stored_txs = block.body.transactions.into_iter().map(|hash| {
                         self.repository_manager
-                            .transaction_receipt_repository
-                            .get_by_hash(&Bytes32::from(hash.0))
+                            .get_stored_tx_by_hash(hash)
                             .unwrap_or_else(|| {
                                 panic!("Missing tx receipt for hash: {hash:?} in block {number}")
                             })
                     });
                     let mut at_least_one_log_added = false;
-                    for tx_data in tx_receipts {
-                        for log in tx_data.receipt.logs() {
-                            if filter.matches(&log.inner) {
-                                logs.push(log.clone());
+                    for tx in stored_txs {
+                        for inner_log in tx.receipt.logs() {
+                            if filter.matches(inner_log) {
+                                logs.push(build_api_log(
+                                    *tx.tx.hash(),
+                                    inner_log.clone(),
+                                    tx.meta,
+                                    log_index_in_block - tx.meta.number_of_logs_before_this_tx,
+                                ));
                                 at_least_one_log_added = true;
                             }
+                            log_index_in_block += 1;
                         }
                     }
                     if at_least_one_log_added {

@@ -1,16 +1,29 @@
-use alloy::consensus::transaction::TransactionInfo;
 use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, TxType};
-use alloy::primitives::{Address, LogData, Sealed, B256};
+use alloy::primitives::{Address, Log, LogData, Sealed, TxHash, B256};
+use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
-use zksync_os_types::{ZkEnvelope, ZkTransaction, ZkTxType};
+use zksync_os_types::{ZkTransaction, ZkTxType};
 
-#[derive(Clone, Debug)]
-pub struct TransactionApiData {
-    pub transaction: alloy::rpc::types::Transaction<ZkEnvelope>,
-    pub receipt: alloy::rpc::types::TransactionReceipt,
+#[derive(Debug, Clone, Copy, RlpEncodable, RlpDecodable)]
+#[rlp(trailing)]
+pub struct TxMeta {
+    pub block_hash: B256,
+    pub block_number: u64,
+    pub block_timestamp: u64,
+    pub tx_index_in_block: u64,
+    pub effective_gas_price: u128,
+    pub number_of_logs_before_this_tx: u64,
+    pub gas_used: u64,
+    pub contract_address: Option<Address>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredTxData {
+    pub tx: ZkTransaction,
+    pub receipt: ReceiptEnvelope,
+    pub meta: TxMeta,
 }
 
 /// Thread-safe in-memory repository of transaction receipts, keyed by transaction hash.
@@ -21,33 +34,65 @@ pub struct TransactionApiData {
 /// todo: unbounded memory use
 #[derive(Clone, Debug)]
 pub struct TransactionReceiptRepository {
-    /// Map from tx hash → receipt data
-    receipts: Arc<DashMap<Bytes32, TransactionApiData>>,
+    /// Map from tx hash → (tx, receipt).
+    tx_data: Arc<DashMap<TxHash, StoredTxData>>,
 }
 
 impl TransactionReceiptRepository {
     /// Creates a new repository.
     pub fn new() -> Self {
         TransactionReceiptRepository {
-            receipts: Arc::new(DashMap::new()),
+            tx_data: Arc::new(DashMap::new()),
         }
     }
 
-    /// Inserts a receipt for `tx_hash`. If a receipt for the same hash
+    /// Inserts data for multiple txs. If a data for the same hash
     /// already exists, it will be overwritten.
-    pub fn insert(&self, tx_hash: Bytes32, data: TransactionApiData) {
-        self.receipts.insert(tx_hash, data);
+    pub fn insert(&self, txs: Vec<(TxHash, StoredTxData)>) {
+        for (tx_hash, data) in txs {
+            self.tx_data.insert(tx_hash, data);
+        }
     }
 
     /// Retrieves the receipt for `tx_hash`, if present.
-    /// Returns a cloned `TransactionApiData`.
-    pub fn get_by_hash(&self, tx_hash: &Bytes32) -> Option<TransactionApiData> {
-        self.receipts.get(tx_hash).map(|r| r.value().clone())
+    pub fn get_receipt_by_hash(&self, tx_hash: TxHash) -> Option<ReceiptEnvelope> {
+        self.tx_data
+            .get(&tx_hash)
+            .map(|r| r.value().receipt.clone())
+    }
+
+    /// Retrieves add stored data for `tx_hash`, if present.
+    pub fn get_stored_tx_by_hash(&self, tx_hash: TxHash) -> Option<StoredTxData> {
+        self.tx_data.get(&tx_hash).map(|r| r.value().clone())
+    }
+
+    /// Retrieves the tx data for `tx_hashes`. Returns error if any is missing.
+    pub fn get_by_hashes(&self, tx_hashes: &[TxHash]) -> anyhow::Result<Vec<StoredTxData>> {
+        let mut result = Vec::new();
+
+        for tx_hash in tx_hashes {
+            if let Some(data) = self.tx_data.get(tx_hash) {
+                result.push(data.value().clone());
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Missing receipt for transaction hash: {:?}",
+                    tx_hash
+                ));
+            }
+        }
+
+        Ok(result)
+    }
+
+    pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {
+        for tx_hash in tx_hashes {
+            self.tx_data.remove(tx_hash);
+        }
     }
 
     /// Returns `true` if a receipt for `tx_hash` is present.
-    pub fn contains(&self, tx_hash: &Bytes32) -> bool {
-        self.receipts.contains_key(tx_hash)
+    pub fn contains(&self, tx_hash: TxHash) -> bool {
+        self.tx_data.contains_key(&tx_hash)
     }
 }
 
@@ -60,38 +105,24 @@ impl Default for TransactionReceiptRepository {
 pub fn transaction_to_api_data(
     block_output: &Sealed<BatchOutput>,
     index: usize,
-    log_index: usize,
+    number_of_logs_before_this_tx: u64,
     tx: ZkTransaction,
-) -> TransactionApiData {
-    let tx_hash = *tx.hash();
+) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
     let logs = tx_output
         .logs
         .iter()
-        .enumerate()
-        .map(|(i, log)| {
-            let inner = alloy::primitives::Log {
-                address: Address::from(log.address.to_be_bytes()),
-                data: LogData::new(
-                    log.topics
-                        .iter()
-                        .map(|topic| B256::from(topic.as_u8_array()))
-                        .collect(),
-                    log.data.clone().into(),
-                )
-                .unwrap(),
-            };
-            alloy::rpc::types::Log {
-                inner,
-                block_hash: Some(block_output.hash()),
-                block_number: Some(block_output.header.number),
-                block_timestamp: Some(block_output.header.timestamp),
-                transaction_hash: Some(tx_hash),
-                transaction_index: Some(index as u64),
-                log_index: Some((log_index + i) as u64),
-                removed: false,
-            }
+        .map(|log| Log {
+            address: Address::from(log.address.to_be_bytes()),
+            data: LogData::new(
+                log.topics
+                    .iter()
+                    .map(|topic| B256::from(topic.as_u8_array()))
+                    .collect(),
+                log.data.clone().into(),
+            )
+            .unwrap(),
         })
         .collect::<Vec<_>>();
     let tx_receipt = Receipt {
@@ -112,36 +143,22 @@ pub fn transaction_to_api_data(
         ZkTxType::L2(TxType::Eip4844) => ReceiptEnvelope::Eip4844(receipt_with_bloom),
         ZkTxType::L2(TxType::Eip7702) => ReceiptEnvelope::Eip7702(receipt_with_bloom),
     };
-    let rpc_receipt = alloy::rpc::types::TransactionReceipt {
-        inner: receipt_envelope,
-        transaction_hash: tx_hash,
-        transaction_index: Some(index as u64),
-        block_hash: Some(block_output.hash()),
-        block_number: Some(block_output.header.number),
-        gas_used: tx_output.gas_used,
+    let meta = TxMeta {
+        block_hash: B256::from(block_output.hash()),
+        block_number: block_output.header.number,
+        block_timestamp: block_output.header.timestamp,
+        tx_index_in_block: index as u64,
         effective_gas_price: block_output.header.base_fee_per_gas as u128,
-        blob_gas_used: None,
-        blob_gas_price: None,
-        from: tx.signer(),
-        to: tx.to(),
+        number_of_logs_before_this_tx,
+        gas_used: tx_output.gas_used,
         contract_address: tx_output
             .contract_address
-            .map(|c| Address::from(c.to_be_bytes())),
+            .map(|a| Address::new(a.to_be_bytes())),
     };
 
-    let rpc_transaction = alloy::rpc::types::Transaction::from_transaction(
-        tx.inner,
-        TransactionInfo {
-            hash: Some(tx_hash),
-            index: Some(index as u64),
-            block_hash: Some(block_output.hash()),
-            block_number: Some(block_output.header.number),
-            base_fee: Some(block_output.header.base_fee_per_gas),
-        },
-    );
-
-    TransactionApiData {
-        transaction: rpc_transaction,
-        receipt: rpc_receipt,
+    StoredTxData {
+        tx,
+        receipt: receipt_envelope,
+        meta,
     }
 }
