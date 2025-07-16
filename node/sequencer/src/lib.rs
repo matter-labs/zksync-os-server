@@ -8,7 +8,6 @@ pub mod block_context_provider;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
-pub mod finality;
 mod metrics;
 pub mod model;
 pub mod prover_api;
@@ -20,12 +19,12 @@ use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
-use crate::finality::FinalityTracker;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::BatchJob;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
+use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
@@ -73,6 +72,7 @@ const CHAIN_ID: u64 = 270;
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
 const PROOF_STORAGE_DB_NAME: &str = "proofs";
+const REPOSITORY_DB_NAME: &str = "repository";
 
 // todo: clean up list of fields passed; split into two function (canonization and sequencing)
 
@@ -88,7 +88,6 @@ pub async fn run_sequencer_actor(
     wal: BlockReplayStorage,
     // todo: do it outside - as one of the sinks (only needed in API)
     repositories: RepositoryManager,
-    finality_tracker: FinalityTracker,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
     tracing::info!(block_to_start, "starting sequencer");
@@ -129,8 +128,7 @@ pub async fn run_sequencer_actor(
 
         tracing::info!(
             block_number = bn,
-            l1_transactions = replay_record.l1_transactions.len(),
-            l2_transactions = replay_record.l2_transactions.len(),
+            transactions = replay_record.transactions.len(),
             preimages = block_output.published_preimages.len(),
             storage_writes = block_output.storage_writes.len(),
             "▶ Executed in {:?}. Adding to state...",
@@ -149,9 +147,22 @@ pub async fn run_sequencer_actor(
 
         tracing::info!(
             block_number = bn,
-            "▶ Added to state in {:?}. Reporting back to block_transaction_provider (mempools)...",
+            "▶ Added to state in {:?}. Adding to repos...",
             stage_started_at.elapsed()
         );
+        stage_started_at = Instant::now();
+
+        // todo: do not call if api is not enabled.
+        repositories
+            .populate_in_memory_blocking(block_output.clone(), replay_record.transactions.clone())
+            .await;
+
+        tracing::info!(
+            block_number = bn,
+            "▶ Added to repos in {:?}. Reporting back to block_transaction_provider (mempools)...",
+            stage_started_at.elapsed()
+        );
+
         stage_started_at = Instant::now();
 
         // TODO: would updating mempool in parallel with state make sense?
@@ -159,32 +170,13 @@ pub async fn run_sequencer_actor(
 
         tracing::info!(
             block_number = bn,
-            "▶ Reported to block_transaction_provider in {:?}. Adding to repos...",
-            stage_started_at.elapsed()
-        );
-        stage_started_at = Instant::now();
-
-        // todo:  this is only used by api - can and should be done async, as one of the sink subscribers
-        //  but need to be careful with `block_number=latest` then -
-        //  we need to make sure that the block is added to the repos before we return its number as `latest`
-        //
-        repositories.add_block_output_to_repos(
-            bn,
-            block_output.clone(),
-            replay_record.l1_transactions.clone(),
-            replay_record.l2_transactions.clone(),
-        );
-
-        tracing::info!(
-            block_number = bn,
-            "▶ Added to repos in {:?}. Adding to wal...",
+            "▶ Reported to block_transaction_provider in {:?}. Adding to wal...",
             stage_started_at.elapsed()
         );
 
         stage_started_at = Instant::now();
 
         wal.append_replay(replay_record.clone());
-        finality_tracker.advance_canonized(bn);
 
         tracing::info!(
             block_number = bn,
@@ -269,8 +261,10 @@ pub async fn run(
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
 
-    let repositories = RepositoryManager::new(sequencer_config.blocks_to_retain_in_memory);
-
+    let repositories = RepositoryManager::new(
+        sequencer_config.blocks_to_retain_in_memory,
+        sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+    );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
     )
@@ -333,16 +327,11 @@ pub async fn run(
             + 1
     };
 
-    // ========== Initialize block finality trackers ===========
-
-    // note: unfinished feature, not really used yet
-    let finality_tracker = FinalityTracker::new(wal_block.unwrap_or(0));
-
     tracing::info!(
         storage_map_block = storage_map_block,
         preimages_block = preimages_block,
         wal_block = wal_block,
-        canonized_block = finality_tracker.get_canonized_block(),
+        canonized_block = repositories.get_canonized_block(),
         tree_last_processed_block = tree_last_processed_block,
         "▶ Storage read. Node starting with block {}",
         first_block_to_execute
@@ -490,7 +479,6 @@ pub async fn run(
             state_handle.clone(),
             block_replay_storage.clone(),
             repositories.clone(),
-            finality_tracker.clone(),
             sequencer_config
         ) => {
             match res {
@@ -505,7 +493,6 @@ pub async fn run(
         res = run_jsonrpsee_server(
             rpc_config,
             repositories.clone(),
-            finality_tracker.clone(),
             state_handle.clone(),
             l2_mempool,
             block_replay_storage.clone()
@@ -566,6 +553,9 @@ pub async fn run(
         }
         _ = state_handle.compact_periodically(Duration::from_millis(100)) => {
             tracing::warn!("compact_periodically unexpectedly exited")
+        }
+        _ = repositories.run_persist_loop() => {
+            tracing::warn!("repositories.run_persist_loop() unexpectedly exited")
         }
     }
 }

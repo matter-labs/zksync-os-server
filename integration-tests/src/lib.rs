@@ -1,8 +1,12 @@
+use crate::dyn_wallet_provider::EthDynProvider;
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
-use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
+use backon::ConstantBuilder;
+use backon::Retryable;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
@@ -10,14 +14,15 @@ use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 
 pub mod assert_traits;
+pub mod dyn_wallet_provider;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 9;
 
 pub struct Tester {
-    pub l1_provider: DynProvider,
-    pub l2_provider: DynProvider,
+    pub l1_provider: EthDynProvider,
+    pub l2_provider: EthDynProvider,
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -43,6 +48,20 @@ impl Tester {
                 .arg("--load-state")
                 .arg("../zkos-l1-state.json")
         })?;
+        (|| async {
+            // Wait for L1 node to get up and be able to respond.
+            l1_provider.clone().get_chain_id().await?;
+            Ok(())
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(?err, ?dur, "retrying connection to L1 node");
+        })
+        .await?;
 
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let l2_address = format!("http://localhost:{}", l2_locked_port.port);
@@ -77,9 +96,6 @@ impl Tester {
             },
         ));
 
-        // todo: wait for healthcheck endpoint instead once there is one
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
         let l2_wallet = EthereumWallet::new(
             // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
             LocalSigner::from_str(
@@ -87,19 +103,31 @@ impl Tester {
             )
             .unwrap(),
         );
-        let l2_provider = ProviderBuilder::new()
-            .wallet(l2_wallet.clone())
-            .connect(&l2_address)
-            .await?;
+        let l2_provider = (|| async {
+            let l2_provider = ProviderBuilder::new()
+                .wallet(l2_wallet.clone())
+                .connect(&l2_address)
+                .await?;
 
-        // Wait for node to get up and be able to respond.
-        l2_provider.get_chain_id().await?;
+            // Wait for L2 node to get up and be able to respond.
+            l2_provider.get_chain_id().await?;
+            anyhow::Ok(l2_provider)
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(?err, ?dur, "retrying connection to L2 node");
+        })
+        .await?;
 
         let l1_wallet = l1_provider.wallet().clone();
 
         Ok(Tester {
-            l1_provider: DynProvider::new(l1_provider),
-            l2_provider: DynProvider::new(l2_provider),
+            l1_provider: EthDynProvider::new(l1_provider),
+            l2_provider: EthDynProvider::new(l2_provider),
             l1_wallet,
             l2_wallet,
             stop_sender,

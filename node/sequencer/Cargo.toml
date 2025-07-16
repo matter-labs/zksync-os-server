@@ -26,11 +26,14 @@ reth-primitives.workspace = true
 reth-primitives-traits = {workspace = true }
 reth-revm = { workspace = true }
 reth-storage-api = { workspace = true }
+reth-execution-types = { workspace = true }
 
 zksync_storage.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256"] }
+# In order to use RlpDecodable, RlpEncodable alloy-rlp crate must be imported directly.
+alloy-rlp.workspace = true
 blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }

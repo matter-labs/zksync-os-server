@@ -5,7 +5,8 @@ use crate::api::result::{internal_rpc_err, unimplemented_rpc_err, ToRpcResult};
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::finality::FinalityTracker;
+use crate::repositories::api_interface::ApiRepository;
+use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
@@ -13,20 +14,19 @@ use alloy::consensus::Sealable;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::primitives::BlockTransactions;
-use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::primitives::{Address, Bytes, TxHash, B256, U256, U64};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
+    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, Log, SyncStatus,
     Transaction, TransactionReceipt, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use zk_ee::utils::Bytes32;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_os_types::L2Envelope;
+use zksync_os_types::ZkEnvelope;
 
 pub(crate) struct EthNamespace {
     tx_handler: TxHandler,
@@ -36,7 +36,6 @@ pub(crate) struct EthNamespace {
     // reconsider approach to API in this regard
     pub(super) repository_manager: RepositoryManager,
 
-    pub(super) finality_info: FinalityTracker,
     pub(super) chain_id: u64,
 }
 
@@ -45,7 +44,6 @@ impl EthNamespace {
         config: RpcConfig,
 
         repository_manager: RepositoryManager,
-        finality_tracker: FinalityTracker,
         state_handle: StateHandle,
         mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
@@ -54,16 +52,14 @@ impl EthNamespace {
 
         let eth_call_handler = EthCallHandler::new(
             config,
-            finality_tracker.clone(),
             state_handle,
             block_replay_storage,
-            repository_manager.account_property_repository.clone(),
+            repository_manager.clone(),
         );
         Self {
             tx_handler,
             eth_call_handler,
             repository_manager,
-            finality_info: finality_tracker,
             chain_id: CHAIN_ID,
         }
     }
@@ -76,22 +72,14 @@ impl EthNamespace {
             return Err(internal_rpc_err("full blocks are not supported yet"));
         }
         let id = id.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending));
-        let number = resolve_block_id(id, &self.finality_info);
+        let number = resolve_block_id(id, &self.repository_manager);
         Ok(self
             .repository_manager
-            .block_receipt_repository
-            .get_by_number(number)
-            .map(|(block_output, tx_hashes)| {
-                let header = alloy::consensus::Header {
-                    number: block_output.header.number,
-                    timestamp: block_output.header.timestamp,
-                    gas_limit: block_output.header.gas_limit,
-                    base_fee_per_gas: Some(block_output.header.base_fee_per_gas),
-                    ..Default::default()
-                };
+            .get_block_by_number(number)
+            .map(|block| {
                 Block::new(
-                    Header::from_consensus(header.seal_slow(), None, None),
-                    BlockTransactions::Hashes(tx_hashes),
+                    Header::from_consensus(block.header.seal_slow(), None, None),
+                    BlockTransactions::Hashes(block.body.transactions),
                 )
             }))
     }
@@ -122,7 +110,7 @@ impl EthApiServer for EthNamespace {
     }
 
     fn block_number(&self) -> RpcResult<U256> {
-        Ok(U256::from(self.finality_info.get_canonized_block()))
+        Ok(U256::from(self.repository_manager.get_canonized_block()))
     }
 
     async fn chain_id(&self) -> RpcResult<Option<U64>> {
@@ -192,14 +180,18 @@ impl EthApiServer for EthNamespace {
         todo!()
     }
 
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<L2Envelope>>> {
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
         //todo: only expose canonized!!!
-        let res = self
-            .repository_manager
-            .transaction_receipt_repository
-            .get_by_hash(&Bytes32::from(hash.0));
+        let stored_tx = self.repository_manager.get_stored_tx_by_hash(hash);
+        let res = stored_tx.map(|stored_tx| Transaction {
+            inner: stored_tx.tx.inner,
+            block_hash: Some(stored_tx.meta.block_hash),
+            block_number: Some(stored_tx.meta.block_number),
+            transaction_index: Some(stored_tx.meta.tx_index_in_block),
+            effective_gas_price: Some(stored_tx.meta.effective_gas_price),
+        });
         tracing::info!("get_transaction_by_hash: hash: {:?}, res: {:?}", hash, res);
-        Ok(res.map(|data| data.transaction))
+        Ok(res)
     }
 
     async fn raw_transaction_by_block_hash_and_index(
@@ -244,19 +236,38 @@ impl EthApiServer for EthNamespace {
 
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
         //todo: only expose canonized!!!
-        let res = self
-            .repository_manager
-            .transaction_receipt_repository
-            .get_by_hash(&Bytes32::from(hash.0));
+        let stored_tx = self.repository_manager.get_stored_tx_by_hash(hash);
+        let res = stored_tx.map(|stored_tx| {
+            let mut log_index_in_tx = 0;
+            let inner_receipt = stored_tx.receipt.map_logs(|inner_log| {
+                let log = build_api_log(hash, inner_log, stored_tx.meta, log_index_in_tx);
+                log_index_in_tx += 1;
+                log
+            });
+            TransactionReceipt {
+                inner: inner_receipt,
+                transaction_hash: hash,
+                transaction_index: Some(stored_tx.meta.tx_index_in_block),
+                block_hash: Some(stored_tx.meta.block_hash),
+                block_number: Some(stored_tx.meta.block_number),
+                gas_used: stored_tx.meta.gas_used,
+                effective_gas_price: stored_tx.meta.effective_gas_price,
+                blob_gas_used: None,
+                blob_gas_price: None,
+                from: stored_tx.tx.signer(),
+                to: stored_tx.tx.to(),
+                contract_address: stored_tx.meta.contract_address,
+            }
+        });
         tracing::debug!("transaction_receipt: hash: {:?}, res: {:?}", hash, res);
-        Ok(res.map(|data| data.receipt))
+        Ok(res)
     }
 
     async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
         //todo Daniyar: really add +1?
         let block_number = resolve_block_id(
             block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
-            &self.finality_info,
+            &self.repository_manager,
         ) + 1;
         let balance = self
             .repository_manager
@@ -299,7 +310,7 @@ impl EthApiServer for EthNamespace {
 
         let resolved_block = resolve_block_id(
             block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
-            &self.finality_info,
+            &self.repository_manager,
         ) + 1;
 
         tracing::info!(
@@ -316,7 +327,7 @@ impl EthApiServer for EthNamespace {
     async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<Bytes> {
         let resolved_block = resolve_block_id(
             block_number.unwrap_or(BlockId::Number(BlockNumberOrTag::Pending)),
-            &self.finality_info,
+            &self.repository_manager,
         );
 
         let Some(props) = self
@@ -446,5 +457,23 @@ impl EthApiServer for EthNamespace {
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
         todo!()
+    }
+}
+
+pub(super) fn build_api_log(
+    tx_hash: TxHash,
+    primitive_log: alloy::primitives::Log,
+    tx_meta: TxMeta,
+    log_index_in_tx: u64,
+) -> Log {
+    Log {
+        inner: primitive_log,
+        block_hash: Some(tx_meta.block_hash),
+        block_number: Some(tx_meta.block_number),
+        block_timestamp: Some(tx_meta.block_timestamp),
+        transaction_hash: Some(tx_hash),
+        transaction_index: Some(tx_meta.tx_index_in_block),
+        log_index: Some(tx_meta.number_of_logs_before_this_tx + log_index_in_tx),
+        removed: false,
     }
 }

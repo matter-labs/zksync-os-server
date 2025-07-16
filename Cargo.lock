@@ -1622,6 +1622,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
 
 [[package]]
+name = "backon"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "302eaff5357a264a2c42f127ecb8bac761cf99749fc3dc95677e2743991f99e7"
+dependencies = [
+ "fastrand",
+ "gloo-timers 0.3.0",
+ "tokio",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2769,15 +2780,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "envy"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f47e0157f2cb54f5ae1bd371b30a2ae4311e1c028f575cd4e81de7353215965"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3127,7 +3129,7 @@ version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
 dependencies = [
- "gloo-timers",
+ "gloo-timers 0.2.6",
  "send_wrapper",
 ]
 
@@ -3267,6 +3269,18 @@ name = "gloo-timers"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b995a66bb87bebce9a0f4a95aed01daca4872c050bfcb21653361c03bc35e5c"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -9172,21 +9186,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync_contracts"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60efe74cb7a9dd7433059f5c1a7e72ec008b1570548c6f1f6318b8ccc901ac49"
-dependencies = [
- "envy",
- "hex",
- "once_cell",
- "serde",
- "serde_json",
- "zksync_basic_types",
- "zksync_utils",
-]
-
-[[package]]
 name = "zksync_crypto_primitives"
 version = "28.1.0-non-semver-compat"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9245,8 +9244,11 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
+ "backon",
  "fs2",
  "futures",
+ "serde_json",
  "tempfile",
  "test-log",
  "tokio",
@@ -9294,7 +9296,6 @@ dependencies = [
  "zksync_os_mempool",
  "zksync_os_types",
  "zksync_storage",
- "zksync_types",
 ]
 
 [[package]]
@@ -9363,6 +9364,7 @@ name = "zksync_os_sequencer"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "anyhow",
  "async-trait",
  "axum 0.7.9",
@@ -9379,6 +9381,7 @@ dependencies = [
  "jsonrpsee",
  "parking_lot",
  "reth-chainspec",
+ "reth-execution-types",
  "reth-primitives",
  "reth-primitives-traits",
  "reth-revm",
@@ -9427,7 +9430,9 @@ name = "zksync_os_types"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "zksync_types",
+ "serde",
+ "thiserror 2.0.12",
+ "zksync_os_contract_interface",
 ]
 
 [[package]]
@@ -9442,55 +9447,6 @@ dependencies = [
  "thread_local",
  "tracing",
  "vise",
-]
-
-[[package]]
-name = "zksync_system_constants"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c5909e41b5a2cfc6f12d9de5510e7f40f9d1d7cc0c17a3fe159d180d2f79989"
-dependencies = [
- "once_cell",
- "zksync_basic_types",
-]
-
-[[package]]
-name = "zksync_types"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a076ef1b6a6cac6dd15615355db0ee8d7b5f329b9e0fec0d5b030fa353595dd9"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake2",
- "chrono",
- "derive_more 2.0.1",
- "hex",
- "num_enum",
- "once_cell",
- "rlp",
- "serde",
- "serde_json",
- "serde_with 1.14.0",
- "thiserror 2.0.12",
- "tracing",
- "zksync_basic_types",
- "zksync_contracts",
- "zksync_crypto_primitives",
- "zksync_mini_merkle_tree",
- "zksync_system_constants",
-]
-
-[[package]]
-name = "zksync_utils"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5690e30b8f0260dd6472dc7ef2514555aa9a0226229779b0e29de28c64d980"
-dependencies = [
- "anyhow",
- "once_cell",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

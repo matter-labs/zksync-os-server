@@ -14,7 +14,7 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_state::StateHandle;
-use zksync_os_types::EncodableZksyncOs;
+use zksync_os_types::ZksyncOsEncode;
 
 // used in two places:
 // * number of blocks received by Batcher but not distributed to Workers yet
@@ -96,7 +96,7 @@ impl Batcher {
             let state_handle = self.state_handle.clone();
             let commit_tx = commit_tx.clone();
             std::thread::spawn(move || {
-                worker_loop(
+                if let Err(err) = worker_loop(
                     worker_id,
                     self.num_workers,
                     block_receiver,
@@ -104,7 +104,9 @@ impl Batcher {
                     commit_tx,
                     state_handle,
                     self.bin_path,
-                )
+                ) {
+                    tracing::error!(?err, "batcher worker exited unexpectedly");
+                }
             });
         }
 
@@ -118,15 +120,13 @@ impl Batcher {
                         .set(replay_record.block_context.block_number);
                     let block_number = replay_record.block_context.block_number;
                     tracing::debug!(
-                        "Batcher dispatcher received block {} with {} L1 transactions and {} L2 transactions",
+                        "Batcher dispatcher received block {} with {} transactions",
                         block_number,
-                        replay_record.l1_transactions.len(),
-                        replay_record.l2_transactions.len()
+                        replay_record.transactions.len()
                     );
                     for tx in worker_block_senders.iter() {
                         tx.send((batch_output.clone(), replay_record.clone()))
-                            .await
-                            .unwrap();
+                            .await?;
                     }
                 }
                 None => {
@@ -149,7 +149,7 @@ fn worker_loop(
     commit_batch_info_sender: Option<Sender<CommitBatchInfo>>,
     state_handle: StateHandle,
     bin_path: &'static str,
-) {
+) -> anyhow::Result<()> {
     tracing::info!(
         worker_id = worker_id,
         "batcher prover input generation worker started"
@@ -159,8 +159,7 @@ fn worker_loop(
     // although creating a Runtime here is awkward - todo
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .unwrap();
+        .build()?;
 
     // thread owns its own tree - as it's not thread-safe.
     let tree = Arc::new(RwLock::new(InMemoryTree::<false> {
@@ -171,7 +170,7 @@ fn worker_loop(
     loop {
         let Some((batch_output, replay_record)) = rt.block_on(block_receiver.recv()) else {
             tracing::warn!("Worker {} block receiver channel closed", worker_id);
-            break;
+            return Ok(());
         };
 
         let bn = replay_record.block_context.block_number;
@@ -194,20 +193,14 @@ fn worker_loop(
                 next_free_slot: tree.read().unwrap().storage_tree.next_free_slot,
             };
 
-            let state_view = state_handle.state_view_at_block(bn).unwrap();
+            let state_view = state_handle.state_view_at_block(bn)?;
 
-            let l1_transactions = replay_record
-                .l1_transactions
+            let transactions: VecDeque<Vec<u8>> = replay_record
+                .transactions
                 .clone()
                 .into_iter()
-                .map(|l1_tx| l1_tx.encode_zksync_os());
-            let l2_transactions = replay_record
-                .l2_transactions
-                .into_iter()
-                .map(|l2_tx| l2_tx.encode_zksync_os());
-            let transactions = l1_transactions
-                .chain(l2_transactions)
-                .collect::<VecDeque<_>>();
+                .map(|tx| tx.encode())
+                .collect();
             let tx_count = transactions.len();
             let list_source = TxListSource { transactions };
 
@@ -249,15 +242,14 @@ fn worker_loop(
 
             let commit_batch_info = CommitBatchInfo::new(
                 batch_output,
-                replay_record.l1_transactions,
+                &replay_record.transactions,
                 tree_output,
                 CHAIN_ID,
             );
             tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
 
             if let Some(commit_batch_info_sender) = &commit_batch_info_sender {
-                rt.block_on(commit_batch_info_sender.send(commit_batch_info.clone()))
-                    .unwrap();
+                rt.block_on(commit_batch_info_sender.send(commit_batch_info.clone()))?;
             }
 
             let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
@@ -270,7 +262,7 @@ fn worker_loop(
             };
             GENERAL_METRICS.block_number[&"batcher"].set(bn);
             GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
-            rt.block_on(batch_sender.send(batch)).unwrap();
+            rt.block_on(batch_sender.send(batch))?;
         }
     }
 }
