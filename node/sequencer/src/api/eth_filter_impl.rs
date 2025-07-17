@@ -6,8 +6,8 @@ use crate::config::RpcConfig;
 use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use crate::reth_state::ZkClient;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
-use alloy::eips::BlockId;
-use alloy::primitives::{TxHash, B256, U128};
+use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::primitives::{BlockNumber, TxHash, B256, U128};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
@@ -118,18 +118,7 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
                     FilterBlockOption::Range {
                         from_block,
                         to_block,
-                    } => {
-                        let from_block_id = from_block.unwrap_or_default().into();
-                        let Some(from) = self.repository.resolve_block_number(from_block_id)?
-                        else {
-                            return Err(EthFilterError::BlockNotFound(from_block_id));
-                        };
-                        let to_block_id = to_block.unwrap_or_default().into();
-                        let Some(to) = self.repository.resolve_block_number(to_block_id)? else {
-                            return Err(EthFilterError::BlockNotFound(to_block_id));
-                        };
-                        (from, to)
-                    }
+                    } => self.resolve_range(from_block, to_block)?,
                     FilterBlockOption::AtBlockHash(_) => {
                         // blockHash is equivalent to fromBlock = toBlock = the block number with
                         // hash blockHash
@@ -174,17 +163,7 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
             FilterBlockOption::Range {
                 from_block,
                 to_block,
-            } => {
-                let from_block_id = from_block.unwrap_or_default().into();
-                let Some(from) = self.repository.resolve_block_number(from_block_id)? else {
-                    return Err(EthFilterError::BlockNotFound(from_block_id));
-                };
-                let to_block_id = to_block.unwrap_or_default().into();
-                let Some(to) = self.repository.resolve_block_number(to_block_id)? else {
-                    return Err(EthFilterError::BlockNotFound(to_block_id));
-                };
-                (from, to)
-            }
+            } => self.resolve_range(from_block, to_block)?,
         };
         tracing::trace!(from, to, ?filter, "getting filtered logs");
         self.get_logs_in_block_range(filter, from, to)
@@ -303,6 +282,22 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
 
             is_valid
         })
+    }
+
+    fn resolve_range(
+        &self,
+        from_block: Option<BlockNumberOrTag>,
+        to_block: Option<BlockNumberOrTag>,
+    ) -> EthFilterResult<(BlockNumber, BlockNumber)> {
+        let from_block_id = from_block.unwrap_or_default().into();
+        let Some(from) = self.repository.resolve_block_number(from_block_id)? else {
+            return Err(EthFilterError::BlockNotFound(from_block_id));
+        };
+        let to_block_id = to_block.unwrap_or_default().into();
+        let Some(to) = self.repository.resolve_block_number(to_block_id)? else {
+            return Err(EthFilterError::BlockNotFound(to_block_id));
+        };
+        Ok((from, to))
     }
 }
 
