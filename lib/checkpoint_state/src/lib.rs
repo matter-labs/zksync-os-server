@@ -132,7 +132,7 @@ impl StateHandle {
         Ok(())
     }
 
-    pub async fn collect_state_metrics(&self, _period: Duration) {
+    pub async fn collect_state_metrics(&self, period: Duration) {
         // let mut ticker = tokio::time::interval(period);
         // let state_handle = self.clone();
         // loop {
@@ -140,9 +140,18 @@ impl StateHandle {
         //     let m = StorageMetrics::collect_metrics(state_handle.clone());
         //     tracing::debug!("{:?}", m);
         // }
+
+        let mut ticker = tokio::time::interval(period);
+        loop {
+            ticker.tick().await;
+        }
     }
 
-    pub async fn compact_periodically(&self, _period: Duration) {
+    pub async fn compact_periodically(&self, period: Duration) {
         // no op
+        let mut ticker = tokio::time::interval(period);
+        loop {
+            ticker.tick().await;
+        }
     }
 }
