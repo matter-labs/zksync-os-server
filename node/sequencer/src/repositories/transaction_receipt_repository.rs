@@ -34,8 +34,9 @@ pub struct StoredTxData {
 /// todo: unbounded memory use
 #[derive(Clone, Debug)]
 pub struct TransactionReceiptRepository {
-    /// Map from tx hash → (tx, receipt).
+    /// Map from tx hash → (tx, receipt, meta).
     tx_data: Arc<DashMap<TxHash, StoredTxData>>,
+    /// Map from (sender, nonce) → tx hash.
     sender_nonce_index: Arc<DashMap<(Address, TxNonce), TxHash>>,
 }
 

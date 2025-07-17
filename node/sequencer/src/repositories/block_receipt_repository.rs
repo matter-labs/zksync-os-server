@@ -9,8 +9,9 @@ use std::sync::Arc;
 ///
 #[derive(Clone, Debug, Default)]
 pub struct BlockReceiptRepository {
+    /// Map from block number → block hash.
     hash_index: Arc<DashMap<BlockNumber, BlockHash>>,
-    /// Map from block number → block.
+    /// Map from block hash → block.
     receipts: Arc<DashMap<BlockHash, alloy::consensus::Block<TxHash>>>,
 }
 
