@@ -7,7 +7,7 @@ use alloy::primitives::B256;
 use crate::{
     errors::{DeserializeContext, DeserializeErrorKind},
     storage::InsertedKeyEntry,
-    types::{ChildRef, InternalNode, Leaf, Manifest, RawNode, Root, TreeTags},
+    types::{ChildRef, InternalNode, Leaf, Manifest, Root, TreeTags},
     DeserializeError,
 };
 
@@ -116,25 +116,6 @@ impl Root {
     pub(super) fn serialize(&self, buffer: &mut Vec<u8>) {
         leb128::write::unsigned(buffer, self.leaf_count).unwrap();
         self.root_node.serialize(buffer);
-    }
-}
-
-impl RawNode {
-    pub(crate) fn deserialize(bytes: &[u8]) -> Self {
-        Self {
-            raw: bytes.to_vec(),
-            leaf: Leaf::deserialize(bytes).ok(),
-            internal: InternalNode::deserialize(bytes).ok(),
-        }
-    }
-
-    pub(crate) fn deserialize_root(bytes: &[u8]) -> Self {
-        let root = Root::deserialize(bytes).ok();
-        Self {
-            raw: bytes.to_vec(),
-            leaf: None,
-            internal: root.map(|root| root.root_node),
-        }
     }
 }
 

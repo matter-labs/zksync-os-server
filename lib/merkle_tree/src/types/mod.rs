@@ -10,7 +10,7 @@ use crate::{DefaultTreeParams, HashTree, TreeParams};
 pub(crate) const MAX_TREE_DEPTH: u8 = 64;
 
 /// Tree leaf.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct Leaf {
     pub key: B256,
@@ -108,17 +108,6 @@ impl From<Leaf> for Node {
     fn from(leaf: Leaf) -> Self {
         Self::Leaf(leaf)
     }
-}
-
-/// Raw node fetched from a database.
-#[derive(Debug)]
-pub struct RawNode {
-    /// Bytes for a serialized node.
-    pub raw: Vec<u8>,
-    /// Leaf if a node can be deserialized into it.
-    pub leaf: Option<Leaf>,
-    /// Internal node if a node can be deserialized into it.
-    pub internal: Option<InternalNode>,
 }
 
 /// Result of a key lookup in the tree.

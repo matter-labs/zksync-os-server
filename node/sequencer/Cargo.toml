@@ -38,6 +38,7 @@ alloy-rlp.workspace = true
 blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
+tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 hex.workspace = true

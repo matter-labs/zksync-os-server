@@ -89,7 +89,7 @@ impl HashTree for Blake2Hasher {
 }
 
 fn compute_empty_tree_hashes() -> Vec<B256> {
-    let empty_leaf_hash = Blake2Hasher.hash_bytes(&[0_u8; 2 * 32 + 8]);
+    let empty_leaf_hash = Blake2Hasher.hash_leaf(&Leaf::default());
     iter::successors(Some(empty_leaf_hash), |hash| {
         Some(Blake2Hasher.hash_branch(hash, hash))
     })
