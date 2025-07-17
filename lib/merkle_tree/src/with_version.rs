@@ -4,13 +4,58 @@ use crate::{
     Database, DefaultTreeParams, HashTree, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
+use tokio::sync::watch;
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system::run::{ReadStorage, ReadStorageTree, SimpleReadStorageTree};
 
+pub struct MerkleTreeForReading<DB: Database, P: TreeParams = DefaultTreeParams> {
+    tree: MerkleTree<DB, P>,
+    /// Used to wait until the requested tree version is written
+    tree_write_watcher: watch::Receiver<u64>,
+}
+
+impl<DB: Database + Clone, P: TreeParams> MerkleTreeForReading<DB, P>
+where
+    P::Hasher: Clone,
+{
+    pub fn new(tree: MerkleTree<DB, P>, tree_write_watcher: watch::Receiver<u64>) -> Self {
+        Self {
+            tree,
+            tree_write_watcher,
+        }
+    }
+
+    /// Returns a [MerkleTreeVersion] at a desired block but only
+    /// after waiting until that block is written into the tree.
+    pub async fn get_at_block(mut self, block: u64) -> MerkleTreeVersion<DB, P> {
+        self.tree_write_watcher
+            .wait_for(|&tree_version| tree_version >= block)
+            .await
+            .unwrap();
+
+        MerkleTreeVersion {
+            tree: self.tree,
+            block,
+        }
+    }
+}
+
+impl<DB: Database, P: TreeParams> Clone for MerkleTreeForReading<DB, P>
+where
+    MerkleTree<DB, P>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tree: self.tree.clone(),
+            tree_write_watcher: self.tree_write_watcher.clone(),
+        }
+    }
+}
+
 pub struct MerkleTreeVersion<DB: Database, P: TreeParams = DefaultTreeParams> {
-    pub(crate) tree: MerkleTree<DB, P>,
-    pub(crate) block: u64,
+    tree: MerkleTree<DB, P>,
+    block: u64,
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {

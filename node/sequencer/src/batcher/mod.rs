@@ -13,7 +13,7 @@ use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommit
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::L1SenderHandle;
 use zksync_os_merkle_tree::{
-    fixed_bytes_to_bytes32, MerkleTree, MerkleTreeVersion, RocksDBWrapper,
+    fixed_bytes_to_bytes32, MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper,
 };
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;
@@ -29,7 +29,7 @@ pub struct Batcher {
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
     // handled by l1-sender. We ensure that they are sent in order.
     commit_batch_info_sender: Option<L1SenderHandle>,
-    persistent_tree: MerkleTree<RocksDBWrapper>,
+    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     state_handle: StateHandle,
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
@@ -43,7 +43,7 @@ impl Batcher {
         // handled by l1-sender
         commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
-        persistent_tree: MerkleTree<RocksDBWrapper>,
+        persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
