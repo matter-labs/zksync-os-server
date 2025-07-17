@@ -42,8 +42,8 @@ pub trait ApiRepository: Send + Sync {
     /// Get all transaction's data by its hash.
     fn get_stored_transaction(&self, hash: TxHash) -> RepositoryResult<Option<StoredTxData>>;
 
-    /// Returns number of the last canonized block.
-    fn get_canonized_block(&self) -> u64;
+    /// Returns number of the last known block.
+    fn get_latest_block(&self) -> u64;
 
     // todo(#36): temporary, remove from here
     fn account_property_repository(&self) -> &AccountPropertyRepository;
@@ -76,8 +76,8 @@ pub trait ApiRepositoryExt: ApiRepository {
     ) -> RepositoryResult<BlockHashOrNumber> {
         match block_id {
             BlockId::Hash(hash) => Ok(hash.block_hash.into()),
-            BlockId::Number(BlockNumberOrTag::Pending) => Ok(self.get_canonized_block().into()),
-            BlockId::Number(BlockNumberOrTag::Latest) => Ok(self.get_canonized_block().into()),
+            BlockId::Number(BlockNumberOrTag::Pending) => Ok(self.get_latest_block().into()),
+            BlockId::Number(BlockNumberOrTag::Latest) => Ok(self.get_latest_block().into()),
             BlockId::Number(BlockNumberOrTag::Safe) => Err(RepositoryError::SafeBlockNotSupported),
             BlockId::Number(BlockNumberOrTag::Finalized) => {
                 Err(RepositoryError::FinalizedBlockNotSupported)
@@ -189,7 +189,7 @@ impl ApiRepository for RepositoryManager {
         Ok(self.db.get_stored_tx_by_hash(hash)?)
     }
 
-    fn get_canonized_block(&self) -> u64 {
+    fn get_latest_block(&self) -> u64 {
         *self.latest_block.borrow()
     }
 

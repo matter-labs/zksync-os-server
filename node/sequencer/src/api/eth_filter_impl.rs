@@ -58,7 +58,7 @@ impl<R: ApiRepository + Clone + 'static> EthFilterNamespace<R> {
 
 impl<R: ApiRepository> EthFilterNamespace<R> {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
-        let last_poll_block_number = self.repository.get_canonized_block();
+        let last_poll_block_number = self.repository.get_latest_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
 
         self.active_filters.insert(
@@ -76,7 +76,7 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
         &self,
         id: FilterId,
     ) -> EthFilterResult<FilterChanges<Transaction<L2Envelope>>> {
-        let latest_block = self.repository.get_canonized_block();
+        let latest_block = self.repository.get_latest_block();
 
         // start_block is the block from which we should start fetching changes, the next block from
         // the last time changes were polled, in other words the best block at last poll + 1

@@ -77,7 +77,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
 
 impl<R: ApiRepository> EthNamespace<R> {
     fn block_number_impl(&self) -> EthResult<U256> {
-        Ok(U256::from(self.repository.get_canonized_block()))
+        Ok(U256::from(self.repository.get_latest_block()))
     }
 
     fn block_by_id_impl(
