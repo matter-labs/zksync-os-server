@@ -142,6 +142,7 @@ impl Batcher {
                 let tx_count = replay_record.transactions.len();
                 let commit_batch_info = CommitBatchInfo::new(
                     batch_output,
+                    &replay_record.block_context,
                     &replay_record.transactions,
                     tree_output,
                     CHAIN_ID,

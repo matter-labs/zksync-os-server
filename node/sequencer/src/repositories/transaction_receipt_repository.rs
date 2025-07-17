@@ -1,5 +1,5 @@
 use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, TxType};
-use alloy::primitives::{Address, Log, LogData, TxHash, B256};
+use alloy::primitives::{Address, Log, LogData, Sealed, TxHash, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -103,7 +103,7 @@ impl Default for TransactionReceiptRepository {
 }
 
 pub fn transaction_to_api_data(
-    block_output: &BatchOutput,
+    block_output: &Sealed<BatchOutput>,
     index: usize,
     number_of_logs_before_this_tx: u64,
     tx: ZkTransaction,
@@ -144,7 +144,7 @@ pub fn transaction_to_api_data(
         ZkTxType::L2(TxType::Eip7702) => ReceiptEnvelope::Eip7702(receipt_with_bloom),
     };
     let meta = TxMeta {
-        block_hash: B256::from(block_output.header.hash()),
+        block_hash: B256::from(block_output.hash()),
         block_number: block_output.header.number,
         block_timestamp: block_output.header.timestamp,
         tx_index_in_block: index as u64,
