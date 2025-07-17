@@ -10,7 +10,7 @@ use zk_os_forward_system::run::{ReadStorage, ReadStorageTree, SimpleReadStorageT
 
 pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
     pub tree: MerkleTree<DB, P>,
-    pub version: u64,
+    pub block: u64,
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
@@ -18,7 +18,7 @@ impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
         let mut current_node = self
             .tree
             .db()
-            .try_root(self.version)
+            .try_root(self.block)
             .unwrap()
             .unwrap()
             .root_node;
@@ -66,7 +66,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
     fn simple_tree_index(&mut self, key: Bytes32) -> Option<u64> {
         self.tree
             .db()
-            .indices(self.version, &[FixedBytes::from_slice(key.as_u8_ref())])
+            .indices(self.block, &[FixedBytes::from_slice(key.as_u8_ref())])
             .ok()
             .and_then(|v| match v[0] {
                 KeyLookup::Existing(x) => Some(x),
@@ -83,7 +83,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         let mut current_node = self
             .tree
             .db()
-            .try_root(self.version)
+            .try_root(self.block)
             .unwrap()
             .unwrap()
             .root_node;
@@ -163,7 +163,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         let res = &self
             .tree
             .db()
-            .indices(self.version, &[FixedBytes::from_slice(key.as_u8_ref())])
+            .indices(self.block, &[FixedBytes::from_slice(key.as_u8_ref())])
             .unwrap()[0];
         match res {
             KeyLookup::Existing(_) => todo!(),

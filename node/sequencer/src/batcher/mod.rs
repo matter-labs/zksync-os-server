@@ -18,7 +18,7 @@ use zksync_os_merkle_tree::{
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;
 
-/// This component will generates l1 batches from the stream of blocks
+/// This component generates l1 batches from the stream of blocks
 /// It also generates Prover Input for each batch.
 ///
 /// Currently, batching is not implemented on zksync-os side, so we do 1 batch == 1 block
@@ -179,9 +179,9 @@ fn compute_prover_input(
     bin_path: &'static str,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
-    let version = block_number - 1;
+    let previous_block = block_number - 1;
 
-    let (root_hash, leaf_count) = persistent_tree.root_info(version).unwrap().unwrap();
+    let (root_hash, leaf_count) = persistent_tree.root_info(previous_block).unwrap().unwrap();
     let initial_storage_commitment = StorageCommitment {
         root: fixed_bytes_to_bytes32(root_hash),
         next_free_slot: leaf_count,
@@ -198,7 +198,7 @@ fn compute_prover_input(
 
     let tree_view = MerkleTreeVersion {
         tree: persistent_tree.clone(),
-        version,
+        block: previous_block,
     };
 
     let prover_input_generation_latency =
@@ -218,7 +218,7 @@ fn compute_prover_input(
     tracing::info!(
         block_number,
         next_free_slot = leaf_count,
-        "Completed prover input computation with persistent tree in {:?}.",
+        "Completed prover input computation in {:?}.",
         latency
     );
 

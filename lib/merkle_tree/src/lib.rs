@@ -5,11 +5,11 @@ use anyhow::Context as _;
 use std::fmt;
 
 pub use self::{
-    adapter::{fixed_bytes_to_bytes32, MerkleTreeVersion},
     errors::DeserializeError,
     hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
     types::{BatchOutput, TreeEntry},
+    with_version::{fixed_bytes_to_bytes32, MerkleTreeVersion},
 };
 use crate::blake2::Blake2Hasher;
 use crate::{
@@ -19,7 +19,6 @@ use crate::{
 };
 
 // TODO: Move to a separate crate
-mod adapter;
 pub mod blake2;
 mod consistency;
 mod errors;
@@ -29,6 +28,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 mod types;
+mod with_version;
 
 /// Unstable types that should not be used unless you know what you're doing (e.g., implementing
 /// `Database` trait for a custom type). There are no guarantees whatsoever that APIs / structure of
