@@ -29,7 +29,7 @@ use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
     execution::{
-        block_executor::execute_block, block_transactions_provider::CommandBlockContextProvider,
+        block_executor::execute_block, command_block_context_provider::CommandBlockContextProvider,
     },
     model::{BlockCommand, ReplayRecord},
 };
