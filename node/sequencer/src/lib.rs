@@ -4,7 +4,6 @@
 
 pub mod api;
 pub mod batcher;
-pub mod block_context_provider;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
@@ -20,7 +19,7 @@ use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
-use crate::model::BatchJob;
+use crate::model::{BatchJob, ProduceCommand};
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
@@ -29,9 +28,8 @@ use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
-    block_context_provider::BlockContextProvider,
     execution::{
-        block_executor::execute_block, block_transactions_provider::BlockTransactionsProvider,
+        block_executor::execute_block, command_block_context_provider::CommandBlockContextProvider,
     },
     model::{BlockCommand, ReplayRecord},
 };
@@ -83,7 +81,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
-    mut block_transaction_provider: BlockTransactionsProvider,
+    mut command_block_context_provider: CommandBlockContextProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
     // todo: do it outside - as one of the sinks (only needed in API)
@@ -110,8 +108,7 @@ pub async fn run_sequencer_actor(
         );
         let mut stage_started_at = Instant::now();
 
-        // note: block_transaction_provider has internal mutable state: `last_processed_l1_command`
-        let prepared_cmd = block_transaction_provider.process_command(cmd)?;
+        let prepared_cmd = command_block_context_provider.process_command(cmd)?;
 
         tracing::info!(
             block_number = bn,
@@ -166,7 +163,7 @@ pub async fn run_sequencer_actor(
         stage_started_at = Instant::now();
 
         // TODO: would updating mempool in parallel with state make sense?
-        block_transaction_provider.on_canonical_state_change(&block_output, &replay_record);
+        command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
 
         tracing::info!(
             block_number = bn,
@@ -208,7 +205,7 @@ fn command_source(
     block_replay_wal: &BlockReplayStorage,
     block_to_start: u64,
     block_time: Duration,
-    block_size_limit: usize,
+    max_transactions_in_block: usize,
 ) -> BoxStream<BlockCommand> {
     let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
     tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
@@ -222,9 +219,11 @@ fn command_source(
     let produce_stream: BoxStream<BlockCommand> =
         futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
             Some((
-                BlockContextProvider
-                    .get_produce_command(block_number, block_time, block_size_limit)
-                    .await,
+                BlockCommand::Produce(ProduceCommand {
+                    block_number,
+                    block_time,
+                    max_transactions_in_block,
+                }),
                 block_number + 1,
             ))
         })
@@ -345,11 +344,20 @@ pub async fn run(
 
     // ========== Initialize TransactionStreamProvider ===========
 
-    let next_l1_priority_id = block_replay_storage
-        .get_replay_record(first_block_to_execute)
-        .map_or(0, |block| block.starting_l1_priority_id);
-    let tx_stream_provider =
-        BlockTransactionsProvider::new(next_l1_priority_id, l1_mempool.clone(), l2_mempool.clone());
+    let first_replay_record = block_replay_storage.get_replay_record(first_block_to_execute);
+    let next_l1_priority_id = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.starting_l1_priority_id);
+    let block_hashes_for_next_block = first_replay_record
+        .as_ref()
+        .map(|record| record.block_context.block_hashes)
+        .unwrap_or_default(); // TODO: take into account genesis block hash.
+    let command_block_context_provider = CommandBlockContextProvider::new(
+        next_l1_priority_id,
+        l1_mempool.clone(),
+        l2_mempool.clone(),
+        block_hashes_for_next_block,
+    );
 
     // ========== Initialize L1 watcher (fallible) ===========
 
@@ -475,7 +483,7 @@ pub async fn run(
             first_block_to_execute,
             blocks_for_batcher_sender,
             tree_sender,
-            tx_stream_provider,
+            command_block_context_provider,
             state_handle.clone(),
             block_replay_storage.clone(),
             repositories.clone(),
