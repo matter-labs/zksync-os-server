@@ -62,8 +62,12 @@ impl StateHandle {
     }
 
     pub fn state_view_at_block(&self, block_number: u64) -> anyhow::Result<StateView> {
+        // Note that we actually want the state at the end of block_number-1.
+        // TODO: This is confusing, fix.
+        let block_number = block_number - 1;
+
         let latest_block = self.persistent_state.block_number();
-        let oldest_block = latest_block - self.checkpoints_to_retain as u64;
+        let oldest_block = latest_block.saturating_sub(self.checkpoints_to_retain as u64);
 
         if block_number > latest_block {
             return Err(anyhow::anyhow!(
@@ -83,9 +87,13 @@ impl StateHandle {
                 let persistent_state = PersistentState::new(checkpoint_path);
                 return Ok(persistent_state);
             } else {
-                return Err(anyhow::anyhow!(
-                    "Checkpoint for block {block_number} does not exist"
-                ));
+                // return Err(anyhow::anyhow!(
+                //     "Checkpoint for block {block_number} does not exist"
+                // ));
+
+                // TODO: quick hack to handle block 0
+                let persistent_state = PersistentState::new(self.path.clone());
+                return Ok(persistent_state);
             }
         }
     }
