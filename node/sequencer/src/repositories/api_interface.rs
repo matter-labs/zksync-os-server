@@ -52,6 +52,7 @@ pub trait ApiRepository: Send + Sync {
     fn bytecode_repository(&self) -> &BytecodeRepository;
 }
 
+/// Extension methods for `ApiRepository` implementations.
 pub trait ApiRepositoryExt: ApiRepository {
     /// Get sealed block with transaction hashes by its hash OR number.
     fn get_block_by_hash_or_number(
