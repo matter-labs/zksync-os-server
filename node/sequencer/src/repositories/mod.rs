@@ -113,6 +113,11 @@ impl RepositoryManager {
 
         // Extract account properties from the block output
         let (account_properties, bytecodes) = extract_account_properties(&block_output);
+        tracing::info!(
+            "New account_properties #{}, {:?}",
+            block_output.header.number,
+            account_properties
+        );
 
         // Add account properties to the account property repository
         self.account_property_repository

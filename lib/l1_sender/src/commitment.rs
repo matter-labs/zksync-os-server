@@ -1,3 +1,4 @@
+use alloy::hex;
 use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, B256, U256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
@@ -130,10 +131,26 @@ impl CommitBatchInfo {
         let mut hasher = Blake2s256::new();
         hasher.update(tree_output.root_hash.as_slice());
         hasher.update(tree_output.leaf_count.to_be_bytes());
+        let new_state_commitment_only_state = B256::from_slice(&hasher.finalize());
+
+        let mut hasher = Blake2s256::new();
+        hasher.update(tree_output.root_hash.as_slice());
+        hasher.update(tree_output.leaf_count.to_be_bytes());
         hasher.update(batch_output.header.number.to_be_bytes());
         hasher.update(last_256_block_hashes_blake);
         hasher.update(batch_output.header.timestamp.to_be_bytes());
         let new_state_commitment = B256::from_slice(&hasher.finalize());
+        tracing::info!(
+            "Tree data used for state commitment: root_hash {}, leaf_count {}",
+            hex::encode(tree_output.root_hash.0),
+            tree_output.leaf_count,
+        );
+        tracing::info!(
+            "New state commitment for block #{}: only_state {}, new {}",
+            batch_output.header.number,
+            hex::encode(new_state_commitment_only_state.0),
+            hex::encode(new_state_commitment.0),
+        );
 
         let mut operator_da_input: Vec<u8> = vec![];
 

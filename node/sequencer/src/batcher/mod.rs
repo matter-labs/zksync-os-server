@@ -298,6 +298,10 @@ async fn ordered_committer(
 fn update_tree_with_batch_output(tree: &Arc<RwLock<InMemoryTree>>, batch_output: &BatchOutput) {
     // update tree - note that we need to do it for every block, not only the ones we need to process
     let mut write_tree = tree.write().unwrap();
+    tracing::info!("update_tree_with_batch_output: #{}", batch_output.header.number);
+    let writes: Vec<_> = batch_output.storage_writes.clone().into_iter().map(|w| (w.key, w.value)).collect();
+    // tracing::info!("update_tree_with_batch_output: {:?}", writes);
+    tracing::info!("update_tree_with_batch_output: {:?}", batch_output.storage_writes);
     for w in &batch_output.storage_writes {
         write_tree.cold_storage.insert(w.key, w.value);
         write_tree.storage_tree.insert(&w.key, &w.value);
