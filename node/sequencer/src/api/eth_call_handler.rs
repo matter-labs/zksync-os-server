@@ -91,7 +91,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
         let nonce = nonce.unwrap_or_else(|| {
             self.repository
                 .account_property_repository()
-                .get_latest(&from.unwrap_or_default())
+                .get_at_block(block_number, &from.unwrap_or_default())
                 .map(|props| props.nonce)
                 .unwrap_or_default()
         });

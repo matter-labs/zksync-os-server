@@ -86,7 +86,7 @@ impl AccountPropertyRepository {
 
     /// Read the `AccountProperties` for `addr` as of `block`.
     ///
-    /// Scans per-block snapshots from `block - 1` down to `base_block + 1`. If none contains `addr`,
+    /// Scans per-block snapshots from `block` down to `base_block + 1`. If none contains `addr`,
     /// falls back to `base_state` at `base_block`. Returns `None` if still not found.
     pub fn get_at_block(&self, block: u64, addr: &Address) -> Option<AccountProperties> {
         let base = self.base_block.load(Ordering::Relaxed);
@@ -116,9 +116,7 @@ impl AccountPropertyRepository {
     /// falling back to the consolidated base state.
     pub fn get_latest(&self, addr: &Address) -> Option<AccountProperties> {
         let latest = self.latest_block();
-        // todo: we are adding `+1` because we want the state for the block (latest + 1)
-        // alternatively the `latest_block` function itself could return `+1`
-        let r = self.get_at_block(latest + 1, addr);
+        let r = self.get_at_block(latest, addr);
 
         tracing::debug!(
             latest_block=latest,
