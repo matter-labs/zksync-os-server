@@ -4,7 +4,7 @@ use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
@@ -99,6 +99,7 @@ pub struct CommitBatchInfo {
 impl CommitBatchInfo {
     pub fn new(
         batch_output: BatchOutput,
+        batch_context: &BatchContext,
         transactions: &[ZkTransaction],
         // TODO: This really needs a different name
         tree_output: zksync_os_merkle_tree::BatchOutput,
@@ -118,9 +119,20 @@ impl CommitBatchInfo {
             }
         }
 
+        let last_256_block_hashes_blake = {
+            let mut blocks_hasher = Blake2s256::new();
+            for block_hash in batch_context.block_hashes.0.iter() {
+                blocks_hasher.update(block_hash.to_be_bytes::<32>());
+            }
+            blocks_hasher.finalize()
+        };
+
         let mut hasher = Blake2s256::new();
         hasher.update(tree_output.root_hash.as_slice());
         hasher.update(tree_output.leaf_count.to_be_bytes());
+        hasher.update(batch_output.header.number.to_be_bytes());
+        hasher.update(last_256_block_hashes_blake);
+        hasher.update(batch_output.header.timestamp.to_be_bytes());
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
         let mut operator_da_input: Vec<u8> = vec![];
