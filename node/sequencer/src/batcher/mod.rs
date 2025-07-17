@@ -1,11 +1,11 @@
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
-use futures::{StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::{mpsc::Receiver, watch};
+use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_forward_system::run::test_impl::TxListSource;
@@ -29,8 +29,6 @@ pub struct Batcher {
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
     // handled by l1-sender. We ensure that they are sent in order.
     commit_batch_info_sender: Option<L1SenderHandle>,
-    /// notifications about tree version to allow the batcher to wait until the tree is ready
-    tree_version_watch: watch::Receiver<u64>,
     persistent_tree: MerkleTree<RocksDBWrapper>,
     state_handle: StateHandle,
     bin_path: &'static str,
@@ -44,7 +42,6 @@ impl Batcher {
         batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
         // handled by l1-sender
         commit_batch_info_sender: Option<L1SenderHandle>,
-        tree_version_watch: watch::Receiver<u64>,
         state_handle: StateHandle,
         persistent_tree: MerkleTree<RocksDBWrapper>,
 
@@ -61,7 +58,6 @@ impl Batcher {
             block_receiver,
             state_handle,
             batch_sender,
-            tree_version_watch,
             persistent_tree,
             commit_batch_info_sender,
             bin_path,
@@ -74,19 +70,12 @@ impl Batcher {
     pub async fn run_loop(self) -> anyhow::Result<()> {
         ReceiverStream::new(self.block_receiver)
             .then(|(batch_output, replay_record)| {
-                // delay the stream so the necessary tree version is available
-                let mut tree_version = self.tree_version_watch.clone();
-                async move {
-                    tree_version
-                        .wait_for(|&tree_version| {
-                            tree_version >= replay_record.block_context.block_number - 1
-                        })
-                        .await
-                        .unwrap();
-                    (batch_output, replay_record)
-                }
+                self.persistent_tree
+                    .clone()
+                    .get_at_block(replay_record.block_context.block_number - 1)
+                    .map(|tree| (tree, batch_output, replay_record))
             })
-            .map(|(batch_output, replay_record)| {
+            .map(|(tree, batch_output, replay_record)| {
                 BATCHER_METRICS
                     .current_block_number
                     .set(replay_record.block_context.block_number);
@@ -97,16 +86,10 @@ impl Batcher {
                     replay_record.transactions.len(),
                 );
 
-                let persistent_tree = self.persistent_tree.clone();
                 let state_handle = self.state_handle.clone();
                 tokio::task::spawn_blocking(move || {
                     (
-                        compute_prover_input(
-                            &replay_record,
-                            state_handle,
-                            persistent_tree.clone(),
-                            self.bin_path,
-                        ),
+                        compute_prover_input(&replay_record, state_handle, tree, self.bin_path),
                         batch_output,
                         replay_record,
                     )
@@ -114,26 +97,17 @@ impl Batcher {
             })
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
-            .and_then(|(a, b, replay_record)| {
-                // delay the stream so the necessary tree version is available
-                let mut tree_version = self.tree_version_watch.clone();
-                async move {
-                    tree_version
-                        .wait_for(|&tree_version| {
-                            tree_version >= replay_record.block_context.block_number
-                        })
-                        .await?;
-                    Ok((a, b, replay_record))
-                }
-            })
             .try_for_each(async |(prover_input, batch_output, replay_record)| {
                 let block_number = replay_record.block_context.block_number;
 
                 let (root_hash, leaf_count) = self
                     .persistent_tree
-                    .root_info(block_number)
-                    .unwrap()
+                    .clone()
+                    .get_at_block(block_number)
+                    .await
+                    .root_info()
                     .unwrap();
+
                 let tree_output = zksync_os_merkle_tree::BatchOutput {
                     root_hash,
                     leaf_count,
@@ -175,13 +149,12 @@ impl Batcher {
 fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: StateHandle,
-    persistent_tree: MerkleTree<RocksDBWrapper>,
+    tree_view: MerkleTreeVersion<RocksDBWrapper>,
     bin_path: &'static str,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
-    let previous_block = block_number - 1;
 
-    let (root_hash, leaf_count) = persistent_tree.root_info(previous_block).unwrap().unwrap();
+    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let initial_storage_commitment = StorageCommitment {
         root: fixed_bytes_to_bytes32(root_hash),
         next_free_slot: leaf_count,
@@ -195,11 +168,6 @@ fn compute_prover_input(
         .map(|tx| tx.clone().encode())
         .collect::<VecDeque<_>>();
     let list_source = TxListSource { transactions };
-
-    let tree_view = MerkleTreeVersion {
-        tree: persistent_tree.clone(),
-        block: previous_block,
-    };
 
     let prover_input_generation_latency =
         BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();

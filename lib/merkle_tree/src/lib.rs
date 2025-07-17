@@ -3,6 +3,7 @@
 use alloy::primitives::B256;
 use anyhow::Context as _;
 use std::fmt;
+use tokio::sync::watch;
 
 pub use self::{
     errors::DeserializeError,
@@ -90,6 +91,8 @@ impl<const TREE_DEPTH: u8, const INTERNAL_NODE_DEPTH: u8> TreeParams
 pub struct MerkleTree<DB, P: TreeParams = DefaultTreeParams> {
     db: DB,
     hasher: P::Hasher,
+    /// Used to wait until the requested tree version is written
+    tree_write_watcher: watch::Receiver<u64>,
 }
 
 impl<DB: Database> MerkleTree<DB> {
@@ -98,8 +101,8 @@ impl<DB: Database> MerkleTree<DB> {
     /// # Errors
     ///
     /// Errors in the same situations as [`Self::with_hasher()`].
-    pub fn new(db: DB) -> anyhow::Result<Self> {
-        Self::with_hasher(db, Blake2Hasher)
+    pub fn new(db: DB, tree_write_watcher: watch::Receiver<u64>) -> anyhow::Result<Self> {
+        Self::with_hasher(db, tree_write_watcher, Blake2Hasher)
     }
 }
 
@@ -127,7 +130,11 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     ///
     /// Errors if the hasher or basic tree parameters (e.g., the tree depth)
     /// do not match those of the tree loaded from the database.
-    pub fn with_hasher(db: DB, hasher: P::Hasher) -> anyhow::Result<Self> {
+    pub fn with_hasher(
+        db: DB,
+        tree_write_watcher: watch::Receiver<u64>,
+        hasher: P::Hasher,
+    ) -> anyhow::Result<Self> {
         let maybe_manifest = db.try_manifest().context("failed reading tree manifest")?;
         if let Some(manifest) = &maybe_manifest {
             manifest.tags.ensure_consistency::<P>(&hasher)?;
@@ -141,7 +148,11 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         tracing::debug!(?info, manifest = ?maybe_manifest, "initialized Merkle tree");
         METRICS.info.set(info).ok();
 
-        Ok(Self { db, hasher })
+        Ok(Self {
+            db,
+            tree_write_watcher,
+            hasher,
+        })
     }
 
     /// Returns a reference to the database.
@@ -344,6 +355,20 @@ impl<DB: Database, P: TreeParams> MerkleTree<Patched<DB>, P> {
     }
 }
 
+impl<DB: Database + Clone, P: TreeParams> MerkleTree<DB, P>
+where
+    P::Hasher: Clone,
+{
+    pub async fn get_at_block(mut self, block: u64) -> MerkleTreeVersion<DB, P> {
+        self.tree_write_watcher
+            .wait_for(|&tree_version| tree_version >= block)
+            .await
+            .unwrap();
+
+        MerkleTreeVersion { tree: self, block }
+    }
+}
+
 impl<DB: Database + Clone, P: TreeParams> Clone for MerkleTree<DB, P>
 where
     P::Hasher: Clone,
@@ -352,6 +377,7 @@ where
         Self {
             db: self.db.clone(),
             hasher: self.hasher.clone(),
+            tree_write_watcher: self.tree_write_watcher.clone(),
         }
     }
 }

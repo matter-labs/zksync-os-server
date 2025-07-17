@@ -46,7 +46,6 @@ use zk_os_forward_system::run::{BatchOutput as BlockOutput, BatchOutput};
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
-use zksync_os_merkle_tree::MerkleTree;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
@@ -299,15 +298,12 @@ pub async fn run(
 
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
 
-    let (tree_ready_block_sender, tree_ready_block_receiver) = watch::channel(0u64);
-
     // ========== Initialize tree manager ===========
 
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
     ));
-    let tree_manager =
-        TreeManager::new(tree_wrapper.clone(), tree_receiver, tree_ready_block_sender);
+    let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
     let tree_last_processed_block = tree_manager
         .last_processed_block()
@@ -420,9 +416,8 @@ pub async fn run(
             blocks_for_batcher_receiver,
             batch_sender,
             l1_sender_handle,
-            tree_ready_block_receiver,
             state_handle.clone(),
-            MerkleTree::new(tree_wrapper.clone()).expect("cannot init MerkleTreeReader"),
+            persistent_tree,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
         );

@@ -1,19 +1,24 @@
 use crate::{
     leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
-    Database, HashTree, MerkleTree, TreeParams,
+    Database, DefaultTreeParams, HashTree, MerkleTree, TreeParams,
 };
 use alloy::primitives::{FixedBytes, B256};
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system::run::{ReadStorage, ReadStorageTree, SimpleReadStorageTree};
 
-pub struct MerkleTreeVersion<DB: Database, P: TreeParams> {
-    pub tree: MerkleTree<DB, P>,
-    pub block: u64,
+pub struct MerkleTreeVersion<DB: Database, P: TreeParams = DefaultTreeParams> {
+    pub(crate) tree: MerkleTree<DB, P>,
+    pub(crate) block: u64,
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
+    pub fn root_info(&self) -> Result<(B256, u64), anyhow::Error> {
+        // We know that the root exists, as some version was loaded into the tree already.
+        self.tree.root_info(self.block).transpose().unwrap()
+    }
+
     fn traverse_to_leaf(&mut self, tree_index: u64) -> Option<Leaf> {
         let mut current_node = self
             .tree
