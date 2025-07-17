@@ -47,7 +47,11 @@ pub trait EthApi {
 
     /// Returns information about a block by hash.
     #[method(name = "getBlockByHash")]
-    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<Block<ZkEnvelope>>>;
+    async fn block_by_hash(
+        &self,
+        hash: B256,
+        full: bool,
+    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>>;
 
     /// Returns information about a block by number.
     #[method(name = "getBlockByNumber")]
@@ -55,7 +59,7 @@ pub trait EthApi {
         &self,
         number: BlockNumberOrTag,
         full: bool,
-    ) -> RpcResult<Option<Block<ZkEnvelope>>>;
+    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>>;
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
     #[method(name = "getBlockTransactionCountByHash")]

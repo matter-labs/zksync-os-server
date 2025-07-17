@@ -83,8 +83,10 @@ impl<R: ApiRepository> EthNamespace<R> {
     fn block_by_id_impl(
         &self,
         block_id: Option<BlockId>,
+        // `full=false` means that the returned block will contain a list of transaction hashes.
+        // `full=true` means that the returned block will contain a list of transactions (in RPC representation).
         full: bool,
-    ) -> EthResult<Option<Block<ZkEnvelope>>> {
+    ) -> EthResult<Option<Block<Transaction<ZkEnvelope>>>> {
         let block_id = block_id.unwrap_or_default();
         let Some(block) = self.repository.get_block_by_id(block_id)? else {
             return Ok(None);
@@ -96,10 +98,8 @@ impl<R: ApiRepository> EthNamespace<R> {
                 .transactions
                 .into_iter()
                 .map(|tx_hash| {
-                    self.repository
-                        .get_transaction(tx_hash)?
+                    self.transaction_by_hash_impl(tx_hash)?
                         .ok_or(EthError::BlockNotFound(block_id))
-                        .map(|tx| tx.into_envelope())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Some(Block::new(
@@ -396,7 +396,11 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         Ok(Some(U64::from(self.chain_id)))
     }
 
-    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<Block<ZkEnvelope>>> {
+    async fn block_by_hash(
+        &self,
+        hash: B256,
+        full: bool,
+    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>> {
         self.block_by_id_impl(Some(hash.into()), full)
             .to_rpc_result()
     }
@@ -405,7 +409,7 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         &self,
         number: BlockNumberOrTag,
         full: bool,
-    ) -> RpcResult<Option<Block<ZkEnvelope>>> {
+    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>> {
         self.block_by_id_impl(Some(number.into()), full)
             .to_rpc_result()
     }
