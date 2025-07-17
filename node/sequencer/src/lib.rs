@@ -29,7 +29,7 @@ use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
     execution::{
-        block_executor::execute_block, block_transactions_provider::BlockTransactionsProvider,
+        block_executor::execute_block, block_transactions_provider::CommandBlockContextProvider,
     },
     model::{BlockCommand, ReplayRecord},
 };
@@ -81,7 +81,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
-    mut block_transaction_provider: BlockTransactionsProvider,
+    mut command_block_context_provider: CommandBlockContextProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
     // todo: do it outside - as one of the sinks (only needed in API)
@@ -108,8 +108,7 @@ pub async fn run_sequencer_actor(
         );
         let mut stage_started_at = Instant::now();
 
-        // note: block_transaction_provider has internal mutable state: `last_processed_l1_command`
-        let prepared_cmd = block_transaction_provider.process_command(cmd)?;
+        let prepared_cmd = command_block_context_provider.process_command(cmd)?;
 
         tracing::info!(
             block_number = bn,
@@ -164,7 +163,7 @@ pub async fn run_sequencer_actor(
         stage_started_at = Instant::now();
 
         // TODO: would updating mempool in parallel with state make sense?
-        block_transaction_provider.on_canonical_state_change(&block_output, &replay_record);
+        command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
 
         tracing::info!(
             block_number = bn,
@@ -353,7 +352,7 @@ pub async fn run(
         .as_ref()
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_default(); // TODO: take into account genesis block hash.
-    let tx_stream_provider = BlockTransactionsProvider::new(
+    let command_block_context_provider = CommandBlockContextProvider::new(
         next_l1_priority_id,
         l1_mempool.clone(),
         l2_mempool.clone(),
@@ -484,7 +483,7 @@ pub async fn run(
             first_block_to_execute,
             blocks_for_batcher_sender,
             tree_sender,
-            tx_stream_provider,
+            command_block_context_provider,
             state_handle.clone(),
             block_replay_storage.clone(),
             repositories.clone(),
