@@ -22,7 +22,7 @@ pub async fn execute_block(
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
-    let state_view = state.state_view_at_block(ctx.block_number)?;
+    let state_view = state.state_view_at_block(ctx.block_number - 1)?;
     let mut runner = VmWrapper::new(ctx, state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();

@@ -80,14 +80,14 @@ impl BytecodeRepository {
         }
     }
 
-    /// Read the bytecode for given hash as of `block`.
+    /// Read the bytecode for given hash as of `block` (inclusive).
     ///
-    /// Scans per-block snapshots from `block - 1` down to `base_block + 1`. If none contains `addr`,
+    /// Scans per-block snapshots from `block` down to `base_block + 1`. If none contains `addr`,
     /// falls back to `base_state` at `base_block`. Returns `None` if still not found.
     pub fn get_at_block(&self, block: u64, hash: &B256) -> Option<Vec<u8>> {
         let base = self.base_block.load(Ordering::Relaxed);
         // Scan diffs newest-first
-        for bn in (base + 1..block).rev() {
+        for bn in (base + 1..=block).rev() {
             if let Some(diff_arc) = self.diffs.get(&bn) {
                 if let Some(bytecode) = diff_arc.get(hash) {
                     return Some(bytecode.clone());
