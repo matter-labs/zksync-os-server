@@ -9228,7 +9228,7 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "vise",
  "zk_ee",
- "zksync_storage 28.9.0-non-semver-compat",
+ "zksync_storage",
 ]
 
 [[package]]
@@ -9280,7 +9280,7 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_merkle_tree",
  "zksync_os_types",
- "zksync_storage 28.1.0-non-semver-compat",
+ "zksync_storage",
 ]
 
 [[package]]
@@ -9296,7 +9296,7 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_mempool",
  "zksync_os_types",
- "zksync_storage 28.1.0-non-semver-compat",
+ "zksync_storage",
 ]
 
 [[package]]
@@ -9336,7 +9336,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.19",
  "vise",
- "zksync_storage 28.1.0-non-semver-compat",
+ "zksync_storage",
 ]
 
 [[package]]
@@ -9399,14 +9399,14 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "vise",
  "zk_ee",
+ "zksync_os_checkpoint_state",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
  "zksync_os_rpc_api",
- "zksync_os_state",
  "zksync_os_types",
- "zksync_storage 28.1.0-non-semver-compat",
+ "zksync_storage",
  "zksync_vlog",
 ]
 
@@ -9424,7 +9424,7 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "vise",
  "zk_ee",
- "zksync_storage 28.1.0-non-semver-compat",
+ "zksync_storage",
 ]
 
 [[package]]
@@ -9435,20 +9435,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.12",
  "zksync_os_contract_interface",
-]
-
-[[package]]
-name = "zksync_storage"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "400244889929450d4559a05dd5c9ac5af081b74527bcf1848f40cbfee4a22df1"
-dependencies = [
- "num_cpus",
- "once_cell",
- "rocksdb",
- "thread_local",
- "tracing",
- "vise",
 ]
 
 [[package]]
