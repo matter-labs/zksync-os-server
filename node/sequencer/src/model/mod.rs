@@ -17,11 +17,19 @@ type L1TxSerialId = u64;
 #[derive(Clone, Debug)]
 pub enum BlockCommand {
     /// Replay a block from the WAL.
-    Replay(ReplayRecord),
+    Replay(Box<ReplayRecord>),
     /// Produce a new block from the mempool.
     /// Second argument - local seal criteria - target block time and max transaction number
     /// (Avoid container struct for now)
-    Produce(BlockContext, (Duration, usize)),
+    Produce(ProduceCommand),
+}
+
+/// Command to produce a new block.
+#[derive(Clone, Debug)]
+pub struct ProduceCommand {
+    pub block_number: u64,
+    pub block_time: Duration,
+    pub max_transactions_in_block: usize,
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
@@ -112,7 +120,7 @@ impl BlockCommand {
     pub fn block_number(&self) -> u64 {
         match self {
             BlockCommand::Replay(record) => record.block_context.block_number,
-            BlockCommand::Produce(context, _) => context.block_number,
+            BlockCommand::Produce(command) => command.block_number,
         }
     }
 }
@@ -127,11 +135,7 @@ impl Display for BlockCommand {
                 record.transactions.len(),
                 record.starting_l1_priority_id,
             ),
-            BlockCommand::Produce(context, duration) => write!(
-                f,
-                "Produce block {} target block properties: {:?}",
-                context.block_number, duration
-            ),
+            BlockCommand::Produce(command) => write!(f, "Produce block: {:?}", command),
         }
     }
 }

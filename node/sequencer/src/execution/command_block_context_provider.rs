@@ -1,16 +1,20 @@
 use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use crate::reth_state::ZkClient;
+use crate::CHAIN_ID;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash};
 use futures::StreamExt;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
+use ruint::aliases::U256;
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 use zk_ee::common_structs::PreimageType;
+use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
 };
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, DynL1Pool, L2TransactionPool, PoolUpdateKind, RethPool,
     RethTransactionPoolExt,
@@ -20,29 +24,32 @@ use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction};
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
 ///
-///  * Tracks L1 priority ID.
+///  * Tracks L1 priority ID and 256 previous block hashes.
 ///  * Combines the L1 and L2 transactions
 ///  * Cross-checks L1 transactions in Replay blocks against L1 (important for ENs) todo: not implemented yet
 ///
 /// Note: unlike other components, this one doesn't tolerate replaying blocks -
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
-pub struct BlockTransactionsProvider {
+pub struct CommandBlockContextProvider {
     next_l1_priority_id: u64,
     l1_mempool: DynL1Pool,
     l2_mempool: RethPool<ZkClient>,
+    block_hashes_for_next_block: BlockHashes,
 }
 
-impl BlockTransactionsProvider {
+impl CommandBlockContextProvider {
     pub fn new(
         next_l1_priority_id: u64,
         l1_mempool: DynL1Pool,
         l2_mempool: RethPool<ZkClient>,
+        block_hashes_for_next_block: BlockHashes,
     ) -> Self {
         Self {
             next_l1_priority_id,
             l1_mempool,
             l2_mempool,
+            block_hashes_for_next_block,
         }
     }
 
@@ -54,7 +61,7 @@ impl BlockTransactionsProvider {
         //  it's not clear whether we want to add it only to Replay or also in Produce
 
         match block_command {
-            BlockCommand::Produce(block_context, (deadline, limit)) => {
+            BlockCommand::Produce(produce_command) => {
                 // Materialize L1 transactions from mempool to Vec<L1Transaction>
                 let mut l1_transactions = Vec::new();
 
@@ -84,25 +91,37 @@ impl BlockTransactionsProvider {
                     .l2_mempool
                     .best_l2_transactions()
                     .map(ZkTransaction::from);
+                let gas_limit = 100_000_000;
+                let timestamp = (millis_since_epoch() / 1000) as u64;
+                let block_context = BatchContext {
+                    eip1559_basefee: U256::from(1000),
+                    native_price: U256::from(1),
+                    gas_per_pubdata: Default::default(),
+                    block_number: produce_command.block_number,
+                    timestamp,
+                    chain_id: CHAIN_ID,
+                    gas_limit,
+                    coinbase: Default::default(),
+                    block_hashes: self.block_hashes_for_next_block,
+                };
                 Ok(PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(l1_stream.chain(l2_stream)),
-                    seal_policy: SealPolicy::Decide(deadline, limit),
+                    seal_policy: SealPolicy::Decide(
+                        produce_command.block_time,
+                        produce_command.max_transactions_in_block,
+                    ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
                     starting_l1_priority_id,
                 })
             }
-            BlockCommand::Replay(ReplayRecord {
-                block_context,
-                starting_l1_priority_id,
-                transactions,
-            }) => Ok(PreparedBlockCommand {
-                block_context,
+            BlockCommand::Replay(record) => Ok(PreparedBlockCommand {
+                block_context: record.block_context,
                 seal_policy: SealPolicy::UntilExhausted,
                 invalid_tx_policy: InvalidTxPolicy::Abort,
-                tx_source: Box::pin(futures::stream::iter(transactions)),
-                starting_l1_priority_id,
+                tx_source: Box::pin(futures::stream::iter(record.transactions)),
+                starting_l1_priority_id: record.starting_l1_priority_id,
                 metrics_label: "replay",
             }),
         }
@@ -124,6 +143,18 @@ impl BlockTransactionsProvider {
                 }
             }
         }
+        // Advance `block_hashes_for_next_block`.
+        let last_block_hash = block_output.header.hash();
+        self.block_hashes_for_next_block = BlockHashes(
+            self.block_hashes_for_next_block
+                .0
+                .into_iter()
+                .skip(1)
+                .chain([U256::from_be_bytes(last_block_hash)])
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+        );
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
         //       so far it looks like below is sufficient
@@ -199,4 +230,11 @@ pub fn extract_changed_accounts(block_output: &BatchOutput) -> Vec<ChangedAccoun
     }
 
     result
+}
+
+pub fn millis_since_epoch() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Incorrect system time")
+        .as_millis()
 }

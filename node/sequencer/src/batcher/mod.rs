@@ -242,6 +242,7 @@ fn worker_loop(
 
             let commit_batch_info = CommitBatchInfo::new(
                 batch_output,
+                &replay_record.block_context,
                 &replay_record.transactions,
                 tree_output,
                 CHAIN_ID,
