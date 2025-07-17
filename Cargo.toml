@@ -80,7 +80,7 @@ backon = "1.5.1"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 #zksync_storage = "28.1.0-non-semver-compat"
-zksync_storage = { git = "https://github.com/matter-labs/zksync-era.git", branch = "bf-checkpoints", package = "zksync_storage" }
+zksync_storage = { git = "https://github.com/matter-labs/zksync-era.git", branch = "bf-checkpoint-28", package = "zksync_storage" }
 zksync_mini_merkle_tree = "28.1.0-non-semver-compat"
 
 # Reth dependencies

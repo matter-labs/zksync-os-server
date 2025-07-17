@@ -1790,7 +1790,7 @@ dependencies = [
  "bitflags 2.9.1",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -4270,7 +4270,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -9439,8 +9439,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_storage"
-version = "28.9.0-non-semver-compat"
-source = "git+https://github.com/matter-labs/zksync-era.git?branch=bf-checkpoints#52d58d1f000d7aefdd3d7ef930ae18aa44de0738"
+version = "28.1.0-non-semver-compat"
+source = "git+https://github.com/matter-labs/zksync-era.git?branch=bf-checkpoint-28#afa8b0b49ab1e1dec175d60c50624718cf2b13c2"
 dependencies = [
  "num_cpus",
  "once_cell",
