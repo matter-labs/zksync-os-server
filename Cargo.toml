@@ -48,8 +48,8 @@ zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", b
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.3-new-sequencer"}
 zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.3-new-sequencer", features = ["evm-compatibility"] }
 
-tokio = "1"
-tokio-stream = "0.1"
+tokio = "1.45.1"
+tokio-stream = "0.1.17"
 ruint = { version = "1.12", default-features = false }
 dashmap = "6.1.0"
 itertools = "0.14.0"

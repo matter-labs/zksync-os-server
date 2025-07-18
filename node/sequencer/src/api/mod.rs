@@ -2,6 +2,7 @@ mod call_fees;
 mod eth_call_handler;
 mod eth_filter_impl;
 mod eth_impl;
+mod eth_pubsub_impl;
 mod metrics;
 mod result;
 mod tx_handler;
@@ -9,6 +10,7 @@ mod types;
 
 use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
+use crate::api::eth_pubsub_impl::EthPubsubNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::repositories::RepositoryManager;
@@ -19,6 +21,7 @@ use jsonrpsee::RpcModule;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_state::StateHandle;
 
 // stripped-down version of `api_server/src/web3/mod.rs`
@@ -43,11 +46,14 @@ pub async fn run_jsonrpsee_server(
         )
         .into_rpc(),
     )?;
-    rpc.merge(EthFilterNamespace::new(config.clone(), repository_manager, mempool).into_rpc())?;
+    rpc.merge(
+        EthFilterNamespace::new(config.clone(), repository_manager.clone(), mempool.clone())
+            .into_rpc(),
+    )?;
+    rpc.merge(EthPubsubNamespace::new(repository_manager, mempool).into_rpc())?;
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
-        .http_only()
         .build();
     let server_builder = ServerBuilder::default().set_config(server_config);
     // .set_http_middleware(middleware)
