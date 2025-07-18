@@ -14,22 +14,28 @@ pub mod block_receipt_repository;
 pub mod bytecode_property_respository;
 mod db;
 mod metrics;
+pub mod notifications;
 pub mod transaction_receipt_repository;
 
 use crate::repositories::account_property_repository::extract_account_properties;
 use crate::repositories::bytecode_property_respository::BytecodeRepository;
 use crate::repositories::db::{RepositoryCF, RepositoryDB};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
+use crate::repositories::notifications::{BlockNotification, SubscribeToBlocks};
 use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
 pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::{BlockHash, Bloom, Sealed, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::path::PathBuf;
-use tokio::sync::watch;
+use std::sync::Arc;
+use tokio::sync::{broadcast, watch};
 pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_types::ZkTransaction;
 use zksync_storage::RocksDB;
+
+/// Size of the broadcast channel used to notify about new blocks.
+const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;
 
 /// Manages repositories that store node data required for RPC but not for VM execution.
 ///
@@ -52,6 +58,7 @@ pub struct RepositoryManager {
     db: RepositoryDB,
     latest_block: watch::Sender<u64>,
     max_blocks_in_memory: u64,
+    block_sender: broadcast::Sender<BlockNotification>,
 }
 
 impl RepositoryManager {
@@ -59,6 +66,7 @@ impl RepositoryManager {
         let db = RocksDB::<RepositoryCF>::new(&db_path).expect("Failed to open db");
         let db = RepositoryDB::new(db);
         let db_block_number = db.latest_block_number();
+        let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
         RepositoryManager {
             account_property_repository: AccountPropertyRepository::new(blocks_to_retain),
@@ -68,6 +76,7 @@ impl RepositoryManager {
             db,
             latest_block: watch::channel(db_block_number).0,
             max_blocks_in_memory: blocks_to_retain as u64,
+            block_sender,
         }
     }
 
@@ -124,13 +133,17 @@ impl RepositoryManager {
         let mut log_index = 0;
         let mut block_bloom = Bloom::default();
         let mut stored_txs = Vec::new();
+        let mut notification_transactions = Vec::new();
         let hash = BlockHash::from(block_output.header.hash());
         let sealed_block_output = Sealed::new_unchecked(block_output, hash);
         for (tx_index, tx) in transactions.into_iter().enumerate() {
             let tx_hash = *tx.hash();
             let stored_tx = transaction_to_api_data(&sealed_block_output, tx_index, log_index, tx);
+            notification_transactions.push(stored_tx.clone());
             log_index += stored_tx.receipt.logs().len() as u64;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+            // todo: consider saving `Arc<StoredTxData>` instead to share them with `BlockNotification` below
+            //       we clone stored transactions in every fetch method anyway so little reason not to `Arc` them
             stored_txs.push((tx_hash, stored_tx));
         }
         let (mut block_output, hash) = sealed_block_output.into_parts();
@@ -142,6 +155,16 @@ impl RepositoryManager {
         self.block_receipt_repository
             .insert(&block_header, tx_hashes);
         self.latest_block.send_replace(block_number);
+
+        let notification = BlockNotification {
+            header: Arc::new(
+                block_receipt_repository::alloy_header(&block_header).seal(block_header.hash()),
+            ),
+            transactions: Arc::new(notification_transactions),
+        };
+        // Ignore error if there are no subscribed receivers
+        let _ = self.block_sender.send(notification);
+
         latency.observe();
     }
 
@@ -171,5 +194,11 @@ impl RepositoryManager {
                 .remove_by_hashes(&block.body.transactions);
             tracing::info!(number, "Persisted receipts");
         }
+    }
+}
+
+impl SubscribeToBlocks for RepositoryManager {
+    fn subscribe_to_blocks(&self) -> broadcast::Receiver<BlockNotification> {
+        self.block_sender.subscribe()
     }
 }

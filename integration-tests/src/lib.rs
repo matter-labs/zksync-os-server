@@ -1,7 +1,7 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{Provider, ProviderBuilder, WalletProvider, WsConnect};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
@@ -24,6 +24,7 @@ const L1_CHAIN_ID: u64 = 9;
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,
+    pub l2_ws_provider: EthDynProvider,
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -66,6 +67,7 @@ impl Tester {
 
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let l2_address = format!("http://localhost:{}", l2_locked_port.port);
+        let l2_ws_address = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
@@ -129,6 +131,12 @@ impl Tester {
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
+            l2_ws_provider: EthDynProvider::new(
+                ProviderBuilder::new()
+                    .wallet(l2_wallet.clone())
+                    .connect_ws(WsConnect::new(l2_ws_address))
+                    .await?,
+            ),
             l1_wallet,
             l2_wallet,
             stop_sender,

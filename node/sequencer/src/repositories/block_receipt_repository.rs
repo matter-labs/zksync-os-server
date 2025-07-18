@@ -63,7 +63,7 @@ impl BlockReceiptRepository {
     }
 }
 
-fn alloy_header(
+pub fn alloy_header(
     header: &zk_os_forward_system::run::output::BlockHeader,
 ) -> alloy::consensus::Header {
     alloy::consensus::Header {
