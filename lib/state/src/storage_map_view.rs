@@ -6,7 +6,7 @@ use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::ReadStorage;
 
 /// Storage View valid for a specific block (`block`)
-/// It represents the state for the beginning of block `block`.
+/// It represents the state immediately after block `block`.
 #[derive(Debug, Clone)]
 pub struct StorageMapView {
     /// Block number for which this view is valid.
@@ -23,13 +23,13 @@ pub struct StorageMapView {
 }
 
 impl ReadStorage for StorageMapView {
-    /// Reads `key` by scanning block diffs from `block - 1` down to `base_block + 1`,
+    /// Reads `key` by scanning block diffs from `block` down to `base_block + 1`,
     /// then falling back to the persistence
     fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
         let latency_diffs = STORAGE_VIEW_METRICS.access[&"diff"].start();
         let latency_total = STORAGE_VIEW_METRICS.access[&"total"].start();
 
-        for bn in (self.base_block + 1..self.block).rev() {
+        for bn in (self.base_block + 1..=self.block).rev() {
             if let Some(diff) = self.diffs.get(&bn) {
                 let res = diff.map.get(&key);
                 if let Some(value) = res {
