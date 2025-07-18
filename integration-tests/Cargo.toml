@@ -17,7 +17,7 @@ zksync_os_sequencer.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_types.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc"] }
+alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 fs2.workspace = true
 tokio.workspace = true
