@@ -133,13 +133,14 @@ impl RepositoryManager {
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
             stored_txs.push((tx_hash, stored_tx));
         }
-        let mut block_output = sealed_block_output.unseal();
+        let (mut block_output, hash) = sealed_block_output.into_parts();
         block_output.header.logs_bloom = block_bloom.into_array();
+        let block_header = Sealed::new_unchecked(block_output.header, hash);
 
         // Add data to repositories.
         self.transaction_receipt_repository.insert(stored_txs);
         self.block_receipt_repository
-            .insert(&block_output.header, tx_hashes);
+            .insert(&block_header, tx_hashes);
         self.latest_block.send_replace(block_number);
         latency.observe();
     }

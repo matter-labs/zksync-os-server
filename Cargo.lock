@@ -1684,7 +1684,7 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "basic_system",
@@ -1702,7 +1702,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -2347,7 +2347,7 @@ checksum = "43da5946c66ffcc7745f48db692ffbb10a83bfe0afd96235c5c2a4fb23994929"
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -2429,7 +2429,7 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 
 [[package]]
 name = "darling"
@@ -2792,7 +2792,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2842,7 +2842,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -3017,7 +3017,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "basic_bootloader",
@@ -4552,7 +4552,7 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 
 [[package]]
 name = "modular-bitfield"
@@ -4981,7 +4981,7 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "ringbuffer",
  "risc_v_simulator",
@@ -6684,7 +6684,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6750,7 +6750,7 @@ dependencies = [
  "security-framework 3.2.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7507,7 +7507,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -7685,7 +7685,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -7711,7 +7711,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9151,7 +9151,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "arrayvec",
  "bitflags 2.9.1",
@@ -9304,8 +9304,10 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "basic_system",
  "blake2",
  "clap",
+ "forward_system",
  "insta",
  "leb128",
  "once_cell",
@@ -9319,6 +9321,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.19",
  "vise",
+ "zk_ee",
  "zksync_storage",
 ]
 
@@ -9334,7 +9337,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#23754866e24acf93c01f1e6a7ca80b95bcba3086"
+source = "git+https://github.com/matter-labs/zksync-os?branch=rb-0.0.3-new-sequencer#44aedb47402adac50ca599d432bcac6272afdf68"
 dependencies = [
  "cycle_marker",
  "execution_utils",
@@ -9378,6 +9381,7 @@ dependencies = [
  "smart-config",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber 0.3.19",
  "vise",

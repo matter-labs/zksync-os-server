@@ -9,7 +9,9 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BatchOutput;
-use zksync_os_merkle_tree::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};
+use zksync_os_merkle_tree::{
+    MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
+};
 use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
@@ -38,8 +40,8 @@ impl TreeManager {
     pub fn new(
         tree_wrapper: RocksDBWrapper,
         block_receiver: Receiver<BatchOutput>,
-        latest_block_sender: watch::Sender<u64>,
-    ) -> TreeManager {
+    ) -> (TreeManager, MerkleTreeForReading<RocksDBWrapper>) {
+        let (latest_block_sender, latest_block_receiver) = watch::channel(0u64);
         let mut tree = MerkleTree::new(tree_wrapper).unwrap();
 
         let version = tree
@@ -52,7 +54,7 @@ impl TreeManager {
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
         let tree_manager = Self {
-            tree: Arc::new(RwLock::new(tree)),
+            tree: Arc::new(RwLock::new(tree.clone())),
             block_receiver,
             latest_block_sender,
         };
@@ -65,7 +67,10 @@ impl TreeManager {
             )
             .expect("cannot send last processed block to watcher");
 
-        tree_manager
+        (
+            tree_manager,
+            MerkleTreeForReading::new(tree, latest_block_receiver),
+        )
     }
 
     pub fn last_processed_block(&self) -> anyhow::Result<u64> {
@@ -122,6 +127,7 @@ impl TreeManager {
 
                     tracing::info!(
                         block_number = block_number,
+                        next_free_slot = output.leaf_count,
                         "Processed {} entries in tree, output: {:?}",
                         count,
                         output

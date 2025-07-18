@@ -7,9 +7,9 @@ use std::fmt;
 pub use self::{
     errors::DeserializeError,
     hasher::{BatchTreeProof, HashTree, TreeOperation},
-    reader::MerkleTreeReader,
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
     types::{BatchOutput, TreeEntry},
+    with_version::{fixed_bytes_to_bytes32, MerkleTreeForReading, MerkleTreeVersion},
 };
 use crate::blake2::Blake2Hasher;
 use crate::{
@@ -24,18 +24,18 @@ mod consistency;
 mod errors;
 mod hasher;
 mod metrics;
-mod reader;
 mod storage;
 #[cfg(test)]
 mod tests;
 mod types;
+mod with_version;
 
 /// Unstable types that should not be used unless you know what you're doing (e.g., implementing
 /// `Database` trait for a custom type). There are no guarantees whatsoever that APIs / structure of
 /// these types will remain stable.
 #[doc(hidden)]
 pub mod unstable {
-    pub use crate::types::{KeyLookup, Leaf, Manifest, Node, NodeKey, RawNode, Root};
+    pub use crate::types::{KeyLookup, Leaf, Manifest, Node, NodeKey, Root};
 }
 
 /// Marker trait for tree parameters.
@@ -341,5 +341,17 @@ impl<DB: Database, P: TreeParams> MerkleTree<Patched<DB>, P> {
     /// Flushes changes to the underlying storage.
     pub fn flush(&mut self) -> anyhow::Result<()> {
         self.db.flush()
+    }
+}
+
+impl<DB: Database + Clone, P: TreeParams> Clone for MerkleTree<DB, P>
+where
+    P::Hasher: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            hasher: self.hasher.clone(),
+        }
     }
 }
