@@ -142,6 +142,8 @@ impl RepositoryManager {
             notification_transactions.push(stored_tx.clone());
             log_index += stored_tx.receipt.logs().len() as u64;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+            // todo: consider saving `Arc<StoredTxData>` instead to share them with `BlockNotification` below
+            //       we clone stored transactions in every fetch method anyway so little reason not to `Arc` them
             stored_txs.push((tx_hash, stored_tx));
         }
         let (mut block_output, hash) = sealed_block_output.into_parts();
