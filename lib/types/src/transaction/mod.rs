@@ -10,7 +10,7 @@ use alloy::consensus::crypto::RecoveryError;
 use alloy::consensus::transaction::{Recovered, SignerRecoverable};
 use alloy::consensus::{Transaction, TransactionEnvelope};
 use alloy::eips::Encodable2718;
-use alloy::primitives::{Address, B256};
+use alloy::primitives::{Address, TxNonce, B256};
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
@@ -64,6 +64,10 @@ impl ZkTransaction {
         self.inner.inner()
     }
 
+    pub fn into_envelope(self) -> ZkEnvelope {
+        self.inner.into_inner()
+    }
+
     pub fn hash(&self) -> &B256 {
         match self.envelope() {
             ZkEnvelope::L1(l1_tx) => l1_tx.hash(),
@@ -73,6 +77,10 @@ impl ZkTransaction {
 
     pub fn signer(&self) -> Address {
         self.inner.signer()
+    }
+
+    pub fn nonce(&self) -> TxNonce {
+        self.inner.nonce()
     }
 
     pub fn to(&self) -> Option<Address> {

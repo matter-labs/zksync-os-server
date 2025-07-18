@@ -1,13 +1,14 @@
+use crate::repositories::api_interface::RepositoryBlock;
 use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
 use alloy::eips::{Decodable2718, Encodable2718};
-use alloy::primitives::TxHash;
+use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 use alloy::rlp::{Decodable, Encodable};
 use tokio::sync::watch;
 use zksync_os_types::{L2Transaction, ZkEnvelope};
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
-use zksync_storage::RocksDB;
+use zksync_storage::{rocksdb, RocksDB};
 
 #[derive(Clone, Copy, Debug)]
 pub enum RepositoryCF {
@@ -93,36 +94,74 @@ impl RepositoryDB {
             .unwrap()
     }
 
-    pub fn get_block_by_number(&self, number: u64) -> Option<Block<TxHash>> {
+    pub fn get_block_by_number(&self, number: BlockNumber) -> DbResult<Option<RepositoryBlock>> {
         let block_number_bytes = number.to_be_bytes();
-        let block_hash_bytes = self
+        let Some(block_hash_bytes) = self
             .db
-            .get_cf(RepositoryCF::BlockNumberToHash, &block_number_bytes)
-            .unwrap()?;
-        let bytes = self
-            .db
-            .get_cf(RepositoryCF::BlockData, &block_hash_bytes)
-            .unwrap();
-        bytes.map(|bytes| Block::decode(&mut bytes.as_slice()).unwrap())
+            .get_cf(RepositoryCF::BlockNumberToHash, &block_number_bytes)?
+        else {
+            return Ok(None);
+        };
+        let hash = BlockHash::from(
+            <[u8; 32]>::try_from(block_hash_bytes).expect("block hash must be 32 bytes long"),
+        );
+        self.get_block_by_hash(hash)
     }
 
-    pub fn get_stored_tx_by_hash(&self, hash: TxHash) -> Option<StoredTxData> {
-        let tx_bytes = self.db.get_cf(RepositoryCF::Tx, &hash.0).unwrap()?;
-        let receipt_bytes = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0).unwrap()?;
-        let meta_bytes = self.db.get_cf(RepositoryCF::TxMeta, &hash.0).unwrap()?;
+    pub fn get_block_by_hash(&self, hash: BlockHash) -> DbResult<Option<RepositoryBlock>> {
+        let Some(bytes) = self.db.get_cf(RepositoryCF::BlockData, hash.as_slice())? else {
+            return Ok(None);
+        };
+        let block = Block::decode(&mut bytes.as_slice())?;
+        Ok(Some(RepositoryBlock::new_unchecked(block, hash)))
+    }
 
-        let tx_envelope = ZkEnvelope::decode_2718(&mut tx_bytes.as_slice()).unwrap();
+    pub fn get_stored_tx_by_hash(&self, hash: TxHash) -> DbResult<Option<StoredTxData>> {
+        let Some(tx_bytes) = self.db.get_cf(RepositoryCF::Tx, &hash.0)? else {
+            return Ok(None);
+        };
+        let Some(receipt_bytes) = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0)? else {
+            return Ok(None);
+        };
+        let Some(meta_bytes) = self.db.get_cf(RepositoryCF::TxMeta, &hash.0)? else {
+            return Ok(None);
+        };
+
+        let tx_envelope = ZkEnvelope::decode_2718(&mut tx_bytes.as_slice())?;
         let tx = match tx_envelope {
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
             ZkEnvelope::L2(l2_envelope) => {
-                let signer = l2_envelope.recover_signer().unwrap();
+                let signer = l2_envelope
+                    .recover_signer()
+                    .expect("transaction saved in DB is not EC recoverable");
                 L2Transaction::new_unchecked(l2_envelope, signer).into()
             }
         };
-        let receipt = ReceiptEnvelope::decode_2718(&mut receipt_bytes.as_slice()).unwrap();
-        let meta = TxMeta::decode(&mut meta_bytes.as_slice()).unwrap();
+        let receipt = ReceiptEnvelope::decode_2718(&mut receipt_bytes.as_slice())?;
+        let meta = TxMeta::decode(&mut meta_bytes.as_slice())?;
 
-        Some(StoredTxData { tx, receipt, meta })
+        Ok(Some(StoredTxData { tx, receipt, meta }))
+    }
+
+    pub fn get_transaction_hash_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: TxNonce,
+    ) -> DbResult<Option<TxHash>> {
+        let mut sender_and_nonce_key = Vec::with_capacity(20 + 8);
+        sender_and_nonce_key.extend_from_slice(sender.as_slice());
+        sender_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());
+        let Some(tx_hash_bytes) = self.db.get_cf(
+            RepositoryCF::InitiatorAndNonceToHash,
+            sender_and_nonce_key.as_slice(),
+        )?
+        else {
+            return Ok(None);
+        };
+        let tx_hash = TxHash::from(
+            <[u8; 32]>::try_from(tx_hash_bytes).expect("tx hash must be 32 bytes long"),
+        );
+        Ok(Some(tx_hash))
     }
 
     pub fn write_block(&self, block: &Block<TxHash>, txs: &[StoredTxData]) {
@@ -178,4 +217,18 @@ impl RepositoryDB {
             tx_hash.as_slice(),
         );
     }
+}
+
+/// DB result type.
+pub type DbResult<Ok> = Result<Ok, DbError>;
+
+/// Error variants thrown by various repositories.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum DbError {
+    #[error(transparent)]
+    Rocksdb(#[from] rocksdb::Error),
+    #[error(transparent)]
+    Eip2718(#[from] alloy::eips::eip2718::Eip2718Error),
+    #[error(transparent)]
+    Rlp(#[from] alloy::rlp::Error),
 }

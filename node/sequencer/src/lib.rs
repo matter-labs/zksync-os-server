@@ -327,7 +327,7 @@ pub async fn run(
         storage_map_block = storage_map_block,
         preimages_block = preimages_block,
         wal_block = wal_block,
-        canonized_block = repositories.get_canonized_block(),
+        canonized_block = repositories.get_latest_block(),
         tree_last_processed_block = tree_last_processed_block,
         "▶ Storage read. Node starting with block {}",
         first_block_to_execute

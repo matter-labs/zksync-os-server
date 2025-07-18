@@ -1,13 +1,16 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/core.rs
 
+use alloy::consensus::Account;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    Block, BlockOverrides, EIP1186AccountProofResponse, FeeHistory, Header, Index, SyncStatus,
-    Transaction, TransactionReceipt, TransactionRequest,
+    AccessListResult, AccountInfo, Block, BlockOverrides, Bundle, EIP1186AccountProofResponse,
+    EthCallResponse, FeeHistory, Header, Index, StateContext, SyncStatus, Transaction,
+    TransactionReceipt, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
@@ -44,7 +47,11 @@ pub trait EthApi {
 
     /// Returns information about a block by hash.
     #[method(name = "getBlockByHash")]
-    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<Block>>;
+    async fn block_by_hash(
+        &self,
+        hash: B256,
+        full: bool,
+    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>>;
 
     /// Returns information about a block by number.
     #[method(name = "getBlockByNumber")]
@@ -52,7 +59,7 @@ pub trait EthApi {
         &self,
         number: BlockNumberOrTag,
         full: bool,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>>;
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
     #[method(name = "getBlockTransactionCountByHash")]
@@ -121,7 +128,7 @@ pub trait EthApi {
         &self,
         hash: B256,
         index: Index,
-    ) -> RpcResult<Option<Transaction>>;
+    ) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
 
     /// Returns information about a raw transaction by block number and transaction index
     /// position.
@@ -138,7 +145,7 @@ pub trait EthApi {
         &self,
         number: BlockNumberOrTag,
         index: Index,
-    ) -> RpcResult<Option<Transaction>>;
+    ) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
 
     /// Returns information about a transaction by sender and nonce.
     #[method(name = "getTransactionBySenderAndNonce")]
@@ -146,7 +153,7 @@ pub trait EthApi {
         &self,
         address: Address,
         nonce: U64,
-    ) -> RpcResult<Option<Transaction>>;
+    ) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
 
     /// Returns the receipt of a transaction by transaction hash.
     #[method(name = "getTransactionReceipt")]
@@ -154,15 +161,15 @@ pub trait EthApi {
 
     /// Returns the balance of the account of given address.
     #[method(name = "getBalance")]
-    async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256>;
+    async fn balance(&self, address: Address, block_id: Option<BlockId>) -> RpcResult<U256>;
 
     /// Returns the value from a storage position at a given address
     #[method(name = "getStorageAt")]
     async fn storage_at(
         &self,
         address: Address,
-        index: JsonStorageKey,
-        block_number: Option<BlockId>,
+        key: JsonStorageKey,
+        block_id: Option<BlockId>,
     ) -> RpcResult<B256>;
 
     /// Returns the number of transactions sent from an address at given block number.
@@ -170,29 +177,29 @@ pub trait EthApi {
     async fn transaction_count(
         &self,
         address: Address,
-        block_number: Option<BlockId>,
+        block_id: Option<BlockId>,
     ) -> RpcResult<U256>;
 
     /// Returns code at a given address at given block number.
     #[method(name = "getCode")]
-    async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<Bytes>;
+    async fn get_code(&self, address: Address, block_id: Option<BlockId>) -> RpcResult<Bytes>;
 
     /// Returns the block's header at given number.
     #[method(name = "getHeaderByNumber")]
-    async fn header_by_number(&self, hash: BlockNumberOrTag) -> RpcResult<Option<Header>>;
+    async fn header_by_number(&self, block_number: BlockNumberOrTag) -> RpcResult<Option<Header>>;
 
     /// Returns the block's header at given hash.
     #[method(name = "getHeaderByHash")]
     async fn header_by_hash(&self, hash: B256) -> RpcResult<Option<Header>>;
 
-    // /// `eth_simulateV1` executes an arbitrary number of transactions on top of the requested state.
-    // /// The transactions are packed into individual blocks. Overrides can be provided.
-    // #[method(name = "simulateV1")]
-    // async fn simulate_v1(
-    //     &self,
-    //     opts: SimulatePayload,
-    //     block_number: Option<BlockId>,
-    // ) -> RpcResult<Vec<SimulatedBlock<B>>>;
+    /// `eth_simulateV1` executes an arbitrary number of transactions on top of the requested state.
+    /// The transactions are packed into individual blocks. Overrides can be provided.
+    #[method(name = "simulateV1")]
+    async fn simulate_v1(
+        &self,
+        opts: SimulatePayload,
+        block_number: Option<BlockId>,
+    ) -> RpcResult<Vec<SimulatedBlock>>;
 
     /// Executes a new message call immediately without creating a transaction on the block chain.
     #[method(name = "call")]
@@ -204,37 +211,37 @@ pub trait EthApi {
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes>;
 
-    // /// Simulate arbitrary number of transactions at an arbitrary blockchain index, with the
-    // /// optionality of state overrides
-    // #[method(name = "callMany")]
-    // async fn call_many(
-    //     &self,
-    //     bundles: Vec<Bundle>,
-    //     state_context: Option<StateContext>,
-    //     state_override: Option<StateOverride>,
-    // ) -> RpcResult<Vec<Vec<EthCallResponse>>>;
+    /// Simulate arbitrary number of transactions at an arbitrary blockchain index, with the
+    /// optionality of state overrides
+    #[method(name = "callMany")]
+    async fn call_many(
+        &self,
+        bundles: Vec<Bundle>,
+        state_context: Option<StateContext>,
+        state_override: Option<StateOverride>,
+    ) -> RpcResult<Vec<Vec<EthCallResponse>>>;
 
-    // /// Generates an access list for a transaction.
-    // ///
-    // /// This method creates an [EIP2930](https://eips.ethereum.org/EIPS/eip-2930) type accessList based on a given Transaction.
-    // ///
-    // /// An access list contains all storage slots and addresses touched by the transaction, except
-    // /// for the sender account and the chain's precompiles.
-    // ///
-    // /// It returns list of addresses and storage keys used by the transaction, plus the gas
-    // /// consumed when the access list is added. That is, it gives you the list of addresses and
-    // /// storage keys that will be used by that transaction, plus the gas consumed if the access
-    // /// list is included. Like `eth_estimateGas`, this is an estimation; the list could change
-    // /// when the transaction is actually mined. Adding an accessList to your transaction does
-    // /// not necessary result in lower gas usage compared to a transaction without an access
-    // /// list.
-    // #[method(name = "createAccessList")]
-    // async fn create_access_list(
-    //     &self,
-    //     request: TransactionRequest,
-    //     block_number: Option<BlockId>,
-    //     state_override: Option<StateOverride>,
-    // ) -> RpcResult<AccessListResult>;
+    /// Generates an access list for a transaction.
+    ///
+    /// This method creates an [EIP2930](https://eips.ethereum.org/EIPS/eip-2930) type accessList based on a given Transaction.
+    ///
+    /// An access list contains all storage slots and addresses touched by the transaction, except
+    /// for the sender account and the chain's precompiles.
+    ///
+    /// It returns list of addresses and storage keys used by the transaction, plus the gas
+    /// consumed when the access list is added. That is, it gives you the list of addresses and
+    /// storage keys that will be used by that transaction, plus the gas consumed if the access
+    /// list is included. Like `eth_estimateGas`, this is an estimation; the list could change
+    /// when the transaction is actually mined. Adding an accessList to your transaction does
+    /// not necessary result in lower gas usage compared to a transaction without an access
+    /// list.
+    #[method(name = "createAccessList")]
+    async fn create_access_list(
+        &self,
+        request: TransactionRequest,
+        block_number: Option<BlockId>,
+        state_override: Option<StateOverride>,
+    ) -> RpcResult<AccessListResult>;
 
     /// Generates and returns an estimate of how much gas is necessary to allow the transaction to
     /// complete.
@@ -250,13 +257,9 @@ pub trait EthApi {
     #[method(name = "gasPrice")]
     async fn gas_price(&self) -> RpcResult<U256>;
 
-    // /// Returns the account details by specifying an address and a block number/tag
-    // #[method(name = "getAccount")]
-    // async fn get_account(
-    //     &self,
-    //     address: Address,
-    //     block: BlockId,
-    // ) -> RpcResult<Option<alloy_rpc_types_eth::Account>>;
+    /// Returns the account details by specifying an address and a block number/tag
+    #[method(name = "getAccount")]
+    async fn get_account(&self, address: Address, block: BlockId) -> RpcResult<Option<Account>>;
 
     /// Introduced in EIP-1559, returns suggestion for the priority for dynamic fee transactions.
     #[method(name = "maxPriorityFeePerGas")]
@@ -280,31 +283,6 @@ pub trait EthApi {
         newest_block: BlockNumberOrTag,
         reward_percentiles: Option<Vec<f64>>,
     ) -> RpcResult<FeeHistory>;
-
-    /// Returns whether the client is actively mining new blocks.
-    #[method(name = "mining")]
-    async fn is_mining(&self) -> RpcResult<bool>;
-
-    /// Returns the number of hashes per second that the node is mining with.
-    #[method(name = "hashrate")]
-    async fn hashrate(&self) -> RpcResult<U256>;
-
-    // /// Returns the hash of the current block, the seedHash, and the boundary condition to be met
-    // /// (“target”)
-    // #[method(name = "getWork")]
-    // async fn get_work(&self) -> RpcResult<Work>;
-
-    // /// Used for submitting mining hashrate.
-    // ///
-    // /// Can be used for remote miners to submit their hash rate.
-    // /// It accepts the miner hash rate and an identifier which must be unique between nodes.
-    // /// Returns `true` if the block was successfully submitted, `false` otherwise.
-    // #[method(name = "submitHashrate")]
-    // async fn submit_hashrate(&self, hashrate: U256, id: B256) -> RpcResult<bool>;
-
-    // /// Used for submitting a proof-of-work solution.
-    // #[method(name = "submitWork")]
-    // async fn submit_work(&self, nonce: B64, pow_hash: B256, mix_digest: B256) -> RpcResult<bool>;
 
     /// Sends transaction; will block waiting for signer to return the
     /// transaction hash.
@@ -339,13 +317,9 @@ pub trait EthApi {
         block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse>;
 
-    // /// Returns the account's balance, nonce, and code.
-    // ///
-    // /// This is similar to `eth_getAccount` but does not return the storage root.
-    // #[method(name = "getAccountInfo")]
-    // async fn get_account_info(
-    //     &self,
-    //     address: Address,
-    //     block: BlockId,
-    // ) -> RpcResult<alloy_rpc_types_eth::AccountInfo>;
+    /// Returns the account's balance, nonce, and code.
+    ///
+    /// This is similar to `eth_getAccount` but does not return the storage root.
+    #[method(name = "getAccountInfo")]
+    async fn get_account_info(&self, address: Address, block: BlockId) -> RpcResult<AccountInfo>;
 }
