@@ -79,7 +79,7 @@ Note: contrary to the Era sequencer, one Node = one process - regardless of the 
 * **Batcher** - optional component (configurable with `batcher_component_enabled=true/false`).
   * Turns a stream of blocks to a stream of batches (1 batch = 1 proof = 1 L1 commit)
     * Note: currently 1 block == 1 batch, multi-block batches are not implemented yet 
-  * For each batch, computes the Prover Input (runs RiscV binary (`app.bin`) and records its input as a stream of `Vec<u32>` - see `batcher/mod.rs`)
+  * For each batch, computes the Prover Input (runs RiscV binary (`server_app.bin`) and records its input as a stream of `Vec<u32>` - see `batcher/mod.rs`)
     * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!). This may be optimized later on. 
     * Process multiple batches in parallel (prover input generation takes more time than block execution)
   * Downstream:

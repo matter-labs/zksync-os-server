@@ -50,9 +50,12 @@ impl Batcher {
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../app_logging_enabled.bin")
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../server_app_logging_enabled.bin"
+            )
         } else {
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../app.bin")
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")
         };
         Self {
             block_receiver,
