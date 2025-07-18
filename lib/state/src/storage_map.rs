@@ -69,8 +69,8 @@ impl StorageMap {
         );
 
         // we cannot provide keys for block N when it's already compacted
-        // because view_at(N) should return view for the BEGINNING of block N
-        if block_number <= persistent_block_upper_bound {
+        // because view_at(N) should return view immediately after block N
+        if block_number < persistent_block_upper_bound {
             return Err(anyhow::anyhow!(
                 "Cannot create StorageView for potentially compacted block {} (potentially compacted until {}, at least until {})",
                 block_number,
@@ -79,7 +79,7 @@ impl StorageMap {
             ));
         }
 
-        if block_number > latest_block + 1 {
+        if block_number > latest_block {
             return Err(anyhow::anyhow!(
                 "Cannot create StorageView for block {} - latest known block number is {}",
                 block_number,
