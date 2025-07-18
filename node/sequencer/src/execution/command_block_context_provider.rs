@@ -2,10 +2,11 @@ use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRe
 use crate::reth_state::ZkClient;
 use crate::CHAIN_ID;
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::{Address, BlockHash};
+use alloy::primitives::{Address, BlockHash, TxHash};
 use futures::StreamExt;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
+use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -125,6 +126,10 @@ impl CommandBlockContextProvider {
                 metrics_label: "replay",
             }),
         }
+    }
+
+    pub fn remove_rejected_txs(&self, tx_hashes: Vec<TxHash>) {
+        self.l2_mempool.remove_transactions(tx_hashes);
     }
 
     pub fn on_canonical_state_change(
