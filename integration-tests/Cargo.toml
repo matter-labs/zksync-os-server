@@ -9,6 +9,7 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 publish = false
+build = "build.rs"
 
 [dependencies]
 zksync_os_l1_sender.workspace = true

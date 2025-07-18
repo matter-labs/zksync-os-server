@@ -52,9 +52,6 @@ jobs:
         ci_run /root/.foundry/bin/foundryup
         echo /root/.foundry/bin >> $GITHUB_PATH
 
-    - name: Build test-contracts
-      run: ci_run forge build --root integration-tests/test-contracts
-
     # todo: move linting for both core and integration-tests to a separate job
     - name: Run clippy
       run: ci_run cargo clippy --all-targets --all-features -p zksync_os_integration_tests -- -D warnings
