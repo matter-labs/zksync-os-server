@@ -11,11 +11,8 @@ use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
-use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::RpcModule;
@@ -67,25 +64,4 @@ pub async fn run_jsonrpsee_server(
 
     server_handle.stopped().await;
     Ok(())
-}
-
-// todo: consider best place for this logic
-pub fn resolve_block_id(block: BlockId, repository_manager: &RepositoryManager) -> BlockNumber {
-    match block {
-        BlockId::Hash(_) => unimplemented!(),
-        // TODO: return last sealed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Pending) => repository_manager.get_canonized_block(),
-        BlockId::Number(BlockNumberOrTag::Latest) => repository_manager.get_canonized_block(),
-        // TODO: return last committed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Safe) => repository_manager.get_canonized_block(),
-        // TODO: return last executed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Finalized) => repository_manager.get_canonized_block(),
-        BlockId::Number(BlockNumberOrTag::Earliest) => unimplemented!(),
-        BlockId::Number(BlockNumberOrTag::Number(number)) => {
-            // note: we don't check whether the requested Block Number is less than `BLOCKS_TO_RETAIN` behind -
-            // we won't be able to serve `eth_call`s and `storage_at`s for it
-            // this will be handled when instantiating `StorageView` for it
-            number
-        }
-    }
 }
