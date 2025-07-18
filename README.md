@@ -3,7 +3,7 @@ New sequencer implementation for zksync-os with focus on high throughput, low la
 
 ## Run
 ### Local
-`cargo run --release` (`release` has significant performance impact)
+`cargo run --release` (`release` makes a significant difference for performance)
 
 Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
 
@@ -25,7 +25,7 @@ sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e ba
 
 ### Exposed Ports
 * `3050` - L2 JSON RPC
-* `3124` - Prover API (e.g. `127.0.0.1/prover-jobs/status`)
+* `3124` - Prover API (e.g. `127.0.0.1/prover-jobs/status`) (only enabled if `prover_api_component_enabled` is set to `true`)
 * `3312` - Prometheus (compatible with `grafana_dashboard.json`)
 
 
@@ -41,7 +41,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"    
 ```
 
-### Regenesis
+### Resetting the Chain
 Erase the local DB and re-run anvil:
 ```
 rm -rf db/node1/*
@@ -74,24 +74,21 @@ Note: contrary to the Era sequencer, one Node = one process - regardless of the 
 * **Sequencer** - mandatory component (every node runs it), executes transactions in VM, sends results downstream to other components.
   * Handles `Produce` and `Replay` commands in an uniform way (see `model/mod.rs` and `execution/block_executor.rs`)
   * For each block: (1) persists it in WAL (see `block_replay_storage.rs`), (2) pushes to `state` (see `state` batch), (3) exposes the block and tx receipts to API (see `repositories/mod.rs`), (4) pushes to async channels for `batcher` and `tree` components.
-  * Note: (3) and (4) will be refactored to be handled uniformly (that is, sequencer doesn't know where it sends results to) 
-* **JSON RPC** - optional component (not configurable atm). Has shared access to `state`. Many 
+* **JSON RPC** - optional component (not configurable atm). Has shared access to `state`.
 * **Persistent Tree** - optional component (not configurable atm), gets state updates via async channel, updates and persists the tree. Exposes root and merkle proofs for the prover input generation (note that sequencer itself doesn't need the tree - our block hash doesn't include root hash)
 * **Batcher** - optional component (configurable with `batcher_component_enabled=true/false`).
   * Turns a stream of blocks to a stream of batches (1 batch = 1 proof = 1 L1 commit)
     * Note: currently 1 block == 1 batch, multi-block batches are not implemented yet 
   * For each batch, computes the Prover Input (runs RiscV binary (`app.bin`) and records its input as a stream of `Vec<u32>` - see `batcher/mod.rs`)
-    * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!). This will be optimized later on. 
+    * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!). This may be optimized later on. 
     * Process multiple batches in parallel (prover input generation takes more time than block execution)
-      * Currently, each worker thread maintains its own in-memory tree (see `worker_loop` method in `batcher/mod.rs`) - to be replaced with the single persistent tree - as it can process requests from multiple threads.
-      * Thus, when batcher is enabled, all blocks need to be replayed - blockchain starts from zero.
   * Downstream:
     * Sends the resulting Prover Input to the **Prover API** (see below)
     * Sends the batch data (`BatchCommitData`) to the **L1 sender** (see below)
 * **L1 sender** - optional component (runs if `localhost:8545` is available). Similar to the Era l1 sender
   * Doesn't need persistence (recovers its state from L1)
     * Currently still persists all sent batches - only to have the previous batch data that is needed when commiting. This will be changed.
-* **Prover API** - opional component (not configurable atm). keeps unproved batches in memory (see `prover_api/prover_job_manager.rs`). Backpressures if there are more than `prover_api_max_unproved_blocks` of them. Exposes the following api (see `prover_api/prover_server.rs`):
+* **Prover API** - opional component (configurable with `prover_api_component_enabled=true/false`). keeps unproved batches in memory (see `prover_api/prover_job_manager.rs`). Backpressures if there are more than `prover_api_max_unproved_blocks` of them. Exposes the following api (see `prover_api/prover_server.rs`):
 ```
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
@@ -101,22 +98,19 @@ Note: contrary to the Era sequencer, one Node = one process - regardless of the 
 ```
 Note that it's the same api as in old sequencer integration, so FRI GPU Provers themselves are fully compatible. 
   * Stores submitted FRI proofs in RocksDB and exposes them via API (under `/prover-jobs/FRI/:block`)
+<img width="1500" height="756" alt="Screenshot 2025-07-17 at 14 51 12" src="https://github.com/user-attachments/assets/cc8a27f0-15df-4406-b803-0e960832a4f1" />
 
+## Known restrictions
 
-## Missing parts
-
-* There is no event indexing (we have a design proposal that should work both for in-memory and persistent cases)
-* Persistent merkle tree is not used for prover input generation, so we use in-memory trees - like with the old sequencer integration. The tree is running and is correct, but it doesn't implement the needed interface - not a fundamental issue
 * lacking seal criteria
-* older blocks not available - neither receipts nor eth_call
-* no proper mempool (we plan to take the one from Reth as is)
-* most JSON RPC methods are missing (including estimate_gas that is stubbed - although eth_call works so not a fundamental issue)
+* older blocks not available for eth_call
 * no upgrade/interop logic
-* there is probably more
 
 ## Glossary (WIP)
 
-* `Block` vs `Batch` - One vm run = one block. 1 FRI proof = 1 L1 commit = 1 batch.
+* `Block` vs `Batch`:
+  * One `block` = one vm run in block_executor = one block_receipt, 
+  * one `batch` = one FRI proof = one L1 commit.
 
 Important: currently zksync-os uses term `batch` for blocks (e.g. `run_batch` etc.). 
 Also, return type of a block is `BatchOutput` - which represents a block in our case. 
