@@ -64,7 +64,7 @@ impl fmt::Display for DeserializeContext {
 /// Error that can occur during deserialization.
 #[derive(Debug)]
 pub struct DeserializeError {
-    kind: DeserializeErrorKind,
+    pub(crate) kind: DeserializeErrorKind,
     contexts: Vec<DeserializeContext>,
 }
 
