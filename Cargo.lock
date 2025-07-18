@@ -9318,6 +9318,7 @@ dependencies = [
  "serde_with 1.14.0",
  "tempfile",
  "thiserror 2.0.12",
+ "tokio",
  "tracing",
  "tracing-subscriber 0.3.19",
  "vise",

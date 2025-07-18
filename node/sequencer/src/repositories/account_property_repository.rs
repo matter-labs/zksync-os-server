@@ -84,7 +84,7 @@ impl AccountPropertyRepository {
         }
     }
 
-    /// Read the `AccountProperties` for `addr` as of `block`.
+    /// Read the `AccountProperties` for `addr` as of `block` (inclusive).
     ///
     /// Scans per-block snapshots from `block` down to `base_block + 1`. If none contains `addr`,
     /// falls back to `base_state` at `base_block`. Returns `None` if still not found.

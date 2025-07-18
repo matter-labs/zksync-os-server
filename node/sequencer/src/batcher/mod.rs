@@ -160,7 +160,7 @@ fn compute_prover_input(
         next_free_slot: leaf_count,
     };
 
-    let state_view = state_handle.state_view_at_block(block_number).unwrap();
+    let state_view = state_handle.state_view_at_block(block_number - 1).unwrap();
 
     let transactions = replay_record
         .transactions

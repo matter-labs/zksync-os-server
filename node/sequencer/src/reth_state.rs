@@ -111,10 +111,13 @@ impl AccountReader for ZkState {
 }
 
 impl BytecodeReader for ZkState {
-    fn bytecode_by_hash(&self, _code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
-        unimplemented!(
-            "reth mempool only calls this for EIP-7702 transactions which we do not support yet"
-        )
+    fn bytecode_by_hash(&self, code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
+        Ok(self
+            .repositories
+            .bytecode_repository
+            .get_latest(code_hash)
+            .map(Bytes::from)
+            .map(Bytecode::new_raw))
     }
 }
 
