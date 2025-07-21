@@ -103,6 +103,8 @@ impl CommandBlockContextProvider {
                     gas_limit,
                     coinbase: Default::default(),
                     block_hashes: self.block_hashes_for_next_block,
+                    // todo: initialize as source of randomness, i.e. the value of prevRandao
+                    mix_hash: Default::default(),
                 };
                 Ok(PreparedBlockCommand {
                     block_context,

@@ -1,8 +1,9 @@
+use anyhow::Context;
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task::{spawn_blocking, JoinHandle},
 };
-use zk_ee::system::errors::InternalError;
+use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
     run_batch, BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback,
@@ -14,7 +15,7 @@ use zksync_os_state::StateView;
 /// (as opposed to pull interface of `run_batch` in zksync-os)
 /// consider changing that interface on zksync-os side, which will make this file redundant
 pub struct VmWrapper {
-    handle: JoinHandle<Result<BatchOutput, InternalError>>,
+    handle: JoinHandle<Result<BatchOutput, ForwardSubsystemError>>,
     tx_sender: Sender<NextTxResponse>,
     tx_result_receiver: Receiver<Result<TxProcessingOutputOwned, InvalidTransaction>>,
 }
@@ -80,13 +81,14 @@ impl VmWrapper {
     }
 
     /// Tell the VM to seal the batch and return the final `BatchOutput`.
-    pub async fn seal_batch(self) -> Result<BatchOutput, InternalError> {
+    pub async fn seal_batch(self) -> anyhow::Result<BatchOutput> {
         // Request batch seal.
         let _ = self.tx_sender.send(NextTxResponse::SealBatch).await;
         // Await the blocking task's result.
         self.handle
             .await
-            .map_err(|_e| InternalError("runner panicked"))?
+            .context("failed to join seal task")?
+            .map_err(|e| anyhow::anyhow!("runner panicked: {e:?}"))
     }
 }
 
