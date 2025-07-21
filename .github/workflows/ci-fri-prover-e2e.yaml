@@ -90,7 +90,7 @@ jobs:
         env:
           LAST_BATCH_NUMBER: 3
           INTERVAL: 30
-          TIMEOUT: 3600
+          TIMEOUT: 600
           URL: http://localhost:3124
         run: |
           PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
