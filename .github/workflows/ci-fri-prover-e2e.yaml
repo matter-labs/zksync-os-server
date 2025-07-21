@@ -92,7 +92,7 @@ jobs:
         env:
           LAST_BATCH_NUMBER: 3
           INTERVAL: 30
-          TIMEOUT: 1200
+          TIMEOUT: 300
           URL: http://localhost:3124
         run: |
           PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
@@ -106,7 +106,7 @@ jobs:
       - name: Show prover.log
         if: always()
         run: |
-          ci_run cat prover.log || true
+          ci_run cat zksync-era/zkos_prover/prover.log || true
 
       - name: Show sccache logs
         if: always()
