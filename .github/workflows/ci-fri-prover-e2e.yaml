@@ -78,13 +78,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: matter-labs/zksync-era
-          path: ../zksync-era
+          path: zksync-era
           ref: zksync-os-integration-0.0.5
 
       - name: Run FRI prover
         run: |
-          ci_run cargo build --manifest-path ../zksync-era/zkos_prover/Cargo.toml
-          ci_run cargo run --manifest-path ../zksync-era/zkos_prover/Cargo.toml -- --enabled-logging &> prover.log &
+          ci_run cargo build --manifest-path zksync-era/zkos_prover/Cargo.toml
+          ci_run cargo run --manifest-path zksync-era/zkos_prover/Cargo.toml -- --enabled-logging &> prover.log &
 
       - name: Wait for proof
         env:
@@ -104,7 +104,7 @@ jobs:
       - name: Show prover.log
         if: always()
         run: |
-          ci_run cat ../zksync-era/zkos_prover/prover.log || true
+          ci_run cat zksync-era/zkos_prover/prover.log || true
 
       - name: Show sccache logs
         if: always()
