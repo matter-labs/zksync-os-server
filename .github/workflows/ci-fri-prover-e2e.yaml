@@ -12,7 +12,7 @@ env:
 
 jobs:
   test-fri-prover-e2e:
-    name: Build and Test
+    name: FRI Prover E2E Test
     runs-on: matterlabs-ci-runner-highmem-long
 
     steps:
@@ -51,8 +51,10 @@ jobs:
         run: ci_run anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
 
       - name: Start server
-        run: ci_run BATCHER_LOGGING_ENABLED=true PROVER_API_COMPONENT_ENABLED=true RUST_LOG=info,zksync_os_sequencer=debug \
-          cargo run --release &> server.log &
+        run: |
+          ci_run cargo build --release
+          ci_run BATCHER_LOGGING_ENABLED=true PROVER_API_COMPONENT_ENABLED=true RUST_LOG=info,zksync_os_sequencer=debug \
+            cargo run --release &> server.log &
 
       - name: Waiting for JSON RPC to become ready
         env:
@@ -61,7 +63,7 @@ jobs:
           TIMEOUT: 30
         run: |
           PASSED_ENV_VARS="URL,INTERVAL,TIMEOUT" \
-          ci_run web3_json_rpc_checker
+          ci_run ./.github/web3_json_rpc_checker
           
       - name: Send L2 tx
         run: |
@@ -79,6 +81,7 @@ jobs:
       - name: Run FRI prover
         run: |
           cd zksync-era/zkos_prover
+          ci_run cargo build --release
           ci_run cargo run --release -- --enabled-logging &> prover.log &
           cd -
 
@@ -90,8 +93,7 @@ jobs:
           URL: http://localhost:3124
         run: |
           PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
-          ci_run batch_l1_status_checker
-          
+          ci_run ./.github/proof_status_checker
 
       - name: Show sccache logs
         if: always()
