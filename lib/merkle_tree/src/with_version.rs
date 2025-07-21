@@ -7,7 +7,7 @@ use alloy::primitives::{FixedBytes, B256};
 use tokio::sync::watch;
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_forward_system::run::{ReadStorage, ReadStorageTree, SimpleReadStorageTree};
+use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 
 pub struct MerkleTreeForReading<DB: Database, P: TreeParams = DefaultTreeParams> {
     tree: MerkleTree<DB, P>,
@@ -110,10 +110,8 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorage for MerkleTree
     }
 }
 
-impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
-    for MerkleTreeVersion<DB, P>
-{
-    fn simple_tree_index(&mut self, key: Bytes32) -> Option<u64> {
+impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for MerkleTreeVersion<DB, P> {
+    fn tree_index(&mut self, key: Bytes32) -> Option<u64> {
         self.tree
             .db()
             .indices(self.block, &[FixedBytes::from_slice(key.as_u8_ref())])
@@ -124,10 +122,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
             })
     }
 
-    fn simple_merkle_proof(
-        &mut self,
-        tree_index: u64,
-    ) -> (u64, FlatStorageLeaf<64>, Box<[Bytes32; 64]>) {
+    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
         let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
 
         let mut current_node = self
@@ -197,7 +192,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
                 fixed_bytes_to_bytes32(self.tree.hasher.empty_subtree_hash(i as u8));
         }
 
-        (
+        LeafProof::new(
             tree_index,
             FlatStorageLeaf {
                 key: fixed_bytes_to_bytes32(leaf.key),
@@ -208,7 +203,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> SimpleReadStorageTree
         )
     }
 
-    fn simple_prev_tree_index(&mut self, key: Bytes32) -> u64 {
+    fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
         // TODO this will fail for existing nodes
         let res = &self
             .tree

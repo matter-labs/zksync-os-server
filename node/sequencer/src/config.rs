@@ -76,7 +76,7 @@ pub struct BatcherConfig {
     pub component_enabled: bool,
 
     /// Whether to enable debug output in RiscV binary.
-    /// Also known as app.bin vs app_logging_enabled.bin
+    /// Also known as server_app.bin vs server_app_logging_enabled.bin
     #[config(default_t = false)]
     pub logging_enabled: bool,
 
@@ -95,7 +95,7 @@ pub struct ProverApiConfig {
     pub component_enabled: bool,
 
     /// Whether to enable debug output in RiscV binary.
-    /// Also known as app.bin vs app_logging_enabled.bin
+    /// Also known as server_app.bin vs server_app_logging_enabled.bin
     #[config(default_t = Duration::from_secs(180))]
     pub job_timeout: Duration,
 

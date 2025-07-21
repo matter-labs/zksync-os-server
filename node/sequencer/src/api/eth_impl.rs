@@ -355,12 +355,14 @@ impl<R: ApiRepository> EthNamespace<R> {
             return Ok(Bytes::default());
         };
         let bytecode_hash = B256::from(props.bytecode_hash.as_u8_array());
-        Ok(Bytes::from(
-            self.repository
-                .bytecode_repository()
-                .get_at_block(block_number, &bytecode_hash)
-                .unwrap_or_default(),
-        ))
+        // todo(#36): temporary logic, replace with zksync-os helper methods when they are available
+        let full_bytecode = self
+            .repository
+            .bytecode_repository()
+            .get_at_block(block_number, &bytecode_hash)
+            .unwrap_or_default();
+        let unpadded_bytecode = &full_bytecode[0..props.unpadded_code_len as usize];
+        Ok(Bytes::copy_from_slice(unpadded_bytecode))
     }
 }
 

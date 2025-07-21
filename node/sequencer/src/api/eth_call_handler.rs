@@ -8,7 +8,7 @@ use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxTy
 use alloy::eips::BlockId;
 use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use zk_ee::system::errors::InternalError;
+use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::InvalidTransaction;
 use zksync_os_state::StateHandle;
 use zksync_os_types::L2Envelope;
@@ -173,7 +173,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
             .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
 
         let res = execute(tx, block_context, storage_view)
-            .map_err(EthCallError::Internal)?
+            .map_err(EthCallError::ForwardSubsystemError)?
             .map_err(EthCallError::InvalidTransaction)?;
 
         Ok(Bytes::copy_from_slice(res.as_returned_bytes()))
@@ -215,8 +215,8 @@ pub enum EthCallError {
     // Below is more or less temporary as the error hierarchy in ZKsync OS is going through a major
     // refactoring.
     /// Internal error propagated by ZKsync OS.
-    #[error("internal error: {}", .0.0)]
-    Internal(InternalError),
+    #[error("ZKsync OS error: {0:?}")]
+    ForwardSubsystemError(ForwardSubsystemError),
     /// Transaction is invalid according to ZKsync OS.
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),
