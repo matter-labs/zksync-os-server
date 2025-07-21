@@ -94,6 +94,16 @@ jobs:
         run: |
           PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
           ci_run ./.github/scripts/proof_status_checker
+          
+      - name: Show server.log
+        if: always()
+        run: |
+          ci_run cat server.log || true
+          
+      - name: Show prover.log
+        if: always()
+        run: |
+          ci_run cat server.log || true
 
       - name: Show sccache logs
         if: always()
