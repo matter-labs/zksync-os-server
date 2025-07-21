@@ -43,7 +43,7 @@ pub enum SubmitError {
 // ───────────── Internal state ─────────────
 
 #[derive(Debug, Clone)]
-pub struct JobEntry {
+struct JobEntry {
     prover_input: Vec<u32>,
     previous_state_commitment: B256,
     commit_batch_info: CommitBatchInfo,
