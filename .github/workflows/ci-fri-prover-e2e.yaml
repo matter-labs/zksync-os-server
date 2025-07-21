@@ -83,10 +83,10 @@ jobs:
 
       - name: Run FRI prover
         run: |
-          cd zksync-era/zkos_prover
+          ci_run cd zksync-era/zkos_prover
           ci_run cargo build
           ci_run cargo run -- --enabled-logging &> prover.log &
-          cd -
+          ci_run cd -
 
       - name: Wait for proof
         env:
