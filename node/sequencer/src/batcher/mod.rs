@@ -1,9 +1,11 @@
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use crate::CHAIN_ID;
+use alloy::primitives::B256;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
@@ -33,6 +35,8 @@ pub struct Batcher {
     state_handle: StateHandle,
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
+    // number and state commitment of the last processed batch.
+    prev_batch_data: Mutex<(u64, B256)>,
 }
 
 impl Batcher {
@@ -47,6 +51,7 @@ impl Batcher {
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
+        prev_batch_data: (u64, B256),
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -65,6 +70,7 @@ impl Batcher {
             commit_batch_info_sender,
             bin_path,
             maximum_in_flight_blocks,
+            prev_batch_data: Mutex::new(prev_batch_data),
         }
     }
 
@@ -102,6 +108,9 @@ impl Batcher {
             .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(async |(prover_input, batch_output, replay_record)| {
                 let block_number = replay_record.block_context.block_number;
+                let (prev_block_number, previous_state_commitment) =
+                    *self.prev_batch_data.lock().unwrap();
+                assert_eq!(prev_block_number + 1, block_number);
 
                 let (root_hash, leaf_count) = self
                     .persistent_tree
@@ -139,9 +148,12 @@ impl Batcher {
                     .send(BatchJob {
                         block_number,
                         prover_input,
+                        previous_state_commitment,
                         commit_batch_info,
                     })
                     .await?;
+                *self.prev_batch_data.lock().unwrap() =
+                    (block_number, stored_batch_info.state_commitment);
 
                 Ok(())
             })

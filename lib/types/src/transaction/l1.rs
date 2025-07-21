@@ -359,7 +359,7 @@ impl Encodable for L1Envelope {
 impl TryFrom<L2CanonicalTransaction> for L1Envelope {
     type Error = L1EnvelopeError;
 
-    fn try_from(tx: L2CanonicalTransaction) -> Result<Self, Self::Error> {
+    fn try_from(mut tx: L2CanonicalTransaction) -> Result<Self, Self::Error> {
         let tx_type = tx.txType.saturating_to();
         if tx_type != REAL_L1_PRIORITY_TX_TYPE_ID {
             return Err(L1EnvelopeError::IncorrectTransactionType(tx_type));
@@ -376,6 +376,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
             // return Err(L1EnvelopeError::NonEmptyFactoryDeps(
             //     tx.factoryDeps.into_iter().map(B256::from).collect(),
             // ));
+            tx.factoryDeps = Vec::new();
         }
         if !tx.reserved[2].is_zero() {
             return Err(L1EnvelopeError::NonZeroReservedField(2, tx.reserved[2]));

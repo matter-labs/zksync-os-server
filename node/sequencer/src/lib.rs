@@ -33,10 +33,12 @@ use crate::{
     },
     model::{BlockCommand, ReplayRecord},
 };
+use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -412,6 +414,11 @@ pub async fn run(
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
+        assert_eq!(first_block_to_execute, 1);
+        let genesis_state_commitment =
+            B256::from_str("0x6e6e7044cb237fa30937e7e2ee56db7bb3b5d3bd0f46ba7c3a46a6ac4cf2f330")
+                .unwrap();
+        let prev_batch_data = (0, genesis_state_commitment);
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
@@ -420,6 +427,7 @@ pub async fn run(
             persistent_tree,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
+            prev_batch_data,
         );
         Box::pin(batcher.run_loop())
     } else {

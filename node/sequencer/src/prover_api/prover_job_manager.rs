@@ -13,13 +13,19 @@ use std::time::{Duration, Instant};
 use crate::model::BatchJob;
 use crate::prover_api::metrics::PROVER_METRICS;
 use crate::prover_api::proof_storage::ProofStorage;
+use air_compiler_cli::prover_utils::{
+    generate_oracle_data_from_metadata_and_proof_list, proof_list_and_metadata_from_program_proof,
+};
+use alloy::primitives::B256;
 use dashmap::DashMap;
+use execution_utils::ProgramProof;
 use itertools::Itertools;
 use serde::Serialize;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc::Receiver;
-use zksync_os_l1_sender::commitment::CommitBatchInfo;
+use zk_os_basic_system::system_implementation::system::BatchPublicInput;
+use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 // ───────────── Error types ─────────────
 
 #[derive(Error, Debug)]
@@ -28,20 +34,23 @@ pub enum SubmitError {
     VerificationFailed,
     #[error("block {0} is not known to the server")]
     UnknownJob(u64),
+    #[error("deserialization failed: {0:?}")]
+    DeserializationFailed(bincode_v1::Error),
     #[error("internal error: {0}")]
     Other(String),
 }
 
 // ───────────── Internal state ─────────────
 
-#[derive(Clone)]
-struct JobEntry {
+#[derive(Debug, Clone)]
+pub struct JobEntry {
     prover_input: Vec<u32>,
+    previous_state_commitment: B256,
     commit_batch_info: CommitBatchInfo,
     status: JobStatus,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum JobStatus {
     Pending,
     Assigned { assigned_at: Instant },
@@ -100,6 +109,7 @@ impl ProverJobManager {
                 job.block_number,
                 JobEntry {
                     prover_input: job.prover_input,
+                    previous_state_commitment: job.previous_state_commitment,
                     commit_batch_info: job.commit_batch_info,
                     status: JobStatus::Pending,
                 },
@@ -150,11 +160,11 @@ impl ProverJobManager {
         proof: Vec<u8>,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        let entry = self
+        let entry_ref = self
             .jobs
-            .remove(&block)
-            .ok_or(SubmitError::UnknownJob(block))?
-            .1;
+            .get(&block)
+            .ok_or(SubmitError::UnknownJob(block))?;
+        let entry = entry_ref.value();
 
         match &entry.status {
             JobStatus::Assigned { assigned_at } => {
@@ -167,13 +177,33 @@ impl ProverJobManager {
             }
         };
 
-        if !verify_fri_proof_stub(&entry.commit_batch_info, &proof) {
+        let program_proof = bincode_v1::deserialize(&proof).map_err(|err| {
+            tracing::warn!(block, "failed to deserialize proof: {err}");
+            SubmitError::DeserializationFailed(err)
+        })?;
+
+        if !verify_fri_proof(
+            entry.previous_state_commitment,
+            entry.commit_batch_info.clone().into(),
+            program_proof,
+        ) {
+            tracing::warn!(
+                batch_number = entry.commit_batch_info.batch_number,
+                "Proof verification failed"
+            );
             return Err(SubmitError::VerificationFailed);
+        } else {
+            tracing::info!(
+                batch_number = entry.commit_batch_info.batch_number,
+                "Proof was verified successfully"
+            );
         }
 
         self.proof_storage
             .save_proof_with_prover(block, &proof, prover_id)
             .map_err(|e| SubmitError::Other(e.to_string()))?;
+        drop(entry_ref);
+        self.jobs.remove(&block);
         Ok(())
     }
 
@@ -215,8 +245,68 @@ impl ProverJobManager {
     }
 }
 
-// ─────────────── Stubs ───────────────
+fn verify_fri_proof(
+    previous_state_commitment: B256,
+    stored_batch_info: StoredBatchInfo,
+    proof: ProgramProof,
+) -> bool {
+    let expected_pi = BatchPublicInput {
+        state_before: previous_state_commitment.0.into(),
+        state_after: stored_batch_info.state_commitment.0.into(),
+        batch_output: stored_batch_info.commitment.0.into(),
+    };
 
-fn verify_fri_proof_stub(_info: &CommitBatchInfo, _proof: &[u8]) -> bool {
-    true
+    let expected_hash_u32s: [u32; 8] = batch_output_hash_as_register_values(&expected_pi);
+
+    let proof_final_register_values: [u32; 16] = extract_final_register_values(proof);
+
+    tracing::debug!(
+        batch_number = stored_batch_info.batch_number,
+        "Program final registers: {:?}",
+        proof_final_register_values
+    );
+    tracing::debug!(
+        batch_number = stored_batch_info.batch_number,
+        "Expected values for Public Inputs hash: {:?}",
+        expected_hash_u32s
+    );
+
+    // compare expected_hash_u32s with the last 8 values of proof_final_register_values
+    proof_final_register_values[..8] == expected_hash_u32s
+}
+
+fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32; 8] {
+    public_input
+        .hash()
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("Slice with incorrect length")))
+        .collect::<Vec<u32>>()
+        .try_into()
+        .expect("Hash should be exactly 32 bytes long")
+}
+
+fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16] {
+    let (metadata, proof_list) = proof_list_and_metadata_from_program_proof(input_program_proof);
+
+    let oracle_data = generate_oracle_data_from_metadata_and_proof_list(&metadata, &proof_list);
+    tracing::debug!(
+        "Oracle data iterator created with {} items",
+        oracle_data.len()
+    );
+
+    let it = oracle_data.into_iter();
+
+    verifier_common::prover::nd_source_std::set_iterator(it);
+
+    // Assume that program proof has only recursion proofs.
+    tracing::debug!("Running continue recursive");
+    assert!(metadata.reduced_proof_count > 0);
+
+    let final_register_values = full_statement_verifier::verify_recursion_layer();
+
+    assert!(
+        verifier_common::prover::nd_source_std::try_read_word().is_none(),
+        "Expected that all words from CSR were consumed"
+    );
+    final_register_values
 }
