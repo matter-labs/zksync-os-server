@@ -57,6 +57,7 @@ jobs:
 
       - name: Waiting for JSON RPC to become ready
         env:
+          URL: http://localhost:3050
           INTERVAL: 1
           TIMEOUT: 30
         run: |
