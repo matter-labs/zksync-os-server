@@ -8,6 +8,7 @@ use std::str::FromStr;
 use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::Tester;
 
 #[test_log::test(tokio::test)]
@@ -85,7 +86,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
             gas_per_pubdata,
         )
         .await?;
-    let l1_deposit_receipt = bridgehub
+    let l1_deposit_request = bridgehub
         .request_l2_transaction_direct(
             amount + tx_base_cost,
             alice,
@@ -96,11 +97,13 @@ async fn l1_deposit() -> anyhow::Result<()> {
             alice,
         )
         .value(amount + tx_base_cost)
-        .send()
+        .into_transaction_request();
+    let l1_deposit_receipt = tester
+        .l1_provider
+        .send_transaction(l1_deposit_request)
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(l1_deposit_receipt.status(), "deposit failed on L1");
     let l1_to_l2_tx_log = l1_deposit_receipt
         .logs()
         .iter()
