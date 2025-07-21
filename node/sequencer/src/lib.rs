@@ -13,7 +13,6 @@ pub mod prover_api;
 pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
-mod util;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;

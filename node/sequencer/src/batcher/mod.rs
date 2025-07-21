@@ -1,7 +1,8 @@
+mod util;
+
 use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
-use crate::util::load_genesis_stored_batch;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -75,12 +76,6 @@ impl Batcher {
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> anyhow::Result<()> {
-        if self.last_committed_batch == 0 {
-            if let Some(l1) = &self.commit_batch_info_sender {
-                l1.init(load_genesis_stored_batch()).await?;
-            }
-        }
-
         ReceiverStream::new(self.block_receiver)
             .then(|(batch_output, replay_record)| {
                 self.persistent_tree
@@ -110,54 +105,58 @@ impl Batcher {
             })
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
-            .try_for_each(async |(prover_input, batch_output, replay_record)| {
-                let block_number = replay_record.block_context.block_number;
+            .try_fold(
+                util::load_genesis_stored_batch(),
+                async |prev_batch, (prover_input, batch_output, replay_record)| {
+                    let block_number = replay_record.block_context.block_number;
 
-                let (root_hash, leaf_count) = self
-                    .persistent_tree
-                    .clone()
-                    .get_at_block(block_number)
-                    .await
-                    .root_info()
-                    .unwrap();
+                    let (root_hash, leaf_count) = self
+                        .persistent_tree
+                        .clone()
+                        .get_at_block(block_number)
+                        .await
+                        .root_info()
+                        .unwrap();
 
-                let tree_output = zksync_os_merkle_tree::BatchOutput {
-                    root_hash,
-                    leaf_count,
-                };
+                    let tree_output = zksync_os_merkle_tree::BatchOutput {
+                        root_hash,
+                        leaf_count,
+                    };
 
-                let tx_count = replay_record.transactions.len();
-                let commit_batch_info = CommitBatchInfo::new(
-                    batch_output,
-                    &replay_record.block_context,
-                    &replay_record.transactions,
-                    tree_output,
-                    CHAIN_ID,
-                );
-                tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
+                    let tx_count = replay_record.transactions.len();
+                    let commit_batch_info = CommitBatchInfo::new(
+                        batch_output,
+                        &replay_record.block_context,
+                        &replay_record.transactions,
+                        tree_output,
+                        CHAIN_ID,
+                    );
+                    tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
 
-                let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
-                tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
+                    let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
+                    tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
 
-                GENERAL_METRICS.block_number[&"batcher"].set(block_number);
-                GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
+                    GENERAL_METRICS.block_number[&"batcher"].set(block_number);
+                    GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
-                if commit_batch_info.batch_number >= self.last_committed_batch {
-                    if let Some(l1) = &self.commit_batch_info_sender {
-                        l1.commit(commit_batch_info.clone()).await?;
+                    if commit_batch_info.batch_number > self.last_committed_batch {
+                        if let Some(l1) = &self.commit_batch_info_sender {
+                            l1.commit(prev_batch, commit_batch_info.clone()).await?;
+                        }
                     }
-                }
-                self.batch_sender
-                    .send(BatchJob {
-                        block_number,
-                        prover_input,
-                        commit_batch_info,
-                    })
-                    .await?;
+                    self.batch_sender
+                        .send(BatchJob {
+                            block_number,
+                            prover_input,
+                            commit_batch_info,
+                        })
+                        .await?;
 
-                Ok(())
-            })
+                    Ok(stored_batch_info)
+                },
+            )
             .await
+            .map(|_| ())
     }
 }
 

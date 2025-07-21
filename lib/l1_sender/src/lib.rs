@@ -26,7 +26,6 @@ pub struct L1Sender {
     provider: DynProvider,
     chain_id: u64,
     validator_timelock_address: Address,
-    last_committed_batch: Option<StoredBatchInfo>,
     command_receiver: mpsc::Receiver<Command>,
 }
 
@@ -66,7 +65,6 @@ impl L1Sender {
             provider,
             chain_id: config.chain_id,
             validator_timelock_address,
-            last_committed_batch: None,
             command_receiver,
         };
         let handle = L1SenderHandle { command_sender };
@@ -93,15 +91,11 @@ impl L1Sender {
             let mut pending_tx_hashes = HashSet::new();
             for cmd in cmd_buffer.drain(..) {
                 match cmd {
-                    Command::Init(last_committed_batch) => {
-                        tracing::info!(
-                            batch_number = last_committed_batch.batch_number,
-                            "initializing with last committed batch",
-                        );
-                        self.last_committed_batch.replace(last_committed_batch);
-                    }
-                    Command::Commit(batch) => {
-                        if let Some(pending_tx_hash) = self.commit(batch).await? {
+                    Command::Commit(CommitCommand {
+                        previous_batch,
+                        batch,
+                    }) => {
+                        if let Some(pending_tx_hash) = self.commit(previous_batch, batch).await? {
                             pending_tx_hashes.insert(pending_tx_hash);
                         }
                     }
@@ -202,18 +196,15 @@ impl L1Sender {
 impl L1Sender {
     /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
     /// function makes sure last committed batch and new batch are encoded correctly.
-    fn commit_calldata(
-        last_committed_batch: &StoredBatchInfo,
-        commit_batch_info: CommitBatchInfo,
-    ) -> Vec<u8> {
+    fn commit_calldata(previous_batch: &StoredBatchInfo, batch: CommitBatchInfo) -> Vec<u8> {
         /// Current commitment encoding version as per protocol.
         const SUPPORTED_ENCODING_VERSION: u8 = 0;
 
-        let stored_batch_info = IExecutor::StoredBatchInfo::from(last_committed_batch);
-        let commit_batch_info = IExecutor::CommitBoojumOSBatchInfo::from(commit_batch_info);
+        let stored_batch_info = IExecutor::StoredBatchInfo::from(previous_batch);
+        let commit_batch_info = IExecutor::CommitBoojumOSBatchInfo::from(batch);
         tracing::debug!(
-            last_batch_hash = ?last_committed_batch.hash(),
-            last_batch_number = ?last_committed_batch.batch_number,
+            last_batch_hash = ?previous_batch.hash(),
+            last_batch_number = ?previous_batch.batch_number,
             new_batch_number = ?commit_batch_info.batchNumber,
             "preparing commit calldata"
         );
@@ -227,29 +218,21 @@ impl L1Sender {
 
     async fn commit(
         &mut self,
-        commit_batch_info: CommitBatchInfo,
+        previous_batch: StoredBatchInfo,
+        batch: CommitBatchInfo,
     ) -> anyhow::Result<Option<TxHash>> {
-        if self.last_committed_batch.is_none() {
+        if batch.batch_number <= previous_batch.batch_number {
             tracing::info!(
-                batch_number = commit_batch_info.batch_number,
-                "initializing with last committed batch",
-            );
-            self.last_committed_batch.replace(commit_batch_info.into());
-            return Ok(None);
-        }
-        let last_committed_batch = self.last_committed_batch.as_ref().unwrap();
-        if commit_batch_info.batch_number <= last_committed_batch.batch_number {
-            tracing::info!(
-                batch_number = commit_batch_info.batch_number,
+                batch_number = batch.batch_number,
                 "ignoring batch as it has been already committed",
             );
             return Ok(None);
         }
         anyhow::ensure!(
-            commit_batch_info.batch_number == last_committed_batch.batch_number + 1,
-            "Tried to commit non-sequential batch #{} after last committed batch #{}",
-            commit_batch_info.batch_number,
-            last_committed_batch.batch_number,
+            batch.batch_number == previous_batch.batch_number + 1,
+            "Tried to commit non-sequential batch #{} after previous batch #{}",
+            batch.batch_number,
+            previous_batch.batch_number,
         );
 
         // Create a blob sidecar with empty data
@@ -257,9 +240,9 @@ impl L1Sender {
 
         let call = IExecutor::commitBatchesSharedBridgeCall::new((
             U256::from(self.chain_id),
-            U256::from(last_committed_batch.batch_number + 1),
-            U256::from(last_committed_batch.batch_number + 1),
-            Self::commit_calldata(last_committed_batch, commit_batch_info.clone()).into(),
+            U256::from(previous_batch.batch_number + 1),
+            U256::from(batch.batch_number),
+            Self::commit_calldata(&previous_batch, batch.clone()).into(),
         ));
 
         let gas_price = self.provider.get_gas_price().await?;
@@ -276,14 +259,10 @@ impl L1Sender {
 
         let pending_tx_hash = *self.provider.send_transaction(tx).await?.tx_hash();
         tracing::debug!(
-            batch = commit_batch_info.batch_number,
+            batch = batch.batch_number,
             ?pending_tx_hash,
             "batch commit transaction sent to L1"
         );
-
-        // Assume commitment was successful, update the last committed batch
-        self.last_committed_batch.replace(commit_batch_info.into());
-
         Ok(Some(pending_tx_hash))
     }
 }
@@ -295,18 +274,17 @@ pub struct L1SenderHandle {
 }
 
 impl L1SenderHandle {
-    /// Request [`L1Sender`] to initialize with last committed batch.
-    pub async fn init(&self, last_committed_batch: StoredBatchInfo) -> anyhow::Result<()> {
-        self.command_sender
-            .send(Command::Init(last_committed_batch))
-            .await
-            .map_err(|_| anyhow::anyhow!("failed to initialize as L1 sender is dropped"))
-    }
-
     /// Request [`L1Sender`] to send batch commitment to L1 asynchronously.
-    pub async fn commit(&self, commit_batch_info: CommitBatchInfo) -> anyhow::Result<()> {
+    pub async fn commit(
+        &self,
+        previous_batch: StoredBatchInfo,
+        batch: CommitBatchInfo,
+    ) -> anyhow::Result<()> {
         self.command_sender
-            .send(Command::Commit(commit_batch_info))
+            .send(Command::Commit(CommitCommand {
+                previous_batch,
+                batch,
+            }))
             .await
             .map_err(|_| anyhow::anyhow!("failed to commit a batch as L1 sender is dropped"))
     }
@@ -314,6 +292,11 @@ impl L1SenderHandle {
 
 #[derive(Debug)]
 enum Command {
-    Init(StoredBatchInfo),
-    Commit(CommitBatchInfo),
+    Commit(CommitCommand),
+}
+
+#[derive(Debug)]
+struct CommitCommand {
+    previous_batch: StoredBatchInfo,
+    batch: CommitBatchInfo,
 }
