@@ -5,7 +5,6 @@ use alloy::primitives::B256;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
@@ -19,6 +18,8 @@ use zksync_os_merkle_tree::{
 };
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;
+
+pub mod util;
 
 /// This component generates l1 batches from the stream of blocks
 /// It also generates Prover Input for each batch.
@@ -36,7 +37,7 @@ pub struct Batcher {
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
     // number and state commitment of the last processed batch.
-    prev_batch_data: Mutex<(u64, B256)>,
+    prev_batch_data: (u64, B256),
 }
 
 impl Batcher {
@@ -70,7 +71,7 @@ impl Batcher {
             commit_batch_info_sender,
             bin_path,
             maximum_in_flight_blocks,
-            prev_batch_data: Mutex::new(prev_batch_data),
+            prev_batch_data,
         }
     }
 
@@ -106,58 +107,59 @@ impl Batcher {
             })
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
-            .try_for_each(async |(prover_input, batch_output, replay_record)| {
-                let block_number = replay_record.block_context.block_number;
-                let (prev_block_number, previous_state_commitment) =
-                    *self.prev_batch_data.lock().unwrap();
-                assert_eq!(prev_block_number + 1, block_number);
+            .try_fold(
+                self.prev_batch_data,
+                async |(prev_block_number, previous_state_commitment),
+                       (prover_input, batch_output, replay_record)| {
+                    let block_number = replay_record.block_context.block_number;
+                    assert_eq!(prev_block_number + 1, block_number);
 
-                let (root_hash, leaf_count) = self
-                    .persistent_tree
-                    .clone()
-                    .get_at_block(block_number)
-                    .await
-                    .root_info()
-                    .unwrap();
+                    let (root_hash, leaf_count) = self
+                        .persistent_tree
+                        .clone()
+                        .get_at_block(block_number)
+                        .await
+                        .root_info()
+                        .unwrap();
 
-                let tree_output = zksync_os_merkle_tree::BatchOutput {
-                    root_hash,
-                    leaf_count,
-                };
+                    let tree_output = zksync_os_merkle_tree::BatchOutput {
+                        root_hash,
+                        leaf_count,
+                    };
 
-                let tx_count = replay_record.transactions.len();
-                let commit_batch_info = CommitBatchInfo::new(
-                    batch_output,
-                    &replay_record.block_context,
-                    &replay_record.transactions,
-                    tree_output,
-                    CHAIN_ID,
-                );
-                tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
+                    let tx_count = replay_record.transactions.len();
+                    let commit_batch_info = CommitBatchInfo::new(
+                        batch_output,
+                        &replay_record.block_context,
+                        &replay_record.transactions,
+                        tree_output,
+                        CHAIN_ID,
+                    );
+                    tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
 
-                let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
-                tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
+                    let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
+                    tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
 
-                GENERAL_METRICS.block_number[&"batcher"].set(block_number);
-                GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
+                    GENERAL_METRICS.block_number[&"batcher"].set(block_number);
+                    GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
-                if let Some(l1) = &self.commit_batch_info_sender {
-                    l1.commit(commit_batch_info.clone()).await?;
-                }
-                self.batch_sender
-                    .send(BatchJob {
-                        block_number,
-                        prover_input,
-                        previous_state_commitment,
-                        commit_batch_info,
-                    })
-                    .await?;
-                *self.prev_batch_data.lock().unwrap() =
-                    (block_number, stored_batch_info.state_commitment);
+                    if let Some(l1) = &self.commit_batch_info_sender {
+                        l1.commit(commit_batch_info.clone()).await?;
+                    }
+                    self.batch_sender
+                        .send(BatchJob {
+                            block_number,
+                            prover_input,
+                            previous_state_commitment,
+                            commit_batch_info,
+                        })
+                        .await?;
 
-                Ok(())
-            })
+                    Ok((block_number, stored_batch_info.state_commitment))
+                },
+            )
             .await
+            .map(|_| ())
     }
 }
 
