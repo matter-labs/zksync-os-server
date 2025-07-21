@@ -63,7 +63,7 @@ jobs:
           TIMEOUT: 30
         run: |
           PASSED_ENV_VARS="URL,INTERVAL,TIMEOUT" \
-          ci_run ./.github/web3_json_rpc_checker
+          ci_run ./.github/scripts/web3_json_rpc_checker
           
       - name: Send L2 tx
         run: |
@@ -93,7 +93,7 @@ jobs:
           URL: http://localhost:3124
         run: |
           PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
-          ci_run ./.github/proof_status_checker
+          ci_run ./.github/scripts/proof_status_checker
 
       - name: Show sccache logs
         if: always()
