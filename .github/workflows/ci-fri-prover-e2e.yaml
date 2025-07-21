@@ -51,10 +51,13 @@ jobs:
         run: ci_run anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
 
       - name: Start server
+        env:
+          BATCHER_LOGGING_ENABLED: "true"
+          PROVER_API_COMPONENT_ENABLED: "true"
         run: |
           ci_run cargo build
-          ci_run BATCHER_LOGGING_ENABLED=true PROVER_API_COMPONENT_ENABLED=true RUST_LOG=info,zksync_os_sequencer=debug \
-            cargo run &> server.log &
+          PASSED_ENV_VARS="BATCHER_LOGGING_ENABLED,PROVER_API_COMPONENT_ENABLED,RUST_BACKTRACE" \
+          ci_run cargo run &> server.log &
 
       - name: Waiting for JSON RPC to become ready
         env:
@@ -103,7 +106,7 @@ jobs:
       - name: Show prover.log
         if: always()
         run: |
-          ci_run cat server.log || true
+          ci_run cat prover.log || true
 
       - name: Show sccache logs
         if: always()
