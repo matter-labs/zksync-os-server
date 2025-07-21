@@ -1,0 +1,100 @@
+name: FRI Prover E2E Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  PASSED_ENV_VARS: RUST_BACKTRACE
+
+jobs:
+  test-fri-prover-e2e:
+    name: Build and Test
+    runs-on: matterlabs-ci-runner-highmem-long
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup misc environment variables
+        shell: bash
+        run: |
+          echo $(pwd)/.github/scripts >> $GITHUB_PATH
+          echo ZKSYNC_OS_HOME=$(pwd) >> $GITHUB_ENV
+
+      - name: Setup sccache for building Rust code inside Docker
+        shell: bash
+        run: |
+          echo SCCACHE_CACHE_SIZE=50G >> .github/.env
+          echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> .github/.env
+          echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> .github/.env
+          echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> .github/.env
+          echo SCCACHE_GCS_RW_MODE=READ_WRITE >> .github/.env
+          echo RUSTC_WRAPPER=sccache >> .github/.env
+          echo DOCKER_PWD=$(pwd) >> .github/.env
+
+      - name: Start CI Docker
+        shell: bash
+        run: ci_up
+
+      - name: Start sccache server
+        shell: bash
+        run: ci_run sccache --start-server
+
+      - name: Check formatting
+        run: ci_run cargo fmt --all -- --check
+
+      - name: Start anvil
+        run: ci_run anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
+
+      - name: Start server
+        run: ci_run BATCHER_LOGGING_ENABLED=true PROVER_API_COMPONENT_ENABLED=true RUST_LOG=info,zksync_os_sequencer=debug \
+          cargo run --release &> server.log &
+
+      - name: Waiting for JSON RPC to become ready
+        env:
+          INTERVAL: 1
+          TIMEOUT: 30
+        run: |
+          PASSED_ENV_VARS="URL,INTERVAL,TIMEOUT" \
+          ci_run web3_json_rpc_checker
+          
+      - name: Send L2 tx
+        run: |
+          ci_run cast send 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 -r http://localhost:3050 \
+            --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110 --gas-price 10gwei \
+            --priority-gas-price 10gwei --value 1ether
+
+      - name: Checkout repo for FRI prover
+        uses: actions/checkout@v4
+        with:
+          repository: matter-labs/zksync-era
+          path: zksync-era
+          ref: zksync-os-integration-0.0.5
+
+      - name: Run FRI prover
+        run: |
+          cd zksync-era/zkos_prover
+          ci_run cargo run --release -- --enabled-logging &> prover.log &
+          cd -
+
+      - name: Wait for proof
+        env:
+          LAST_BATCH_NUMBER: 3
+          INTERVAL: 30
+          TIMEOUT: 1200
+          URL: http://localhost:3124
+        run: |
+          PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
+          ci_run batch_l1_status_checker
+          
+
+      - name: Show sccache logs
+        if: always()
+        run: |
+          ci_run sccache --show-stats || true
+          ci_run cat /tmp/sccache_log.txt || true
