@@ -6,9 +6,9 @@ use std::{
 use alloy::primitives::B256;
 
 use crate::{
-    leaf_nibbles, max_nibbles_for_internal_node, max_node_children,
+    Database, DeserializeError, HashTree, MerkleTree, TreeParams, leaf_nibbles,
+    max_nibbles_for_internal_node, max_node_children,
     types::{InternalNode, KeyLookup, Leaf, Node, NodeKey},
-    Database, DeserializeError, HashTree, MerkleTree, TreeParams,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +37,9 @@ pub enum ConsistencyError {
     #[error("missing min / max guards")]
     NoGuards,
 
-    #[error("internal node with key {key} has unexpected number of children: expected {expected}, actual {actual}")]
+    #[error(
+        "internal node with key {key} has unexpected number of children: expected {expected}, actual {actual}"
+    )]
     ChildCountMismatch {
         key: NodeKey,
         expected: usize,

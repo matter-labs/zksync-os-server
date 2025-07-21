@@ -9,11 +9,11 @@ pub use self::{
     hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
     types::{BatchOutput, TreeEntry},
-    with_version::{fixed_bytes_to_bytes32, MerkleTreeForReading, MerkleTreeVersion},
+    with_version::{MerkleTreeForReading, MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
 use crate::blake2::Blake2Hasher;
 use crate::{
-    metrics::{BatchProofStage, LoadStage, MerkleTreeInfo, METRICS},
+    metrics::{BatchProofStage, LoadStage, METRICS, MerkleTreeInfo},
     storage::{AsEntry, TreeUpdate, WorkingPatchSet},
     types::{Leaf, MAX_TREE_DEPTH},
 };

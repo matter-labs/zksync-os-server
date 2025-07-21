@@ -1,11 +1,11 @@
 use crate::metrics::STORAGE_MAP_METRICS;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
 use zk_ee::utils::Bytes32;
-use zksync_storage::db::NamedColumnFamily;
 use zksync_storage::RocksDB;
+use zksync_storage::db::NamedColumnFamily;
 
 /// Wrapper for map of storage diffs that are persisted in RocksDB.
 ///

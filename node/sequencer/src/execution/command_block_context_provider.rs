@@ -1,6 +1,6 @@
+use crate::CHAIN_ID;
 use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use crate::reth_state::ZkClient;
-use crate::CHAIN_ID;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash};
 use futures::StreamExt;
@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
-    AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_os_mempool::{

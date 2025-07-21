@@ -5,14 +5,14 @@ use std::{ops, path::Path};
 use alloy::primitives::B256;
 use anyhow::Context as _;
 use once_cell::sync::OnceCell;
-use zksync_storage::{db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice, RocksDB};
+use zksync_storage::{RocksDB, db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice};
 
 use crate::{
+    Database, DeserializeError,
     errors::{DeserializeContext, DeserializeErrorKind},
     metrics::{LoadStage, METRICS},
     storage::{InsertedKeyEntry, PartialPatchSet, PatchSet},
     types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root},
-    Database, DeserializeError,
 };
 
 impl NodeKey {
@@ -491,8 +491,9 @@ mod tests {
     use super::*;
     use crate::blake2::Blake2Hasher;
     use crate::{
-        leaf_nibbles, max_nibbles_for_internal_node, max_node_children, storage::PartialPatchSet,
-        types::TreeTags, DefaultTreeParams, MerkleTree, TreeEntry, TreeParams,
+        DefaultTreeParams, MerkleTree, TreeEntry, TreeParams, leaf_nibbles,
+        max_nibbles_for_internal_node, max_node_children, storage::PartialPatchSet,
+        types::TreeTags,
     };
 
     #[test]

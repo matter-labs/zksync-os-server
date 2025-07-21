@@ -12,8 +12,8 @@ use proptest::{prelude::*, sample::Index};
 use super::naive_hash_tree;
 use crate::blake2::Blake2Hasher;
 use crate::{
-    types::Leaf, BatchOutput, BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeEntry,
-    TreeOperation, TreeParams,
+    BatchOutput, BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeEntry, TreeOperation,
+    TreeParams, types::Leaf,
 };
 
 const MAX_ENTRIES: usize = 100;
