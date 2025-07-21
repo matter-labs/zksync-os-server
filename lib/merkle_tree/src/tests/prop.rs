@@ -118,7 +118,7 @@ enum LeafMutation {
 }
 
 impl LeafMutation {
-    fn gen() -> impl Strategy<Value = Self> {
+    fn generate() -> impl Strategy<Value = Self> {
         prop_oneof![
             any::<u8>().prop_map(Self::FlipKeyBit),
             any::<u8>().prop_map(Self::FlipValueBit),
@@ -144,7 +144,7 @@ struct OpMutation {
 }
 
 impl OpMutation {
-    fn gen() -> impl Strategy<Value = Self> {
+    fn generate() -> impl Strategy<Value = Self> {
         (proptest::bool::ANY, proptest::num::i8::ANY).prop_filter_map(
             "no-op",
             |(flip_hit_or_miss, index_increment)| {
@@ -180,11 +180,11 @@ enum ProofMutation {
 }
 
 impl ProofMutation {
-    fn gen() -> impl Strategy<Value = Self> {
+    fn generate() -> impl Strategy<Value = Self> {
         prop_oneof![
-            (any::<Index>(), OpMutation::gen())
+            (any::<Index>(), OpMutation::generate())
                 .prop_map(|(idx, mutation)| Self::MutateOp(idx, mutation)),
-            (any::<Index>(), LeafMutation::gen())
+            (any::<Index>(), LeafMutation::generate())
                 .prop_map(|(idx, mutation)| Self::MutateLeaf(idx, mutation)),
             any::<Index>().prop_map(Self::RemoveLeaf),
             (any::<Index>(), any::<u8>()).prop_map(|(idx, bit)| Self::FlipHashBit(idx, bit)),
@@ -340,7 +340,7 @@ proptest! {
         prev_entries in gen_writes(1..=MAX_ENTRIES),
         read_indices in proptest::collection::vec(any::<Index>(), 1..=MAX_ENTRIES),
         missing_reads in gen_reads(),
-        mutation in ProofMutation::gen(),
+        mutation in ProofMutation::generate(),
     ) {
         let mut tree = MerkleTree::new(PatchSet::default()).unwrap();
         let mut all_reads = missing_reads;
