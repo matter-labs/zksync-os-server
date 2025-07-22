@@ -291,6 +291,7 @@ fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32
 }
 
 fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16] {
+    tracing::info!("extract_final_register_values");
     let (metadata, proof_list) = proof_list_and_metadata_from_program_proof(input_program_proof);
 
     let oracle_data = generate_oracle_data_from_metadata_and_proof_list(&metadata, &proof_list);
