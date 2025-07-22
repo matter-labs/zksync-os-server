@@ -271,8 +271,9 @@ pub async fn run(
 
     let proof_storage = ProofStorage::new(proof_storage_db);
     tracing::info!(
-        "Proof storage initialized with {} proofs already present",
-        proof_storage.get_blocks_with_proof().len()
+        "Proof storage initialized with {} FRI and {} SNARK proofs already present",
+        proof_storage.estimate_number_of_fri_proofs(),
+        proof_storage.estimate_number_of_snark_proofs(),
     );
 
     // =========== load last persisted block numbers.  ===========
@@ -445,6 +446,7 @@ pub async fn run(
             proof_storage,
             prover_api_config.job_timeout,
             prover_api_config.max_unproved_blocks,
+            prover_api_config.max_fris_per_snark,
         ));
         (
             Box::pin(prover_server::run(

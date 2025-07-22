@@ -113,4 +113,8 @@ pub struct ProverApiConfig {
     ///
     #[config(default_t = 1000)]
     pub max_unproved_blocks: usize,
+    
+    /// Max number of FRI blocks that can be processed per SNARK job.
+    #[config(default_t = 10)]
+    pub max_fris_per_snark: usize,
 }
