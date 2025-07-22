@@ -142,3 +142,8 @@ codegen-units = 1
 opt-level = 0
 debug = false
 codegen-units = 1
+
+[profile.release.package.blake2_with_compression_verifier]
+opt-level = 0
+debug = false
+codegen-units = 1
