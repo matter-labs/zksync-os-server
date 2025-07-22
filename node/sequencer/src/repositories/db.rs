@@ -8,7 +8,7 @@ use alloy::rlp::{Decodable, Encodable};
 use tokio::sync::watch;
 use zksync_os_types::{L2Transaction, ZkEnvelope};
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
-use zksync_storage::{rocksdb, RocksDB};
+use zksync_storage::{RocksDB, rocksdb};
 
 #[derive(Clone, Copy, Debug)]
 pub enum RepositoryCF {

@@ -11,8 +11,8 @@
 //!     * Value          : `to_block` (8 bytes, big‑endian) **followed by** raw proof bytes
 //!
 
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
+use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 /// Column‑families used by the proof store.
 #[derive(Copy, Clone, Debug)]
