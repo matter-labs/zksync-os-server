@@ -8,8 +8,8 @@ use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxTy
 use alloy::eips::BlockId;
 use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::InvalidTransaction;
+use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zksync_os_state::StateHandle;
 use zksync_os_types::L2Envelope;
 

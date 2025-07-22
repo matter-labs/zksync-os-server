@@ -11,11 +11,11 @@ members = [
     "node/sequencer",
     "integration-tests",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"
 repository = "https://github.com/matter-labs/zksync-os-server"

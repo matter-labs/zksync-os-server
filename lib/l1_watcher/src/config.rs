@@ -1,6 +1,6 @@
 use alloy::primitives::Address;
-use smart_config::metadata::TimeUnit;
 use smart_config::Serde;
+use smart_config::metadata::TimeUnit;
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::path::PathBuf;
 use std::time::Duration;

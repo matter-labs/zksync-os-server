@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use std::sync::atomic::AtomicU64;
 use std::{
     collections::HashMap,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
 };
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::StorageWrite;
@@ -220,7 +220,7 @@ impl StorageMap {
                     return Err(anyhow::anyhow!(
                         "StorageMap: compacting diffs, but no diff found for block {}",
                         block_number
-                    ))
+                    ));
                 }
             }
         }

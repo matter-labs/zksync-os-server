@@ -8,8 +8,8 @@ use std::str::FromStr;
 use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 
 #[test_log::test(tokio::test)]
 async fn basic_transfers() -> anyhow::Result<()> {
