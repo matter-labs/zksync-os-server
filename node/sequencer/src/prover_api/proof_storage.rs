@@ -8,10 +8,8 @@
 //! • **SNARK proofs**
 //!     * Column‑family  : `snark_proofs`
 //!     * Key            : **`from_block` big‑endian**
-//!     * Value          : `to_block` (8 bytes, big‑endian) **followed by** raw proof bytes
+//!     * Value          : `to_block` (8 bytes, big‑endian) **followed by** raw proof bytes
 //!
-//!   Storing `to_block` inside the value lets us obtain the latest SNARK range
-//!   with a single `SeekToLast` (no full iteration).
 
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
@@ -150,11 +148,13 @@ impl ProofStorage {
         self.latest_snark_range().map(|(_, to)| to + 1).unwrap_or(1)
     }
     pub fn estimate_number_of_fri_proofs(&self) -> u64 {
-        self.db.estimated_number_of_entries(ProofColumnFamily::FriProofs)
+        self.db
+            .estimated_number_of_entries(ProofColumnFamily::FriProofs)
     }
 
     pub fn estimate_number_of_snark_proofs(&self) -> u64 {
-        self.db.estimated_number_of_entries(ProofColumnFamily::SnarkProofs)
+        self.db
+            .estimated_number_of_entries(ProofColumnFamily::SnarkProofs)
     }
 
     /// Diagnostic helper: returns **all** stored SNARK ranges.

@@ -56,7 +56,6 @@ struct AppState {
     job_manager: Arc<ProverJobManager>,
 }
 
-
 /// Public view of job manager state
 #[derive(Debug, Serialize)]
 pub struct ProverJobManagerState {

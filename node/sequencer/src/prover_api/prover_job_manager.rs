@@ -19,13 +19,13 @@ use std::time::{Duration, Instant};
 use crate::model::BatchJob;
 use crate::prover_api::metrics::PROVER_METRICS;
 use crate::prover_api::proof_storage::ProofStorage;
+use crate::prover_api::prover_server::{FriJobState, ProverJobManagerState};
 use dashmap::DashMap;
 use itertools::Itertools;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc::Receiver;
 use zksync_os_l1_sender::commitment::CommitBatchInfo;
-use crate::prover_api::prover_server::{FriJobState, ProverJobManagerState};
 // ───────────── Error types ─────────────
 
 #[derive(Error, Debug)]
@@ -100,7 +100,7 @@ impl ProverJobManager {
                 //  so we shouldn't use old FRI proofs here.
                 // this will be addressed when we revisit state recovery.
                 tracing::debug!(block_number = job.block_number, "already proven block");
-                continue
+                continue;
             }
 
             self.jobs.insert(
@@ -131,10 +131,10 @@ impl ProverJobManager {
                 match &entry.status {
                     JobStatus::Pending => Some(key),
                     JobStatus::Assigned { assigned_at, .. }
-                    if now.duration_since(*assigned_at) > self.assignment_timeout =>
-                        {
-                            Some(key)
-                        }
+                        if now.duration_since(*assigned_at) > self.assignment_timeout =>
+                    {
+                        Some(key)
+                    }
                     _ => None,
                 }
             })
@@ -190,17 +190,17 @@ impl ProverJobManager {
     ///
     /// Returns (block_from, block_to, Vec<FRI proof>)
     pub fn get_next_snark_job(&self) -> Option<(u64, u64, Vec<Vec<u8>>)> {
-        let start_block = self.proof_storage
-            .next_expected_snark_range_start();
+        let start_block = self.proof_storage.next_expected_snark_range_start();
 
-        let gapless_proofs: Vec<Vec<u8>> = std::iter::successors(Some(start_block), |b| Some(b + 1))
-            .map(|block| self.proof_storage.get_fri_proof(block))
-            // stop at the first gap
-            .take_while(|opt| opt.is_some())
-            .take(self.max_fris_per_snark)
-            // safe after take_while
-            .map(Option::unwrap)
-            .collect();
+        let gapless_proofs: Vec<Vec<u8>> =
+            std::iter::successors(Some(start_block), |b| Some(b + 1))
+                .map(|block| self.proof_storage.get_fri_proof(block))
+                // stop at the first gap
+                .take_while(|opt| opt.is_some())
+                .take(self.max_fris_per_snark)
+                // safe after take_while
+                .map(Option::unwrap)
+                .collect();
 
         if gapless_proofs.is_empty() {
             return None; // start_block doesn't have fri proof yet
@@ -222,7 +222,8 @@ impl ProverJobManager {
     }
 
     pub fn status(&self) -> ProverJobManagerState {
-        let fri_jobs = self.jobs
+        let fri_jobs = self
+            .jobs
             .iter()
             .sorted_by_key(|entry| *entry.key())
             .map(|entry| {
@@ -248,7 +249,7 @@ impl ProverJobManager {
             fri_jobs,
             next_snark_job,
             fri_proofs_count_estimate: self.proof_storage.estimate_number_of_fri_proofs(),
-            snark_proofs_count_estimated: self.proof_storage.estimate_number_of_snark_proofs()
+            snark_proofs_count_estimated: self.proof_storage.estimate_number_of_snark_proofs(),
         }
     }
 
