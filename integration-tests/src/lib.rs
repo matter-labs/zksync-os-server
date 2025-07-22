@@ -36,6 +36,7 @@ impl Tester {
     pub async fn setup() -> anyhow::Result<Self> {
         let l1_locked_port = LockedPort::acquire_unused().await?;
         let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+        let l1_ws_address = format!("ws://localhost:{}", l1_locked_port.port);
         let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             let anvil = if std::env::var("CI").is_ok() {
                 // This is where `anvil` gets installed to in our CI. For some reason it does not
@@ -84,7 +85,7 @@ impl Tester {
             },
             L1SenderConfig {
                 rocks_db_path: rocksdb_path.path().to_path_buf(),
-                l1_api_url: l1_address.clone(),
+                l1_api_url: l1_ws_address,
                 ..Default::default()
             },
             L1WatcherConfig {
