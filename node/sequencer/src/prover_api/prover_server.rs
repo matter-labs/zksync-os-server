@@ -40,11 +40,6 @@ struct SnarkProofPayload {
     proof: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct AvailableProofsPayload {
-    block_number: u64,
-    available_proofs: Vec<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct ProverQuery {

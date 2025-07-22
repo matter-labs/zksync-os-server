@@ -93,10 +93,13 @@ Note: contrary to the Era sequencer, one Node = one process - regardless of the 
 * **Prover API** - opional component (configurable with `prover_api_component_enabled=true/false`). keeps unproved batches in memory (see `prover_api/prover_job_manager.rs`). Backpressures if there are more than `prover_api_max_unproved_blocks` of them. Exposes the following api (see `prover_api/prover_server.rs`):
 ```
         .route("/prover-jobs/status", get(status))
+        // FRI routes
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
-        .route("/prover-jobs/available", get(list_available_proofs))
         .route("/prover-jobs/FRI/:block", get(get_fri_proof))
+        // SNARK routes
+        .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
+        .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
 ```
 Note that it's the same api as in old sequencer integration, so FRI GPU Provers themselves are fully compatible. 
   * Stores submitted FRI proofs in RocksDB and exposes them via API (under `/prover-jobs/FRI/:block`)
