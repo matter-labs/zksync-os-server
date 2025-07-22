@@ -137,3 +137,8 @@ codegen-units = 1
 opt-level = 0
 debug = false
 codegen-units = 1
+
+[profile.release.package.bigint_with_control_verifier]
+opt-level = 0
+debug = false
+codegen-units = 1
