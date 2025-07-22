@@ -113,7 +113,22 @@ zksync_os_types = { path = "lib/types" }
 
 zksync_os_sequencer = { path = "node/sequencer" }
 
+[profile.release.package.air-compiler-cli]
+opt-level = 0
+debug = false
+codegen-units = 1
+
+[profile.release.package.execution_utils]
+opt-level = 0
+debug = false
+codegen-units = 1
+
+[profile.release.package.verifier_common]
+opt-level = 0
+debug = false
+codegen-units = 1
+
 [profile.release.package.full_statement_verifier]
-opt-level = 2
+opt-level = 0
 debug = false
 codegen-units = 1
