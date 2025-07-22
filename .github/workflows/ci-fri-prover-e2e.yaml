@@ -13,7 +13,7 @@ env:
 jobs:
   test-fri-prover-e2e:
     name: FRI Prover E2E Test
-    runs-on: matterlabs-ci-runner-highmem-long
+    runs-on: matterlabs-ci-gpu-l4-runner-prover-tests
 
     steps:
       - name: Checkout code
@@ -83,8 +83,8 @@ jobs:
 
       - name: Run FRI prover
         run: |
-          ci_run cargo build --manifest-path zksync-era/zkos_prover/Cargo.toml
-          ci_run cargo run --manifest-path zksync-era/zkos_prover/Cargo.toml -- --enabled-logging &> prover.log &
+          ci_run cargo build --manifest-path zksync-era/zkos_prover/Cargo.toml --release --features gpu
+          ci_run cargo run --manifest-path zksync-era/zkos_prover/Cargo.toml --release --features gpu -- --enabled-logging &> prover.log &
 
       - name: Wait for proof
         env:
