@@ -52,7 +52,7 @@ jobs:
           BATCHER_LOGGING_ENABLED: "true"
           PROVER_API_COMPONENT_ENABLED: "true"
         run: |
-          ci_run cargo build --release
+          ci_run cargo build --release -j 1
           PASSED_ENV_VARS="BATCHER_LOGGING_ENABLED,PROVER_API_COMPONENT_ENABLED,RUST_BACKTRACE" \
           ci_run cargo run --release &> server.log &
 
