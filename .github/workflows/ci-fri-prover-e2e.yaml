@@ -9,6 +9,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   PASSED_ENV_VARS: RUST_BACKTRACE
+  RUNNER_COMPOSE_FILE: "docker-compose-gpu-runner-cuda-12-0.yml"
 
 jobs:
   test-fri-prover-e2e:
@@ -43,9 +44,6 @@ jobs:
       - name: Start sccache server
         shell: bash
         run: ci_run sccache --start-server
-
-      - name: Check formatting
-        run: ci_run cargo fmt --all -- --check
 
       - name: Start anvil
         run: ci_run anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
