@@ -79,9 +79,10 @@ async fn l1_deposit() -> anyhow::Result<()> {
             }
         }))
         .await?;
+    let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
-            U256::from(base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas),
+            U256::from(max_fee_per_gas + max_priority_fee_per_gas),
             gas_limit,
             gas_per_pubdata,
         )
@@ -97,6 +98,8 @@ async fn l1_deposit() -> anyhow::Result<()> {
             alice,
         )
         .value(amount + tx_base_cost)
+        .max_fee_per_gas(max_fee_per_gas)
+        .max_priority_fee_per_gas(max_priority_fee_per_gas)
         .into_transaction_request();
     let l1_deposit_receipt = tester
         .l1_provider
