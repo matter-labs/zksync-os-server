@@ -5,7 +5,7 @@ use alloy::eips::eip2930::AccessList;
 use alloy::eips::eip7702::SignedAuthorization;
 use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::{
-    keccak256, Address, Bytes, ChainId, Signature, TxHash, TxKind, B256, U256,
+    Address, B256, Bytes, ChainId, Signature, TxHash, TxKind, U256, keccak256,
 };
 use alloy::rlp::{BufMut, Decodable, Encodable};
 use alloy::sol_types::SolValue;

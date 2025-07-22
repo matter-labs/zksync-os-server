@@ -15,8 +15,8 @@ pub mod reth_state;
 pub mod tree_manager;
 
 use crate::api::run_jsonrpsee_server;
-use crate::batcher::util::genesis_stored_batch_info;
 use crate::batcher::Batcher;
+use crate::batcher::util::genesis_stored_batch_info;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
@@ -24,8 +24,8 @@ use crate::model::{BatchJob, ProduceCommand};
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{

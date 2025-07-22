@@ -1,13 +1,13 @@
 use anyhow::Context;
 use tokio::{
-    sync::mpsc::{channel, Receiver, Sender},
-    task::{spawn_blocking, JoinHandle},
+    sync::mpsc::{Receiver, Sender, channel},
+    task::{JoinHandle, spawn_blocking},
 };
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
-    run_batch, BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback,
-    TxSource,
+    BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
+    run_batch,
 };
 use zksync_os_state::StateView;
 

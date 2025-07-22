@@ -1,5 +1,5 @@
-use alloy::consensus::transaction::Recovered;
 use alloy::consensus::EthereumTxEnvelope;
+use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
 use reth_transaction_pool::{

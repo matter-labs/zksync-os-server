@@ -7,7 +7,7 @@ use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, Reposi
 use crate::reth_state::ZkClient;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{BlockNumber, TxHash, B256, U128};
+use alloy::primitives::{B256, BlockNumber, TxHash, U128};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
@@ -18,7 +18,7 @@ use jsonrpsee::core::RpcResult;
 use reth_transaction_pool::{EthPooledTransaction, NewSubpoolTransactionStream, TransactionPool};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
