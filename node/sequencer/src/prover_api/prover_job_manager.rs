@@ -271,7 +271,7 @@ impl ProverJobManager {
                         block_number: block,
                         status: JobStatusInfo::Assigned {
                             seconds_ago: (*assigned_at).elapsed().as_secs() as u32,
-                        }
+                        },
                     },
                 }
             })
