@@ -1,9 +1,8 @@
 use crate::{
-    leaf_nibbles,
+    Database, DefaultTreeParams, HashTree, MerkleTree, TreeParams, leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
-    Database, DefaultTreeParams, HashTree, MerkleTree, TreeParams,
 };
-use alloy::primitives::{FixedBytes, B256};
+use alloy::primitives::{B256, FixedBytes};
 use tokio::sync::watch;
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;

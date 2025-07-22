@@ -3,8 +3,8 @@
 //! A proof is a binary blob (`Vec<u8>`) identified by its block number.
 //!
 
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
+use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 /// Column family set for proof storage.
 #[derive(Copy, Clone, Debug)]

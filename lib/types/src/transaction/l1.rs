@@ -5,7 +5,7 @@ use alloy::eips::eip2930::AccessList;
 use alloy::eips::eip7702::SignedAuthorization;
 use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::{
-    keccak256, Address, Bytes, ChainId, Signature, TxHash, TxKind, B256, U256,
+    Address, B256, Bytes, ChainId, Signature, TxHash, TxKind, U256, keccak256,
 };
 use alloy::rlp::{BufMut, Decodable, Encodable};
 use alloy::sol_types::SolValue;
@@ -359,7 +359,7 @@ impl Encodable for L1Envelope {
 impl TryFrom<L2CanonicalTransaction> for L1Envelope {
     type Error = L1EnvelopeError;
 
-    fn try_from(mut tx: L2CanonicalTransaction) -> Result<Self, Self::Error> {
+    fn try_from(tx: L2CanonicalTransaction) -> Result<Self, Self::Error> {
         let tx_type = tx.txType.saturating_to();
         if tx_type != REAL_L1_PRIORITY_TX_TYPE_ID {
             return Err(L1EnvelopeError::IncorrectTransactionType(tx_type));
@@ -376,7 +376,6 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
             // return Err(L1EnvelopeError::NonEmptyFactoryDeps(
             //     tx.factoryDeps.into_iter().map(B256::from).collect(),
             // ));
-            tx.factoryDeps = Vec::new();
         }
         if !tx.reserved[2].is_zero() {
             return Err(L1EnvelopeError::NonZeroReservedField(2, tx.reserved[2]));

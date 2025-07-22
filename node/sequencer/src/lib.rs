@@ -16,6 +16,7 @@ pub mod tree_manager;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
+use crate::batcher::util::genesis_stored_batch_info;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
@@ -23,8 +24,8 @@ use crate::model::{BatchJob, ProduceCommand};
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
@@ -33,12 +34,10 @@ use crate::{
     },
     model::{BlockCommand, ReplayRecord},
 };
-use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -378,7 +377,8 @@ pub async fn run(
 
     // ========== Initialize L1 sender (fallible) ===========
 
-    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let genesis_stored_batch_info = genesis_stored_batch_info();
+    let l1_sender = L1Sender::new(l1_sender_config, genesis_stored_batch_info.clone()).await;
     let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
@@ -415,10 +415,7 @@ pub async fn run(
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
         assert_eq!(first_block_to_execute, 1);
-        let genesis_state_commitment =
-            B256::from_str("0x6e6e7044cb237fa30937e7e2ee56db7bb3b5d3bd0f46ba7c3a46a6ac4cf2f330")
-                .unwrap();
-        let prev_batch_data = (0, genesis_state_commitment);
+        let prev_batch_data = (0, genesis_stored_batch_info.state_commitment);
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,

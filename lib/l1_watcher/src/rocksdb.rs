@@ -1,7 +1,7 @@
 use alloy::primitives::BlockNumber;
 use std::path::PathBuf;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
+use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 const L1_WATCHER_DB_NAME: &str = "l1_watcher";
 

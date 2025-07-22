@@ -1,4 +1,4 @@
-use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, B256, U256};
+use alloy::primitives::{Address, B256, Bytes, FixedBytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
@@ -119,6 +119,7 @@ impl CommitBatchInfo {
             }
         }
 
+        // todo: uncomment when updating `zksync-os` commitment (#80 )
         // let last_256_block_hashes_blake = {
         //     let mut blocks_hasher = Blake2s256::new();
         //     for block_hash in batch_context.block_hashes.0.iter() {
