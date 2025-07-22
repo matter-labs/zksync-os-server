@@ -6,7 +6,7 @@ use std::{
 use alloy::primitives::B256;
 use anyhow::Context;
 
-use crate::{BatchOutput, HashTree, TreeEntry, types::Leaf};
+use crate::{TreeBatchOutput, HashTree, TreeEntry, types::Leaf};
 
 /// Operation on a Merkle tree entry used in [`BatchTreeProof`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -85,7 +85,7 @@ impl BatchTreeProof {
         self,
         hasher: &dyn HashTree,
         tree_depth: u8,
-        prev_output: BatchOutput,
+        prev_output: TreeBatchOutput,
         read_keys: &[B256],
     ) -> anyhow::Result<MerkleTreeView> {
         self.verify(hasher, tree_depth, Some(prev_output), &[], read_keys)
@@ -96,7 +96,7 @@ impl BatchTreeProof {
         mut self,
         hasher: &dyn HashTree,
         tree_depth: u8,
-        prev_output: Option<BatchOutput>,
+        prev_output: Option<TreeBatchOutput>,
         entries: &[TreeEntry],
         read_keys: &[B256],
     ) -> anyhow::Result<MerkleTreeView> {
@@ -225,7 +225,7 @@ impl BatchTreeProof {
 
     fn verify_operation(
         &self,
-        prev_output: &BatchOutput,
+        prev_output: &TreeBatchOutput,
         operation: TreeOperation,
         key: &B256,
     ) -> anyhow::Result<()> {
@@ -418,7 +418,7 @@ mod tests {
             hashes: vec![],
         };
 
-        let empty_tree_output = BatchOutput {
+        let empty_tree_output = TreeBatchOutput {
             leaf_count: 2,
             root_hash: "0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b"
                 .parse()
@@ -454,7 +454,7 @@ mod tests {
             hashes: vec![],
         };
 
-        let empty_tree_output = BatchOutput {
+        let empty_tree_output = TreeBatchOutput {
             leaf_count: 2,
             root_hash: "0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b"
                 .parse()
@@ -483,7 +483,7 @@ mod tests {
             hashes: vec![],
         };
 
-        let empty_tree_output = BatchOutput {
+        let empty_tree_output = TreeBatchOutput {
             leaf_count: 2,
             root_hash: "0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b"
                 .parse()

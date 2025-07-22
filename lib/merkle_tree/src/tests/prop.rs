@@ -12,7 +12,7 @@ use proptest::{prelude::*, sample::Index};
 use super::naive_hash_tree;
 use crate::blake2::Blake2Hasher;
 use crate::{
-    BatchOutput, BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeEntry, TreeOperation,
+    TreeBatchOutput, BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeEntry, TreeOperation,
     TreeParams, types::Leaf,
 };
 
@@ -69,10 +69,10 @@ fn merge_reads(reads: &mut Vec<B256>, prev_entries: &[TreeEntry], indices: Vec<I
     reads.extend(deduplicated_reads);
 }
 
-fn latest_tree_info(tree: &MerkleTree<PatchSet>) -> Option<BatchOutput> {
+fn latest_tree_info(tree: &MerkleTree<PatchSet>) -> Option<TreeBatchOutput> {
     if let Some(version) = tree.latest_version().unwrap() {
         let (root_hash, leaf_count) = tree.root_info(version).unwrap().expect("no latest info");
-        Some(BatchOutput {
+        Some(TreeBatchOutput {
             root_hash,
             leaf_count,
         })

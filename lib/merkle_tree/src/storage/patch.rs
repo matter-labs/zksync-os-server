@@ -10,7 +10,7 @@ use anyhow::Context as _;
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
-    BatchOutput, DeserializeError, HashTree, MerkleTree, TreeEntry, TreeParams,
+    TreeBatchOutput, DeserializeError, HashTree, MerkleTree, TreeEntry, TreeParams,
     errors::{DeserializeContext, DeserializeErrorKind},
     hasher::{BatchTreeProof, IntermediateHash, InternalHashes, TreeOperation},
     leaf_nibbles, max_nibbles_for_internal_node, max_node_children,
@@ -485,7 +485,7 @@ impl<P: TreeParams> WorkingPatchSet<P> {
         self,
         hasher: &P::Hasher,
         update: FinalTreeUpdate,
-    ) -> (PatchSet, BatchOutput) {
+    ) -> (PatchSet, TreeBatchOutput) {
         use rayon::prelude::*;
 
         let mut this = self.inner;
@@ -515,7 +515,7 @@ impl<P: TreeParams> WorkingPatchSet<P> {
         assert_eq!(hashes.len(), 1);
         let (root_idx, root_hash) = hashes[0];
         assert_eq!(root_idx, 0);
-        let output = BatchOutput {
+        let output = TreeBatchOutput {
             leaf_count: this.leaf_count,
             root_hash,
         };
