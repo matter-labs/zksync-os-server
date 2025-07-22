@@ -119,6 +119,7 @@ impl CommitBatchInfo {
             }
         }
 
+        // todo: uncomment when updating `zksync-os` commitment (#80 )
         // let last_256_block_hashes_blake = {
         //     let mut blocks_hasher = Blake2s256::new();
         //     for block_hash in batch_context.block_hashes.0.iter() {
