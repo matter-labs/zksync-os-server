@@ -5,9 +5,8 @@ use std::{collections::HashMap, iter};
 use alloy::primitives::B256;
 
 use crate::{
-    max_nibbles_for_internal_node,
+    HashTree, TreeParams, max_nibbles_for_internal_node,
     types::{InternalNode, Root},
-    HashTree, TreeParams,
 };
 
 /// Internal hashes for a single `InternalNode`. Ordered by ascending depth `1..internal_node_depth`
@@ -151,8 +150,8 @@ impl<'a> InternalHashes<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blake2::Blake2Hasher;
     use crate::DefaultTreeParams;
+    use crate::blake2::Blake2Hasher;
 
     #[test]
     fn constructing_internal_hashes() {

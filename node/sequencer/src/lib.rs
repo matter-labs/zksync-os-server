@@ -23,8 +23,8 @@ use crate::model::{BatchJob, ProduceCommand};
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{

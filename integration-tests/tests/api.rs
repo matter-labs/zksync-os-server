@@ -1,7 +1,7 @@
 use alloy::network::ReceiptResponse;
 use alloy::providers::Provider;
-use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::contracts::EventEmitter;
 
 #[test_log::test(tokio::test)]
 async fn get_code() -> anyhow::Result<()> {

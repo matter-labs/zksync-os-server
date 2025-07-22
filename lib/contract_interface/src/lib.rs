@@ -1,5 +1,5 @@
 use crate::IBridgehub::{
-    requestL2TransactionDirectCall, IBridgehubInstance, L2TransactionRequestDirect,
+    IBridgehubInstance, L2TransactionRequestDirect, requestL2TransactionDirectCall,
 };
 use alloy::contract::SolCallBuilder;
 use alloy::network::Ethereum;

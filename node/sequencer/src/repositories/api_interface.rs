@@ -14,7 +14,7 @@ pub type RepositoryBlock = Sealed<Block<TxHash>>;
 pub trait ApiRepository: Send + Sync {
     /// Get sealed block with transaction hashes by its number.
     fn get_block_by_number(&self, number: BlockNumber)
-        -> RepositoryResult<Option<RepositoryBlock>>;
+    -> RepositoryResult<Option<RepositoryBlock>>;
 
     /// Get sealed block with transaction hashes by its hash.
     fn get_block_by_hash(&self, hash: BlockHash) -> RepositoryResult<Option<RepositoryBlock>>;

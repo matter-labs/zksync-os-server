@@ -1,4 +1,4 @@
-use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, B256, U256};
+use alloy::primitives::{Address, B256, Bytes, FixedBytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;

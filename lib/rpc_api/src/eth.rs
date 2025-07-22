@@ -4,7 +4,7 @@
 use alloy::consensus::Account;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{Address, Bytes, B256, U256, U64};
+use alloy::primitives::{Address, B256, Bytes, U64, U256};
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
@@ -86,7 +86,7 @@ pub trait EthApi {
     /// Returns all transaction receipts for a given block.
     #[method(name = "getBlockReceipts")]
     async fn block_receipts(&self, block_id: BlockId)
-        -> RpcResult<Option<Vec<TransactionReceipt>>>;
+    -> RpcResult<Option<Vec<TransactionReceipt>>>;
 
     /// Returns an uncle block of the given block and index.
     #[method(name = "getUncleByBlockHashAndIndex")]

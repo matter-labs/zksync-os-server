@@ -1,5 +1,5 @@
 use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, TxType};
-use alloy::primitives::{Address, Log, LogData, Sealed, TxHash, TxNonce, B256};
+use alloy::primitives::{Address, B256, Log, LogData, Sealed, TxHash, TxNonce};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;

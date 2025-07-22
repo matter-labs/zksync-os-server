@@ -2,8 +2,8 @@ use alloy::network::Ethereum;
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{EthCall, PendingTransactionBuilder};
 use alloy::rpc::json_rpc::RpcRecv;
-use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::TransactionReceipt;
+use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 
 #[allow(async_fn_in_trait)]
 pub trait EthCallAssert {

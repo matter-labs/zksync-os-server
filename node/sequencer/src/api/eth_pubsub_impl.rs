@@ -33,14 +33,14 @@ impl<R> EthPubsubNamespace<R> {
 
 impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
     /// Returns a stream that yields all new RPC blocks.
-    fn new_headers_stream(&self) -> impl Stream<Item = alloy::rpc::types::Header> {
+    fn new_headers_stream(&self) -> impl Stream<Item = alloy::rpc::types::Header> + use<R> {
         self.repository.block_stream().map(|notification| {
             alloy::rpc::types::Header::from_consensus((*notification.header).clone(), None, None)
         })
     }
 
     /// Returns a stream that yields all logs that match the given filter.
-    fn log_stream(&self, filter: Filter) -> impl Stream<Item = Log> {
+    fn log_stream(&self, filter: Filter) -> impl Stream<Item = Log> + use<R> {
         self.repository
             .block_stream()
             .flat_map(move |notification| {
@@ -62,14 +62,14 @@ impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
     }
 
     /// Returns a stream that yields all transaction hashes emitted by the mempool.
-    fn pending_transaction_hashes_stream(&self) -> impl Stream<Item = TxHash> {
+    fn pending_transaction_hashes_stream(&self) -> impl Stream<Item = TxHash> + use<R> {
         ReceiverStream::new(self.mempool.pending_transactions_listener())
     }
 
     /// Returns a stream that yields all transactions emitted by the mempool.
     fn full_pending_transaction_stream(
         &self,
-    ) -> impl Stream<Item = NewTransactionEvent<EthPooledTransaction>> {
+    ) -> impl Stream<Item = NewTransactionEvent<EthPooledTransaction>> + use<R> {
         self.mempool.new_pending_pool_transactions_listener()
     }
 

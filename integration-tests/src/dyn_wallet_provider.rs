@@ -4,7 +4,7 @@ use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::{Ethereum, EthereumWallet, Network};
 use alloy::primitives::{
-    Address, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, B256, U128, U256, U64,
+    Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, TxHash, U64, U128, U256,
 };
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{

@@ -1,5 +1,5 @@
 use rand::prelude::IndexedRandom;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tempfile::TempDir;
 
 use crate::{MerkleTree, MerkleTreeColumnFamily, RocksDBWrapper, TreeEntry};

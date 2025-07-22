@@ -5,8 +5,8 @@ use futures::stream::{self, BoxStream, StreamExt};
 use std::convert::TryInto;
 use zk_os_forward_system::run::BatchContext;
 use zksync_os_types::ZkEnvelope;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::RocksDB;
+use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:

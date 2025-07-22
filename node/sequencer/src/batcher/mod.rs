@@ -1,6 +1,6 @@
+use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
-use crate::CHAIN_ID;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -9,11 +9,11 @@ use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_forward_system::run::test_impl::TxListSource;
-use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
-use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zk_os_forward_system::run::{BatchOutput, StorageCommitment, generate_proof_input};
 use zksync_os_l1_sender::L1SenderHandle;
+use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree::{
-    fixed_bytes_to_bytes32, MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper,
+    MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;

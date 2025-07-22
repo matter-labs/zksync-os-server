@@ -10,12 +10,12 @@ use anyhow::Context as _;
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
+    BatchOutput, DeserializeError, HashTree, MerkleTree, TreeEntry, TreeParams,
     errors::{DeserializeContext, DeserializeErrorKind},
     hasher::{BatchTreeProof, IntermediateHash, InternalHashes, TreeOperation},
     leaf_nibbles, max_nibbles_for_internal_node, max_node_children,
     metrics::{BatchProofStage, LoadStage, METRICS},
     types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root, TreeTags},
-    BatchOutput, DeserializeError, HashTree, MerkleTree, TreeEntry, TreeParams,
 };
 
 #[derive(Debug)]

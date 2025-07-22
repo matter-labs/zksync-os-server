@@ -11,8 +11,8 @@ use alloy::network::{EthereumWallet, TransactionBuilder, TransactionBuilder4844}
 use alloy::primitives::{Address, U256};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::{SolCall, SolValue};
 use anyhow::Context;

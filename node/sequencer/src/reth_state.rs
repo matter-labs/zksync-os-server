@@ -1,7 +1,7 @@
-use crate::repositories::RepositoryManager;
 use crate::CHAIN_ID;
+use crate::repositories::RepositoryManager;
 use alloy::eips::{BlockNumHash, BlockNumberOrTag};
-use alloy::primitives::{Address, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, B256};
+use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue};
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
 use reth_primitives_traits::{Account, Bytecode};
 use reth_revm::db::BundleState;

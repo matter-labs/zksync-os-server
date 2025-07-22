@@ -6,17 +6,17 @@ use alloy::primitives::{B256, U256};
 use anyhow::Context;
 use clap::Parser;
 use rand::{
-    prelude::{IteratorRandom, StdRng},
     SeedableRng,
+    prelude::{IteratorRandom, StdRng},
 };
 use tempfile::TempDir;
 use tracing_subscriber::EnvFilter;
 use zksync_os_merkle_tree::blake2::{Blake2Hasher, Hasher};
 use zksync_os_merkle_tree::{
-    unstable, Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree,
-    MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams,
+    Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree, MerkleTreeColumnFamily,
+    PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams, unstable,
 };
-use zksync_storage::{db::NamedColumnFamily, RocksDB, RocksDBOptions};
+use zksync_storage::{RocksDB, RocksDBOptions, db::NamedColumnFamily};
 
 #[derive(Debug)]
 struct WithDynHasher;

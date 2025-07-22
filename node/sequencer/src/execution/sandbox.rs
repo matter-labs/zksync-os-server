@@ -1,7 +1,7 @@
 use ruint::aliases::U256;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
-use zk_os_forward_system::run::{simulate_tx, BatchContext};
+use zk_os_forward_system::run::{BatchContext, simulate_tx};
 use zksync_os_state::StateView;
 use zksync_os_types::{L2Transaction, ZksyncOsEncode};
 

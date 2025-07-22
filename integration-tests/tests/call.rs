@@ -1,9 +1,9 @@
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::providers::Provider;
-use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::TransactionRequest;
-use zksync_os_integration_tests::assert_traits::EthCallAssert;
+use alloy::rpc::types::state::StateOverride;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::EthCallAssert;
 
 #[test_log::test(tokio::test)]
 async fn call_fail() -> anyhow::Result<()> {
