@@ -385,7 +385,7 @@ pub async fn run(
             .unwrap(),
     );
     let bridgehub = Bridgehub::new(
-        l1_sender_config.bridgehub_address.clone(),
+        l1_sender_config.bridgehub_address,
         provider.clone(),
         l1_sender_config.chain_id,
     );

@@ -259,7 +259,7 @@ impl L1Sender {
             U256::from(self.chain_id),
             U256::from(last_committed_batch.batch_number + 1),
             U256::from(last_committed_batch.batch_number + 1),
-            Self::commit_calldata(&last_committed_batch, commit_batch_info.clone()).into(),
+            Self::commit_calldata(last_committed_batch, commit_batch_info.clone()).into(),
         ));
 
         let gas_price = self.provider.get_gas_price().await?;
