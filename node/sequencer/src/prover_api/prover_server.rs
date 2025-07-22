@@ -138,7 +138,7 @@ async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) ->
 // ───────────── SNARK handlers ─────────────
 
 async fn pick_snark_job(State(state): State<AppState>) -> Response {
-    let Some(((from_block, to_block), proofs)) = state.job_manager.get_next_snark_job() else {
+    let Some((from_block, to_block, proofs)) = state.job_manager.get_next_snark_job() else {
         return StatusCode::NO_CONTENT.into_response();
     };
 

@@ -3,19 +3,17 @@
 //! * Incoming jobs are received through an async channel (see
 //!   [`ProverJobManager::listen_for_batch_jobs`]).
 //! * Temporary applies different logic to FRI and SNARK jobs:
-//! For FRI jobs, it stores the prover assignments in the in-memory map, so that multiple provers are supported:
+//!   * For FRI jobs, it stores the prover assignments in the in-memory map, so that multiple provers are supported:
 //!     * Provers request work via [`pick_next_fri_job`], which always returns the
 //!       smallest block number that is **pending** or has **timed‑out**.
 //!     * When a proof is submitted and verified, the job is removed so the map
 //!       cannot grow unbounded.
-//! For SNARK jobs, it doesn't coordinate between provers, so only one prover is
-//! supported. Additionally, it doens't store anything in memory - using a
-//! persistent storage instead:
+//!   * For SNARK jobs, it doesn't coordinate between provers, so only one prover is
+//!     supported. Additionally, it doesn't store anything in memory - using a persistent storage instead:
 //!     * Provers request work via [`pick_next_snark_job`], which returns the
 //!       next range of blocks that have no proofs.
 //!     * When a proof is submitted, it's saved in the persistent storage.
 //!
-//
 use std::time::{Duration, Instant};
 
 use crate::model::BatchJob;
@@ -190,8 +188,8 @@ impl ProverJobManager {
     /// Returns the next range of gapless FRI proofs - which can be combined into a single SNARK proof.
     /// Note that this function is not mutating the internal state, as we don't save SNARK prover job assignments.
     ///
-    /// Returns ((block_from, block_to), Vec<FRI proof>)
-    pub fn get_next_snark_job(&self) -> Option<((u64, u64), Vec<Vec<u8>>)> {
+    /// Returns (block_from, block_to, Vec<FRI proof>)
+    pub fn get_next_snark_job(&self) -> Option<(u64, u64, Vec<Vec<u8>>)> {
         let start_block = self.proof_storage
             .next_expected_snark_range_start();
 
@@ -209,7 +207,7 @@ impl ProverJobManager {
         }
 
         let last_block = start_block + gapless_proofs.len() as u64 - 1;
-        Some(((start_block, last_block), gapless_proofs))
+        Some((start_block, last_block, gapless_proofs))
     }
     pub fn submit_snark_proof(
         &self,
@@ -245,7 +243,7 @@ impl ProverJobManager {
                 }
             })
             .collect();
-        let next_snark_job = self.get_next_snark_job().map(|(range, _)| range);
+        let next_snark_job = self.get_next_snark_job().map(|(from, to, _)| (from, to));
         ProverJobManagerState {
             fri_jobs,
             next_snark_job,
