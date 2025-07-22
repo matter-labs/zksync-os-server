@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::model::BatchJob;
 use crate::prover_api::metrics::PROVER_METRICS;
 use crate::prover_api::proof_storage::ProofStorage;
-use crate::prover_api::prover_server::{FriJobState, ProverJobManagerState};
+use crate::prover_api::prover_server::{FriJobState, JobStatusInfo, ProverJobManagerState};
 use air_compiler_cli::prover_utils::{
     generate_oracle_data_from_metadata_and_proof_list, proof_list_and_metadata_from_program_proof,
 };
@@ -265,15 +265,13 @@ impl ProverJobManager {
                 match &entry.status {
                     JobStatus::Pending => FriJobState {
                         block_number: block,
-                        status: "Pending",
-                        prover_id: None,
-                        assigned_seconds_ago: None,
+                        status: JobStatusInfo::Pending,
                     },
                     JobStatus::Assigned { assigned_at } => FriJobState {
                         block_number: block,
-                        status: "Assigned",
-                        prover_id: None,
-                        assigned_seconds_ago: Some((*assigned_at).elapsed().as_secs() as u32),
+                        status: JobStatusInfo::Assigned {
+                            seconds_ago: (*assigned_at).elapsed().as_secs() as u32,
+                        }
                     },
                 }
             })

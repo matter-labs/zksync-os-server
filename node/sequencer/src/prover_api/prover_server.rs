@@ -40,7 +40,6 @@ struct SnarkProofPayload {
     proof: String,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct ProverQuery {
     id: Option<String>,
@@ -54,21 +53,28 @@ struct AppState {
 /// Public view of job manager state
 #[derive(Debug, Serialize)]
 pub struct ProverJobManagerState {
+    /// List of FRI jobs that are in memory
     pub fri_jobs: Vec<FriJobState>,
+    /// (from_block, to_block) of the next SNARK job to be processed
     pub next_snark_job: Option<(u64, u64)>,
+    /// estimated number of blocks for which we have FRI proofs (computed and persisted)
     pub fri_proofs_count_estimate: u64,
+    /// estimated number of computed and persisted SNARK proofs
     pub snark_proofs_count_estimated: u64,
+}
+
+/// Status of a FRI job in memory
+#[derive(Debug, Serialize)]
+pub enum JobStatusInfo {
+    Pending,
+    Assigned { seconds_ago: u32 },
 }
 
 /// Public view of one FRI job’s state.
 #[derive(Debug, Serialize)]
 pub struct FriJobState {
     pub block_number: u64,
-    pub status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prover_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assigned_seconds_ago: Option<u32>,
+    pub status: JobStatusInfo,
 }
 
 // ───────────── FRI handlers ─────────────
