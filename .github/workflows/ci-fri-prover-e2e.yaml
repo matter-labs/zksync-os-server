@@ -14,7 +14,7 @@ env:
 jobs:
   test-fri-prover-e2e:
     name: FRI Prover E2E Test
-    runs-on: matterlabs-ci-gpu-l4-runner-prover-tests
+    runs-on: matterlabs-ci-runner-high-performance
 
     steps:
       - name: Checkout code
