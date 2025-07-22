@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   PASSED_ENV_VARS: RUST_BACKTRACE
-  RUNNER_COMPOSE_FILE: "docker-compose-gpu-runner-cuda-12-0.yml"
+#  RUNNER_COMPOSE_FILE: "docker-compose-gpu-runner-cuda-12-0.yml"
 
 jobs:
   test-fri-prover-e2e:
@@ -81,12 +81,12 @@ jobs:
 
       - name: Run FRI prover
         run: |
-          ci_run wget -c https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.sh
-          ci_run chmod +x cmake-3.28.6-linux-x86_64.sh
-          ci_run ./cmake-3.28.6-linux-x86_64.sh --skip-license --prefix=/usr/local
+#          ci_run wget -c https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.sh
+#          ci_run chmod +x cmake-3.28.6-linux-x86_64.sh
+#          ci_run ./cmake-3.28.6-linux-x86_64.sh --skip-license --prefix=/usr/local
           
-          ci_run cargo build --manifest-path zksync-era/zkos_prover/Cargo.toml --release --features gpu
-          ci_run cargo run --manifest-path zksync-era/zkos_prover/Cargo.toml --release --features gpu -- --enabled-logging &> prover.log &
+          ci_run cargo build --manifest-path zksync-era/zkos_prover/Cargo.toml --release
+          ci_run cargo run --manifest-path zksync-era/zkos_prover/Cargo.toml --release -- --enabled-logging &> prover.log &
 
       - name: Wait for proof
         env:
