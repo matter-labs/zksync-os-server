@@ -10,7 +10,7 @@ use anyhow::Context as _;
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
-    TreeBatchOutput, DeserializeError, HashTree, MerkleTree, TreeEntry, TreeParams,
+    DeserializeError, HashTree, MerkleTree, TreeBatchOutput, TreeEntry, TreeParams,
     errors::{DeserializeContext, DeserializeErrorKind},
     hasher::{BatchTreeProof, IntermediateHash, InternalHashes, TreeOperation},
     leaf_nibbles, max_nibbles_for_internal_node, max_node_children,

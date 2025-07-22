@@ -6,7 +6,7 @@ use std::{
 use alloy::primitives::B256;
 use anyhow::Context;
 
-use crate::{TreeBatchOutput, HashTree, TreeEntry, types::Leaf};
+use crate::{HashTree, TreeBatchOutput, TreeEntry, types::Leaf};
 
 /// Operation on a Merkle tree entry used in [`BatchTreeProof`].
 #[derive(Debug, Clone, Copy, PartialEq)]
