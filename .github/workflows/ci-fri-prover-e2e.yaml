@@ -52,9 +52,9 @@ jobs:
           BATCHER_LOGGING_ENABLED: "true"
           PROVER_API_COMPONENT_ENABLED: "true"
         run: |
-          ci_run cargo build
+          ci_run cargo build --release
           PASSED_ENV_VARS="BATCHER_LOGGING_ENABLED,PROVER_API_COMPONENT_ENABLED,RUST_BACKTRACE" \
-          ci_run cargo run &> server.log &
+          ci_run cargo run --release &> server.log &
 
       - name: Waiting for JSON RPC to become ready
         env:
