@@ -13,6 +13,7 @@ pub mod prover_api;
 pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
+mod util;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
@@ -33,6 +34,7 @@ use crate::{
     },
     model::{BlockCommand, ReplayRecord},
 };
+use alloy::providers::{DynProvider, ProviderBuilder, WsConnect};
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
@@ -43,6 +45,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::{BatchOutput as BlockOutput, BatchOutput};
+use zksync_os_contract_interface::Bridgehub;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
@@ -374,19 +377,32 @@ pub async fn run(
         }
     };
 
+    let provider = DynProvider::new(
+        ProviderBuilder::new()
+            .connect_ws(WsConnect::new(l1_sender_config.l1_api_url.clone()))
+            .await
+            .context("failed to connect to L1 api")
+            .unwrap(),
+    );
+    let bridgehub = Bridgehub::new(
+        l1_sender_config.bridgehub_address.clone(),
+        provider.clone(),
+        l1_sender_config.chain_id,
+    );
+    let last_committed_batch = bridgehub
+        .get_total_batches_committed()
+        .await
+        .unwrap()
+        .saturating_to::<u64>();
+
     // ========== Initialize L1 sender (fallible) ===========
 
     let l1_sender = L1Sender::new(l1_sender_config).await;
-    let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
+    let (l1_sender_task, l1_sender_handle): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
-        u64,
     ) = match l1_sender {
-        Ok((l1_sender, l1_handle, last_committed_batch_number)) => (
-            Box::pin(l1_sender.run()),
-            Some(l1_handle),
-            last_committed_batch_number,
-        ),
+        Ok((l1_sender, l1_handle)) => (Box::pin(l1_sender.run()), Some(l1_handle)),
         Err(err) => {
             // todo: this is inconsistent with the behaviour when prover api / batcher are disabled:
             //  * here, we return `l1_sender_handle` as `None` and upstream components don't send to it
@@ -404,7 +420,6 @@ pub async fn run(
                         .map_err(|e| anyhow::anyhow!(e))
                 }),
                 None,
-                0,
             )
         }
     };
@@ -418,6 +433,7 @@ pub async fn run(
             l1_sender_handle,
             state_handle.clone(),
             persistent_tree,
+            last_committed_batch,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
         );

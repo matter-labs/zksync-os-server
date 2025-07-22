@@ -1,6 +1,7 @@
 use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
+use crate::util::load_genesis_stored_batch;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ pub struct Batcher {
     commit_batch_info_sender: Option<L1SenderHandle>,
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     state_handle: StateHandle,
+    last_committed_batch: u64,
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
 }
@@ -44,6 +46,7 @@ impl Batcher {
         commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
+        last_committed_batch: u64,
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
@@ -63,6 +66,7 @@ impl Batcher {
             batch_sender,
             persistent_tree,
             commit_batch_info_sender,
+            last_committed_batch,
             bin_path,
             maximum_in_flight_blocks,
         }
@@ -71,6 +75,12 @@ impl Batcher {
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> anyhow::Result<()> {
+        if self.last_committed_batch == 0 {
+            if let Some(l1) = &self.commit_batch_info_sender {
+                l1.init(load_genesis_stored_batch()).await?;
+            }
+        }
+
         ReceiverStream::new(self.block_receiver)
             .then(|(batch_output, replay_record)| {
                 self.persistent_tree
@@ -132,8 +142,10 @@ impl Batcher {
                 GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                 GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
-                if let Some(l1) = &self.commit_batch_info_sender {
-                    l1.commit(commit_batch_info.clone()).await?;
+                if commit_batch_info.batch_number >= self.last_committed_batch {
+                    if let Some(l1) = &self.commit_batch_info_sender {
+                        l1.commit(commit_batch_info.clone()).await?;
+                    }
                 }
                 self.batch_sender
                     .send(BatchJob {

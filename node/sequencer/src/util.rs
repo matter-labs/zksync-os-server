@@ -1,12 +1,8 @@
-use crate::commitment::StoredBatchInfo;
 use alloy::primitives::keccak256;
-use alloy::providers::DynProvider;
-use zksync_os_contract_interface::Bridgehub;
+use zksync_os_l1_sender::commitment::StoredBatchInfo;
 
-pub async fn load_genesis_stored_batch(
-    bridgehub: &Bridgehub<DynProvider>,
-) -> anyhow::Result<StoredBatchInfo> {
-    let genesis_stored_batch = StoredBatchInfo {
+pub fn load_genesis_stored_batch() -> StoredBatchInfo {
+    StoredBatchInfo {
         batch_number: 0,
         // TODO: Make dynamic; can this be resolved without genesis configuration?
         // Result of `blake2(0x90a83ead2ba2194fbbb0f7cd2a017e36cfb4891513546d943a7282c2844d4b6b,0x2)`
@@ -22,9 +18,5 @@ pub async fn load_genesis_stored_batch(
         commitment: "0x753b52ab98b0062963a4b2ea1c061c4ab522f53f50b8fefe0a52760cbcc9e183"
             .parse()
             .unwrap(),
-    };
-    let genesis_stored_hash = bridgehub.stored_batch_hash(0).await?;
-    assert_eq!(genesis_stored_batch.hash(), genesis_stored_hash);
-
-    Ok(genesis_stored_batch)
+    }
 }
