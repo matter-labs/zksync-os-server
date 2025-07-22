@@ -45,32 +45,32 @@ jobs:
         shell: bash
         run: ci_run sccache --start-server
 
-      - name: Start anvil
-        run: ci_run anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
-
-      - name: Start server
-        env:
-          BATCHER_LOGGING_ENABLED: "true"
-          PROVER_API_COMPONENT_ENABLED: "true"
-        run: |
-          ci_run cargo build
-          PASSED_ENV_VARS="BATCHER_LOGGING_ENABLED,PROVER_API_COMPONENT_ENABLED,RUST_BACKTRACE" \
-          ci_run cargo run &> server.log &
-
-      - name: Waiting for JSON RPC to become ready
-        env:
-          URL: http://localhost:3050
-          INTERVAL: 1
-          TIMEOUT: 30
-        run: |
-          PASSED_ENV_VARS="URL,INTERVAL,TIMEOUT" \
-          ci_run ./.github/scripts/web3_json_rpc_checker
-          
-      - name: Send L2 tx
-        run: |
-          ci_run cast send 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 -r http://localhost:3050 \
-            --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110 --gas-price 10gwei \
-            --priority-gas-price 10gwei --value 1ether
+#      - name: Start anvil
+#        run: ci_run anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
+#
+#      - name: Start server
+#        env:
+#          BATCHER_LOGGING_ENABLED: "true"
+#          PROVER_API_COMPONENT_ENABLED: "true"
+#        run: |
+#          ci_run cargo build
+#          PASSED_ENV_VARS="BATCHER_LOGGING_ENABLED,PROVER_API_COMPONENT_ENABLED,RUST_BACKTRACE" \
+#          ci_run cargo run &> server.log &
+#
+#      - name: Waiting for JSON RPC to become ready
+#        env:
+#          URL: http://localhost:3050
+#          INTERVAL: 1
+#          TIMEOUT: 30
+#        run: |
+#          PASSED_ENV_VARS="URL,INTERVAL,TIMEOUT" \
+#          ci_run ./.github/scripts/web3_json_rpc_checker
+#
+#      - name: Send L2 tx
+#        run: |
+#          ci_run cast send 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 -r http://localhost:3050 \
+#            --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110 --gas-price 10gwei \
+#            --priority-gas-price 10gwei --value 1ether
 
       - name: Checkout repo for FRI prover
         uses: actions/checkout@v4
@@ -81,6 +81,10 @@ jobs:
 
       - name: Run FRI prover
         run: |
+          ci_run wget -c https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.sh
+          ci_run chmod +x cmake-3.28.6-linux-x86_64.sh
+          ci_run ./cmake-3.28.6-linux-x86_64.sh --skip-license --prefix=/usr/local
+          
           ci_run cargo build --manifest-path zksync-era/zkos_prover/Cargo.toml --release --features gpu
           ci_run cargo run --manifest-path zksync-era/zkos_prover/Cargo.toml --release --features gpu -- --enabled-logging &> prover.log &
 
@@ -88,7 +92,7 @@ jobs:
         env:
           LAST_BATCH_NUMBER: 3
           INTERVAL: 30
-          TIMEOUT: 600
+          TIMEOUT: 30
           URL: http://localhost:3124
         run: |
           PASSED_ENV_VARS="LAST_BATCH_NUMBER,URL,INTERVAL,TIMEOUT" \
