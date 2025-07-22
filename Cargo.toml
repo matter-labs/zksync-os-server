@@ -11,7 +11,7 @@ members = [
     "node/sequencer",
     "integration-tests",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
