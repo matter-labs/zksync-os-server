@@ -182,21 +182,24 @@ impl ProverJobManager {
             SubmitError::DeserializationFailed(err)
         })?;
 
-        if !verify_fri_proof(
+        match verify_fri_proof(
             entry.previous_state_commitment,
             entry.commit_batch_info.clone().into(),
             program_proof,
         ) {
-            tracing::warn!(
-                batch_number = entry.commit_batch_info.batch_number,
-                "Proof verification failed"
-            );
-            return Err(SubmitError::VerificationFailed);
-        } else {
-            tracing::info!(
-                batch_number = entry.commit_batch_info.batch_number,
-                "Proof was verified successfully"
-            );
+            Ok(()) => {
+                tracing::info!(
+                    batch_number = entry.commit_batch_info.batch_number,
+                    "Proof was verified successfully"
+                )
+            }
+            Err(err) => {
+                tracing::warn!(
+                    batch_number = entry.commit_batch_info.batch_number,
+                    "Proof verification failed"
+                );
+                return Err(err);
+            }
         }
 
         self.proof_storage
@@ -249,7 +252,7 @@ fn verify_fri_proof(
     previous_state_commitment: B256,
     stored_batch_info: StoredBatchInfo,
     proof: ProgramProof,
-) -> bool {
+) -> Result<(), SubmitError> {
     let expected_pi = BatchPublicInput {
         state_before: previous_state_commitment.0.into(),
         state_after: stored_batch_info.state_commitment.0.into(),
@@ -272,7 +275,9 @@ fn verify_fri_proof(
     );
 
     // compare expected_hash_u32s with the last 8 values of proof_final_register_values
-    proof_final_register_values[..8] == expected_hash_u32s
+    (proof_final_register_values[..8] == expected_hash_u32s)
+        .then_some(())
+        .ok_or(SubmitError::VerificationFailed)
 }
 
 fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32; 8] {
