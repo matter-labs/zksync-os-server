@@ -114,6 +114,6 @@ zksync_os_types = { path = "lib/types" }
 zksync_os_sequencer = { path = "node/sequencer" }
 
 [profile.release.package.full_statement_verifier]
-opt-level = 0
+opt-level = 1
 debug = false
 codegen-units = 1
