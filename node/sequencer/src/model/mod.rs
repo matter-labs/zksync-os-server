@@ -1,3 +1,4 @@
+use alloy::primitives::B256;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -113,6 +114,7 @@ pub enum SealPolicy {
 pub struct BatchJob {
     pub block_number: u64,
     pub prover_input: Vec<u32>,
+    pub previous_state_commitment: B256,
     pub commit_batch_info: CommitBatchInfo,
 }
 

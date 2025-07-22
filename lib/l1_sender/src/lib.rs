@@ -1,7 +1,6 @@
 pub mod commitment;
 pub mod config;
 mod rocksdb;
-mod util;
 
 use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use crate::config::L1SenderConfig;
@@ -38,7 +37,10 @@ impl L1Sender {
     ///
     /// Resulting [`L1Sender`] is expected to be consumed by calling [`Self::run`]. Additionally,
     /// returns a cloneable handle that can be used to send requests to this instance of [`L1Sender`].
-    pub async fn new(config: L1SenderConfig) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
+    pub async fn new(
+        config: L1SenderConfig,
+        genesis_stored_batch: StoredBatchInfo,
+    ) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
         let blob_operator_wallet = EthereumWallet::from(
             PrivateKeySigner::from_str(config.operator_private_key.expose_secret())
                 .context("failed to parse operator private key")?,
@@ -66,7 +68,11 @@ impl L1Sender {
         let storage = L1SenderRocksdbStorage::new(config.rocks_db_path);
         let last_committed_batch = match storage.get_last_committed_batch() {
             Some(last_committed_batch) => last_committed_batch,
-            None => util::load_genesis_stored_batch(&bridgehub).await?,
+            None => {
+                let genesis_stored_hash = bridgehub.stored_batch_hash(0).await?;
+                assert_eq!(genesis_stored_batch.hash(), genesis_stored_hash);
+                genesis_stored_batch
+            }
         };
         let last_committed_batch_number = last_committed_batch.batch_number;
         tracing::info!(last_committed_batch_number, "starting L1 sender");
