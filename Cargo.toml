@@ -118,6 +118,11 @@ opt-level = 0
 debug = false
 codegen-units = 1
 
+[profile.release.package.cli]
+opt-level = 0
+debug = false
+codegen-units = 1
+
 [profile.release.package.execution_utils]
 opt-level = 0
 debug = false
