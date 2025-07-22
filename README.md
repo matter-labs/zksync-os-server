@@ -12,6 +12,8 @@ To enable local L1 - in other tab (see "L1 State" below for more info)
 anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
 ```
 
+To enable prover api, add `prover_api_component_enabled=true` env. variable. It's disabled by default for now so that block production is not blocked when provers are not run.
+
 See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g. for high TPS:
 ```
 batcher_component_enabled=false sequencer_blocks_to_retain_in_memory=16 cargo run --release
