@@ -3,13 +3,13 @@ use dashmap::DashMap;
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 use zk_ee::common_structs::PreimageType;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
-    AccountProperties, ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zk_os_forward_system::run::BatchOutput;
 

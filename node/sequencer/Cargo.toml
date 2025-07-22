@@ -20,6 +20,11 @@ zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 
+air-compiler-cli.workspace = true
+execution_utils.workspace = true
+verifier_common.workspace = true
+full_statement_verifier.workspace = true
+
 reth-chainspec = { workspace = true }
 reth-trie-common = { workspace = true }
 reth-primitives.workspace = true
@@ -55,6 +60,7 @@ serde_json.workspace = true
 jsonrpsee.workspace = true
 
 bincode.workspace = true
+bincode_v1.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }
 
 zksync_os_state.workspace = true

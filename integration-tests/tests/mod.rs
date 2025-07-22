@@ -9,6 +9,7 @@ use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 
 #[test_log::test(tokio::test)]
 async fn basic_transfers() -> anyhow::Result<()> {
@@ -78,14 +79,15 @@ async fn l1_deposit() -> anyhow::Result<()> {
             }
         }))
         .await?;
+    let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
-            U256::from(base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas),
+            U256::from(max_fee_per_gas + max_priority_fee_per_gas),
             gas_limit,
             gas_per_pubdata,
         )
         .await?;
-    let l1_deposit_receipt = bridgehub
+    let l1_deposit_request = bridgehub
         .request_l2_transaction_direct(
             amount + tx_base_cost,
             alice,
@@ -96,11 +98,15 @@ async fn l1_deposit() -> anyhow::Result<()> {
             alice,
         )
         .value(amount + tx_base_cost)
-        .send()
+        .max_fee_per_gas(max_fee_per_gas)
+        .max_priority_fee_per_gas(max_priority_fee_per_gas)
+        .into_transaction_request();
+    let l1_deposit_receipt = tester
+        .l1_provider
+        .send_transaction(l1_deposit_request)
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(l1_deposit_receipt.status(), "deposit failed on L1");
     let l1_to_l2_tx_log = l1_deposit_receipt
         .logs()
         .iter()
