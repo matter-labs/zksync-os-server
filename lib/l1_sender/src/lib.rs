@@ -16,7 +16,7 @@ use alloy::transports::TransportResult;
 use anyhow::Context;
 use futures::{Stream, StreamExt};
 use smart_config::value::ExposeSecret;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::str::FromStr;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::{Bridgehub, IExecutor};
@@ -92,15 +92,16 @@ impl L1Sender {
             .await
             != 0
         {
-            let mut pending_tx_hashes = HashSet::new();
+            let mut pending_tx_hashes = HashMap::new();
             for cmd in cmd_buffer.drain(..) {
                 match cmd {
                     Command::Commit(CommitCommand {
                         previous_batch,
                         batch,
                     }) => {
+                        let batch_number = batch.batch_number;
                         if let Some(pending_tx_hash) = self.commit(previous_batch, batch).await? {
-                            pending_tx_hashes.insert(pending_tx_hash);
+                            pending_tx_hashes.insert(pending_tx_hash, batch_number);
                         }
                     }
                 }
@@ -116,7 +117,7 @@ impl L1Sender {
     async fn wait_for_pending_txs(
         &mut self,
         l1_block_stream: &mut (dyn Stream<Item = TransportResult<Block>> + Unpin + Send),
-        mut pending_tx_hashes: HashSet<TxHash>,
+        mut pending_tx_hashes: HashMap<TxHash, u64>,
     ) -> anyhow::Result<()> {
         while !pending_tx_hashes.is_empty() {
             let Some(block) = l1_block_stream.next().await else {
@@ -125,8 +126,8 @@ impl L1Sender {
             let block = block?;
             let mut mined_pending_txs = 0;
             for tx_hash in block.transactions.hashes() {
-                if pending_tx_hashes.remove(&tx_hash) {
-                    self.validate_tx_receipt(tx_hash).await?;
+                if let Some(batch_number) = pending_tx_hashes.remove(&tx_hash) {
+                    self.validate_tx_receipt(batch_number, tx_hash).await?;
                     mined_pending_txs += 1;
                 }
             }
@@ -144,7 +145,7 @@ impl L1Sender {
         Ok(())
     }
 
-    async fn validate_tx_receipt(&self, tx_hash: TxHash) -> anyhow::Result<()> {
+    async fn validate_tx_receipt(&self, batch_number: u64, tx_hash: TxHash) -> anyhow::Result<()> {
         let receipt = self
             .provider
             .get_transaction_receipt(tx_hash)
@@ -154,7 +155,7 @@ impl L1Sender {
             // We could also look at tx receipt's logs for a corresponding `BlockCommit` event but
             // not sure if this is 100% necessary yet.
             tracing::info!(
-                // batch = commit_batch_info.batch_number,
+                batch_number,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
                 "batch committed to L1",
@@ -163,26 +164,26 @@ impl L1Sender {
             Ok(())
         } else {
             tracing::error!(
-                // batch = commit_batch_info.batch_number,
+                batch_number,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
                 "commit transaction failed"
             );
-            if tracing::enabled!(tracing::Level::DEBUG) {
-                let trace = self
-                    .provider
-                    .debug_trace_transaction(
-                        receipt.transaction_hash,
-                        GethDebugTracingOptions::call_tracer(CallConfig::default()),
-                    )
-                    .await?;
+            if let Ok(trace) = self
+                .provider
+                .debug_trace_transaction(
+                    receipt.transaction_hash,
+                    GethDebugTracingOptions::call_tracer(CallConfig::default()),
+                )
+                .await
+            {
                 let call_frame = trace
                     .try_into_call_frame()
                     .expect("requested call tracer but received a different call frame type");
                 // We print top-level call frame's output as it likely contains serialized custom
                 // error pointing to the underlying problem (i.e. starts with the error's 4byte
                 // signature).
-                tracing::debug!(
+                tracing::error!(
                     ?call_frame.output,
                     ?call_frame.error,
                     ?call_frame.revert_reason,

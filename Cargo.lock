@@ -10132,7 +10132,6 @@ dependencies = [
  "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
  "vise",
  "zk_ee",
- "zksync_os_contract_interface",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
