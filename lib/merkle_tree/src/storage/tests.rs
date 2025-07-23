@@ -1,8 +1,8 @@
 use super::*;
 use crate::blake2::Blake2Hasher;
 use crate::{
-    leaf_nibbles, storage::patch::InsertedLeaf, DefaultTreeParams, MerkleTree, TreeEntry,
-    TreeParams,
+    DefaultTreeParams, MerkleTree, TreeEntry, TreeParams, leaf_nibbles,
+    storage::patch::InsertedLeaf,
 };
 use alloy::primitives::U256;
 use std::collections::HashSet;

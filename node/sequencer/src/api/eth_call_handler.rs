@@ -4,14 +4,18 @@ use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
 use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use alloy::consensus::transaction::Recovered;
-use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
+use alloy::consensus::{SignableTransaction, Transaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
-use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind};
+use alloy::network::TransactionBuilder;
+use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind, U256};
+use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use zk_ee::system::errors::InternalError;
-use zk_os_forward_system::run::InvalidTransaction;
+use zk_os_forward_system::run::errors::ForwardSubsystemError;
+use zk_os_forward_system::run::{BatchContext, ExecutionResult, InvalidTransaction};
 use zksync_os_state::StateHandle;
-use zksync_os_types::L2Envelope;
+use zksync_os_types::{L2Envelope, L2Transaction};
+
+const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 
 pub struct EthCallHandler<R> {
     config: RpcConfig,
@@ -36,33 +40,11 @@ impl<R: ApiRepository> EthCallHandler<R> {
         }
     }
 
-    pub fn call_impl(
+    fn create_tx_from_request(
         &self,
         request: TransactionRequest,
-        block: Option<BlockId>,
-        state_overrides: Option<alloy::rpc::types::state::StateOverride>,
-        block_overrides: Option<Box<BlockOverrides>>,
-    ) -> Result<Bytes, EthCallError> {
-        if state_overrides.is_some() {
-            return Err(EthCallError::StateOverridesNotSupported);
-        }
-        if block_overrides.is_some() {
-            return Err(EthCallError::BlockOverridesNotSupported);
-        }
-
-        let block_id = block.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
-            return Err(EthCallError::BlockNotFound(block_id));
-        };
-        tracing::info!(?block_id, block_number, "resolved block id");
-
-        // using previous block context
-        let block_context = self
-            .block_replay_storage
-            .get_replay_record(block_number)
-            .ok_or(EthCallError::BlockNotFound(block_id))?
-            .block_context;
-
+        block_context: &BatchContext,
+    ) -> Result<L2Transaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
         let TransactionRequest {
@@ -91,7 +73,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
         let nonce = nonce.unwrap_or_else(|| {
             self.repository
                 .account_property_repository()
-                .get_at_block(block_number, &from.unwrap_or_default())
+                .get_at_block(block_context.block_number, &from.unwrap_or_default())
                 .map(|props| props.nonce)
                 .unwrap_or_default()
         });
@@ -164,7 +146,36 @@ impl<R: ApiRepository> EthCallHandler<R> {
                 return Err(EthCallError::Eip7702NotSupported);
             }
         };
-        let tx = Recovered::new_unchecked(tx, from);
+        Ok(Recovered::new_unchecked(tx, from))
+    }
+
+    pub fn call_impl(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> Result<Bytes, EthCallError> {
+        if state_overrides.is_some() {
+            return Err(EthCallError::StateOverridesNotSupported);
+        }
+        if block_overrides.is_some() {
+            return Err(EthCallError::BlockOverridesNotSupported);
+        }
+
+        let block_id = block.unwrap_or_default();
+        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+            return Err(EthCallError::BlockNotFound(block_id));
+        };
+        tracing::info!(?block_id, block_number, "resolved block id");
+
+        // using previous block context
+        let block_context = self
+            .block_replay_storage
+            .get_replay_record(block_number)
+            .ok_or(EthCallError::BlockNotFound(block_id))?
+            .block_context;
+        let tx = self.create_tx_from_request(request, &block_context)?;
 
         let storage_view = self
             .state_handle
@@ -173,11 +184,260 @@ impl<R: ApiRepository> EthCallHandler<R> {
             .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
 
         let res = execute(tx, block_context, storage_view)
-            .map_err(EthCallError::Internal)?
+            .map_err(EthCallError::ForwardSubsystemError)?
             .map_err(EthCallError::InvalidTransaction)?;
 
         Ok(Bytes::copy_from_slice(res.as_returned_bytes()))
     }
+
+    pub fn estimate_gas_impl(
+        &self,
+        mut request: TransactionRequest,
+        block_number: Option<BlockId>,
+        state_override: Option<StateOverride>,
+    ) -> Result<U256, EthCallError> {
+        if state_override.is_some() {
+            return Err(EthCallError::StateOverridesNotSupported);
+        }
+        let block_id = block_number.unwrap_or_default();
+        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+            return Err(EthCallError::BlockNotFound(block_id));
+        };
+        let block_context = self
+            .block_replay_storage
+            .get_replay_record(block_number)
+            .ok_or(EthCallError::BlockStateNotAvailable(block_number))?
+            .block_context;
+
+        // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
+        // original geth logic. Source:
+        // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
+
+        // the gas limit of the corresponding block
+        let block_gas_limit = block_context.gas_limit;
+
+        // Determine the highest possible gas limit, considering both the request's specified limit
+        // and the block's limit.
+        let mut highest_gas_limit = request
+            .gas
+            .map(|mut tx_gas_limit| {
+                if block_gas_limit < tx_gas_limit {
+                    // requested gas limit is higher than the allowed gas limit, capping
+                    tx_gas_limit = block_gas_limit;
+                }
+                tx_gas_limit
+            })
+            .unwrap_or(block_gas_limit);
+
+        // Check funds of the sender (only useful to check if transaction gas price is more than 0).
+        //
+        // The caller allowance is check by doing `(account.balance - tx.value) / tx.gas_price`
+        if request
+            .gas_price
+            .or(request.max_fee_per_gas)
+            .unwrap_or_default()
+            > 0
+        {
+            let balance = self
+                .repository
+                .account_property_repository()
+                .get_at_block(
+                    block_context.block_number,
+                    &request.from.unwrap_or_default(),
+                )
+                .map(|props| props.balance)
+                .unwrap_or_default();
+            let value = request.value.unwrap_or_default();
+            // Subtract transferred value from the caller balance. Return error if the caller has
+            // insufficient funds.
+            let balance = balance
+                .checked_sub(value)
+                .ok_or(EthCallError::InvalidTransaction(
+                    InvalidTransaction::LackOfFundForMaxFee {
+                        fee: value,
+                        balance,
+                    },
+                ))?;
+            // Cap the highest gas limit by max gas caller can afford with given gas price
+            highest_gas_limit = highest_gas_limit.min(
+                // Calculate the amount of gas the caller can afford with the specified gas price.
+                balance
+                    .checked_div(block_context.eip1559_basefee)
+                    // This will be 0 if gas price is 0. It is fine, because we check it before.
+                    .unwrap_or_default()
+                    .saturating_to(),
+            );
+        }
+        request.set_gas_limit(
+            request
+                .gas
+                .unwrap_or(highest_gas_limit)
+                .min(highest_gas_limit),
+        );
+        let tx = self.create_tx_from_request(request, &block_context)?;
+
+        let storage_view = self
+            .state_handle
+            .state_view_at_block(block_number)
+            // todo: introduce error hierarchy for `zksync_os_state`
+            .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
+
+        // Execute the transaction with the highest possible gas limit.
+        let mut res = execute(tx.clone(), block_context, storage_view.clone())
+            .map_err(EthCallError::ForwardSubsystemError)?
+            .map_err(EthCallError::InvalidTransaction)?;
+        match res.execution_result {
+            ExecutionResult::Success(_) => {
+                // Transaction succeeded with the highest possible gas limit, we can proceed with
+                // binary search
+            }
+            ExecutionResult::Revert(output) => {
+                return Err(EthCallError::Revert(Bytes::from(output)));
+            }
+        }
+
+        // we know the tx succeeded with the configured gas limit, so we can use that as the
+        // highest, in case we applied a gas cap due to caller allowance above
+        highest_gas_limit = tx.gas_limit();
+
+        // fixme: following block is disabled because zksync-os reports gas_used=0 during simulation
+        // // NOTE: this is the gas the transaction used, which is less than the
+        // // transaction requires to succeed.
+        // let mut gas_used = res.gas_used;
+        // // the lowest value is capped by the gas used by the unconstrained transaction
+        // let mut lowest_gas_limit = gas_used.saturating_sub(1);
+        //
+        // // As stated in Geth, there is a good chance that the transaction will pass if we set the
+        // // gas limit to the execution gas used plus the gas refund, so we check this first
+        // // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135
+        // //
+        // // Calculate the optimistic gas limit by adding gas used and gas refund,
+        // // then applying a 64/63 multiplier to account for gas forwarding rules.
+        // let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
+        // if optimistic_gas_limit < highest_gas_limit {
+        //     // Set the transaction's gas limit to the calculated optimistic gas limit.
+        //     let mut optimistic_tx = tx.clone();
+        //     set_gas_limit(&mut optimistic_tx, optimistic_gas_limit);
+        //
+        //     // Re-execute the transaction with the new gas limit and update the result and
+        //     // environment.
+        //     res = execute(optimistic_tx, block_context, storage_view.clone())
+        //         .map_err(EthCallError::ForwardSubsystemError)?
+        //         .map_err(EthCallError::InvalidTransaction)?;
+        //
+        //     // Update the gas used based on the new result.
+        //     gas_used = res.gas_used;
+        //     // Update the gas limit estimates (highest and lowest) based on the execution result.
+        //     update_estimated_gas_range(
+        //         res.execution_result,
+        //         optimistic_gas_limit,
+        //         &mut highest_gas_limit,
+        //         &mut lowest_gas_limit,
+        //     )?;
+        // };
+
+        // // Pick a point that's close to the estimated gas
+        // let mut mid_gas_limit = std::cmp::min(
+        //     gas_used * 3,
+        //     ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64,
+        // );
+        let mut lowest_gas_limit = 21_000;
+        let mut mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
+
+        // Binary search narrows the range to find the minimum gas limit needed for the transaction
+        // to succeed.
+        while lowest_gas_limit + 1 < highest_gas_limit {
+            // An estimation error is allowed once the current gas limit range used in the binary
+            // search is small enough (less than 1.5% of the highest gas limit)
+            // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152
+            if (highest_gas_limit - lowest_gas_limit) as f64 / (highest_gas_limit as f64)
+                < ESTIMATE_GAS_ERROR_RATIO
+            {
+                break;
+            };
+
+            let mut mid_tx = tx.clone();
+            set_gas_limit(&mut mid_tx, mid_gas_limit);
+            tracing::trace!(
+                gas_limit = mid_tx.gas_limit(),
+                "trying to simulate transaction"
+            );
+
+            // Execute transaction and handle potential gas errors, adjusting limits accordingly.
+            match execute(mid_tx, block_context, storage_view.clone())
+                .map_err(EthCallError::ForwardSubsystemError)?
+            {
+                Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {
+                    // Decrease the highest gas limit if gas is too high
+                    highest_gas_limit = mid_gas_limit;
+                }
+                Err(
+                    InvalidTransaction::CallGasCostMoreThanGasLimit
+                    | InvalidTransaction::OutOfGasDuringValidation,
+                ) => {
+                    // Increase the lowest gas limit if gas is too low
+                    lowest_gas_limit = mid_gas_limit;
+                }
+                // Handle other cases, including successful transactions.
+                ethres => {
+                    // Unpack the result and environment if the transaction was successful.
+                    res = ethres.map_err(EthCallError::InvalidTransaction)?;
+                    // Update the estimated gas range based on the transaction result.
+                    update_estimated_gas_range(
+                        res.execution_result,
+                        mid_gas_limit,
+                        &mut highest_gas_limit,
+                        &mut lowest_gas_limit,
+                    )?;
+                }
+            }
+
+            // New midpoint
+            mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
+        }
+
+        // todo: simulation undershoots real gas limit so we double the result just in case
+        //       likely because of missing ecrecover or similar discrepancies from real execution
+        Ok(U256::from(highest_gas_limit * 2))
+    }
+}
+
+fn set_gas_limit(tx: &mut L2Transaction, gas_limit: u64) {
+    match tx.inner_mut() {
+        L2Envelope::Legacy(inner) => inner.tx_mut().gas_limit = gas_limit,
+        L2Envelope::Eip2930(inner) => inner.tx_mut().gas_limit = gas_limit,
+        L2Envelope::Eip1559(inner) => inner.tx_mut().gas_limit = gas_limit,
+        L2Envelope::Eip4844(inner) => inner.tx_mut().as_mut().gas_limit = gas_limit,
+        L2Envelope::Eip7702(inner) => inner.tx_mut().gas_limit = gas_limit,
+    }
+}
+
+#[inline]
+pub fn update_estimated_gas_range(
+    result: ExecutionResult,
+    tx_gas_limit: u64,
+    highest_gas_limit: &mut u64,
+    lowest_gas_limit: &mut u64,
+) -> Result<(), EthCallError> {
+    match result {
+        ExecutionResult::Success { .. } => {
+            // Cap the highest gas limit with the succeeding gas limit.
+            *highest_gas_limit = tx_gas_limit;
+        }
+        ExecutionResult::Revert { .. } => {
+            // We know that transaction succeeded with a higher gas limit before, so any failure
+            // means that we need to increase it.
+            //
+            // We are ignoring all halts here, and not just OOG errors because there are cases when
+            // non-OOG halt might flag insufficient gas limit as well.
+            //
+            // Common usage of invalid opcode in OpenZeppelin:
+            // <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/94697be8a3f0dfcd95dfb13ffbd39b5973f5c65d/contracts/metatx/ERC2771Forwarder.sol#L360-L367>
+            *lowest_gas_limit = tx_gas_limit;
+        }
+    };
+
+    Ok(())
 }
 
 /// Error types returned by `eth_call` implementation
@@ -212,11 +472,15 @@ pub enum EthCallError {
     #[error("missing `maxPriorityFeePerGas` field for EIP-1559 transaction")]
     MissingPriorityFee,
 
+    /// Thrown if executing a transaction failed during estimate/call
+    #[error("execution reverted: {0}")]
+    Revert(Bytes),
+
     // Below is more or less temporary as the error hierarchy in ZKsync OS is going through a major
     // refactoring.
     /// Internal error propagated by ZKsync OS.
-    #[error("internal error: {}", .0.0)]
-    Internal(InternalError),
+    #[error("ZKsync OS error: {0:?}")]
+    ForwardSubsystemError(ForwardSubsystemError),
     /// Transaction is invalid according to ZKsync OS.
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),

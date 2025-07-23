@@ -1,5 +1,5 @@
 use crate::repositories::api_interface::RepositoryBlock;
-use alloy::primitives::{Address, BlockHash, BlockNumber, Bloom, Sealed, TxHash, B256, B64, U256};
+use alloy::primitives::{Address, B64, B256, BlockHash, BlockNumber, Bloom, Sealed, TxHash, U256};
 use dashmap::DashMap;
 use std::sync::Arc;
 
@@ -63,7 +63,7 @@ impl BlockReceiptRepository {
     }
 }
 
-fn alloy_header(
+pub fn alloy_header(
     header: &zk_os_forward_system::run::output::BlockHeader,
 ) -> alloy::consensus::Header {
     alloy::consensus::Header {

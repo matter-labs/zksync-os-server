@@ -91,7 +91,7 @@ impl From<L1Envelope> for TransactionData {
             ],
             data: l1_tx.input.to_vec(),
             signature: vec![],
-            factory_deps: vec![],
+            factory_deps: l1_tx.factory_deps,
             paymaster_input: vec![],
             reserved_dynamic: vec![],
         }

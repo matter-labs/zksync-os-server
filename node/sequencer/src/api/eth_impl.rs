@@ -1,20 +1,20 @@
+use crate::CHAIN_ID;
 use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
-use crate::api::result::{internal_rpc_err, unimplemented_rpc_err, ToRpcResult};
+use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::reth_state::ZkClient;
-use crate::CHAIN_ID;
-use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::consensus::Account;
+use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::dyn_abi::TypedData;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::primitives::BlockTransactions;
-use alloy::primitives::{Address, BlockNumber, Bytes, TxHash, B256, U256, U64};
+use alloy::primitives::{Address, B256, BlockNumber, Bytes, TxHash, U64, U256};
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
@@ -356,12 +356,14 @@ impl<R: ApiRepository> EthNamespace<R> {
             return Ok(Bytes::default());
         };
         let bytecode_hash = B256::from(props.bytecode_hash.as_u8_array());
-        Ok(Bytes::from(
-            self.repository
-                .bytecode_repository()
-                .get_at_block(block_number, &bytecode_hash)
-                .unwrap_or_default(),
-        ))
+        // todo(#36): temporary logic, replace with zksync-os helper methods when they are available
+        let full_bytecode = self
+            .repository
+            .bytecode_repository()
+            .get_at_block(block_number, &bytecode_hash)
+            .unwrap_or_default();
+        let unpadded_bytecode = &full_bytecode[0..props.unpadded_code_len as usize];
+        Ok(Bytes::copy_from_slice(unpadded_bytecode))
     }
 }
 
@@ -610,14 +612,17 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
 
     async fn estimate_gas(
         &self,
-        _request: TransactionRequest,
-        _block_number: Option<BlockId>,
-        _state_override: Option<StateOverride>,
+        request: TransactionRequest,
+        block_number: Option<BlockId>,
+        state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        // todo(#26): real implementation
         let latency = API_METRICS.response_time[&"estimate_gas"].start();
+        let result = self
+            .eth_call_handler
+            .estimate_gas_impl(request, block_number, state_override)
+            .to_rpc_result()?;
         latency.observe();
-        Ok(U256::from(1000000))
+        Ok(result)
     }
 
     async fn gas_price(&self) -> RpcResult<U256> {

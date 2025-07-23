@@ -3,7 +3,7 @@ use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use alloy::primitives::TxHash;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;

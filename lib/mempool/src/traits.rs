@@ -1,5 +1,5 @@
-use alloy::consensus::transaction::Recovered;
 use alloy::consensus::EthereumTxEnvelope;
+use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
 use reth_transaction_pool::{
@@ -35,10 +35,11 @@ pub trait L2TransactionPool:
     fn best_l2_transactions(&self) -> impl Stream<Item = L2Transaction> + Send + 'static {
         let pending_transactions_listener =
             self.pending_transactions_listener_for(TransactionListenerKind::All);
-        BestL2Transactions {
+        let mut x = BestL2Transactions {
             pending_transactions_listener,
             best_transactions: self.best_transactions(),
-        }
+        };
+        x.best_transactions.mark_invalid()
     }
 }
 

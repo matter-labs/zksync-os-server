@@ -4,8 +4,8 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
-use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 
 #[test_log::test(tokio::test)]
 async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
@@ -25,6 +25,7 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
     assert_eq!(tester.l2_provider.get_balance(bob).await?, U256::ZERO);
 
     let gas_price = tester.l2_provider.get_gas_price().await?;
+    let gas_limit = 100_000;
     let value = U256::from(100);
     // Prepare Bob's transaction with a nonce gap
     let bob_tx = TransactionRequest::default()
@@ -32,8 +33,8 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
         .with_to(Address::random())
         .with_value(value)
         .with_gas_price(gas_price)
+        .with_gas_limit(100_000)
         .with_nonce(1);
-    let gas_limit = tester.l2_provider.estimate_gas(bob_tx.clone()).await?;
 
     // This is what it will cost to execute Bob's legacy transaction
     let bob_tx_cost = U256::from(gas_limit) * U256::from(gas_price) + value;
@@ -43,9 +44,11 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
         .send_transaction(bob_tx.clone())
         .await
         .expect_err("sending transaction should fail");
-    assert!(error
-        .to_string()
-        .contains("sender does not have enough funds"));
+    assert!(
+        error
+            .to_string()
+            .contains("sender does not have enough funds")
+    );
 
     // Alice gives Bob enough for his transaction
     let receipt = tester
