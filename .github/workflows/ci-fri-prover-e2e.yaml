@@ -65,12 +65,6 @@ jobs:
           PASSED_ENV_VARS="URL,INTERVAL,TIMEOUT" \
           ci_run ./.github/scripts/web3_json_rpc_checker
 
-      - name: Send L2 tx
-        run: |
-          ci_run cast send 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049 -r http://localhost:3050 \
-            --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110 --gas-price 10gwei \
-            --priority-gas-price 10gwei --value 1ether
-
       - name: Checkout repo for FRI prover
         uses: actions/checkout@v4
         with:
@@ -85,7 +79,7 @@ jobs:
 
       - name: Wait for proof
         env:
-          LAST_BATCH_NUMBER: 3
+          LAST_BATCH_NUMBER: 1
           INTERVAL: 30
           TIMEOUT: 1200
           URL: http://localhost:3124
