@@ -1,10 +1,14 @@
-use crate::repositories::api_interface::RepositoryBlock;
-use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
-use alloy::consensus::transaction::SignerRecoverable;
-use alloy::consensus::{Block, ReceiptEnvelope, Transaction};
-use alloy::eips::{Decodable2718, Encodable2718};
-use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
-use alloy::rlp::{Decodable, Encodable};
+use crate::repositories::{
+    api_interface::RepositoryBlock,
+    metrics::REPOSITORIES_METRICS,
+    transaction_receipt_repository::{StoredTxData, TxMeta},
+};
+use alloy::{
+    consensus::{Block, ReceiptEnvelope, Transaction, transaction::SignerRecoverable},
+    eips::{Decodable2718, Encodable2718},
+    primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
+    rlp::{Decodable, Encodable},
+};
 use tokio::sync::watch;
 use zksync_os_types::{L2Transaction, ZkEnvelope};
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
@@ -188,6 +192,12 @@ impl RepositoryDB {
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
 
+        REPOSITORIES_METRICS
+            .block_data_size
+            .observe(batch.size_in_bytes());
+        REPOSITORIES_METRICS
+            .block_data_size_per_tx
+            .observe(batch.size_in_bytes() / txs.len());
         self.db.write(batch).unwrap();
         self.latest_block_number.send_replace(block_number);
     }

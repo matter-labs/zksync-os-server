@@ -17,19 +17,22 @@ mod metrics;
 pub mod notifications;
 pub mod transaction_receipt_repository;
 
-use crate::repositories::account_property_repository::extract_account_properties;
-use crate::repositories::bytecode_property_respository::BytecodeRepository;
-use crate::repositories::db::{RepositoryCF, RepositoryDB};
-use crate::repositories::metrics::REPOSITORIES_METRICS;
-use crate::repositories::notifications::{BlockNotification, SubscribeToBlocks};
-use crate::repositories::transaction_receipt_repository::transaction_to_api_data;
+use crate::metrics::GENERAL_METRICS;
+use crate::repositories::{
+    account_property_repository::extract_account_properties,
+    bytecode_property_respository::BytecodeRepository,
+    db::{RepositoryCF, RepositoryDB},
+    metrics::REPOSITORIES_METRICS,
+    notifications::{BlockNotification, SubscribeToBlocks},
+    transaction_receipt_repository::{TransactionReceiptRepository, transaction_to_api_data},
+};
 pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::{BlockHash, Bloom, Sealed, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
+use std::ops::Div;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
-pub use transaction_receipt_repository::TransactionReceiptRepository;
 use zk_os_forward_system::run::BatchOutput;
 use zksync_os_types::ZkTransaction;
 use zksync_storage::RocksDB;
@@ -110,8 +113,9 @@ impl RepositoryManager {
     /// - No atomicity or ordering guarantees are provided for repository updates.
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
     fn populate_in_memory(&self, mut block_output: BatchOutput, transactions: Vec<ZkTransaction>) {
-        let latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let total_latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
+        let tx_count = transactions.len();
         let tx_hashes = transactions
             .iter()
             .map(|tx| TxHash::from(tx.hash().0))
@@ -124,10 +128,16 @@ impl RepositoryManager {
         let (account_properties, bytecodes) = extract_account_properties(&block_output);
 
         // Add account properties to the account property repository
+        let account_properties_latency_observer =
+            REPOSITORIES_METRICS.insert_block[&"account_properties"].start();
         self.account_property_repository
             .add_diff(block_number, account_properties);
+        let account_properties_latency = account_properties_latency_observer.observe();
+
         // Add bytecodes to the bytecode repository
+        let bytecodes_latency_observer = REPOSITORIES_METRICS.insert_block[&"bytecodes"].start();
         self.bytecode_repository.add_diff(block_number, bytecodes);
+        let bytecodes_latency = bytecodes_latency_observer.observe();
 
         // Add transaction receipts to the transaction receipt repository
         let mut log_index = 0;
@@ -151,9 +161,17 @@ impl RepositoryManager {
         let block_header = Sealed::new_unchecked(block_output.header, hash);
 
         // Add data to repositories.
+        let transaction_receipts_latency_observer =
+            REPOSITORIES_METRICS.insert_block[&"transaction_receipts"].start();
         self.transaction_receipt_repository.insert(stored_txs);
+        let transaction_receipts_latency = transaction_receipts_latency_observer.observe();
+
+        let block_receipt_latency_observer =
+            REPOSITORIES_METRICS.insert_block[&"block_receipts"].start();
         self.block_receipt_repository
             .insert(&block_header, tx_hashes);
+        let block_receipt_latency = block_receipt_latency_observer.observe();
+
         self.latest_block.send_replace(block_number);
 
         let notification = BlockNotification {
@@ -165,7 +183,21 @@ impl RepositoryManager {
         // Ignore error if there are no subscribed receivers
         let _ = self.block_sender.send(notification);
 
-        latency.observe();
+        let latency = total_latency.observe();
+        REPOSITORIES_METRICS
+            .insert_block_per_tx
+            .observe(latency.div(tx_count as u32));
+
+        tracing::debug!(
+            block_number,
+            total_latency = ?latency,
+            ?account_properties_latency,
+            ?bytecodes_latency,
+            ?transaction_receipts_latency,
+            ?block_receipt_latency,
+            "Stored a block in memory with {} transactions",
+            tx_count,
+        );
     }
 
     pub async fn run_persist_loop(&self) {
@@ -187,12 +219,28 @@ impl RepositoryManager {
                 .transaction_receipt_repository
                 .get_by_hashes(&block.body.transactions)
                 .unwrap();
+
+            let persist_latency_observer = REPOSITORIES_METRICS.persist_block.start();
             self.db.write_block(&block, &txs);
+            let persist_latency = persist_latency_observer.observe();
+            REPOSITORIES_METRICS
+                .persist_block_per_tx
+                .observe(persist_latency.div(txs.len() as u32));
 
             self.block_receipt_repository.remove_by_number(number);
             self.transaction_receipt_repository
                 .remove_by_hashes(&block.body.transactions);
-            tracing::info!(number, "Persisted receipts");
+
+            let persistence_lag = self.latest_block.borrow().saturating_sub(number) as usize;
+            REPOSITORIES_METRICS.persistence_lag.set(persistence_lag);
+            tracing::info!(
+                block_number = number,
+                ?persist_latency,
+                persistence_lag,
+                "Persisted receipts",
+            );
+
+            GENERAL_METRICS.block_number[&"persist"].set(number);
         }
     }
 }
