@@ -230,7 +230,11 @@ impl RepositoryManager {
             self.block_receipt_repository.remove_by_number(number);
             self.transaction_receipt_repository
                 .remove_by_hashes(&block.body.transactions);
-            tracing::info!(number, "Persisted receipts. Latency: {:?}", persist_latency);
+            tracing::info!(
+               block_number=number, 
+               persist_latency,
+               "Persisted receipts",
+            );
 
             REPOSITORIES_METRICS
                 .persistence_lag
