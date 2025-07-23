@@ -76,7 +76,7 @@ impl L1Sender {
     pub async fn run(mut self) -> anyhow::Result<()> {
         let limit = 16;
         let mut cmd_buffer = Vec::with_capacity(16);
-        let mut block_stream = self
+        let mut l1_block_stream = self
             .provider
             .subscribe_full_blocks()
             .hashes()
@@ -101,7 +101,7 @@ impl L1Sender {
                     }
                 }
             }
-            self.wait_for_pending_txs(&mut block_stream, pending_tx_hashes)
+            self.wait_for_pending_txs(&mut l1_block_stream, pending_tx_hashes)
                 .await?;
         }
 
@@ -111,11 +111,11 @@ impl L1Sender {
 
     async fn wait_for_pending_txs(
         &mut self,
-        block_stream: &mut (dyn Stream<Item = TransportResult<Block>> + Unpin + Send),
+        l1_block_stream: &mut (dyn Stream<Item = TransportResult<Block>> + Unpin + Send),
         mut pending_tx_hashes: HashSet<TxHash>,
     ) -> anyhow::Result<()> {
         while !pending_tx_hashes.is_empty() {
-            let Some(block) = block_stream.next().await else {
+            let Some(block) = l1_block_stream.next().await else {
                 anyhow::bail!("L1 block stream has been closed unexpectedly");
             };
             let block = block?;
