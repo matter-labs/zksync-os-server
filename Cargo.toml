@@ -114,4 +114,5 @@ zksync_os_types = { path = "lib/types" }
 zksync_os_sequencer = { path = "node/sequencer" }
 
 [profile.release]
+# This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true
