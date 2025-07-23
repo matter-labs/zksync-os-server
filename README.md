@@ -60,33 +60,61 @@ rm -rf db/node1/*
 anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
 ```
 
-## High-level design
-
-Note: contrary to the Era sequencer, one Node = one process — regardless of the configuration
+## Design
 
 ### Subsystems
 
-* **Sequencer** subsystem - mandatory component (every node runs it), executes transactions in VM, sends results
-  downstream to other components.
+* **Sequencer** subsystem — mandatory for every node. Executes transactions in VM, sends results downstream to other
+  components.
     * Handles `Produce` and `Replay` commands in an uniform way (see `model/mod.rs` and `execution/block_executor.rs`)
     * For each block: (1) persists it in WAL (see `block_replay_storage.rs`), (2) pushes to `state` (see `state`
-      batch), (3) exposes the block and tx receipts to API (see `repositories/mod.rs`), (4) pushes to async channels for
-      `batcher` and `tree` components.
-* **API** subsystem - optional component (not configurable atm). Has shared access to `state`.
-* **Batcher** subsystem - optional (configurable via `batcher_component_enabled=true/false`).
+      crate), (3) exposes the block and tx receipts to API (see `repositories/mod.rs`), (4) pushes to async channels for
+      downstream subsystems. Waits on backpressure.
+* **API** subsystem — optional (not configurable atm). Has shared access to `state`. Exposes ethereum-compatible JSON
+  RPC
+* **Batcher** subsystem — optional (configurable via `batcher_component_enabled=true/false`). Has shared access to
+  `state`.
     * Turns a stream of blocks into a stream of batches (1 batch = 1 proof = 1 L1 commit); exposes Prover APIs; submits
       batches and proofs to L1.
       Note: currently 1 block == 1 batch, multi-block batches are not implemented yet.
-    * For each batch, computes the Prover Input (runs RiscV binary (`server_app.bin`) and records its input as a stream
-      of `Vec<u32>` - see `batcher/mod.rs`)
+    * For each batch, computes the Prover Input (runs RiscV binary (`app.bin`) and records its input as a stream of
+      `Vec<u32>` - see `batcher/mod.rs`)
     * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!).
-      This may be optimized later on.
-    * **L1 sender** - optional component (runs if `localhost:8545` is available). Similar to the Era l1 sender
-        * Doesn't need persistence (recovers its state from L1)- _сurrently still persists all sent batches - only to
-          have the previous batch data that is needed when commiting. This will be changed._
+      This will be optimized later on.
+    * if `localhost:8545` is available, runs **L1 sender**.
 
-Note on **Persistent Tree** - it is only needed for Batcher Subsystem. Sequencer doesn't need the tree - block hashes
-don't include root hash. But even when batcher subsystem is not enabled, we want to run the tree for potential failover
+Note on **Persistent Tree** — it is only necessary for Batcher Subsystem. Sequencer doesn't need the tree — block hashes
+don't include root hash. Still, even when batcher subsystem is not enabled, we want to run the tree for potential
+failover.
+
+### Component Details
+
+<img width="1500" height="756" alt="Screenshot 2025-07-17 at 14 51 12" src="https://github.com/user-attachments/assets/cc8a27f0-15df-4406-b803-0e960832a4f1" />
+
+See individual components and state recovery details in the table below. Note that most components have little to no
+internal state or persistence — this is one of the designing principles.
+
+| Component                                                                | In-memory state                                                                | Persistence                                                                                                          | State Recovery                                                                                                                                                               | 
+|--------------------------------------------------------------------------|--------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------| 
+| **Command Source**                                                       | `starting_block` (only used on startup)                                        | -                                                                                                                    | `starting_block` is the first block **after** the compacted block stored in `state`, i.e., `starting_block = highest_block - blocks_to_retain_in_memory`.                    | 
+| **BlockContextProvider**                                                 | `next_l1_priority_id`; `block_hashes_for_next_block` (last 256 block hashes)   | -                                                                                                                    | `next_l1_priority_id`: take from the last `ReplayRecord`; `block_hashes_for_next_block`: take from 256 last `ReplayRecord`s                                                  |
+| **L1Watcher**                                                            | `Arc<DashMap<PriorityId, L1Envelope>>`                                         | - (TODO - temporary stores the last processed L1 block)                                                              | Not needed (TODO - will load processed priority transactions from L1)                                                                                                        |
+| **L2Mempool**                                                            | _RETH Crate_ - prepared list of pending transactions                           | -                                                                                                                    | Not needed - built from JSON RPC requests                                                                                                                                    |
+| **BlockExecutor**                                                        | None 🔥                                                                        | -                                                                                                                    | Not needed                                                                                                                                                                   |
+| **State**                                                                | All Storage Logs and Preimages for `blocks_to_retain_in_memory` last blocks    | Compacted state at some older block (`highest_block - blocks_to_retain_in_memory`): full state map and all preimages | Not needed as we choose `starting_block` such that this component recovers naturally                                                                                         |
+| **Merkle Tree**                                                          | None - persistence only                                                        | Full Merkle tree - including previous values on each leaf                                                            | Not needed                                                                                                                                                                   |
+| _⬇️Batcher Components ⬇️_                                                | _⬇️ Components below operate on Batches - not Blocks ⬇️_                       | _ ⬇️Components below must not rely on persistence - otherwise failover is not possible ⬇️_                           |                                                                                                                                                                              |                              
+| **Batcher**                                                              | Trailing Batch's `CommitBatchInfo`; `starting_batch` (2)                       | -                                                                                                                    | Currently: not implemented, so we always start chain from zero. Later - two options: (1) Load last committed `CommitBatchInfo` from L1 OR (2) reprocess last committed batch |                             
+| **Prover Input Generator**  (TODO - merged with the **Batcher** for now) | None                                                                           | -                                                                                                                    | Not needed                                                                                                                                                                   |                             
+| **FRI Job Manager**                                                      | Gapless List of unproved batches with `ProverInput` and prover assignment info | -                                                                                                                    | Not needed - batches that still need FRI proofs will go through the pipeline again (see above)                                                                               |                             
+| **L1 Committer**                                                         | None/Minimal                                                                   | - (TODO - temporary stores `CommitBatchInfo` because it's needed for the previous `StoredBatchInfo`)                 | Not needed - recovers itself from L1                                                                                                                                         |                             
+| **SNARK Job Manager** (TODO - missing)                                   | Gapless list of batches with their FRI proofs and prover assignment info       | -                                                                                                                    | Load blocks that are committed but not proved on L1 yet. Load their FRI proofs from FRI cache (TODO)                                                                         |                             
+| **L1 Executor** (TODO - missing)                                         | None/Minimal (TODO: tree for `PriorityOpsBatchInfo`)                           | -                                                                                                                    | Not needed - recovers itself from L1                                                                                                                                         |                             
+
+2. Determine `starting_batch` as the batch following the last committed batch on L1. Determine block numbers for this
+   batch (TODO - not trivial without persistence). **Batcher** component will ignore earlier blocks, and start producing
+   batches from `startin_batch + 1`
+3.
 
 ### Prover API
 
@@ -99,44 +127,6 @@ don't include root hash. But even when batcher subsystem is not enabled, we want
 ```
 
 Note that it's the same api as in old sequencer integration, so FRI GPU Provers themselves are fully compatible.
-
-### Components
-
-Note: parts of this table is WIP:
-
-* `L1FinalityMonitor` is missing
-* `FRI Prover API` and `SNARK Prover API` are currently same thing (`ProverApi`)
-* There is no `SNARK Job Manager` - and thus we don't support multiple SNARK wrappers
-* There is no `L1 Executor`
-
-<img width="1500" height="756" alt="Screenshot 2025-07-17 at 14 51 12" src="https://github.com/user-attachments/assets/cc8a27f0-15df-4406-b803-0e960832a4f1" />
-
-**State Recovery**:
-
-1. Determine the Block number for sequencer to start with:
-    1. Get the last canonized block number in WAL/Consensus - this is the
-    2. Determine the last Batch number
-
-Universal rules:
-
-* Components
-
-| Component                   | In-memory state                                                                | Persistence                                                                                                          | State Recovery                                                                                                                                         | 
-|-----------------------------|--------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------| 
-| **Command Source**          | -                                                                              | -                                                                                                                    | Needs the block number to launch the stream with                                                                                                       | 
-| **BlockContextProvider**    | `next_l1_priority_id`; `block_hashes_for_next_block` (last 256 block hashes)   | -                                                                                                                    | `next_l1_priority_id`: take from the last `ReplayRecord`; `block_hashes_for_next_block`: take from 256 last `ReplayRecord`s                            |
-| **L1Watcher**               | `Arc<DashMap<PriorityId, L1Envelope>>`                                         | - (WIP)                                                                                                              | WIP                                                                                                                                                    |
-| **L2Mempool**               | _RETH Crate_ - prepared list of pending transactions                           | -                                                                                                                    | Not needed - built from JSON RPC requests                                                                                                              |
-| **BlockExecutor**           | None 🔥                                                                        | -                                                                                                                    | -                                                                                                                                                      |
-| **State**                   | All Storage Logs and Preimages for `blocks_to_retain_in_memory` last blocks    | Compacted state at some older block (`highest_block - blocks_to_retain_in_memory`): full state map and all preimages | Not needed - chains starts from block `highest_block - blocks_to_retain_in_memory`, so it recovers under normal operations                             |
-| **Merkle Tree**             | None - persistence only                                                        | Full Merkle tree - including previous values on each leaf                                                            | Not needed                                                                                                                                             |
-| _⬇️Batcher Components_      | _Components below operate on Batches - not Blocks_                             | _Components below must not rely on persistence - otherwise failover is not possible_                                 |                                                                                                                                                        |                              
-| **Batcher**                 | Previous/Trailing Batch `CommitBatchInfo`                                      | -                                                                                                                    | Currently: need to start from block zero. Later - two options: (1) Load last committed `CommitBatchInfo` from L1 OR (2) reprocess last committed batch |                             
-| **Prover Input Generator**  | None                                                                           | -                                                                                                                    | Not needed                                                                                                                                             |                             
-| **FRI Job Manager**         | Gapless List of unproved batches with `ProverInput` and prover assignment info | -                                                                                                                    | Not needed - batches that still need FRI proofs will go through the pipeline again (see above)                                                         |                             
-| **L1 Committer**            | None/Minimal                                                                   | - (WIP)                                                                                                              | Not needed - recovers itself from L1                                                                                                                   |                             
-| **SNARK Job Manager** (WIP) | Gapless list of batches with their FRI proofs and prover assignment info       | -                                                                                                                    | Load blocks that are committed but not proved on L1 yet. Load their FRI proofs from FRI cache (WIP)                                                    |                             
-| **L1 Executor** (WIP)       | None/Minimal (TODO: tree for `PriorityOpsBatchInfo`)                           | -                                                                                                                    | Not needed - recovers itself from L1                                                                                                                   |                             
 
 ### Principles
 
@@ -166,8 +156,8 @@ Minimal Node only needs (1).
 
 ## Known restrictions
 
-* lacking seal criteria
-* older blocks not available for eth_call
+* lacking seal criteria - potential for unprovable blocks
+* older blocks are not available for eth_call
 * no upgrade/interop logic
 
 ## Glossary
