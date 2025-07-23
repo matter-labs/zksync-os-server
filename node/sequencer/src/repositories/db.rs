@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use zksync_os_types::{L2Transaction, ZkEnvelope};
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 use zksync_storage::{RocksDB, rocksdb};
+use crate::repositories::metrics::REPOSITORIES_METRICS;
 
 #[derive(Clone, Copy, Debug)]
 pub enum RepositoryCF {
@@ -188,6 +189,7 @@ impl RepositoryDB {
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
 
+        REPOSITORIES_METRICS.block_data_size.observe(batch.size_in_bytes());
         self.db.write(batch).unwrap();
         self.latest_block_number.send_replace(block_number);
     }
