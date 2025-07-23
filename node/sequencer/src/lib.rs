@@ -16,6 +16,7 @@ pub mod tree_manager;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
+use crate::batcher::util::genesis_stored_batch_info;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
@@ -23,8 +24,8 @@ use crate::model::{BatchJob, ProduceCommand};
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
@@ -376,7 +377,8 @@ pub async fn run(
 
     // ========== Initialize L1 sender (fallible) ===========
 
-    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let genesis_stored_batch_info = genesis_stored_batch_info();
+    let l1_sender = L1Sender::new(l1_sender_config, genesis_stored_batch_info.clone()).await;
     let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
@@ -412,6 +414,8 @@ pub async fn run(
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
+        assert_eq!(first_block_to_execute, 1);
+        let prev_batch_data = (0, genesis_stored_batch_info.state_commitment);
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
@@ -420,6 +424,7 @@ pub async fn run(
             persistent_tree,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
+            prev_batch_data,
         );
         Box::pin(batcher.run_loop())
     } else {

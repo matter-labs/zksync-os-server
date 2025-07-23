@@ -5,10 +5,10 @@ use std::str;
 use alloy::primitives::B256;
 
 use crate::{
+    DeserializeError,
     errors::{DeserializeContext, DeserializeErrorKind},
     storage::InsertedKeyEntry,
     types::{ChildRef, InternalNode, Leaf, Manifest, Root, TreeTags},
-    DeserializeError,
 };
 
 const HASH_SIZE: usize = 32;

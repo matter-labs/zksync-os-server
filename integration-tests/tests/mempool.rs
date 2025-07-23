@@ -4,8 +4,8 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
-use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 
 #[test_log::test(tokio::test)]
 async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
@@ -44,9 +44,11 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
         .send_transaction(bob_tx.clone())
         .await
         .expect_err("sending transaction should fail");
-    assert!(error
-        .to_string()
-        .contains("sender does not have enough funds"));
+    assert!(
+        error
+            .to_string()
+            .contains("sender does not have enough funds")
+    );
 
     // Alice gives Bob enough for his transaction
     let receipt = tester

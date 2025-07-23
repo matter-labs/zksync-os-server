@@ -1,5 +1,5 @@
 use crate::repositories::api_interface::RepositoryBlock;
-use alloy::primitives::{Address, BlockHash, BlockNumber, Bloom, Sealed, TxHash, B256, B64, U256};
+use alloy::primitives::{Address, B64, B256, BlockHash, BlockNumber, Bloom, Sealed, TxHash, U256};
 use dashmap::DashMap;
 use std::sync::Arc;
 
