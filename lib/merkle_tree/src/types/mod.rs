@@ -278,7 +278,7 @@ pub struct Manifest {
 
 /// Output of updating / inserting data in a [`MerkleTree`](crate::MerkleTree).
 #[derive(Debug, Clone, Copy)]
-pub struct BatchOutput {
+pub struct TreeBatchOutput {
     /// New root hash of the tree.
     pub root_hash: B256,
     /// New leaf count (including 2 guard entries).

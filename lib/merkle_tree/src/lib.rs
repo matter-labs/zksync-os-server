@@ -8,7 +8,7 @@ pub use self::{
     errors::DeserializeError,
     hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
-    types::{BatchOutput, TreeEntry},
+    types::{TreeBatchOutput, TreeEntry},
     with_version::{MerkleTreeForReading, MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
 use crate::blake2::Blake2Hasher;
@@ -208,7 +208,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     /// # Errors
     ///
     /// Proxies database I/O errors.
-    pub fn extend(&mut self, entries: &[TreeEntry]) -> anyhow::Result<BatchOutput> {
+    pub fn extend(&mut self, entries: &[TreeEntry]) -> anyhow::Result<TreeBatchOutput> {
         let (output, _) = self.extend_inner(entries, None)?;
         Ok(output)
     }
@@ -220,7 +220,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
     pub fn extend_with_reference(
         &mut self,
         entries: &[(u64, TreeEntry)],
-    ) -> anyhow::Result<BatchOutput> {
+    ) -> anyhow::Result<TreeBatchOutput> {
         let (output, _) = self.extend_inner(entries, None)?;
         Ok(output)
     }
@@ -230,7 +230,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         &mut self,
         entries: &[impl AsEntry],
         read_keys: Option<&[B256]>,
-    ) -> anyhow::Result<(BatchOutput, Option<BatchTreeProof>)> {
+    ) -> anyhow::Result<(TreeBatchOutput, Option<BatchTreeProof>)> {
         let latest_version = self
             .latest_version()
             .context("failed getting latest version")?;
@@ -319,7 +319,7 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         &mut self,
         entries: &[TreeEntry],
         read_keys: &[B256],
-    ) -> anyhow::Result<(BatchOutput, BatchTreeProof)> {
+    ) -> anyhow::Result<(TreeBatchOutput, BatchTreeProof)> {
         let (output, proof) = self.extend_inner(entries, Some(read_keys))?;
         Ok((output, proof.unwrap()))
     }

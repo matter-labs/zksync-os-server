@@ -122,7 +122,7 @@ impl Batcher {
                         .root_info()
                         .unwrap();
 
-                    let tree_output = zksync_os_merkle_tree::BatchOutput {
+                    let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
                         root_hash,
                         leaf_count,
                     };
