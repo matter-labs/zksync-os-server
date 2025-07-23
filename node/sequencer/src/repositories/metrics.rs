@@ -9,9 +9,9 @@ const BLOCK_DATA_SIZES: Buckets = Buckets::exponential(1.0..=10000000.0, 2.0);
 #[metrics(prefix = "repositories")]
 pub struct RepositoriesMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
-    pub insert_block_in_memory: LabeledFamily<&'static str, Histogram<Duration>>,
+    pub insert_block: LabeledFamily<&'static str, Histogram<Duration>>,
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub insert_block_in_memory_per_tx: Histogram<Duration>,
+    pub insert_block_per_tx: Histogram<Duration>,
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]
     pub persist_block: Histogram<Duration>,
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]

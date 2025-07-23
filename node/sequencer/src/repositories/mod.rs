@@ -113,7 +113,7 @@ impl RepositoryManager {
     /// - No atomicity or ordering guarantees are provided for repository updates.
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
     fn populate_in_memory(&self, mut block_output: BatchOutput, transactions: Vec<ZkTransaction>) {
-        let total_latency = REPOSITORIES_METRICS.insert_block_in_memory[&"total"].start();
+        let total_latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
         let tx_count = transactions.len();
         let tx_hashes = transactions
@@ -129,14 +129,13 @@ impl RepositoryManager {
 
         // Add account properties to the account property repository
         let account_properties_latency_observer =
-            REPOSITORIES_METRICS.insert_block_in_memory[&"account_properties"].start();
+            REPOSITORIES_METRICS.insert_block[&"account_properties"].start();
         self.account_property_repository
             .add_diff(block_number, account_properties);
         let account_properties_latency = account_properties_latency_observer.observe();
 
         // Add bytecodes to the bytecode repository
-        let bytecodes_latency_observer =
-            REPOSITORIES_METRICS.insert_block_in_memory[&"bytecodes"].start();
+        let bytecodes_latency_observer = REPOSITORIES_METRICS.insert_block[&"bytecodes"].start();
         self.bytecode_repository.add_diff(block_number, bytecodes);
         let bytecodes_latency = bytecodes_latency_observer.observe();
 
@@ -163,12 +162,12 @@ impl RepositoryManager {
 
         // Add data to repositories.
         let transaction_receipts_latency_observer =
-            REPOSITORIES_METRICS.insert_block_in_memory[&"transaction_receipts"].start();
+            REPOSITORIES_METRICS.insert_block[&"transaction_receipts"].start();
         self.transaction_receipt_repository.insert(stored_txs);
         let transaction_receipts_latency = transaction_receipts_latency_observer.observe();
 
         let block_receipt_latency_observer =
-            REPOSITORIES_METRICS.insert_block_in_memory[&"block_receipts"].start();
+            REPOSITORIES_METRICS.insert_block[&"block_receipts"].start();
         self.block_receipt_repository
             .insert(&block_header, tx_hashes);
         let block_receipt_latency = block_receipt_latency_observer.observe();
@@ -186,7 +185,7 @@ impl RepositoryManager {
 
         let latency = total_latency.observe();
         REPOSITORIES_METRICS
-            .insert_block_in_memory_per_tx
+            .insert_block_per_tx
             .observe(latency.div(tx_count as u32));
 
         tracing::debug!(
