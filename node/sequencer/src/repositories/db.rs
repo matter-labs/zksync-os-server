@@ -195,6 +195,9 @@ impl RepositoryDB {
         REPOSITORIES_METRICS
             .block_data_size
             .observe(batch.size_in_bytes());
+        REPOSITORIES_METRICS
+            .block_data_size_per_tx
+            .observe(batch.size_in_bytes() / txs.len());
         self.db.write(batch).unwrap();
         self.latest_block_number.send_replace(block_number);
     }
