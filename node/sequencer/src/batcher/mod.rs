@@ -2,6 +2,7 @@ use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
 use alloy::primitives::B256;
+use dashmap::DashMap;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -9,6 +10,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
 use zk_os_forward_system::run::{BatchOutput, StorageCommitment, generate_proof_input};
 use zksync_os_l1_sender::L1SenderHandle;
@@ -37,7 +39,16 @@ pub struct Batcher {
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
     // number and state commitment of the last processed batch.
-    prev_batch_data: (u64, B256),
+    last_processed_batch_number_and_commitment: (u64, B256),
+    // cache for block timestamps
+    block_timestamps: DashMap<u64, u64>,
+}
+
+#[derive(Debug)]
+pub struct BatcherInitData {
+    pub last_block_number: u64,
+    pub last_block_timestamp: u64,
+    pub last_state_commitment: B256,
 }
 
 impl Batcher {
@@ -52,7 +63,7 @@ impl Batcher {
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
-        prev_batch_data: (u64, B256),
+        batcher_init_data: BatcherInitData,
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -63,6 +74,12 @@ impl Batcher {
         } else {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")
         };
+        let block_timestamps = [(
+            batcher_init_data.last_block_number,
+            batcher_init_data.last_block_timestamp,
+        )]
+        .into_iter()
+        .collect();
         Self {
             block_receiver,
             state_handle,
@@ -71,7 +88,11 @@ impl Batcher {
             commit_batch_info_sender,
             bin_path,
             maximum_in_flight_blocks,
-            prev_batch_data,
+            last_processed_batch_number_and_commitment: (
+                batcher_init_data.last_block_number,
+                batcher_init_data.last_state_commitment,
+            ),
+            block_timestamps,
         }
     }
 
@@ -95,11 +116,27 @@ impl Batcher {
                     block_number,
                     replay_record.transactions.len(),
                 );
+                let previous_block_timestamp = *self
+                    .block_timestamps
+                    .get(&(replay_record.block_context.block_number - 1))
+                    .unwrap_or_else(|| panic!("Missing block timestamp for block {}", block_number))
+                    .value();
+
+                self.block_timestamps
+                    .remove(&(replay_record.block_context.block_number - 1));
+                self.block_timestamps
+                    .insert(block_number, replay_record.block_context.timestamp);
 
                 let state_handle = self.state_handle.clone();
                 tokio::task::spawn_blocking(move || {
                     (
-                        compute_prover_input(&replay_record, state_handle, tree, self.bin_path),
+                        compute_prover_input(
+                            &replay_record,
+                            state_handle,
+                            tree,
+                            self.bin_path,
+                            previous_block_timestamp,
+                        ),
                         batch_output,
                         replay_record,
                     )
@@ -108,11 +145,11 @@ impl Batcher {
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
             .try_fold(
-                self.prev_batch_data,
-                async |(prev_block_number, previous_state_commitment),
+                self.last_processed_batch_number_and_commitment,
+                async |(previous_block_number, previous_state_commitment),
                        (prover_input, batch_output, replay_record)| {
                     let block_number = replay_record.block_context.block_number;
-                    assert_eq!(prev_block_number + 1, block_number);
+                    assert_eq!(previous_block_number + 1, block_number);
 
                     let (root_hash, leaf_count) = self
                         .persistent_tree
@@ -168,6 +205,7 @@ fn compute_prover_input(
     state_handle: StateHandle,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
     bin_path: &'static str,
+    last_block_timestamp: u64,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
 
@@ -191,7 +229,10 @@ fn compute_prover_input(
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
         replay_record.block_context,
-        initial_storage_commitment,
+        ProofData {
+            state_root_view: initial_storage_commitment,
+            last_block_timestamp,
+        },
         tree_view,
         state_view,
         list_source,

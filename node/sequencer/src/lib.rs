@@ -15,8 +15,8 @@ pub mod reth_state;
 pub mod tree_manager;
 
 use crate::api::run_jsonrpsee_server;
-use crate::batcher::Batcher;
 use crate::batcher::util::genesis_stored_batch_info;
+use crate::batcher::{Batcher, BatcherInitData};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
@@ -415,7 +415,6 @@ pub async fn run(
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
         assert_eq!(first_block_to_execute, 1);
-        let prev_batch_data = (0, genesis_stored_batch_info.state_commitment);
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
@@ -424,7 +423,11 @@ pub async fn run(
             persistent_tree,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
-            prev_batch_data,
+            BatcherInitData {
+                last_block_number: 0,
+                last_block_timestamp: 0,
+                last_state_commitment: genesis_stored_batch_info.state_commitment,
+            },
         );
         Box::pin(batcher.run_loop())
     } else {
