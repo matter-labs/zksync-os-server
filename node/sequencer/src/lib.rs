@@ -119,10 +119,9 @@ pub async fn run_sequencer_actor(
         );
         stage_started_at = Instant::now();
 
-        let (block_output, replay_record, rejected_txs) =
-            execute_block(prepared_cmd, state.clone())
-                .await
-                .context("execute_block")?;
+        let (block_output, replay_record, purged_txs) = execute_block(prepared_cmd, state.clone())
+            .await
+            .context("execute_block")?;
 
         tracing::info!(
             block_number = bn,
@@ -165,8 +164,8 @@ pub async fn run_sequencer_actor(
 
         // TODO: would updating mempool in parallel with state make sense?
         command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
-        let rejected_txs_hashes = rejected_txs.into_iter().map(|(hash, _)| hash).collect();
-        command_block_context_provider.remove_rejected_txs(rejected_txs_hashes);
+        let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
+        command_block_context_provider.remove_txs(purged_txs_hashes);
 
         tracing::info!(
             block_number = bn,

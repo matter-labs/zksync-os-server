@@ -27,7 +27,7 @@ pub async fn execute_block(
     let mut runner = VmWrapper::new(ctx, state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
-    let mut rejected_txs = Vec::new();
+    let mut purged_txs = Vec::new();
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match command.seal_policy {
@@ -91,7 +91,17 @@ pub async fn execute_block(
                                 } else {
                                     match command.invalid_tx_policy {
                                         InvalidTxPolicy::RejectAndContinue => {
-                                            rejected_txs.push((*tx.hash(), e.clone()));
+                                            let rejection_method = rejection_method(e.clone());
+
+                                            // mark the tx as invalid regardless of the `rejection_method`.
+                                            command.tx_source.as_mut().mark_last_tx_as_invalid();
+                                            // add tx to `purged_txs` only if we are purging it.
+                                            match rejection_method {
+                                                TxRejectionMethod::Purge => {
+                                                    purged_txs.push((*tx.hash(), e.clone()));
+                                                }
+                                                TxRejectionMethod::Skip => {},
+                                            }
                                             tracing::warn!(block = ctx.block_number, ?e,
                                                            "invalid tx → skipped");
                                         }
@@ -143,6 +153,53 @@ pub async fn execute_block(
     Ok((
         output,
         ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
-        rejected_txs,
+        purged_txs,
     ))
+}
+
+enum TxRejectionMethod {
+    // purge tx from the mempool
+    Purge,
+    // skip tx and all its descendants for the current block
+    Skip,
+}
+
+fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
+    match error {
+        InvalidTransaction::InvalidEncoding
+        | InvalidTransaction::InvalidStructure
+        | InvalidTransaction::PriorityFeeGreaterThanMaxFee
+        | InvalidTransaction::BaseFeeGreaterThanMaxFee
+        | InvalidTransaction::CallerGasLimitMoreThanBlock
+        | InvalidTransaction::CallGasCostMoreThanGasLimit
+        | InvalidTransaction::RejectCallerWithCode
+        | InvalidTransaction::OverflowPaymentInTransaction
+        | InvalidTransaction::NonceOverflowInTransaction
+        | InvalidTransaction::NonceTooLow { .. }
+        | InvalidTransaction::MalleableSignature
+        | InvalidTransaction::IncorrectFrom { .. }
+        | InvalidTransaction::CreateInitCodeSizeLimit
+        | InvalidTransaction::InvalidChainId
+        | InvalidTransaction::AccessListNotSupported
+        | InvalidTransaction::GasPerPubdataTooHigh
+        | InvalidTransaction::BlockGasLimitTooHigh
+        | InvalidTransaction::UpgradeTxNotFirst
+        | InvalidTransaction::Revert { .. }
+        | InvalidTransaction::ReceivedInsufficientFees { .. }
+        | InvalidTransaction::InvalidMagic
+        | InvalidTransaction::InvalidReturndataLength
+        | InvalidTransaction::OutOfGasDuringValidation
+        | InvalidTransaction::OutOfNativeResourcesDuringValidation
+        | InvalidTransaction::NonceUsedAlready
+        | InvalidTransaction::NonceNotIncreased
+        | InvalidTransaction::PaymasterReturnDataTooShort
+        | InvalidTransaction::PaymasterInvalidMagic
+        | InvalidTransaction::PaymasterContextInvalid
+        | InvalidTransaction::PaymasterContextOffsetTooLong
+        | InvalidTransaction::UpgradeTxFailed => TxRejectionMethod::Purge,
+
+        InvalidTransaction::GasPriceLessThanBasefee
+        | InvalidTransaction::LackOfFundForMaxFee { .. }
+        | InvalidTransaction::NonceTooHigh { .. } => TxRejectionMethod::Skip,
+    }
 }
