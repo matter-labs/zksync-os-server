@@ -34,7 +34,6 @@ use crate::{
     },
     model::{BlockCommand, ReplayRecord},
 };
-use alloy::providers::{DynProvider, ProviderBuilder, WsConnect};
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
@@ -45,7 +44,6 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::{BatchOutput as BlockOutput, BatchOutput};
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
@@ -377,33 +375,19 @@ pub async fn run(
         }
     };
 
-    let provider = DynProvider::new(
-        ProviderBuilder::new()
-            .connect_ws(WsConnect::new(l1_sender_config.l1_api_url.clone()))
-            .await
-            .context("failed to connect to L1 api")
-            .unwrap(),
-    );
-    let bridgehub = Bridgehub::new(
-        l1_sender_config.bridgehub_address,
-        provider.clone(),
-        l1_sender_config.chain_id,
-    );
-    let last_committed_batch = bridgehub
-        .get_total_batches_committed()
-        .await
-        .unwrap()
-        .saturating_to::<u64>();
-
     // ========== Initialize L1 sender (fallible) ===========
 
-    let genesis_stored_batch_info = genesis_stored_batch_info();
-    let l1_sender = L1Sender::new(l1_sender_config, genesis_stored_batch_info.clone()).await;
-    let (l1_sender_task, l1_sender_handle): (
+    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let (l1_sender_task, l1_sender_handle, last_committed_batch_number): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
+        u64,
     ) = match l1_sender {
-        Ok((l1_sender, l1_handle)) => (Box::pin(l1_sender.run()), Some(l1_handle)),
+        Ok((l1_sender, l1_handle, last_committed_batch_number)) => (
+            Box::pin(l1_sender.run()),
+            Some(l1_handle),
+            last_committed_batch_number,
+        ),
         Err(err) => {
             // todo: this is inconsistent with the behaviour when prover api / batcher are disabled:
             //  * here, we return `l1_sender_handle` as `None` and upstream components don't send to it
@@ -421,25 +405,26 @@ pub async fn run(
                         .map_err(|e| anyhow::anyhow!(e))
                 }),
                 None,
+                0,
             )
         }
     };
 
+    let genesis_stored_batch_info = genesis_stored_batch_info();
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
         assert_eq!(first_block_to_execute, 1);
-        let prev_batch_data = (0, genesis_stored_batch_info.state_commitment);
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
             l1_sender_handle,
             state_handle.clone(),
             persistent_tree,
-            last_committed_batch,
+            last_committed_batch_number,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
-            prev_batch_data,
+            genesis_stored_batch_info,
         );
         Box::pin(batcher.run_loop())
     } else {

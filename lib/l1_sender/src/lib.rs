@@ -35,10 +35,7 @@ impl L1Sender {
     ///
     /// Resulting [`L1Sender`] is expected to be consumed by calling [`Self::run`]. Additionally,
     /// returns a cloneable handle that can be used to send requests to this instance of [`L1Sender`].
-    pub async fn new(
-        config: L1SenderConfig,
-        genesis_stored_batch: StoredBatchInfo,
-    ) -> anyhow::Result<(Self, L1SenderHandle)> {
+    pub async fn new(config: L1SenderConfig) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
         let operator_wallet = EthereumWallet::from(
             PrivateKeySigner::from_str(config.operator_private_key.expose_secret())
                 .context("failed to parse operator private key")?,
@@ -60,6 +57,10 @@ impl L1Sender {
             provider.clone(),
             config.chain_id,
         );
+        let last_committed_batch = bridgehub
+            .get_total_batches_committed()
+            .await?
+            .saturating_to::<u64>();
         let validator_timelock_address = bridgehub.validator_timelock_address().await?;
         tracing::info!(?validator_timelock_address, "resolved on L1");
 
@@ -71,7 +72,7 @@ impl L1Sender {
             command_receiver,
         };
         let handle = L1SenderHandle { command_sender };
-        Ok((this, handle))
+        Ok((this, handle, last_committed_batch))
     }
 
     /// Runs L1 sender indefinitely thus processing requests received from any of the matching
