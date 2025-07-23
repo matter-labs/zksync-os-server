@@ -611,14 +611,17 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
 
     async fn estimate_gas(
         &self,
-        _request: TransactionRequest,
-        _block_number: Option<BlockId>,
-        _state_override: Option<StateOverride>,
+        request: TransactionRequest,
+        block_number: Option<BlockId>,
+        state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        // todo(#26): real implementation
         let latency = API_METRICS.response_time[&"estimate_gas"].start();
+        let result = self
+            .eth_call_handler
+            .estimate_gas_impl(request, block_number, state_override)
+            .to_rpc_result()?;
         latency.observe();
-        Ok(U256::from(1000000))
+        Ok(result)
     }
 
     async fn gas_price(&self) -> RpcResult<U256> {
