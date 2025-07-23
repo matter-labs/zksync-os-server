@@ -189,14 +189,14 @@ impl RepositoryManager {
             .observe(latency.div(tx_count as u32));
 
         tracing::debug!(
-            "Stored a block {} in memory with {} transactions. Latencies: total: {:?}, account properties: {:?}, bytecodes: {:?}, transaction receipts: {:?}, block receipts: {:?}",
             block_number,
-            tx_count,
-            latency,
+            total_latency = latency,
             account_properties_latency,
             bytecodes_latency,
             transaction_receipts_latency,
             block_receipt_latency,
+            "Stored a block in memory with {} transactions",
+            tx_count,
         );
     }
 
