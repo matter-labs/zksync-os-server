@@ -35,7 +35,10 @@ impl L1Sender {
     ///
     /// Resulting [`L1Sender`] is expected to be consumed by calling [`Self::run`]. Additionally,
     /// returns a cloneable handle that can be used to send requests to this instance of [`L1Sender`].
-    pub async fn new(config: L1SenderConfig) -> anyhow::Result<(Self, L1SenderHandle)> {
+    pub async fn new(
+        config: L1SenderConfig,
+        genesis_stored_batch: StoredBatchInfo,
+    ) -> anyhow::Result<(Self, L1SenderHandle)> {
         let operator_wallet = EthereumWallet::from(
             PrivateKeySigner::from_str(config.operator_private_key.expose_secret())
                 .context("failed to parse operator private key")?,

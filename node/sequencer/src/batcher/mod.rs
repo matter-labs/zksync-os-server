@@ -3,6 +3,7 @@ mod util;
 use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
+use alloy::primitives::B256;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -20,6 +21,8 @@ use zksync_os_merkle_tree::{
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;
 
+pub mod util;
+
 /// This component generates l1 batches from the stream of blocks
 /// It also generates Prover Input for each batch.
 ///
@@ -36,6 +39,8 @@ pub struct Batcher {
     last_committed_batch: u64,
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
+    // number and state commitment of the last processed batch.
+    prev_batch_data: (u64, B256),
 }
 
 impl Batcher {
@@ -51,6 +56,7 @@ impl Batcher {
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
+        prev_batch_data: (u64, B256),
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -70,6 +76,7 @@ impl Batcher {
             last_committed_batch,
             bin_path,
             maximum_in_flight_blocks,
+            prev_batch_data,
         }
     }
 
@@ -109,6 +116,7 @@ impl Batcher {
                 util::load_genesis_stored_batch(),
                 async |prev_batch, (prover_input, batch_output, replay_record)| {
                     let block_number = replay_record.block_context.block_number;
+                    assert_eq!(prev_batch.batch_number + 1, block_number);
 
                     let (root_hash, leaf_count) = self
                         .persistent_tree
@@ -139,6 +147,7 @@ impl Batcher {
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                     GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
+                    let previous_state_commitment = stored_batch_info.state_commitment;
                     if commit_batch_info.batch_number > self.last_committed_batch {
                         if let Some(l1) = &self.commit_batch_info_sender {
                             l1.commit(prev_batch, commit_batch_info.clone()).await?;
@@ -148,6 +157,7 @@ impl Batcher {
                         .send(BatchJob {
                             block_number,
                             prover_input,
+                            previous_state_commitment,
                             commit_batch_info,
                         })
                         .await?;

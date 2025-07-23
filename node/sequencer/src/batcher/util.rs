@@ -1,7 +1,7 @@
 use alloy::primitives::keccak256;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 
-pub fn load_genesis_stored_batch() -> StoredBatchInfo {
+pub fn genesis_stored_batch_info() -> StoredBatchInfo {
     StoredBatchInfo {
         batch_number: 0,
         // TODO: Make dynamic; can this be resolved without genesis configuration?
