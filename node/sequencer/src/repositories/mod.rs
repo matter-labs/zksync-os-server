@@ -190,11 +190,11 @@ impl RepositoryManager {
 
         tracing::debug!(
             block_number,
-            total_latency = latency,
-            account_properties_latency,
-            bytecodes_latency,
-            transaction_receipts_latency,
-            block_receipt_latency,
+            total_latency = ?latency,
+            ?account_properties_latency,
+            ?bytecodes_latency,
+            ?transaction_receipts_latency,
+            ?block_receipt_latency,
             "Stored a block in memory with {} transactions",
             tx_count,
         );
@@ -230,15 +230,16 @@ impl RepositoryManager {
             self.block_receipt_repository.remove_by_number(number);
             self.transaction_receipt_repository
                 .remove_by_hashes(&block.body.transactions);
+
+            let persistence_lag = self.latest_block.borrow().saturating_sub(number) as usize;
+            REPOSITORIES_METRICS.persistence_lag.set(persistence_lag);
             tracing::info!(
-               block_number=number, 
-               persist_latency,
-               "Persisted receipts",
+                block_number = number,
+                ?persist_latency,
+                persistence_lag,
+                "Persisted receipts",
             );
 
-            REPOSITORIES_METRICS
-                .persistence_lag
-                .set(self.latest_block.borrow().saturating_sub(number) as usize);
             GENERAL_METRICS.block_number[&"persist"].set(number);
         }
     }
