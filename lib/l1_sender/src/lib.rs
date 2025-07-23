@@ -3,8 +3,7 @@ pub mod config;
 
 use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use crate::config::L1SenderConfig;
-use alloy::consensus::{SidecarBuilder, SimpleCoder};
-use alloy::network::{EthereumWallet, TransactionBuilder, TransactionBuilder4844};
+use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::{Address, TxHash, U256};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
@@ -26,6 +25,8 @@ pub struct L1Sender {
     provider: DynProvider,
     chain_id: u64,
     validator_timelock_address: Address,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
     command_receiver: mpsc::Receiver<Command>,
 }
 
@@ -69,6 +70,8 @@ impl L1Sender {
             provider,
             chain_id: config.chain_id,
             validator_timelock_address,
+            max_fee_per_gas: config.max_fee_per_gas,
+            max_priority_fee_per_gas: config.max_priority_fee_per_gas,
             command_receiver,
         };
         let handle = L1SenderHandle { command_sender };
@@ -240,9 +243,6 @@ impl L1Sender {
             previous_batch.batch_number,
         );
 
-        // Create a blob sidecar with empty data
-        let sidecar = SidecarBuilder::<SimpleCoder>::from_slice(&[]).build()?;
-
         let call = IExecutor::commitBatchesSharedBridgeCall::new((
             U256::from(self.chain_id),
             U256::from(previous_batch.batch_number + 1),
@@ -250,17 +250,32 @@ impl L1Sender {
             Self::commit_calldata(&previous_batch, batch.clone()).into(),
         ));
 
-        let gas_price = self.provider.get_gas_price().await?;
         let eip1559_est = self.provider.estimate_eip1559_fees().await?;
+        tracing::info!(
+            eip1559_est.max_priority_fee_per_gas,
+            "estimated median priority fee (20% percentile) for the last 10 blocks"
+        );
+        if eip1559_est.max_fee_per_gas > self.max_fee_per_gas {
+            tracing::warn!(
+                max_fee_per_gas = self.max_fee_per_gas,
+                estimated_max_fee_per_gas = eip1559_est.max_fee_per_gas,
+                "L1 sender's configured maxFeePerGas is lower than the one estimated from network"
+            );
+        }
+        if eip1559_est.max_priority_fee_per_gas > self.max_priority_fee_per_gas {
+            tracing::warn!(
+                max_priority_fee_per_gas = self.max_priority_fee_per_gas,
+                estimated_max_priority_fee_per_gas = eip1559_est.max_priority_fee_per_gas,
+                "L1 sender's configured maxPriorityFeePerGas is lower than the one estimated from network"
+            );
+        }
         let tx = TransactionRequest::default()
             .with_to(self.validator_timelock_address)
-            .with_max_fee_per_blob_gas(gas_price)
-            .with_max_fee_per_gas(eip1559_est.max_fee_per_gas)
-            .with_max_priority_fee_per_gas(eip1559_est.max_priority_fee_per_gas)
+            .with_max_fee_per_gas(self.max_fee_per_gas)
+            .with_max_priority_fee_per_gas(self.max_priority_fee_per_gas)
             // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
             .with_gas_limit(15000000)
-            .with_call(&call)
-            .with_blob_sidecar(sidecar);
+            .with_call(&call);
 
         let pending_tx_hash = *self.provider.send_transaction(tx).await?.tx_hash();
         tracing::debug!(

@@ -81,7 +81,6 @@ impl Tester {
                 ..Default::default()
             },
             L1SenderConfig {
-                rocks_db_path: rocksdb_path.path().to_path_buf(),
                 l1_api_url: l1_address.clone(),
                 ..Default::default()
             },
