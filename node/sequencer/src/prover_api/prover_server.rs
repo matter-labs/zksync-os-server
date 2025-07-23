@@ -77,6 +77,9 @@ async fn submit_fri_proof(
             "proof verification failed".to_string(),
         )),
         Err(SubmitError::UnknownJob(_)) => Err((StatusCode::NOT_FOUND, "unknown block".into())),
+        Err(SubmitError::DeserializationFailed(err)) => {
+            Err((StatusCode::BAD_REQUEST, err.to_string()))
+        }
         Err(SubmitError::Other(e)) => {
             error!("internal error: {e}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e))
