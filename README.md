@@ -88,8 +88,7 @@ don't include root hash. Still, even when batcher subsystem is not enabled, we w
 failover.
 
 ### Component Details
-
-<img width="1500" height="756" alt="Screenshot 2025-07-17 at 14 51 12" src="https://github.com/user-attachments/assets/cc8a27f0-15df-4406-b803-0e960832a4f1" />
+<img width="1500" height="517" alt="Screenshot 2025-07-23 at 23 52 31" src="https://github.com/user-attachments/assets/0998171c-f4c7-4a4a-b239-02aabcc27060" />
 
 See individual components and state recovery details in the table below. Note that most components have little to no
 internal state or persistence — this is one of the designing principles.
