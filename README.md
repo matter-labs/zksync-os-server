@@ -89,7 +89,8 @@ failover.
 
 ### Component Details
 
-<img width="1500" height="517" alt="Screenshot 2025-07-23 at 23 52 31" src="https://github.com/user-attachments/assets/0998171c-f4c7-4a4a-b239-02aabcc27060" />
+<img width="1558" height="650" alt="Screenshot 2025-07-24 at 14 35 48" src="https://github.com/user-attachments/assets/05933cbd-485d-4f8c-9fbe-071afd11db1c" />
+
 
 See individual components and state recovery details in the table below. Note that most components have little to no
 internal state or persistence — this is one of the design principles.
