@@ -144,7 +144,7 @@ impl Batcher {
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                     GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
-                    let previous_state_commitment = stored_batch_info.state_commitment;
+                    let previous_state_commitment = prev_batch_info.state_commitment;
                     if commit_batch_info.batch_number > self.last_committed_batch {
                         if let Some(l1) = &self.commit_batch_info_sender {
                             l1.commit(prev_batch_info, commit_batch_info.clone())
