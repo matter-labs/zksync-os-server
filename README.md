@@ -1,37 +1,47 @@
 # zksync-os-sequencer
+
 New sequencer implementation for zksync-os with focus on high throughput, low latency and great DevEx.
 
 ## Run
+
 ### Local
+
 `cargo run --release` (`release` makes a significant difference for performance)
 
-Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
+Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (
+`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
 
 To enable local L1 - in other tab (see "L1 State" below for more info)
+
 ```
 anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
 ```
 
-See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g. for high TPS:
+See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g.:
+
 ```
-batcher_component_enabled=false sequencer_blocks_to_retain_in_memory=16 cargo run --release
+batcher_component_enabled=false sequencer_blocks_to_retain_in_memory=256 cargo run --release
 ```
 
 ### Docker
+
 ```
 sudo docker build -t zksync_os_sequencer .
 sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e batcher_maximum_in_flight_blocks=15  -v /mnt/localssd/db:/db   zksync_os_sequencer
 ```
 
 ### Exposed Ports
-* `3050` - L2 JSON RPC
-* `3124` - Prover API (e.g. `127.0.0.1/prover-jobs/status`) (only enabled if `prover_api_component_enabled` is set to `true`)
-* `3312` - Prometheus (compatible with `grafana_dashboard.json`)
 
+* `3050` - L2 JSON RPC
+* `3124` - Prover API (e.g. `127.0.0.1/prover-jobs/status`) (only enabled if `prover_api_component_enabled` is set to
+  `true`)
+* `3312` - Prometheus
 
 ### Prerequisites
+
 Only Rust + Cargo.
 When running on a new VM:
+
 ```
 # essentials
 sudo apt-get install -y build-essential pkg-config cmake clang lldb lld libssl-dev apt-transport-https ca-certificates curl software-properties-common git
@@ -42,53 +52,69 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 ### Resetting the Chain
+
 Erase the local DB and re-run anvil:
+
 ```
 rm -rf db/node1/*
 anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
 ```
 
-## High-level design
-### Principles
-* Low, async persistence
-  * to meet throughput and latency requirements, we avoid synchronous persistence at the critical path. Additionally, we aim at storing only the data that is strictly needed - minimizing the potential for state inconsistency
-* Few, meaningful data containers / abstractions. Examples:
-  * We reuse `BatchOutput` and `BatchContext` structs that are introduced in `zksync-os`  - avoiding further container structs
-  * We introduce key concept of `ReplayRecord` that has all info to replay a block (along from the key value state access):
-```rust
-pub struct ReplayRecord {
-    pub context: BatchContext,
-    pub transactions: Vec<Transaction>,
-}
-```
-* State - strong separation between:
-  1. Actual state - data needed to execute VM: key-value storage and preimages map - see `state` crate
-  2. Receipts repositories - data only needed in API - see `repositories/mod.rs`
-  3. Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from `batcher` - see below.
-     
-Minimal Node will only have (1).
-* Explicit finality handling - description WIP
+## Design
 
-### Components
-Note: contrary to the Era sequencer, one Node = one process - regardless of the configuration
-* **Sequencer** - mandatory component (every node runs it), executes transactions in VM, sends results downstream to other components.
-  * Handles `Produce` and `Replay` commands in an uniform way (see `model/mod.rs` and `execution/block_executor.rs`)
-  * For each block: (1) persists it in WAL (see `block_replay_storage.rs`), (2) pushes to `state` (see `state` batch), (3) exposes the block and tx receipts to API (see `repositories/mod.rs`), (4) pushes to async channels for `batcher` and `tree` components.
-* **JSON RPC** - optional component (not configurable atm). Has shared access to `state`.
-* **Persistent Tree** - optional component (not configurable atm), gets state updates via async channel, updates and persists the tree. Exposes root and merkle proofs for the prover input generation (note that sequencer itself doesn't need the tree - our block hash doesn't include root hash)
-* **Batcher** - optional component (configurable with `batcher_component_enabled=true/false`).
-  * Turns a stream of blocks to a stream of batches (1 batch = 1 proof = 1 L1 commit)
-    * Note: currently 1 block == 1 batch, multi-block batches are not implemented yet 
-  * For each batch, computes the Prover Input (runs RiscV binary (`server_app.bin`) and records its input as a stream of `Vec<u32>` - see `batcher/mod.rs`)
-    * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!). This may be optimized later on. 
-    * Process multiple batches in parallel (prover input generation takes more time than block execution)
-  * Downstream:
-    * Sends the resulting Prover Input to the **Prover API** (see below)
-    * Sends the batch data (`BatchCommitData`) to the **L1 sender** (see below)
-* **L1 sender** - optional component (runs if `localhost:8545` is available). Similar to the Era l1 sender
-  * Doesn't need persistence (recovers its state from L1)
-    * Currently still persists all sent batches - only to have the previous batch data that is needed when commiting. This will be changed.
-* **Prover API** - opional component (configurable with `prover_api_component_enabled=true/false`). keeps unproved batches in memory (see `prover_api/prover_job_manager.rs`). Backpressures if there are more than `prover_api_max_unproved_blocks` of them. Exposes the following api (see `prover_api/prover_server.rs`):
+### Subsystems
+
+* **Sequencer** subsystem — mandatory for every node. Executes transactions in VM, sends results downstream to other
+  components.
+    * Handles `Produce` and `Replay` commands in an uniform way (see `model/mod.rs` and `execution/block_executor.rs`)
+    * For each block: (1) persists it in WAL (see `block_replay_storage.rs`), (2) pushes to `state` (see `state`
+      crate), (3) exposes the block and tx receipts to API (see `repositories/mod.rs`), (4) pushes to async channels for
+      downstream subsystems. Waits on backpressure.
+* **API** subsystem — optional (not configurable atm). Has shared access to `state`. Exposes ethereum-compatible JSON
+  RPC
+* **Batcher** subsystem — optional (configurable via `batcher_component_enabled=true/false`). Has shared access to
+  `state`.
+    * Turns a stream of blocks into a stream of batches (1 batch = 1 proof = 1 L1 commit); exposes Prover APIs; submits
+      batches and proofs to L1.
+      Note: currently 1 block == 1 batch, multi-block batches are not implemented yet.
+    * For each batch, computes the Prover Input (runs RiscV binary (`app.bin`) and records its input as a stream of
+      `Vec<u32>` - see `batcher/mod.rs`)
+    * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!).
+      This will be optimized later on.
+    * if `localhost:8545` is available, runs **L1 sender**.
+
+Note on **Persistent Tree** — it is only necessary for Batcher Subsystem. Sequencer doesn't need the tree — block hashes
+don't include root hash. Still, even when batcher subsystem is not enabled, we want to run the tree for potential
+failover.
+
+### Component Details
+
+<img width="1549" height="658" alt="Screenshot 2025-07-24 at 15 00 55" src="https://github.com/user-attachments/assets/e1a472bd-d14b-4840-bd89-223347bebccf" />
+
+See individual components and state recovery details in the table below. Note that most components have little to no
+internal state or persistence — this is one of the design principles.
+
+| Component                                                                | In-memory state                                                                                              | Persistence                                                                                                          | State Recovery                                                                                                                                                                                                                                                                                                | 
+|--------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------| 
+| **Command Source**                                                       | `starting_block` (only used on startup)                                                                      | none                                                                                                                 | `starting_block` is the first block **after** the compacted block stored in `state`, i.e., `starting_block = highest_block - blocks_to_retain_in_memory`.                                                                                                                                                     | 
+| **BlockContextProvider**                                                 | `next_l1_priority_id`; `block_hashes_for_next_block` (last 256 block hashes)                                 | none                                                                                                                 | `next_l1_priority_id`: take from `ReplayRecord` of `starting_block - 1`; `block_hashes_for_next_block`: take from 256 `ReplayRecord`s before `starting_block`                                                                                                                                                 |
+| **L1Watcher**                                                            | Gapless list of Priority transactions - starting from the last committed to L1                               | none (TODO - temporary stores the last processed L1 block)                                                           | none (TODO - will load committed priority transactions from L1)                                                                                                                                                                                                                                               |
+| **L2Mempool** _(RETH crate)_                                             | prepared list of pending L2 transactions                                                                     | none                                                                                                                 | none (consider persisting mempool transactions in the future)                                                                                                                                                                                                                                                 |
+| **BlockExecutor**                                                        | none 🔥                                                                                                      | none                                                                                                                 | none                                                                                                                                                                                                                                                                                                          |
+| **Repositories** (API subsystem)                                         | BlockHeaders and Transactions for ~`blocks_to_retain_in_memory` blocks                                       | Historical BlockHeaders and Transactions                                                                             | none - recovers naturally when replaying blocks from `starting_block`                                                                                                                                                                                                                                         |
+| **State**                                                                | All Storage Logs and Preimages for `blocks_to_retain_in_memory` last blocks                                  | Compacted state at some older block (`highest_block - blocks_to_retain_in_memory`): full state map and all preimages | none - recovers naturally when replaying blocks from `starting_block`                                                                                                                                                                                                                                         |
+| **Merkle Tree**                                                          | Only persistence                                                                                             | Full Merkle tree - including previous values on each leaf                                                            | none                                                                                                                                                                                                                                                                                                          |
+| ⬇️ _Batcher Subsystem Components_                                        | ⬇️ _Components below operate on Batches - not Blocks️_                                                       | ⬇️ _Components below must not rely on persistence - otherwise failover is not possible_                              | ⬇️                                                                                                                                                                                                                                                                                                            |                              
+| **Batcher**                                                              | startup: `starting_batch` and `batcher_starting_block`; <br/> operation: Trailing Batch's `CommitBatchInfo`; | none (TODO - temporary stores `CommitBatchInfo` + block range of produced batches)                                   | `starting_batch`: batch **after** the last committed on L1;<br/> `batcher_starting_block`: block **after** the last block in the last committed L1 batch;<br/> Trailing `CommitBatchInfo`: Currently: from peristense; todo - Load last committed `CommitBatchInfo` from L1 OR reprocess last committed batch |                             
+| **Prover Input Generator**  (TODO - merged with the **Batcher** for now) |                                                                                                              | none                                                                                                                 | none                                                                                                                                                                                                                                                                                                          |                             
+| **FRI Job Manager**                                                      | Gapless List of unproved batches with `ProverInput` and prover assignment info                               | none                                                                                                                 | none - batches before `starting_batch` are guaranteed to have FRI proofs, batches after will go through the pipeline again                                                                                                                                                                                    |                             
+| **FRI Store/Cache**                                                      | none                                                                                                         | `Map<BatchNumber, FRIProof>` (todo: extract from the node process to enable failover)                                | none                                                                                                                                                                                                                                                                                                          |                             
+| **L1 Committer**                                                         | none*                                                                                                        | none (TODO - temporary stores `CommitBatchInfo` because it's needed for the previous `StoredBatchInfo`)              | none - recovers itself from L1                                                                                                                                                                                                                                                                                |                             
+| **SNARK Job Manager** (TODO - missing)                                   | Gapless list of batches with their FRI proofs and prover assignment info                                     | none                                                                                                                 | Load batches that are committed but not proved on L1 yet. Load their FRI proofs from FRI cache (TODO)                                                                                                                                                                                                         |                             
+| **L1 Executor** (TODO - missing)                                         | none* (TODO: tree for `PriorityOpsBatchInfo`)                                                                | none                                                                                                                 | none - recovers itself from L1                                                                                                                                                                                                                                                                                |                             
+
+### Prover API
+
 ```
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
@@ -96,24 +122,49 @@ Note: contrary to the Era sequencer, one Node = one process - regardless of the 
         .route("/prover-jobs/available", get(list_available_proofs))
         .route("/prover-jobs/FRI/:block", get(get_fri_proof))
 ```
-Note that it's the same api as in old sequencer integration, so FRI GPU Provers themselves are fully compatible. 
-  * Stores submitted FRI proofs in RocksDB and exposes them via API (under `/prover-jobs/FRI/:block`)
-<img width="1500" height="756" alt="Screenshot 2025-07-17 at 14 51 12" src="https://github.com/user-attachments/assets/cc8a27f0-15df-4406-b803-0e960832a4f1" />
+
+Note that it's the same api as in old sequencer integration, so FRI GPU Provers themselves are fully compatible.
+
+### Principles
+
+* Minimal, async persistence
+    * to meet throughput and latency requirements, we avoid synchronous persistence at the critical path. Additionally,
+      we aim at storing only the data that is strictly needed - minimizing the potential for state inconsistency
+* Few, meaningful data containers / abstractions. Examples:
+    * We reuse `BatchOutput` and `BatchContext` structs that are introduced in `zksync-os`  - avoiding further container
+      structs
+    * We introduce key concept of `ReplayRecord` that has all info to replay a block (along from the key value state
+      access):
+
+```rust
+pub struct ReplayRecord {
+    pub context: BatchContext,
+    pub transactions: Vec<Transaction>,
+}
+```
+
+* State - strong separation between:
+    1. Actual state - data needed to execute VM: key-value storage and preimages map - see `state` crate
+    2. Receipts repositories - data only needed in API - see `repositories/mod.rs`
+    3. Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from `batcher` -
+       see below.
+
+Minimal Node only needs (1).
 
 ## Known restrictions
 
-* lacking seal criteria
-* older blocks not available for eth_call
+* lacking seal criteria - potential for unprovable blocks
+* older blocks are not available for eth_call
 * no upgrade/interop logic
 
-## Glossary (WIP)
+## Glossary
 
 * `Block` vs `Batch`:
-  * One `block` = one vm run in block_executor = one block_receipt, 
-  * one `batch` = one FRI proof = one L1 commit.
+    * One `block` = one vm run in block_executor = one block_receipt,
+    * one `batch` = one FRI proof = one L1 commit.
 
-Important: currently zksync-os uses term `batch` for blocks (e.g. `run_batch` etc.). 
-Also, return type of a block is `BatchOutput` - which represents a block in our case. 
+Important: currently zksync-os uses term `batch` for blocks (e.g. `run_batch` etc.).
+Also, return type of a block is `BatchOutput` - which represents a block in our case.
 todo: use `use BatchOutput as BlockOutput` in this repo to avoid confusion.
 
 ## L1 State
