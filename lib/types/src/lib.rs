@@ -21,7 +21,7 @@ pub fn forced_deposit_transaction() -> L1Envelope {
         maxFeePerGas: U256::from(1),
         maxPriorityFeePerGas: U256::from(0),
         paymaster: U256::ZERO,
-        nonce: U256::from(0),
+        nonce: U256::from(7),
         value: U256::from(100),
         reserved: [
             // `toMint`

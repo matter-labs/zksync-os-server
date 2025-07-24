@@ -77,15 +77,10 @@ impl StateHandle {
         }
     }
 
-    /// Returns (state_block_number, preimages_block_number)
-    ///
-    /// Hint: we can return `min` of these two values
-    /// for all intents and purposes - only returning both values for easier logging/context
-    pub fn latest_block_numbers(&self) -> (u64, u64) {
-        (
-            self.storage_map.latest_block.load(Ordering::Relaxed),
-            self.persistent_preimages.rocksdb_block_number(),
-        )
+    pub fn compacted_block_number(&self) -> u64 {
+        self.storage_map
+            .persistent_storage_map
+            .rocksdb_block_number()
     }
 
     pub fn state_view_at_block(&self, block_number: u64) -> anyhow::Result<StateView> {
