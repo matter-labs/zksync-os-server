@@ -28,9 +28,7 @@ use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
-    execution::{
-        block_executor::execute_block, block_context_provider::BlockContextProvider,
-    },
+    execution::{block_context_provider::BlockContextProvider, block_executor::execute_block},
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
