@@ -9992,6 +9992,7 @@ dependencies = [
  "basic_system",
  "blake2",
  "forward_system",
+ "futures",
  "ruint",
  "serde",
  "serde_json",
@@ -10003,7 +10004,6 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_merkle_tree",
  "zksync_os_types",
- "zksync_storage",
 ]
 
 [[package]]

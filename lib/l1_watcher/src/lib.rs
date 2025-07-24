@@ -10,7 +10,7 @@ use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, BlockNumber};
-use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
@@ -33,7 +33,7 @@ impl L1Watcher {
 
         let provider = DynProvider::new(
             ProviderBuilder::new()
-                .connect(&config.l1_api_url)
+                .connect_ws(WsConnect::new(config.l1_api_url))
                 .await
                 .context("failed to connect to L1 api")?,
         );

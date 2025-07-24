@@ -16,7 +16,7 @@ zksync_os_types.workspace = true
 
 zksync_storage.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
+alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 serde_json.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }

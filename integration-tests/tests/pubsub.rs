@@ -57,7 +57,7 @@ impl PubsubSuite for NewBlockSuite {
     }
 
     async fn subscribe(&self, tester: &Tester) -> anyhow::Result<Subscription<Self::Expected>> {
-        Ok(tester.l2_ws_provider.subscribe_blocks().await?)
+        Ok(tester.l2_provider.subscribe_blocks().await?)
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
@@ -95,10 +95,7 @@ impl PubsubSuite for PendingTxSuite<false> {
     }
 
     async fn subscribe(&self, tester: &Tester) -> anyhow::Result<Subscription<Self::Expected>> {
-        Ok(tester
-            .l2_ws_provider
-            .subscribe_pending_transactions()
-            .await?)
+        Ok(tester.l2_provider.subscribe_pending_transactions().await?)
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
@@ -125,7 +122,7 @@ impl PubsubSuite for PendingTxSuite<true> {
 
     async fn subscribe(&self, tester: &Tester) -> anyhow::Result<Subscription<Self::Expected>> {
         Ok(tester
-            .l2_ws_provider
+            .l2_provider
             .subscribe_full_pending_transactions()
             .await?)
     }
@@ -173,7 +170,7 @@ impl PubsubSuite for NewLogsSuite {
         let filter = Filter::new()
             .address(*self.event_emitter.address())
             .event_signature(TestEvent::SIGNATURE_HASH);
-        Ok(tester.l2_ws_provider.subscribe_logs(&filter).await?)
+        Ok(tester.l2_provider.subscribe_logs(&filter).await?)
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
