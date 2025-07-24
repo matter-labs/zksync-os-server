@@ -70,7 +70,7 @@ jobs:
         with:
           repository: matter-labs/zksync-era
           path: zksync-era
-          ref: zksync-os-integration-0.0.5
+          ref: zksync-os-integration
 
       - name: Run FRI prover
         run: |
