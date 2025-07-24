@@ -1,5 +1,6 @@
 use crate::CHAIN_ID;
 use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::ApiRepository;
 use alloy::eips::{BlockNumHash, BlockNumberOrTag};
 use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue};
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
@@ -19,15 +20,19 @@ use reth_trie_common::{
 use std::fmt::Debug;
 use std::sync::Arc;
 use zk_ee::utils::Bytes32;
+use zk_os_api::helpers::{get_balance, get_nonce};
+use zk_os_forward_system::run::PreimageSource;
+use zksync_os_state::{StateHandle, StateView};
 
 #[derive(Debug)]
 pub struct ZkClient {
     chain_spec: Arc<ChainSpec>,
     repositories: RepositoryManager,
+    state_handle: StateHandle,
 }
 
 impl ZkClient {
-    pub fn new(repositories: RepositoryManager) -> Self {
+    pub fn new(repositories: RepositoryManager, state_handle: StateHandle) -> Self {
         let builder = ChainSpecBuilder::default()
             .chain(Chain::from(CHAIN_ID))
             // Activate everything up to Cancun
@@ -40,6 +45,7 @@ impl ZkClient {
         Self {
             chain_spec: Arc::new(builder.build()),
             repositories,
+            state_handle,
         }
     }
 }
@@ -55,7 +61,8 @@ impl ChainSpecProvider for ZkClient {
 impl StateProviderFactory for ZkClient {
     fn latest(&self) -> ProviderResult<StateProviderBox> {
         Ok(Box::new(ZkState {
-            repositories: self.repositories.clone(),
+            state_handle: self.state_handle.clone(),
+            latest_block: self.repositories.get_latest_block(),
         }))
     }
 
@@ -89,23 +96,29 @@ impl StateProviderFactory for ZkClient {
 
 #[derive(Debug)]
 pub struct ZkState {
-    repositories: RepositoryManager,
+    state_handle: StateHandle,
+    latest_block: u64,
+}
+
+impl ZkState {
+    // I would like to just store a StateView but AccountReader and BytecodeReader
+    // operate on an immutable reference, so they could use it concurrently.
+    fn state_view(&self) -> StateView {
+        self.state_handle
+            .state_view_at_block(self.latest_block)
+            .unwrap()
+    }
 }
 
 impl AccountReader for ZkState {
     fn basic_account(&self, address: &Address) -> ProviderResult<Option<Account>> {
         Ok(self
-            .repositories
-            .account_property_repository
-            .get_latest(address)
+            .state_view()
+            .get_account(ruint::aliases::B160::from_le_bytes(address.into_array()))
             .map(|props| Account {
-                nonce: props.nonce,
-                balance: props.balance,
-                bytecode_hash: if props.bytecode_hash == Bytes32::ZERO {
-                    None
-                } else {
-                    Some(props.bytecode_hash.as_u8_array().into())
-                },
+                nonce: get_nonce(&props),
+                balance: get_balance(&props),
+                bytecode_hash: Some(B256::from_slice(&props.bytecode_hash.as_u8_array())),
             }))
     }
 }
@@ -113,9 +126,10 @@ impl AccountReader for ZkState {
 impl BytecodeReader for ZkState {
     fn bytecode_by_hash(&self, code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
         Ok(self
-            .repositories
-            .bytecode_repository
-            .get_latest(code_hash)
+            .state_view()
+            .get_preimage(Bytes32::from_array(
+                code_hash.as_slice().try_into().unwrap(),
+            ))
             .map(Bytes::from)
             .map(Bytecode::new_raw))
     }

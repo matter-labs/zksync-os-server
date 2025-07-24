@@ -284,7 +284,7 @@ pub async fn run(
     );
 
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
-        ZkClient::new(repositories.clone()),
+        ZkClient::new(repositories.clone(), state_handle.clone()),
         forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
