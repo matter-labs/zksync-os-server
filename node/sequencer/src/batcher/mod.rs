@@ -1,7 +1,6 @@
 use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
-use alloy::primitives::B256;
 use dashmap::DashMap;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
@@ -36,19 +35,19 @@ pub struct Batcher {
     commit_batch_info_sender: Option<L1SenderHandle>,
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     state_handle: StateHandle,
+    last_committed_batch: u64,
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
-    // number and state commitment of the last processed batch.
-    last_processed_batch_number_and_commitment: (u64, B256),
+    // holds info about the last processed batch (genesis if none)
+    prev_batch_info: StoredBatchInfo,
     // cache for block timestamps
     block_timestamps: DashMap<u64, u64>,
 }
 
 #[derive(Debug)]
-pub struct BatcherInitData {
-    pub last_block_number: u64,
-    pub last_block_timestamp: u64,
-    pub last_state_commitment: B256,
+pub struct BatcherLastBlockData {
+    pub number: u64,
+    pub timestamp: u64,
 }
 
 impl Batcher {
@@ -60,10 +59,12 @@ impl Batcher {
         commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
+        last_committed_batch: u64,
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
-        batcher_init_data: BatcherInitData,
+        prev_batch_info: StoredBatchInfo,
+        last_block_data: BatcherLastBlockData,
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -74,24 +75,19 @@ impl Batcher {
         } else {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")
         };
-        let block_timestamps = [(
-            batcher_init_data.last_block_number,
-            batcher_init_data.last_block_timestamp,
-        )]
-        .into_iter()
-        .collect();
+        let block_timestamps = [(last_block_data.number, last_block_data.timestamp)]
+            .into_iter()
+            .collect();
         Self {
             block_receiver,
             state_handle,
             batch_sender,
             persistent_tree,
             commit_batch_info_sender,
+            last_committed_batch,
             bin_path,
             maximum_in_flight_blocks,
-            last_processed_batch_number_and_commitment: (
-                batcher_init_data.last_block_number,
-                batcher_init_data.last_state_commitment,
-            ),
+            prev_batch_info,
             block_timestamps,
         }
     }
@@ -145,11 +141,10 @@ impl Batcher {
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
             .try_fold(
-                self.last_processed_batch_number_and_commitment,
-                async |(previous_block_number, previous_state_commitment),
-                       (prover_input, batch_output, replay_record)| {
+                self.prev_batch_info,
+                async |prev_batch_info, (prover_input, batch_output, replay_record)| {
                     let block_number = replay_record.block_context.block_number;
-                    assert_eq!(previous_block_number + 1, block_number);
+                    assert_eq!(prev_batch_info.batch_number + 1, block_number);
 
                     let (root_hash, leaf_count) = self
                         .persistent_tree
@@ -159,7 +154,7 @@ impl Batcher {
                         .root_info()
                         .unwrap();
 
-                    let tree_output = zksync_os_merkle_tree::BatchOutput {
+                    let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
                         root_hash,
                         leaf_count,
                     };
@@ -180,8 +175,12 @@ impl Batcher {
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                     GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
-                    if let Some(l1) = &self.commit_batch_info_sender {
-                        l1.commit(commit_batch_info.clone()).await?;
+                    let previous_state_commitment = prev_batch_info.state_commitment;
+                    if commit_batch_info.batch_number > self.last_committed_batch {
+                        if let Some(l1) = &self.commit_batch_info_sender {
+                            l1.commit(prev_batch_info, commit_batch_info.clone())
+                                .await?;
+                        }
                     }
                     self.batch_sender
                         .send(BatchJob {
@@ -192,7 +191,7 @@ impl Batcher {
                         })
                         .await?;
 
-                    Ok((block_number, stored_batch_info.state_commitment))
+                    Ok(stored_batch_info)
                 },
             )
             .await

@@ -16,7 +16,7 @@ pub mod tree_manager;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::util::genesis_stored_batch_info;
-use crate::batcher::{Batcher, BatcherInitData};
+use crate::batcher::{Batcher, BatcherLastBlockData};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
@@ -377,9 +377,8 @@ pub async fn run(
 
     // ========== Initialize L1 sender (fallible) ===========
 
-    let genesis_stored_batch_info = genesis_stored_batch_info();
-    let l1_sender = L1Sender::new(l1_sender_config, genesis_stored_batch_info.clone()).await;
-    let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
+    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let (l1_sender_task, l1_sender_handle, last_committed_batch_number): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
         u64,
@@ -411,6 +410,7 @@ pub async fn run(
         }
     };
 
+    let genesis_stored_batch_info = genesis_stored_batch_info();
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
@@ -421,12 +421,13 @@ pub async fn run(
             l1_sender_handle,
             state_handle.clone(),
             persistent_tree,
+            last_committed_batch_number,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
-            BatcherInitData {
-                last_block_number: 0,
-                last_block_timestamp: 0,
-                last_state_commitment: genesis_stored_batch_info.state_commitment,
+            genesis_stored_batch_info,
+            BatcherLastBlockData {
+                number: 0,
+                timestamp: 0,
             },
         );
         Box::pin(batcher.run_loop())

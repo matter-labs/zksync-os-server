@@ -79,6 +79,7 @@ alloy::sol! {
     #[sol(rpc)]
     interface IZKChain {
         function storedBatchHash(uint256 _batchNumber) external view returns (bytes32);
+        function getTotalBatchesCommitted() external view returns (uint256);
     }
 
     // Taken from `IExecutor.sol`
@@ -211,5 +212,12 @@ impl<P: Provider> Bridgehub<P> {
             .storedBatchHash(U256::from(batch_number))
             .call()
             .await
+    }
+
+    // TODO: Consider creating a separate `ZkChain` struct
+    pub async fn get_total_batches_committed(&self) -> alloy::contract::Result<U256> {
+        let zk_chain_address = self.zk_chain_address().await?;
+        let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider());
+        zk_chain.getTotalBatchesCommitted().call().await
     }
 }

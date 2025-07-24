@@ -101,8 +101,7 @@ impl CommitBatchInfo {
         batch_output: BatchOutput,
         batch_context: &BatchContext,
         transactions: &[ZkTransaction],
-        // TODO: This really needs a different name
-        tree_output: zksync_os_merkle_tree::BatchOutput,
+        tree_output: zksync_os_merkle_tree::TreeBatchOutput,
         chain_id: u64,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
