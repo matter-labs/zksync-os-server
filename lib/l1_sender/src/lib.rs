@@ -13,7 +13,7 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::{SolCall, SolValue};
 use alloy::transports::TransportResult;
 use anyhow::Context;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use smart_config::value::ExposeSecret;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -95,20 +95,28 @@ impl L1Sender {
             .await
             != 0
         {
-            let mut pending_tx_hashes = HashMap::new();
-            for cmd in cmd_buffer.drain(..) {
-                match cmd {
-                    Command::Commit(CommitCommand {
-                        previous_batch,
-                        batch,
-                    }) => {
-                        let batch_number = batch.batch_number;
-                        if let Some(pending_tx_hash) = self.commit(previous_batch, batch).await? {
-                            pending_tx_hashes.insert(pending_tx_hash, batch_number);
+            let pending_tx_hashes = futures::stream::iter(cmd_buffer.drain(..).map(anyhow::Ok))
+                .try_filter_map(|cmd| async {
+                    match cmd {
+                        Command::Commit(CommitCommand {
+                            previous_batch,
+                            batch,
+                        }) => {
+                            let batch_number = batch.batch_number;
+                            if let Some(pending_tx_hash) =
+                                self.commit(previous_batch, batch).await?
+                            {
+                                Ok(Some((pending_tx_hash, batch_number)))
+                            } else {
+                                Ok(None)
+                            }
                         }
                     }
-                }
-            }
+                })
+                // We could buffer the stream here to enable parallelized commits, but this is not
+                // necessary for now
+                .try_collect::<HashMap<TxHash, u64>>()
+                .await?;
             self.wait_for_pending_txs(&mut l1_block_stream, pending_tx_hashes)
                 .await?;
         }
@@ -225,7 +233,7 @@ impl L1Sender {
     }
 
     async fn commit(
-        &mut self,
+        &self,
         previous_batch: StoredBatchInfo,
         batch: CommitBatchInfo,
     ) -> anyhow::Result<Option<TxHash>> {
