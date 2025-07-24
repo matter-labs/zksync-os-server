@@ -43,4 +43,8 @@ pub struct L1SenderConfig {
     // with >30x capacity.
     #[config(default_t = (2 * GWEI_TO_WEI) as u128)]
     pub max_priority_fee_per_gas: u128,
+
+    /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    #[config(default_t = 16)]
+    pub command_limit: usize,
 }

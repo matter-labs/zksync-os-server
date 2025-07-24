@@ -27,6 +27,7 @@ pub struct L1Sender {
     validator_timelock_address: Address,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
+    command_limit: usize,
     command_receiver: mpsc::Receiver<Command>,
 }
 
@@ -37,6 +38,7 @@ impl L1Sender {
     /// Resulting [`L1Sender`] is expected to be consumed by calling [`Self::run`]. Additionally,
     /// returns a cloneable handle that can be used to send requests to this instance of [`L1Sender`].
     pub async fn new(config: L1SenderConfig) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
+        anyhow::ensure!(config.command_limit > 0, "command limit must be positive");
         let operator_wallet = EthereumWallet::from(
             PrivateKeySigner::from_str(config.operator_private_key.expose_secret())
                 .context("failed to parse operator private key")?,
@@ -72,6 +74,7 @@ impl L1Sender {
             validator_timelock_address,
             max_fee_per_gas: config.max_fee_per_gas,
             max_priority_fee_per_gas: config.max_priority_fee_per_gas,
+            command_limit: config.command_limit,
             command_receiver,
         };
         let handle = L1SenderHandle { command_sender };
@@ -81,17 +84,23 @@ impl L1Sender {
     /// Runs L1 sender indefinitely thus processing requests received from any of the matching
     /// handles.
     pub async fn run(mut self) -> anyhow::Result<()> {
-        let limit = 16;
-        let mut cmd_buffer = Vec::with_capacity(16);
+        let mut cmd_buffer = Vec::with_capacity(self.command_limit);
         let mut l1_block_stream = self
             .provider
             .subscribe_full_blocks()
             .hashes()
             .into_stream()
             .await?;
+        // This sleeps until **at least one** command is received from the channel. Additionally,
+        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
+        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
+        // emptied in every iteration, its size never exceeds `self.command_limit`.
+        //
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
         while self
             .command_receiver
-            .recv_many(&mut cmd_buffer, limit)
+            .recv_many(&mut cmd_buffer, self.command_limit)
             .await
             != 0
         {
