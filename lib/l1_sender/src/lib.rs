@@ -4,7 +4,7 @@ pub mod config;
 use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use crate::config::L1SenderConfig;
 use alloy::network::{EthereumWallet, TransactionBuilder};
-use alloy::primitives::{Address, TxHash, U256};
+use alloy::primitives::{Address, BlockNumber, TxHash, U256};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
@@ -13,7 +13,8 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::{SolCall, SolValue};
 use alloy::transports::TransportResult;
 use anyhow::Context;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use smart_config::value::ExposeSecret;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -84,13 +85,8 @@ impl L1Sender {
     /// Runs L1 sender indefinitely thus processing requests received from any of the matching
     /// handles.
     pub async fn run(mut self) -> anyhow::Result<()> {
+        let mut heartbeat = Heartbeat::new(&self.provider).await?;
         let mut cmd_buffer = Vec::with_capacity(self.command_limit);
-        let mut l1_block_stream = self
-            .provider
-            .subscribe_full_blocks()
-            .hashes()
-            .into_stream()
-            .await?;
         // This sleeps until **at least one** command is received from the channel. Additionally,
         // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
@@ -126,95 +122,13 @@ impl L1Sender {
                 // necessary for now
                 .try_collect::<HashMap<TxHash, u64>>()
                 .await?;
-            self.wait_for_pending_txs(&mut l1_block_stream, pending_tx_hashes)
+            heartbeat
+                .wait_for_pending_txs(&self.provider, pending_tx_hashes)
                 .await?;
         }
 
         tracing::trace!("channel has been closed; stopping L1 sender");
         Ok(())
-    }
-
-    async fn wait_for_pending_txs(
-        &mut self,
-        l1_block_stream: &mut (dyn Stream<Item = TransportResult<Block>> + Unpin + Send),
-        mut pending_tx_hashes: HashMap<TxHash, u64>,
-    ) -> anyhow::Result<()> {
-        while !pending_tx_hashes.is_empty() {
-            let Some(block) = l1_block_stream.next().await else {
-                anyhow::bail!("L1 block stream has been closed unexpectedly");
-            };
-            let block = block?;
-            let mut mined_pending_txs = 0;
-            for tx_hash in block.transactions.hashes() {
-                if let Some(batch_number) = pending_tx_hashes.remove(&tx_hash) {
-                    self.validate_tx_receipt(batch_number, tx_hash).await?;
-                    mined_pending_txs += 1;
-                }
-            }
-            let remaining_pending_txs = pending_tx_hashes.len();
-            let base_fee_per_gas = block.header.base_fee_per_gas.unwrap_or_default();
-            tracing::debug!(
-                block.header.number,
-                ?block.header.hash,
-                base_fee_per_gas,
-                mined_pending_txs,
-                remaining_pending_txs,
-                "received new L1 block"
-            );
-        }
-        Ok(())
-    }
-
-    async fn validate_tx_receipt(&self, batch_number: u64, tx_hash: TxHash) -> anyhow::Result<()> {
-        let receipt = self
-            .provider
-            .get_transaction_receipt(tx_hash)
-            .await?
-            .context("mined transaction receipt is missing")?;
-        if receipt.status() {
-            // We could also look at tx receipt's logs for a corresponding `BlockCommit` event but
-            // not sure if this is 100% necessary yet.
-            tracing::info!(
-                batch_number,
-                tx_hash = ?receipt.transaction_hash,
-                l1_block_number = receipt.block_number.unwrap(),
-                "batch committed to L1",
-            );
-
-            Ok(())
-        } else {
-            tracing::error!(
-                batch_number,
-                tx_hash = ?receipt.transaction_hash,
-                l1_block_number = receipt.block_number.unwrap(),
-                "commit transaction failed"
-            );
-            if let Ok(trace) = self
-                .provider
-                .debug_trace_transaction(
-                    receipt.transaction_hash,
-                    GethDebugTracingOptions::call_tracer(CallConfig::default()),
-                )
-                .await
-            {
-                let call_frame = trace
-                    .try_into_call_frame()
-                    .expect("requested call tracer but received a different call frame type");
-                // We print top-level call frame's output as it likely contains serialized custom
-                // error pointing to the underlying problem (i.e. starts with the error's 4byte
-                // signature).
-                tracing::error!(
-                    ?call_frame.output,
-                    ?call_frame.error,
-                    ?call_frame.revert_reason,
-                    "failed transaction's top-level call frame"
-                );
-            }
-            anyhow::bail!(
-                "commit transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
-                receipt.transaction_hash
-            );
-        }
     }
 }
 
@@ -301,6 +215,126 @@ impl L1Sender {
             "batch commit transaction sent to L1"
         );
         Ok(Some(pending_tx_hash))
+    }
+}
+
+/// L1 sender's heartbeat that monitors all L1 blocks and enforces that we receive them sequentially
+struct Heartbeat {
+    last_l1_block_number: Option<BlockNumber>,
+    l1_block_stream: BoxStream<'static, TransportResult<Block>>,
+}
+
+impl Heartbeat {
+    async fn new(provider: &DynProvider) -> anyhow::Result<Self> {
+        Ok(Self {
+            last_l1_block_number: None,
+            l1_block_stream: Box::pin(
+                provider
+                    .subscribe_full_blocks()
+                    .hashes()
+                    .into_stream()
+                    .await?,
+            ),
+        })
+    }
+
+    async fn wait_for_pending_txs(
+        &mut self,
+        provider: &DynProvider,
+        mut pending_tx_hashes: HashMap<TxHash, u64>,
+    ) -> anyhow::Result<()> {
+        while !pending_tx_hashes.is_empty() {
+            let Some(block) = self.l1_block_stream.next().await else {
+                anyhow::bail!("L1 block stream has been closed unexpectedly");
+            };
+            let block = block?;
+
+            if let Some(last_l1_block_number) = self.last_l1_block_number {
+                if block.header.number != last_l1_block_number + 1 {
+                    // This can happen if there is a reorg on L1. As a temporary measure we restart which
+                    // forces us to re-initialize L1 sender.
+                    anyhow::bail!(
+                        "received non-sequential L1 block #{} (expected #{}); restarting",
+                        block.header.number,
+                        last_l1_block_number + 1
+                    );
+                }
+            }
+            self.last_l1_block_number.replace(block.header.number);
+
+            let mut mined_pending_txs = 0;
+            for tx_hash in block.transactions.hashes() {
+                if let Some(batch_number) = pending_tx_hashes.remove(&tx_hash) {
+                    Self::validate_tx_receipt(provider, batch_number, tx_hash).await?;
+                    mined_pending_txs += 1;
+                }
+            }
+            let remaining_pending_txs = pending_tx_hashes.len();
+            let base_fee_per_gas = block.header.base_fee_per_gas.unwrap_or_default();
+            tracing::debug!(
+                block.header.number,
+                ?block.header.hash,
+                base_fee_per_gas,
+                mined_pending_txs,
+                remaining_pending_txs,
+                "received new L1 block"
+            );
+        }
+        Ok(())
+    }
+
+    async fn validate_tx_receipt(
+        provider: &DynProvider,
+        batch_number: u64,
+        tx_hash: TxHash,
+    ) -> anyhow::Result<()> {
+        let receipt = provider
+            .get_transaction_receipt(tx_hash)
+            .await?
+            .context("mined transaction receipt is missing")?;
+        if receipt.status() {
+            // We could also look at tx receipt's logs for a corresponding `BlockCommit` event but
+            // not sure if this is 100% necessary yet.
+            tracing::info!(
+                batch_number,
+                tx_hash = ?receipt.transaction_hash,
+                l1_block_number = receipt.block_number.unwrap(),
+                "batch committed to L1",
+            );
+
+            Ok(())
+        } else {
+            tracing::error!(
+                batch_number,
+                tx_hash = ?receipt.transaction_hash,
+                l1_block_number = receipt.block_number.unwrap(),
+                "commit transaction failed"
+            );
+            if let Ok(trace) = provider
+                .debug_trace_transaction(
+                    receipt.transaction_hash,
+                    GethDebugTracingOptions::call_tracer(CallConfig::default()),
+                )
+                .await
+            {
+                let call_frame = trace
+                    .try_into_call_frame()
+                    .expect("requested call tracer but received a different call frame type");
+                // We print top-level call frame's output as it likely contains serialized custom
+                // error pointing to the underlying problem (i.e. starts with the error's 4byte
+                // signature).
+                tracing::error!(
+                    ?call_frame.output,
+                    ?call_frame.error,
+                    ?call_frame.revert_reason,
+                    "failed transaction's top-level call frame"
+                );
+            }
+            anyhow::bail!(
+                "commit transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
+                receipt.transaction_hash
+            );
+        }
     }
 }
 
