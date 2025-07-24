@@ -1,7 +1,6 @@
 use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
-use alloy::primitives::B256;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -34,10 +33,11 @@ pub struct Batcher {
     commit_batch_info_sender: Option<L1SenderHandle>,
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     state_handle: StateHandle,
+    last_committed_batch: u64,
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
-    // number and state commitment of the last processed batch.
-    prev_batch_data: (u64, B256),
+    // holds info about the last processed batch (genesis if none)
+    prev_batch_info: StoredBatchInfo,
 }
 
 impl Batcher {
@@ -49,10 +49,11 @@ impl Batcher {
         commit_batch_info_sender: Option<L1SenderHandle>,
         state_handle: StateHandle,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
+        last_committed_batch: u64,
 
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
-        prev_batch_data: (u64, B256),
+        prev_batch_info: StoredBatchInfo,
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -69,9 +70,10 @@ impl Batcher {
             batch_sender,
             persistent_tree,
             commit_batch_info_sender,
+            last_committed_batch,
             bin_path,
             maximum_in_flight_blocks,
-            prev_batch_data,
+            prev_batch_info,
         }
     }
 
@@ -108,11 +110,10 @@ impl Batcher {
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
             .try_fold(
-                self.prev_batch_data,
-                async |(prev_block_number, previous_state_commitment),
-                       (prover_input, batch_output, replay_record)| {
+                self.prev_batch_info,
+                async |prev_batch_info, (prover_input, batch_output, replay_record)| {
                     let block_number = replay_record.block_context.block_number;
-                    assert_eq!(prev_block_number + 1, block_number);
+                    assert_eq!(prev_batch_info.batch_number + 1, block_number);
 
                     let (root_hash, leaf_count) = self
                         .persistent_tree
@@ -143,8 +144,12 @@ impl Batcher {
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                     GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
-                    if let Some(l1) = &self.commit_batch_info_sender {
-                        l1.commit(commit_batch_info.clone()).await?;
+                    let previous_state_commitment = prev_batch_info.state_commitment;
+                    if commit_batch_info.batch_number > self.last_committed_batch {
+                        if let Some(l1) = &self.commit_batch_info_sender {
+                            l1.commit(prev_batch_info, commit_batch_info.clone())
+                                .await?;
+                        }
                     }
                     self.batch_sender
                         .send(BatchJob {
@@ -155,7 +160,7 @@ impl Batcher {
                         })
                         .await?;
 
-                    Ok((block_number, stored_batch_info.state_commitment))
+                    Ok(stored_batch_info)
                 },
             )
             .await

@@ -377,9 +377,8 @@ pub async fn run(
 
     // ========== Initialize L1 sender (fallible) ===========
 
-    let genesis_stored_batch_info = genesis_stored_batch_info();
-    let l1_sender = L1Sender::new(l1_sender_config, genesis_stored_batch_info.clone()).await;
-    let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
+    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let (l1_sender_task, l1_sender_handle, last_committed_batch_number): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
         u64,
@@ -411,20 +410,21 @@ pub async fn run(
         }
     };
 
+    let genesis_stored_batch_info = genesis_stored_batch_info();
     // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
     let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
         // TODO: Start from `last_committed_batch_number`
         assert_eq!(first_block_to_execute, 1);
-        let prev_batch_data = (0, genesis_stored_batch_info.state_commitment);
         let batcher = Batcher::new(
             blocks_for_batcher_receiver,
             batch_sender,
             l1_sender_handle,
             state_handle.clone(),
             persistent_tree,
+            last_committed_batch_number,
             batcher_config.logging_enabled,
             batcher_config.maximum_in_flight_blocks,
-            prev_batch_data,
+            genesis_stored_batch_info,
         );
         Box::pin(batcher.run_loop())
     } else {

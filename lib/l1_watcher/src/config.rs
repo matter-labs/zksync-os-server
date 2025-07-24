@@ -14,7 +14,7 @@ pub struct L1WatcherConfig {
     pub rocks_db_path: PathBuf,
 
     /// L1's JSON RPC API.
-    #[config(default_t = "http://localhost:8545".into())]
+    #[config(default_t = "ws://localhost:8545".into())]
     pub l1_api_url: String,
 
     /// L2 chain ID to monitor priority requests for.

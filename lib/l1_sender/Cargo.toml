@@ -14,16 +14,16 @@ zksync_os_contract_interface.workspace = true
 zksync_os_merkle_tree.workspace = true
 zksync_os_types.workspace = true
 
-zksync_storage.workspace = true
 zksync_mini_merkle_tree.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["reqwest", "kzg", "provider-debug-api", "signer-local"] }
+alloy = { workspace = true, default-features = false, features = ["reqwest", "kzg", "provider-debug-api", "signer-local", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 blake2.workspace = true
+futures.workspace = true
 ruint.workspace = true
 serde_json.workspace = true
 serde.workspace = true
