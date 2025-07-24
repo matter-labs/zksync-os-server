@@ -19,6 +19,7 @@ use smart_config::value::ExposeSecret;
 use std::collections::HashMap;
 use std::str::FromStr;
 use tokio::sync::mpsc;
+use zksync_os_contract_interface::IExecutor::commitBatchesSharedBridgeCall;
 use zksync_os_contract_interface::{Bridgehub, IExecutor};
 
 /// Node component responsible for sending transactions to L1.
@@ -47,7 +48,7 @@ impl L1Sender {
         let provider = DynProvider::new(
             ProviderBuilder::new()
                 .wallet(operator_wallet)
-                .connect_ws(WsConnect::new(config.l1_api_url))
+                .connect_ws(WsConnect::new(&config.l1_api_url))
                 .await
                 .context("failed to connect to L1 api")?,
         );
@@ -73,8 +74,8 @@ impl L1Sender {
             provider,
             chain_id: config.chain_id,
             validator_timelock_address,
-            max_fee_per_gas: config.max_fee_per_gas,
-            max_priority_fee_per_gas: config.max_priority_fee_per_gas,
+            max_fee_per_gas: config.max_fee_per_gas(),
+            max_priority_fee_per_gas: config.max_priority_fee_per_gas(),
             command_limit: config.command_limit,
             command_receiver,
         };
@@ -100,26 +101,19 @@ impl L1Sender {
             .await
             != 0
         {
-            let pending_tx_hashes = futures::stream::iter(cmd_buffer.drain(..).map(anyhow::Ok))
-                .try_filter_map(|cmd| async {
+            let pending_tx_hashes = futures::stream::iter(cmd_buffer.drain(..))
+                .then(|cmd| async {
                     match cmd {
-                        Command::Commit(CommitCommand {
-                            previous_batch,
-                            batch,
-                        }) => {
-                            let batch_number = batch.batch_number;
-                            if let Some(pending_tx_hash) =
-                                self.commit(previous_batch, batch).await?
-                            {
-                                Ok(Some((pending_tx_hash, batch_number)))
-                            } else {
-                                Ok(None)
-                            }
+                        Command::Commit(cmd) => {
+                            let batch_number = cmd.batch.batch_number;
+                            let pending_tx_hash = self.commit(cmd).await?;
+                            anyhow::Ok((pending_tx_hash, batch_number))
                         }
                     }
                 })
-                // We could buffer the stream here to enable parallelized commits, but this is not
-                // necessary for now
+                // We could buffer the stream here to enable sending transactions in parallel, but
+                // this is not necessary for now - they may still be included in one block (as we
+                // don't wait for inclusion here)
                 .try_collect::<HashMap<TxHash, u64>>()
                 .await?;
             heartbeat
@@ -133,53 +127,18 @@ impl L1Sender {
 }
 
 impl L1Sender {
-    /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
-    /// function makes sure last committed batch and new batch are encoded correctly.
-    fn commit_calldata(previous_batch: &StoredBatchInfo, batch: CommitBatchInfo) -> Vec<u8> {
-        /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 0;
-
-        let stored_batch_info = IExecutor::StoredBatchInfo::from(previous_batch);
-        let commit_batch_info = IExecutor::CommitBoojumOSBatchInfo::from(batch);
-        tracing::debug!(
-            last_batch_hash = ?previous_batch.hash(),
-            last_batch_number = ?previous_batch.batch_number,
-            new_batch_number = ?commit_batch_info.batchNumber,
-            "preparing commit calldata"
-        );
-        let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
-
-        // Prefixed by current encoding version as expected by protocol
-        [[SUPPORTED_ENCODING_VERSION].to_vec(), encoded_data]
-            .concat()
-            .to_vec()
-    }
-
-    async fn commit(
-        &self,
-        previous_batch: StoredBatchInfo,
-        batch: CommitBatchInfo,
-    ) -> anyhow::Result<Option<TxHash>> {
-        if batch.batch_number <= previous_batch.batch_number {
-            tracing::info!(
-                batch_number = batch.batch_number,
-                "ignoring batch as it has been already committed",
-            );
-            return Ok(None);
-        }
+    async fn commit(&self, cmd: CommitCommand) -> anyhow::Result<TxHash> {
+        let call = cmd.to_call(self.chain_id);
+        let CommitCommand {
+            previous_batch,
+            batch,
+        } = cmd;
         anyhow::ensure!(
             batch.batch_number == previous_batch.batch_number + 1,
             "Tried to commit non-sequential batch #{} after previous batch #{}",
             batch.batch_number,
             previous_batch.batch_number,
         );
-
-        let call = IExecutor::commitBatchesSharedBridgeCall::new((
-            U256::from(self.chain_id),
-            U256::from(previous_batch.batch_number + 1),
-            U256::from(batch.batch_number),
-            Self::commit_calldata(&previous_batch, batch.clone()).into(),
-        ));
 
         let eip1559_est = self.provider.estimate_eip1559_fees().await?;
         tracing::info!(
@@ -214,7 +173,7 @@ impl L1Sender {
             ?pending_tx_hash,
             "batch commit transaction sent to L1"
         );
-        Ok(Some(pending_tx_hash))
+        Ok(pending_tx_hash)
     }
 }
 
@@ -370,4 +329,39 @@ enum Command {
 struct CommitCommand {
     previous_batch: StoredBatchInfo,
     batch: CommitBatchInfo,
+}
+
+impl CommitCommand {
+    /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
+    /// function makes sure last committed batch and new batch are encoded correctly.
+    fn to_calldata_suffix(&self) -> Vec<u8> {
+        /// Current commitment encoding version as per protocol.
+        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+
+        let stored_batch_info = IExecutor::StoredBatchInfo::from(&self.previous_batch);
+        let commit_batch_info = IExecutor::CommitBoojumOSBatchInfo::from(self.batch.clone());
+        tracing::debug!(
+            last_batch_hash = ?self.previous_batch.hash(),
+            last_batch_number = ?self.previous_batch.batch_number,
+            new_batch_number = ?commit_batch_info.batchNumber,
+            "preparing commit calldata"
+        );
+        let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+        // Prefixed by current encoding version as expected by protocol
+        [[SUPPORTED_ENCODING_VERSION].to_vec(), encoded_data]
+            .concat()
+            .to_vec()
+    }
+
+    /// Prepares a call to `commitBatchesSharedBridge` that should be executed as the result of this
+    /// command.
+    fn to_call(&self, chain_id: u64) -> commitBatchesSharedBridgeCall {
+        IExecutor::commitBatchesSharedBridgeCall::new((
+            U256::from(chain_id),
+            U256::from(self.previous_batch.batch_number + 1),
+            U256::from(self.batch.batch_number),
+            self.to_calldata_suffix().into(),
+        ))
+    }
 }
