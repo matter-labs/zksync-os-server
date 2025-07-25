@@ -76,22 +76,24 @@ impl ProverInputGenerator {
     pub async fn run_loop(self) -> Result<()> {
         ReceiverStream::new(self.batch_replay_data_receiver)
             // wait for tree to have processed block for each replay record
-            .then(|batch_replay_data| async {
-                let mut processed_replays = Vec::new();
-                // todo: now this loop is only doing one iteration (batch_replay_data.block_replays.len() == 1)
-                // we can change approach (e.g. don't have a separate stream step for tree)
-                // note: in fact tree is guaranteed to be available here
-                // since this batch was already processed by batcher that also needs/waits for the tree
-                for replay_record in batch_replay_data.block_replays {
-                    let tree = self
-                        .persistent_tree
-                        .clone()
-                        .get_at_block(replay_record.block_context.block_number - 1)
-                        .await;
-                    processed_replays.push((tree, replay_record));
-                }
+            .then(|batch_replay_data| {
+                let tree = self.persistent_tree.clone();
+                async move {
+                    let mut processed_replays = Vec::new();
+                    // todo: now this loop is only doing one iteration (batch_replay_data.block_replays.len() == 1)
+                    // we can change approach (e.g. don't have a separate stream step for tree)
+                    // note: in fact tree is guaranteed to be available here
+                    // since this batch was already processed by batcher that also needs/waits for the tree
+                    for replay_record in batch_replay_data.block_replays {
+                        let tree = tree
+                            .clone()
+                            .get_at_block(replay_record.block_context.block_number - 1)
+                            .await;
+                        processed_replays.push((tree, replay_record));
+                    }
 
-                (batch_replay_data.batch, processed_replays)
+                    (batch_replay_data.batch, processed_replays)
+                }
             })
             // generate prover input. Use up to `Self::maximum_in_flight_blocks` threads
             .map(|(batch_metadata, processed_replays)| {
