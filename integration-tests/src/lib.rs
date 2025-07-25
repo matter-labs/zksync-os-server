@@ -1,7 +1,7 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider, WsConnect};
+use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
@@ -24,7 +24,6 @@ const L1_CHAIN_ID: u64 = 9;
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,
-    pub l2_ws_provider: EthDynProvider,
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -35,7 +34,7 @@ pub struct Tester {
 impl Tester {
     pub async fn setup() -> anyhow::Result<Self> {
         let l1_locked_port = LockedPort::acquire_unused().await?;
-        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+        let l1_address = format!("ws://localhost:{}", l1_locked_port.port);
         let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             let anvil = if std::env::var("CI").is_ok() {
                 // This is where `anvil` gets installed to in our CI. For some reason it does not
@@ -66,8 +65,7 @@ impl Tester {
         .await?;
 
         let l2_locked_port = LockedPort::acquire_unused().await?;
-        let l2_address = format!("http://localhost:{}", l2_locked_port.port);
-        let l2_ws_address = format!("ws://localhost:{}", l2_locked_port.port);
+        let l2_address = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
@@ -83,7 +81,6 @@ impl Tester {
                 ..Default::default()
             },
             L1SenderConfig {
-                rocks_db_path: rocksdb_path.path().to_path_buf(),
                 l1_api_url: l1_address.clone(),
                 ..Default::default()
             },
@@ -131,12 +128,6 @@ impl Tester {
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
-            l2_ws_provider: EthDynProvider::new(
-                ProviderBuilder::new()
-                    .wallet(l2_wallet.clone())
-                    .connect_ws(WsConnect::new(l2_ws_address))
-                    .await?,
-            ),
             l1_wallet,
             l2_wallet,
             stop_sender,

@@ -31,14 +31,14 @@ use zksync_os_types::{L2Envelope, ZkEnvelope};
 /// Note: unlike other components, this one doesn't tolerate replaying blocks -
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
-pub struct CommandBlockContextProvider {
+pub struct BlockContextProvider {
     next_l1_priority_id: u64,
     l1_mempool: DynL1Pool,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
 }
 
-impl CommandBlockContextProvider {
+impl BlockContextProvider {
     pub fn new(
         next_l1_priority_id: u64,
         l1_mempool: DynL1Pool,

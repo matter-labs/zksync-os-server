@@ -9,6 +9,7 @@ use alloy::sol_types::SolEvent;
 use futures::StreamExt;
 use tokio::time::error::Elapsed;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
@@ -57,7 +58,7 @@ impl PubsubSuite for NewBlockSuite {
     }
 
     async fn subscribe(&self, tester: &Tester) -> anyhow::Result<Subscription<Self::Expected>> {
-        Ok(tester.l2_ws_provider.subscribe_blocks().await?)
+        Ok(tester.l2_provider.subscribe_blocks().await?)
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
@@ -70,7 +71,7 @@ impl PubsubSuite for NewBlockSuite {
                     .with_value(U256::from(100)),
             )
             .await?
-            .get_receipt()
+            .expect_successful_receipt()
             .await?;
 
         // Get expected block header from JSON-RPC API
@@ -95,10 +96,7 @@ impl PubsubSuite for PendingTxSuite<false> {
     }
 
     async fn subscribe(&self, tester: &Tester) -> anyhow::Result<Subscription<Self::Expected>> {
-        Ok(tester
-            .l2_ws_provider
-            .subscribe_pending_transactions()
-            .await?)
+        Ok(tester.l2_provider.subscribe_pending_transactions().await?)
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
@@ -110,7 +108,7 @@ impl PubsubSuite for PendingTxSuite<false> {
                     .with_value(U256::from(100)),
             )
             .await?
-            .register()
+            .expect_register()
             .await?;
         Ok(*pending_tx.tx_hash())
     }
@@ -125,7 +123,7 @@ impl PubsubSuite for PendingTxSuite<true> {
 
     async fn subscribe(&self, tester: &Tester) -> anyhow::Result<Subscription<Self::Expected>> {
         Ok(tester
-            .l2_ws_provider
+            .l2_provider
             .subscribe_full_pending_transactions()
             .await?)
     }
@@ -147,7 +145,7 @@ impl PubsubSuite for PendingTxSuite<true> {
             .l2_provider
             .send_tx_envelope(tx_envelope.clone())
             .await?
-            .register()
+            .expect_register()
             .await?;
         let transaction = Transaction::from_transaction(
             Recovered::new_unchecked(tx_envelope, tester.l2_wallet.default_signer().address()),
@@ -173,7 +171,7 @@ impl PubsubSuite for NewLogsSuite {
         let filter = Filter::new()
             .address(*self.event_emitter.address())
             .event_signature(TestEvent::SIGNATURE_HASH);
-        Ok(tester.l2_ws_provider.subscribe_logs(&filter).await?)
+        Ok(tester.l2_provider.subscribe_logs(&filter).await?)
     }
 
     async fn prepare_expected(&self, tester: &Tester) -> anyhow::Result<Self::Expected> {
@@ -184,9 +182,8 @@ impl PubsubSuite for NewLogsSuite {
             .emitEvent(event_number)
             .send()
             .await?
-            .get_receipt()
+            .expect_successful_receipt()
             .await?;
-        assert!(receipt.status(), "transaction failed");
         let block = tester
             .l2_provider
             .get_block_by_number(receipt.block_number.unwrap().into())

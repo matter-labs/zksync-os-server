@@ -104,7 +104,7 @@ impl ProverJobManager {
                 // wait for `jobs` to be empty
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-
+            tracing::info!(block_number = job.block_number, "Received a new batch job");
             self.jobs.insert(
                 job.block_number,
                 JobEntry {
@@ -144,6 +144,7 @@ impl ProverJobManager {
 
         if let Some(block) = candidate {
             if let Some(mut entry) = self.jobs.get_mut(&block) {
+                tracing::info!(block_number = block, "Picked a FRI job");
                 let input = entry.prover_input.clone();
                 entry.status = JobStatus::Assigned { assigned_at: now };
                 return Some((block, input));

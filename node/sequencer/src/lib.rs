@@ -16,7 +16,6 @@ pub mod tree_manager;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
-use crate::batcher::util::genesis_stored_batch_info;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
 use crate::metrics::GENERAL_METRICS;
@@ -29,9 +28,7 @@ use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
-    execution::{
-        block_executor::execute_block, command_block_context_provider::CommandBlockContextProvider,
-    },
+    execution::{block_context_provider::BlockContextProvider, block_executor::execute_block},
     model::{BlockCommand, ReplayRecord},
 };
 use anyhow::{Context, Result};
@@ -82,7 +79,7 @@ pub async fn run_sequencer_actor(
     batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
-    mut command_block_context_provider: CommandBlockContextProvider,
+    mut command_block_context_provider: BlockContextProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
     // todo: do it outside - as one of the sinks (only needed in API)
@@ -245,6 +242,17 @@ pub async fn run(
     batcher_config: BatcherConfig,
     prover_api_config: ProverApiConfig,
 ) {
+    // ======= Boilerplate - Initialize async channels  ===========
+
+    // todo: this is received by batcher and then fanned out to workers. Could just use broadcast instead
+    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
+        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(10);
+
+    let (batch_sender, mut batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(10);
+
+    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(10);
+
+    // =========== Boilerplate - initialize components that don't need state recovery  ===========
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
         &sequencer_config
             .rocks_db_path
@@ -253,11 +261,10 @@ pub async fn run(
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
 
-    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db);
+    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db, CHAIN_ID);
 
     let state_handle = StateHandle::new(StateConfig {
-        // when running batcher, we need to start from zero due to in-memory tree
-        erase_storage_on_start: batcher_config.component_enabled,
+        erase_storage_on_start: false,
         blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
@@ -277,73 +284,55 @@ pub async fn run(
         proof_storage.get_blocks_with_proof().len()
     );
 
-    // =========== load last persisted block numbers.  ===========
-    let (storage_map_block, preimages_block) = state_handle.latest_block_numbers();
-    let wal_block = block_replay_storage.latest_block();
-
-    // todo: will be used once repositories have persistence
-    // let repository_blocks = ...
-
-    // it's enough to check a weaker condition (`>= min`) - but currently neither state components can be ahead of WAL
-    assert!(
-        wal_block.unwrap_or(0) >= storage_map_block,
-        "State DB block number ({storage_map_block}) is greater than WAL block ({wal_block:?}). Preimages block: ({preimages_block})"
-    );
-
-    // ======= Initialize async channels  ===========
-
-    // todo: this is received by batcher and then fanned out to workers. Could just use broadcast instead
-    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
-        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(100);
-
-    let (batch_sender, mut batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(100);
-
-    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(100);
-
-    // ========== Initialize tree manager ===========
-
-    let tree_wrapper = TreeManager::tree_wrapper(Path::new(
-        &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
-    ));
-    let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
-
-    let tree_last_processed_block = tree_manager
-        .last_processed_block()
-        .expect("cannot read tree last processed block after initialization");
-
-    let first_block_to_execute = if batcher_config.component_enabled {
-        1
-    } else {
-        [
-            storage_map_block,
-            preimages_block,
-            tree_last_processed_block,
-        ]
-        .iter()
-        .min()
-        .unwrap()
-            + 1
-    };
-
-    tracing::info!(
-        storage_map_block = storage_map_block,
-        preimages_block = preimages_block,
-        wal_block = wal_block,
-        canonized_block = repositories.get_latest_block(),
-        tree_last_processed_block = tree_last_processed_block,
-        "▶ Storage read. Node starting with block {}",
-        first_block_to_execute
-    );
-
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
         ZkClient::new(repositories.clone()),
         forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
 
-    // ========== Initialize TransactionStreamProvider ===========
+    let tree_wrapper = TreeManager::tree_wrapper(Path::new(
+        &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
+    ));
+    let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
-    let first_replay_record = block_replay_storage.get_replay_record(first_block_to_execute);
+    // =========== Recover block number to start from ===========
+    let storage_map_compacted_block = state_handle.compacted_block_number();
+
+    // =========== Assert that the starting block number is consistent with other components ===========
+    let repositories_persisted_block = repositories.get_latest_block();
+    let wal_block = block_replay_storage.latest_block().unwrap_or(0);
+    let tree_last_processed_block = tree_manager
+        .last_processed_block()
+        .expect("cannot read tree last processed block after initialization");
+
+    tracing::info!(
+        storage_map_block = storage_map_compacted_block,
+        wal_block = wal_block,
+        canonized_block = repositories.get_latest_block(),
+        tree_last_processed_block = tree_last_processed_block,
+        "▶ Node starting with block {}",
+        storage_map_compacted_block + 1
+    );
+
+    let starting_block = storage_map_compacted_block + 1;
+
+    assert!(
+        wal_block >= storage_map_compacted_block
+            && repositories_persisted_block >= storage_map_compacted_block
+            && tree_last_processed_block >= storage_map_compacted_block
+            && tree_last_processed_block <= wal_block
+            && repositories_persisted_block <= wal_block,
+        "Inconsistency in block numbers detected!"
+    );
+
+    // ========== Initialize BlockContextProvider and its state ===========
+
+    let first_replay_record = block_replay_storage.get_replay_record(starting_block);
+    assert!(
+        first_replay_record.is_some() || starting_block == 1,
+        "Unless it's a new chain, replay record must exist"
+    );
+
     let next_l1_priority_id = first_replay_record
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
@@ -351,7 +340,7 @@ pub async fn run(
         .as_ref()
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_default(); // TODO: take into account genesis block hash.
-    let command_block_context_provider = CommandBlockContextProvider::new(
+    let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_mempool.clone(),
         l2_mempool.clone(),
@@ -378,9 +367,8 @@ pub async fn run(
 
     // ========== Initialize L1 sender (fallible) ===========
 
-    let genesis_stored_batch_info = genesis_stored_batch_info();
-    let l1_sender = L1Sender::new(l1_sender_config, genesis_stored_batch_info.clone()).await;
-    let (l1_sender_task, l1_sender_handle, _last_committed_batch_number): (
+    let l1_sender = L1Sender::new(l1_sender_config).await;
+    let (l1_sender_task, l1_sender_handle, last_committed_batch_number): (
         BoxFuture<anyhow::Result<()>>,
         Option<L1SenderHandle>,
         u64,
@@ -407,25 +395,25 @@ pub async fn run(
                         .map_err(|e| anyhow::anyhow!(e))
                 }),
                 None,
-                0,
+                // when running without L1 sender, we assume all blocks are committed
+                // todo: will not work when 1 block != 1 batch
+                starting_block - 1,
             )
         }
     };
 
-    // ========== Initialize batcher (aka prover_input_generator) (if configured) ===========
-    let batcher_task: BoxFuture<anyhow::Result<()>> = if batcher_config.component_enabled {
-        // TODO: Start from `last_committed_batch_number`
-        assert_eq!(first_block_to_execute, 1);
-        let prev_batch_data = (0, genesis_stored_batch_info.state_commitment);
+    // ========== Initialize batcher (includes prover_input_generator for now) ===========
+    let batcher_task: BoxFuture<Result<()>> = if batcher_config.component_enabled {
         let batcher = Batcher::new(
+            last_committed_batch_number + 1,
+            sequencer_config.rocks_db_path.clone(),
+            batcher_config.logging_enabled,
+            batcher_config.maximum_in_flight_blocks,
             blocks_for_batcher_receiver,
             batch_sender,
             l1_sender_handle,
-            state_handle.clone(),
             persistent_tree,
-            batcher_config.logging_enabled,
-            batcher_config.maximum_in_flight_blocks,
-            prev_batch_data,
+            state_handle.clone(),
         );
         Box::pin(batcher.run_loop())
     } else {
@@ -482,7 +470,7 @@ pub async fn run(
     tokio::select! {
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
-            first_block_to_execute,
+            starting_block,
             blocks_for_batcher_sender,
             tree_sender,
             command_block_context_provider,

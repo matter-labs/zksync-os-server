@@ -6,6 +6,7 @@ use alloy::rpc::json_rpc::RpcRecv;
 use alloy::rpc::types::{Filter, Log, Transaction, TransactionRequest};
 use alloy::sol_types::SolEvent;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 use zksync_os_integration_tests::contracts::EventEmitter::{EventEmitterInstance, TestEvent};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
@@ -109,7 +110,7 @@ impl FilterSuite for NewBlockSuite {
                     .with_value(U256::from(100)),
             )
             .await?
-            .get_receipt()
+            .expect_successful_receipt()
             .await?;
         Ok(receipt.block_hash.expect("receipt has no block hash"))
     }
@@ -140,7 +141,7 @@ impl FilterSuite for PendingTxSuite<false> {
                     .with_value(U256::from(100)),
             )
             .await?
-            .register()
+            .expect_register()
             .await?;
         Ok(*pending_tx.tx_hash())
     }
@@ -177,7 +178,7 @@ impl FilterSuite for PendingTxSuite<true> {
             .l2_provider
             .send_tx_envelope(tx_envelope.clone())
             .await?
-            .register()
+            .expect_register()
             .await?;
         let transaction = Transaction::from_transaction(
             Recovered::new_unchecked(tx_envelope, tester.l2_wallet.default_signer().address()),
@@ -213,9 +214,8 @@ impl FilterSuite for NewLogsSuite {
             .emitEvent(event_number)
             .send()
             .await?
-            .get_receipt()
+            .expect_successful_receipt()
             .await?;
-        assert!(receipt.status(), "transaction failed");
         let block = tester
             .l2_provider
             .get_block_by_number(receipt.block_number.unwrap().into())

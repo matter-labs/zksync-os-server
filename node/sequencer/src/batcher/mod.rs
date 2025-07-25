@@ -1,9 +1,11 @@
 use crate::CHAIN_ID;
+use crate::batcher::batcher_rocks_db_storage::BatcherRocksDBStorage;
+use crate::batcher::util::genesis_stored_batch_info;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchJob, ReplayRecord};
-use alloy::primitives::B256;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::collections::VecDeque;
+use std::future::ready;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
@@ -19,6 +21,7 @@ use zksync_os_merkle_tree::{
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;
 
+mod batcher_rocks_db_storage;
 pub mod util;
 
 /// This component generates l1 batches from the stream of blocks
@@ -27,6 +30,20 @@ pub mod util;
 /// Currently, batching is not implemented on zksync-os side, so we do 1 batch == 1 block
 /// Thus, this component only generates prover input.
 pub struct Batcher {
+    // == state ==
+    // holds info about the last processed batch (genesis if none)
+    prev_batch_info: StoredBatchInfo,
+    // only used on startup. Skips all upstream blocks until this one.
+    batcher_starting_block: u64,
+
+    // == persistence (todo: get rid of it - see zksync-os-server/README.md for details) - only used to recover initial `prev_batch_info` ==
+    storage: BatcherRocksDBStorage,
+
+    // == config ==
+    bin_path: &'static str,
+    maximum_in_flight_blocks: usize,
+
+    // == plumbing ==
     block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
     // todo: the following two may just need to be a broadcast with backpressure instead (to eth-sender and prover-api)
     batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
@@ -34,25 +51,26 @@ pub struct Batcher {
     commit_batch_info_sender: Option<L1SenderHandle>,
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     state_handle: StateHandle,
-    bin_path: &'static str,
-    maximum_in_flight_blocks: usize,
-    // number and state commitment of the last processed batch.
-    prev_batch_data: (u64, B256),
 }
 
 impl Batcher {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        // == initial state ==
+        batcher_starting_block: u64,
+
+        // == config ==
+        rocks_db_path: PathBuf,
+        enable_logging: bool,
+        maximum_in_flight_blocks: usize,
+
+        // == plumbing ==
         block_receiver: tokio::sync::mpsc::Receiver<(BatchOutput, ReplayRecord)>,
         batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
         // handled by l1-sender
         commit_batch_info_sender: Option<L1SenderHandle>,
-        state_handle: StateHandle,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
-
-        enable_logging: bool,
-        maximum_in_flight_blocks: usize,
-        prev_batch_data: (u64, B256),
+        state_handle: StateHandle,
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -63,6 +81,19 @@ impl Batcher {
         } else {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")
         };
+
+        // todo: will not need storage in the future
+        let storage = BatcherRocksDBStorage::new(rocks_db_path);
+
+        let prev_batch_info = if batcher_starting_block == 1 {
+            genesis_stored_batch_info()
+        } else {
+            storage
+                .get(batcher_starting_block - 1)
+                .expect("cannot access batcher storage")
+                .expect("no prev batch info")
+        };
+
         Self {
             block_receiver,
             state_handle,
@@ -71,7 +102,9 @@ impl Batcher {
             commit_batch_info_sender,
             bin_path,
             maximum_in_flight_blocks,
-            prev_batch_data,
+            batcher_starting_block,
+            storage,
+            prev_batch_info,
         }
     }
 
@@ -79,12 +112,17 @@ impl Batcher {
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> anyhow::Result<()> {
         ReceiverStream::new(self.block_receiver)
+            .skip_while(move |(_, record)| {
+                ready(record.block_context.block_number < self.batcher_starting_block)
+            })
+            // wait for tree to have processed block
             .then(|(batch_output, replay_record)| {
                 self.persistent_tree
                     .clone()
                     .get_at_block(replay_record.block_context.block_number - 1)
                     .map(|tree| (tree, batch_output, replay_record))
             })
+            // generate prover input. Use up to `Self::maximum_in_flight_blocks` threads
             .map(|(tree, batch_output, replay_record)| {
                 BATCHER_METRICS
                     .current_block_number
@@ -108,11 +146,10 @@ impl Batcher {
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
             .try_fold(
-                self.prev_batch_data,
-                async |(prev_block_number, previous_state_commitment),
-                       (prover_input, batch_output, replay_record)| {
+                self.prev_batch_info,
+                async |prev_batch_info, (prover_input, batch_output, replay_record)| {
                     let block_number = replay_record.block_context.block_number;
-                    assert_eq!(prev_block_number + 1, block_number);
+                    assert_eq!(prev_batch_info.batch_number + 1, block_number);
 
                     let (root_hash, leaf_count) = self
                         .persistent_tree
@@ -122,7 +159,7 @@ impl Batcher {
                         .root_info()
                         .unwrap();
 
-                    let tree_output = zksync_os_merkle_tree::BatchOutput {
+                    let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
                         root_hash,
                         leaf_count,
                     };
@@ -143,9 +180,15 @@ impl Batcher {
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                     GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
 
+                    self.storage
+                        .set(commit_batch_info.batch_number, &stored_batch_info)?;
+                    let previous_state_commitment = prev_batch_info.state_commitment;
+
                     if let Some(l1) = &self.commit_batch_info_sender {
-                        l1.commit(commit_batch_info.clone()).await?;
+                        l1.commit(prev_batch_info, commit_batch_info.clone())
+                            .await?;
                     }
+
                     self.batch_sender
                         .send(BatchJob {
                             block_number,
@@ -154,8 +197,7 @@ impl Batcher {
                             commit_batch_info,
                         })
                         .await?;
-
-                    Ok((block_number, stored_batch_info.state_commitment))
+                    Ok(stored_batch_info)
                 },
             )
             .await
