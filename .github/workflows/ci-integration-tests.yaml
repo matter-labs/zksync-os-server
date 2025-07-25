@@ -59,7 +59,7 @@ jobs:
       run: ci_run cargo nextest run --profile ci -p zksync_os_integration_tests
 
     - name: Run integration tests (prover)
-      run: ci_run cargo nextest run --profile ci -p zksync_os_integration_tests --features prover-tests -E 'test(prover)'
+      run: ci_run cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'test(prover)'
 
     - name: Show sccache logs
       if: always()
