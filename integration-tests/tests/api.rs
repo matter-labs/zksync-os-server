@@ -1,6 +1,7 @@
 use alloy::network::ReceiptResponse;
 use alloy::providers::Provider;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
 
 #[test_log::test(tokio::test)]
@@ -14,9 +15,8 @@ async fn get_code() -> anyhow::Result<()> {
     let deploy_tx_receipt = EventEmitter::deploy_builder(tester.l2_provider.clone())
         .send()
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(deploy_tx_receipt.status(), "deploy transaction failed");
     let contract_address = deploy_tx_receipt
         .contract_address()
         .expect("no contract deployed");
