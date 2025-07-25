@@ -9,3 +9,7 @@ global-timeout = "1h"
 fail-fast = false
 # Adds retries (at least one success is required to mark test as successful). Uncomment if integrtaion tests become flaky.
 #retries = { backoff = "fixed", count = 2, delay = "1s" }
+
+[[profile.default.overrides]]
+filter = 'test(prover)'
+slow-timeout = { period = "300s", terminate-after = 5 }

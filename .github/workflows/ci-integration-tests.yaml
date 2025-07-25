@@ -53,10 +53,13 @@ jobs:
 
     # todo: move linting for both core and integration-tests to a separate job
     - name: Run clippy
-      run: ci_run cargo clippy --all-targets --all-features -p zksync_os_integration_tests -- -D warnings
+      run: ci_run cargo clippy --all-targets -p zksync_os_integration_tests -- -D warnings
 
-    - name: Run integration tests
+    - name: Run integration tests (no prover)
       run: ci_run cargo nextest run --profile ci -p zksync_os_integration_tests
+
+    - name: Run integration tests (prover)
+      run: ci_run cargo nextest run --profile ci -p zksync_os_integration_tests --features prover-tests -E 'test(prover)'
 
     - name: Show sccache logs
       if: always()
