@@ -290,8 +290,8 @@ impl<R: ApiRepository> EthNamespace<R> {
         Ok(self
             .state_handle
             .state_view_at_block(block_number)
-            .unwrap()
-            .get_account(ruint::aliases::B160::from_le_bytes(address.into_array()))
+            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
+            .get_account(B160::from_le_bytes(address.into_array()))
             .as_ref()
             .map(get_balance)
             .unwrap_or(U256::ZERO))
@@ -336,8 +336,8 @@ impl<R: ApiRepository> EthNamespace<R> {
         let nonce = self
             .state_handle
             .state_view_at_block(block_number)
-            .unwrap()
-            .get_account(ruint::aliases::B160::from_le_bytes(address.into_array()))
+            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
+            .get_account(B160::from_le_bytes(address.into_array()))
             .as_ref()
             .map(get_nonce)
             .unwrap_or(0);
@@ -352,10 +352,11 @@ impl<R: ApiRepository> EthNamespace<R> {
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
-        let mut view = self.state_handle.state_view_at_block(block_number).unwrap();
-        let Some(props) =
-            view.get_account(ruint::aliases::B160::from_le_bytes(address.into_array()))
-        else {
+        let mut view = self
+            .state_handle
+            .state_view_at_block(block_number)
+            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
+        let Some(props) = view.get_account(B160::from_le_bytes(address.into_array())) else {
             return Ok(Bytes::default());
         };
         let bytecode = get_code(&mut view, &props);

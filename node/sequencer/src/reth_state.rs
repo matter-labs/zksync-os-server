@@ -6,7 +6,7 @@ use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bytes, StorageKey
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
 use reth_primitives_traits::{Account, Bytecode};
 use reth_revm::db::BundleState;
-use reth_storage_api::errors::ProviderResult;
+use reth_storage_api::errors::{ProviderError, ProviderResult};
 use reth_storage_api::{
     AccountReader, BlockHashReader, BlockIdReader, BlockNumReader, BytecodeReader,
     HashedPostStateProvider, StateProofProvider, StateProvider, StateProviderBox,
@@ -17,12 +17,11 @@ use reth_trie_common::{
     AccountProof, HashedPostState, HashedStorage, MultiProof, MultiProofTargets, StorageMultiProof,
     StorageProof, TrieInput,
 };
+use ruint::aliases::B160;
 use std::fmt::Debug;
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zk_os_forward_system::run::PreimageSource;
-use zksync_os_state::{StateHandle, StateView};
+use zksync_os_state::StateHandle;
 
 #[derive(Debug)]
 pub struct ZkClient {
@@ -100,21 +99,13 @@ pub struct ZkState {
     latest_block: u64,
 }
 
-impl ZkState {
-    // I would like to just store a StateView but AccountReader and BytecodeReader
-    // operate on an immutable reference, so they could use it concurrently.
-    fn state_view(&self) -> StateView {
-        self.state_handle
-            .state_view_at_block(self.latest_block)
-            .unwrap()
-    }
-}
-
 impl AccountReader for ZkState {
     fn basic_account(&self, address: &Address) -> ProviderResult<Option<Account>> {
         Ok(self
-            .state_view()
-            .get_account(ruint::aliases::B160::from_le_bytes(address.into_array()))
+            .state_handle
+            .state_view_at_block(self.latest_block)
+            .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?
+            .get_account(B160::from_le_bytes(address.into_array()))
             .map(|props| Account {
                 nonce: get_nonce(&props),
                 balance: get_balance(&props),
@@ -124,14 +115,10 @@ impl AccountReader for ZkState {
 }
 
 impl BytecodeReader for ZkState {
-    fn bytecode_by_hash(&self, code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
-        Ok(self
-            .state_view()
-            .get_preimage(Bytes32::from_array(
-                code_hash.as_slice().try_into().unwrap(),
-            ))
-            .map(Bytes::from)
-            .map(Bytecode::new_raw))
+    fn bytecode_by_hash(&self, _code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
+        unimplemented!(
+            "reth mempool only calls this for EIP-7702 transactions which we do not support yet"
+        )
     }
 }
 
