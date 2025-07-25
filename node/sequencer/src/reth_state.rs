@@ -105,7 +105,7 @@ impl AccountReader for ZkState {
             .state_handle
             .state_view_at_block(self.latest_block)
             .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?
-            .get_account(B160::from_le_bytes(address.into_array()))
+            .get_account(B160::from_be_bytes(address.into_array()))
             .map(|props| Account {
                 nonce: get_nonce(&props),
                 balance: get_balance(&props),

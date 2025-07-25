@@ -291,7 +291,7 @@ impl<R: ApiRepository> EthNamespace<R> {
             .state_handle
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
-            .get_account(B160::from_le_bytes(address.into_array()))
+            .get_account(B160::from_be_bytes(address.into_array()))
             .as_ref()
             .map(get_balance)
             .unwrap_or(U256::ZERO))
@@ -337,7 +337,7 @@ impl<R: ApiRepository> EthNamespace<R> {
             .state_handle
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
-            .get_account(B160::from_le_bytes(address.into_array()))
+            .get_account(B160::from_be_bytes(address.into_array()))
             .as_ref()
             .map(get_nonce)
             .unwrap_or(0);
@@ -356,7 +356,7 @@ impl<R: ApiRepository> EthNamespace<R> {
             .state_handle
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
-        let Some(props) = view.get_account(B160::from_le_bytes(address.into_array())) else {
+        let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
             return Ok(Bytes::default());
         };
         let bytecode = get_code(&mut view, &props);

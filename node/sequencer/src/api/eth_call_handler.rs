@@ -78,7 +78,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
             self.state_handle
                 .state_view_at_block(block_context.block_number)
                 .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
-                .get_account(B160::from_le_bytes(from.unwrap_or_default().into_array()))
+                .get_account(B160::from_be_bytes(from.unwrap_or_default().into_array()))
                 .as_ref()
                 .map(get_nonce)
                 .unwrap_or_default()
@@ -248,7 +248,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
                 .state_handle
                 .state_view_at_block(block_context.block_number)
                 .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
-                .get_account(B160::from_le_bytes(
+                .get_account(B160::from_be_bytes(
                     request.from.unwrap_or_default().into_array(),
                 ))
                 .as_ref()
