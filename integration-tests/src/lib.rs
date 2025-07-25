@@ -91,7 +91,7 @@ impl Tester {
             address: format!("0.0.0.0:{}", prover_api_locked_port.port),
             ..Default::default()
         };
-        let main_task = tokio::task::spawn_local(async move {
+        let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
                 rpc_config,
