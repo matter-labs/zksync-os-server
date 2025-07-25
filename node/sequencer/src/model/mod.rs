@@ -1,9 +1,12 @@
+use alloy::primitives::B256;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::pin::Pin;
 use std::time::Duration;
 use zk_os_forward_system::run::BatchContext as BlockContext;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_mempool::TxStream;
 use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
 type L1TxSerialId = u64;
@@ -102,7 +105,7 @@ pub struct PreparedBlockCommand {
     pub block_context: BlockContext,
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
-    pub tx_source: BoxStream<'static, ZkTransaction>,
+    pub tx_source: Pin<Box<dyn TxStream<Item = ZkTransaction> + Send + 'static>>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,
