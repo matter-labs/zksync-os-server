@@ -36,6 +36,13 @@ jobs:
           echo RUSTC_WRAPPER=sccache >> .github/.env
           echo DOCKER_PWD=$(pwd) >> .github/.env
 
+      - name: Install foundry
+        run: |
+          ci_run wget https://foundry.paradigm.xyz -O foundryup.sh
+          ci_run bash foundryup.sh
+          ci_run /root/.foundry/bin/foundryup
+          echo /root/.foundry/bin >> $GITHUB_PATH
+
       - name: Start CI Docker
         shell: bash
         run: ci_up
