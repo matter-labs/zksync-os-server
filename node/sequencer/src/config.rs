@@ -70,11 +70,14 @@ pub struct SequencerConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct BatcherConfig {
-    /// Whether to run the batcher (prover input generator) or not.
-    /// As it relies on in-memory tree, blockchain will need to replay all blocks on every restart.
+    /// Whether to run the batcher subsystem or not
     #[config(default_t = true)]
-    pub component_enabled: bool,
+    pub subsystem_enabled: bool,
+}
 
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ProverInputGeneratorConfig {
     /// Whether to enable debug output in RiscV binary.
     /// Also known as server_app.bin vs server_app_logging_enabled.bin
     #[config(default_t = false)]
@@ -82,7 +85,7 @@ pub struct BatcherConfig {
 
     /// How many blocks should be worked on at once.
     /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
-    #[config(default_t = 10)]
+    #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
 }
 
@@ -94,8 +97,7 @@ pub struct ProverApiConfig {
     #[config(default_t = false)]
     pub component_enabled: bool,
 
-    /// Whether to enable debug output in RiscV binary.
-    /// Also known as server_app.bin vs server_app_logging_enabled.bin
+    /// Timeout after which a prover job is assigned to another Prover Worker.
     #[config(default_t = Duration::from_secs(180))]
     pub job_timeout: Duration,
 
