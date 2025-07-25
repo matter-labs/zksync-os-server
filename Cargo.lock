@@ -10032,6 +10032,7 @@ dependencies = [
  "dashmap",
  "futures",
  "reth-chainspec",
+ "reth-primitives-traits",
  "reth-storage-api",
  "reth-transaction-pool",
  "tokio",

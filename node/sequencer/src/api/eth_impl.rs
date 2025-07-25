@@ -148,33 +148,20 @@ impl<R: ApiRepository> EthNamespace<R> {
     }
 
     fn raw_transaction_by_hash_impl(&self, hash: B256) -> EthResult<Option<Bytes>> {
-        // Look up in repositories first to avoid race condition
-        if let Some(raw_tx) = self.repository.get_raw_transaction(hash)? {
-            return Ok(Some(Bytes::from(raw_tx)));
-        }
+        // Look up in mempool first to avoid race condition
         if let Some(pool_tx) = self.mempool.get(&hash) {
             return Ok(Some(Bytes::from(
                 pool_tx.transaction.transaction.encoded_2718(),
             )));
         }
+        if let Some(raw_tx) = self.repository.get_raw_transaction(hash)? {
+            return Ok(Some(Bytes::from(raw_tx)));
+        }
         Ok(None)
     }
 
     fn transaction_by_hash_impl(&self, hash: B256) -> EthResult<Option<Transaction<ZkEnvelope>>> {
-        if let Some(tx) = self.repository.get_transaction(hash)? {
-            if let Some(meta) = self.repository.get_transaction_meta(hash)? {
-                return Ok(Some(Transaction::from_transaction(
-                    tx.inner,
-                    TransactionInfo {
-                        hash: Some(hash),
-                        index: Some(meta.tx_index_in_block),
-                        block_hash: Some(meta.block_hash),
-                        block_number: Some(meta.block_number),
-                        base_fee: Some(meta.effective_gas_price as u64),
-                    },
-                )));
-            }
-        }
+        // Look up in mempool first to avoid race condition
         if let Some(pool_tx) = self.mempool.get(&hash) {
             let envelope = L2Envelope::from(pool_tx.transaction.transaction.inner().clone());
             return Ok(Some(Transaction::from_transaction(
@@ -190,6 +177,20 @@ impl<R: ApiRepository> EthNamespace<R> {
                     base_fee: None,
                 },
             )));
+        }
+        if let Some(tx) = self.repository.get_transaction(hash)? {
+            if let Some(meta) = self.repository.get_transaction_meta(hash)? {
+                return Ok(Some(Transaction::from_transaction(
+                    tx.inner,
+                    TransactionInfo {
+                        hash: Some(hash),
+                        index: Some(meta.tx_index_in_block),
+                        block_hash: Some(meta.block_hash),
+                        block_number: Some(meta.block_number),
+                        base_fee: Some(meta.effective_gas_price as u64),
+                    },
+                )));
+            }
         }
         Ok(None)
     }

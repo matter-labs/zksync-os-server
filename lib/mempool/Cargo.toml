@@ -15,6 +15,7 @@ zksync_os_types.workspace = true
 reth-chainspec = { workspace = true }
 reth-storage-api = { workspace = true }
 reth-transaction-pool = { workspace = true }
+reth-primitives-traits = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips"] }
 anyhow.workspace = true
