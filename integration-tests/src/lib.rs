@@ -69,32 +69,42 @@ impl Tester {
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
-        let main_task = tokio::task::spawn(zksync_os_sequencer::run(
-            stop_receiver,
-            RpcConfig {
-                address: format!("0.0.0.0:{}", l2_locked_port.port),
-                ..Default::default()
-            },
-            MempoolConfig::default(),
-            SequencerConfig {
-                rocks_db_path: rocksdb_path.path().to_path_buf(),
-                ..Default::default()
-            },
-            L1SenderConfig {
-                l1_api_url: l1_address.clone(),
-                ..Default::default()
-            },
-            L1WatcherConfig {
-                rocks_db_path: rocksdb_path.path().to_path_buf(),
-                l1_api_url: l1_address.clone(),
-                ..Default::default()
-            },
-            Default::default(),
-            ProverApiConfig {
-                address: format!("0.0.0.0:{}", prover_api_locked_port.port),
-                ..Default::default()
-            },
-        ));
+        // Create a handle to run the sequencer in the background
+        let rpc_config = RpcConfig {
+            address: format!("0.0.0.0:{}", l2_locked_port.port),
+            ..Default::default()
+        };
+        let sequencer_config = SequencerConfig {
+            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            ..Default::default()
+        };
+        let l1_sender_config = L1SenderConfig {
+            l1_api_url: l1_address.clone(),
+            ..Default::default()
+        };
+        let l1_watcher_config = L1WatcherConfig {
+            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            l1_api_url: l1_address.clone(),
+            ..Default::default()
+        };
+        let prover_api_config = ProverApiConfig {
+            address: format!("0.0.0.0:{}", prover_api_locked_port.port),
+            ..Default::default()
+        };
+        let main_task = tokio::task::spawn(async move {
+            zksync_os_sequencer::run(
+                stop_receiver,
+                rpc_config,
+                MempoolConfig::default(),
+                sequencer_config,
+                l1_sender_config,
+                l1_watcher_config,
+                Default::default(),
+                Default::default(),
+                prover_api_config,
+            )
+            .await;
+        });
 
         let l2_wallet = EthereumWallet::new(
             // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049

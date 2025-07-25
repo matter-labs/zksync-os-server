@@ -69,7 +69,7 @@ impl L1Sender {
         let validator_timelock_address = bridgehub.validator_timelock_address().await?;
         tracing::info!(?validator_timelock_address, "resolved on L1");
 
-        let (command_sender, command_receiver) = mpsc::channel(128);
+        let (command_sender, command_receiver) = mpsc::channel(50);
         let this = Self {
             provider,
             chain_id: config.chain_id,
