@@ -1,0 +1,11 @@
+[profile.default]
+# Tests are marked as slow if they take more than 1 minute, terminated after 3 minutes
+slow-timeout = { period = "1m", terminate-after = 3 }
+# Global timeout for the entire test run. Test runs will be terminated if they take longer than this timeout.
+global-timeout = "1h"
+
+[profile.ci]
+# Do not cancel the test run on the first failure.
+fail-fast = false
+# Adds retries (at least one success is required to mark test as successful). Uncomment if integrtaion tests become flaky.
+#retries = { backoff = "fixed", count = 2, delay = "1s" }

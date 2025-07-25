@@ -5,6 +5,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 
 #[test_log::test(tokio::test)]
@@ -51,7 +52,7 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
     );
 
     // Alice gives Bob enough for his transaction
-    let receipt = tester
+    tester
         .l2_provider
         .send_transaction(
             TransactionRequest::default()
@@ -60,21 +61,20 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
                 .with_value(bob_tx_cost),
         )
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(receipt.status(), "transaction should be successful");
 
     // Now mempool should accept Bob's transaction
     let bob_receipt_fut = tester
         .l2_provider
         .send_transaction(bob_tx)
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .map(|res| res.expect("transaction should be successful"))
         .shared();
 
     // But then Bob spends all of his funds on another transaction; note that nonce here is 0
-    let receipt = tester
+    tester
         .l2_provider
         .send_transaction(
             TransactionRequest::default()
@@ -85,16 +85,15 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
                 .with_nonce(0),
         )
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(receipt.status(), "transaction should be successful");
     // Bob's second transaction is unminable because of the lack of funds in Bob's account
     tokio::time::timeout(std::time::Duration::from_secs(3), bob_receipt_fut.clone())
         .await
         .expect_err("transaction should timeout");
 
     // Alice gives Bob enough for his second transaction
-    let receipt = tester
+    tester
         .l2_provider
         .send_transaction(
             TransactionRequest::default()
@@ -103,12 +102,10 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
                 .with_value(bob_tx_cost),
         )
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(receipt.status(), "transaction should be successful");
     // Bob's second transaction should be minable now
-    let receipt = bob_receipt_fut.await;
-    assert!(receipt.status(), "transaction should be successful");
+    bob_receipt_fut.await;
 
     Ok(())
 }

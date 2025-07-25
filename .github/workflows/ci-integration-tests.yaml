@@ -1,7 +1,9 @@
 name: Integration Tests
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,7 +56,7 @@ jobs:
       run: ci_run cargo clippy --all-targets --all-features -p zksync_os_integration_tests -- -D warnings
 
     - name: Run integration tests
-      run: ci_run cargo test --verbose -p zksync_os_integration_tests
+      run: ci_run cargo nextest run --profile ci -p zksync_os_integration_tests
 
     - name: Show sccache logs
       if: always()

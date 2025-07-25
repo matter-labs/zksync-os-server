@@ -25,7 +25,11 @@ async fn basic_transfers() -> anyhow::Result<()> {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
             .with_value(deposit_amount);
-        let receipt_future = tester.l2_provider.send_transaction(tx).await?.get_receipt();
+        let receipt_future = tester
+            .l2_provider
+            .send_transaction(tx)
+            .await?
+            .expect_successful_receipt();
         receipt_futures.push(receipt_future);
     }
     tracing::info!(elapsed = ?start.elapsed(), "submitted all tx requests");
@@ -39,7 +43,6 @@ async fn basic_transfers() -> anyhow::Result<()> {
 
     let start = Instant::now();
     for receipt in receipts {
-        assert!(receipt.status(), "transaction failed");
         let balance = tester.l2_provider.get_balance(receipt.to.unwrap()).await?;
         assert_eq!(balance, deposit_amount);
     }
@@ -120,20 +123,17 @@ async fn l1_deposit() -> anyhow::Result<()> {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
             .with_value(U256::from(100));
-        let receipt = tester
+        tester
             .l2_provider
             .send_transaction(tx)
             .await?
-            .get_receipt()
+            .expect_successful_receipt()
             .await?;
-        assert!(receipt.status(), "transaction failed");
     }
 
-    let l2_deposit_receipt =
-        PendingTransactionBuilder::new(tester.l2_provider.root().clone(), l2_tx_hash)
-            .get_receipt()
-            .await?;
-    assert!(l2_deposit_receipt.status(), "deposit failed on L2");
+    PendingTransactionBuilder::new(tester.l2_provider.root().clone(), l2_tx_hash)
+        .expect_successful_receipt()
+        .await?;
     let fee = U256::from(l1_deposit_receipt.effective_gas_price)
         * U256::from(l1_deposit_receipt.gas_used);
 

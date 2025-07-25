@@ -260,7 +260,7 @@ pub async fn run(
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
 
-    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db);
+    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db, CHAIN_ID);
 
     let state_handle = StateHandle::new(StateConfig {
         erase_storage_on_start: false,
