@@ -50,13 +50,13 @@ jobs:
           ci_run bash foundryup.sh
           ci_run /root/.foundry/bin/foundryup
           echo /root/.foundry/bin >> $GITHUB_PATH
-          
+
       - name: Start anvil
         run: ci_run /root/.foundry/bin/anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545 &> anvil.log &
 
       - name: Start server
         env:
-          BATCHER_LOGGING_ENABLED: "true"
+          PROVER_INPUT_GENERATOR_LOGGING_ENABLED: "true"
           PROVER_API_COMPONENT_ENABLED: "true"
         run: |
           ci_run cargo build --release --verbose

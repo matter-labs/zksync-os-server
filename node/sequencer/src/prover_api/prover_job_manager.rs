@@ -110,7 +110,7 @@ impl ProverJobManager {
                 batch_number,
                 JobEntry {
                     prover_input: job.prover_input,
-                    previous_state_commitment: job.batch.previous_batch.commitment,
+                    previous_state_commitment: job.batch.previous_batch.state_commitment,
                     commit_batch_info: job.batch.commit_batch_info,
                     status: JobStatus::Pending,
                 },
@@ -272,6 +272,8 @@ fn verify_fri_proof(
     );
     tracing::debug!(
         batch_number = stored_batch_info.batch_number,
+        ?previous_state_commitment,
+        ?stored_batch_info,
         "Expected values for Public Inputs hash: {:?}",
         expected_hash_u32s
     );

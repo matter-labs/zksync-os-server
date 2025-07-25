@@ -88,7 +88,7 @@ impl Batcher {
             .then(|(block_output, replay_record)| {
                 self.persistent_tree
                     .clone()
-                    .get_at_block(replay_record.block_context.block_number - 1)
+                    .get_at_block(replay_record.block_context.block_number)
                     .map(|tree| Ok::<_, anyhow::Error>((tree, block_output, replay_record)))
             })
             .try_fold(
@@ -122,7 +122,7 @@ impl Batcher {
                         block_number_to = block_number,
                         batch_number = block_number,
                         state_commitment = ?commit_batch_info.new_state_commitment,
-                        "Batch produce",
+                        "Batch produced",
                     );
 
                     // Create batch replay data (currently just one block per batch)
@@ -133,6 +133,11 @@ impl Batcher {
                         },
                         block_replays: vec![replay_record],
                     };
+
+                    tracing::debug!(
+                        ?batch_replay_data.batch,
+                        "Batch produced",
+                    );
 
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
 
