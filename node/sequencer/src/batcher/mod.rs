@@ -228,7 +228,7 @@ fn compute_prover_input(
         .collect::<VecDeque<_>>();
     let list_source = TxListSource { transactions };
 
-    let prover_input_generation_latency =
+    let prover_input_generation_latency_observer =
         BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
@@ -240,7 +240,7 @@ fn compute_prover_input(
     )
     .expect("proof gen failed");
 
-    let latency = prover_input_generation_latency.observe();
+    let latency = prover_input_generation_latency_observer.observe();
 
     tracing::info!(
         block_number,

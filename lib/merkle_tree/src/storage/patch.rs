@@ -561,12 +561,12 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             .chain(read_keys.iter().copied())
             .collect();
 
-        let key_lookup_latency = METRICS.load_nodes_latency[&LoadStage::KeyLookup].start();
+        let key_lookup_latency_observer = METRICS.load_nodes_latency[&LoadStage::KeyLookup].start();
         let lookup = self
             .db
             .indices(latest_version, &touched_keys)
             .context("failed loading indices")?;
-        let elapsed = key_lookup_latency.observe();
+        let elapsed = key_lookup_latency_observer.observe();
         tracing::debug!(?elapsed, "loaded lookup info");
 
         // Collect all distinct indices that need to be loaded.
@@ -635,10 +635,10 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             read_operations.push(read_op);
         }
 
-        let tree_nodes_latency = METRICS.load_nodes_latency[&LoadStage::TreeNodes].start();
+        let tree_nodes_latency_observer = METRICS.load_nodes_latency[&LoadStage::TreeNodes].start();
         let mut patch = WorkingPatchSet::new(root);
         patch.load_nodes(&self.db, distinct_indices.iter().copied())?;
-        let elapsed = tree_nodes_latency.observe();
+        let elapsed = tree_nodes_latency_observer.observe();
         tracing::debug!(
             ?elapsed,
             distinct_indices.len = distinct_indices.len(),

@@ -85,7 +85,7 @@ impl BlockReplayStorage {
     /// Appends a replay command (context + raw transactions) to the WAL.
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
     pub fn append_replay(&self, record: ReplayRecord) {
-        let latency = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
+        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         assert!(!record.transactions.is_empty());
 
         let current_latest_block = self.latest_block().unwrap_or(0);
@@ -98,7 +98,7 @@ impl BlockReplayStorage {
             return;
         }
         self.append_replay_unchecked(record);
-        latency.observe();
+        latency_observer.observe();
     }
 
     fn append_replay_unchecked(&self, record: ReplayRecord) {
