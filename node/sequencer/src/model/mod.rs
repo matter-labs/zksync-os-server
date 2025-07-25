@@ -1,5 +1,3 @@
-use alloy::primitives::B256;
-use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::pin::Pin;
