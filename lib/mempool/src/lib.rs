@@ -1,5 +1,6 @@
 mod l1_pool;
 mod reth;
+mod stream;
 mod traits;
 
 pub use crate::reth::RethPool;
@@ -10,6 +11,7 @@ pub use reth_transaction_pool::{
     CanonicalStateUpdate, PoolUpdateKind, TransactionPool as RethTransactionPool,
     TransactionPoolExt as RethTransactionPoolExt,
 };
+pub use stream::{BestTransactionsStream, ReplayTxStream, TxStream, best_transactions};
 pub use traits::L2TransactionPool;
 
 use crate::l1_pool::{L1Mempool, L1Pool};

@@ -178,9 +178,8 @@ impl<R: ApiRepository> EthCallHandler<R> {
         // using previous block context
         let block_context = self
             .block_replay_storage
-            .get_replay_record(block_number)
-            .ok_or(EthCallError::BlockNotFound(block_id))?
-            .block_context;
+            .get_context(block_number)
+            .ok_or(EthCallError::BlockNotFound(block_id))?;
         let tx = self.create_tx_from_request(request, &block_context)?;
 
         let storage_view = self

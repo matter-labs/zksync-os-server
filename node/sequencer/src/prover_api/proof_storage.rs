@@ -67,7 +67,7 @@ impl ProofStorage {
             .expect("DB read failure")
     }
 
-    pub fn get_blocks_with_proof(&self) -> Vec<u64> {
+    pub fn get_batches_with_proof(&self) -> Vec<u64> {
         self.db
             .prefix_iterator_cf(ProofColumnFamily::Proofs, &[])
             .map(|(key, _)| {

@@ -10,6 +10,7 @@ pub mod execution;
 mod metrics;
 pub mod model;
 pub mod prover_api;
+mod prover_input_generator;
 pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
@@ -17,19 +18,23 @@ pub mod tree_manager;
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
-use crate::config::{BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
+use crate::config::{
+    BatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig,
+};
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{BatchJob, ProduceCommand};
+use crate::model::{BatchForProving, BatchReplayData, ProduceCommand, ReplayRecord};
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
+use crate::prover_input_generator::ProverInputGenerator;
 use crate::repositories::RepositoryManager;
 use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::{
     execution::{block_context_provider::BlockContextProvider, block_executor::execute_block},
-    model::{BlockCommand, ReplayRecord},
+    model::BlockCommand,
 };
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
@@ -116,10 +121,9 @@ pub async fn run_sequencer_actor(
         );
         stage_started_at = Instant::now();
 
-        let (block_output, replay_record): (BlockOutput, ReplayRecord) =
-            execute_block(prepared_cmd, state.clone())
-                .await
-                .context("execute_block")?;
+        let (block_output, replay_record, purged_txs) = execute_block(prepared_cmd, state.clone())
+            .await
+            .context("execute_block")?;
 
         tracing::info!(
             block_number = bn,
@@ -162,6 +166,8 @@ pub async fn run_sequencer_actor(
 
         // TODO: would updating mempool in parallel with state make sense?
         command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
+        let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
+        command_block_context_provider.remove_txs(purged_txs_hashes);
 
         tracing::info!(
             block_number = bn,
@@ -239,19 +245,28 @@ pub async fn run(
     l1_sender_config: L1SenderConfig,
     l1_watcher_config: L1WatcherConfig,
     batcher_config: BatcherConfig,
+    prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
 ) {
     // ======= Boilerplate - Initialize async channels  ===========
 
-    // todo: this is received by batcher and then fanned out to workers. Could just use broadcast instead
+    // Channel between `BlockExecutor` and `Batcher`
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(10);
 
-    let (batch_sender, mut batch_receiver) = tokio::sync::mpsc::channel::<BatchJob>(10);
-
+    // Channel between `BlockExecutor` and `TreeManager`
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(10);
 
+    // Channel between `Batcher` and `ProverInputGenerator`
+    let (batch_data_sender, batch_data_receiver) =
+        tokio::sync::mpsc::channel::<BatchReplayData>(10);
+
+    // Channel between `ProverInputGenerator` and `ProverAPI`
+    let (batch_for_proving_sender, mut batch_for_prover_receiver) =
+        tokio::sync::mpsc::channel::<BatchForProving>(10);
+
     // =========== Boilerplate - initialize components that don't need state recovery  ===========
+    tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
         &sequencer_config
             .rocks_db_path
@@ -259,15 +274,16 @@ pub async fn run(
     )
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
+    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db, CHAIN_ID);
 
-    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db);
-
+    tracing::info!("Initializing StateHandle");
     let state_handle = StateHandle::new(StateConfig {
         erase_storage_on_start: false,
         blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
 
+    tracing::info!("Initializing RepositoryManager");
     let repositories = RepositoryManager::new(
         sequencer_config.blocks_to_retain_in_memory,
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
@@ -277,27 +293,49 @@ pub async fn run(
     )
     .expect("Failed to open ProofStorageDB");
 
+    tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(proof_storage_db);
     tracing::info!(
         "Proof storage initialized with {} proofs already present",
-        proof_storage.get_blocks_with_proof().len()
+        proof_storage.get_batches_with_proof().len()
     );
 
+    tracing::info!("Initializing mempools");
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
         ZkClient::new(repositories.clone(), state_handle.clone()),
         forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
 
+    tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
     ));
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
-    // =========== Recover block number to start from ===========
+    tracing::info!("Initializing L1Watcher");
+    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone()).await;
+    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        }
+    };
+
+    // =========== Recover block number to start from and assert that it's consistent with other components ===========
+
+    // this will be the starting block
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
-    // =========== Assert that the starting block number is consistent with other components ===========
+    // only reading these for assertions
     let repositories_persisted_block = repositories.get_latest_block();
     let wal_block = block_replay_storage.latest_block().unwrap_or(0);
     let tree_last_processed_block = tree_manager
@@ -309,7 +347,7 @@ pub async fn run(
         wal_block = wal_block,
         canonized_block = repositories.get_latest_block(),
         tree_last_processed_block = tree_last_processed_block,
-        "▶ Node starting with block {}",
+        "▶ Sequencer will start from block {}",
         storage_map_compacted_block + 1
     );
 
@@ -321,10 +359,11 @@ pub async fn run(
             && tree_last_processed_block >= storage_map_compacted_block
             && tree_last_processed_block <= wal_block
             && repositories_persisted_block <= wal_block,
-        "Inconsistency in block numbers detected!"
+        "Block numbers are inconsistent on startup!"
     );
 
     // ========== Initialize BlockContextProvider and its state ===========
+    tracing::info!("Initializing BlockContextProvider");
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
@@ -341,94 +380,81 @@ pub async fn run(
         .unwrap_or_default(); // TODO: take into account genesis block hash.
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
-        l1_mempool.clone(),
+        l1_mempool,
         l2_mempool.clone(),
         block_hashes_for_next_block,
     );
 
-    // ========== Initialize L1 watcher (fallible) ===========
-
-    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool).await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
-        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
-        Err(err) => {
-            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
-        }
-    };
-
-    // ========== Initialize L1 sender (fallible) ===========
-
-    let l1_sender = L1Sender::new(l1_sender_config).await;
-    let (l1_sender_task, l1_sender_handle, last_committed_batch_number): (
-        BoxFuture<anyhow::Result<()>>,
-        Option<L1SenderHandle>,
+    if !batcher_config.subsystem_enabled {
+        tracing::error!(
+            "!!! Batcher subsystem disabled via configuration. This mode is only recommended for running tree loadtest."
+        );
+        unimplemented!("Running without batcher is not supported at the moment.");
+        // let mut blocks_receiver = blocks_for_batcher_receiver;
+        // async move {
+        //     while blocks_receiver.recv().await.is_some() {
+        //         // Drop messages silently to prevent backpressure
+        //     }
+        //     Ok::<(), anyhow::Error>(())
+        // }
+        // .boxed()
+    }
+    tracing::info!("Initializing batcher subsystem");
+    // ========== Initialize L1 sender ===========
+    tracing::info!("Initializing L1 sender");
+    let (l1_sender, l1_sender_handle, last_committed_batch_number): (
+        L1Sender,
+        L1SenderHandle,
         u64,
-    ) = match l1_sender {
-        Ok((l1_sender, l1_handle, last_committed_batch_number)) => (
-            Box::pin(l1_sender.run()),
-            Some(l1_handle),
-            last_committed_batch_number,
-        ),
-        Err(err) => {
-            // todo: this is inconsistent with the behaviour when prover api / batcher are disabled:
-            //  * here, we return `l1_sender_handle` as `None` and upstream components don't send to it
-            //  * in prover api and batcher, we still have the channel defined and
-            //    we run a dummy consumer instead of the actual component
-            //  **Choose one approach to optional components and stick to it**
-            tracing::error!(?err, "failed to start L1 sender; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            (
-                Box::pin(async move {
-                    // Defer until we receive stop signal, i.e. a task that does nothing
-                    stop_receiver
-                        .changed()
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e))
-                }),
-                None,
-                // when running without L1 sender, we assume all blocks are committed
-                // todo: will not work when 1 block != 1 batch
-                starting_block - 1,
-            )
-        }
-    };
+    ) = L1Sender::new(l1_sender_config).await.expect(
+        "Failed to initialize L1Sender. Consider disabling batcher subsystem via configuration.",
+    );
 
-    // ========== Initialize batcher (includes prover_input_generator for now) ===========
-    let batcher_task: BoxFuture<Result<()>> = if batcher_config.component_enabled {
+    // todo: will not hold when we do proper batching,
+    //  but both number are needed to initialize the batcher
+    //  (it needs to know until what block to skip, and it also needs to know the batch number to start with)
+    //  potential solution: modify batcher persistence to also store block range per batch - and use it to recover that block number
+    let last_committed_block_number = last_committed_batch_number;
+
+    tracing::info!(
+        last_committed_batch_number,
+        last_committed_block_number,
+        "L1 sender initialized"
+    );
+    assert!(
+        last_committed_block_number <= wal_block
+            && last_committed_block_number >= storage_map_compacted_block,
+        "L1 sender last committed block number is inconsistent with WAL or storage map"
+    );
+
+    // ========== Initialize Batcher ===========
+    tracing::info!("Initializing Batcher");
+    let batcher_task = {
         let batcher = Batcher::new(
             last_committed_batch_number + 1,
             sequencer_config.rocks_db_path.clone(),
-            batcher_config.logging_enabled,
-            batcher_config.maximum_in_flight_blocks,
             blocks_for_batcher_receiver,
-            batch_sender,
+            batch_data_sender,
+            persistent_tree.clone(),
+        );
+        Box::pin(batcher.run_loop())
+    };
+
+    tracing::info!("Initializing ProverInputGenerator");
+    let prover_input_generator_task = {
+        let prover_input_generator = ProverInputGenerator::new(
+            prover_input_generator_config.logging_enabled,
+            prover_input_generator_config.maximum_in_flight_blocks,
+            batch_data_receiver,
+            batch_for_proving_sender,
             l1_sender_handle,
             persistent_tree,
             state_handle.clone(),
         );
-        Box::pin(batcher.run_loop())
-    } else {
-        tracing::info!(
-            "Batcher disabled via configuration; draining channel to avoid backpressure"
-        );
-        let mut receiver = blocks_for_batcher_receiver;
-        Box::pin(async move {
-            while receiver.recv().await.is_some() {
-                // Drop messages silently to prevent backpressure
-            }
-            Ok(())
-        })
+        Box::pin(prover_input_generator.run_loop())
     };
 
-    // ======= Initialize Prover Api Server (if configured) ========
+    // ======= Initialize Prover Api Server========
 
     let (prover_job_manager_task, prover_server_task): (
         BoxFuture<anyhow::Result<()>>,
@@ -444,14 +470,16 @@ pub async fn run(
                 prover_job_manager.clone(),
                 prover_api_config.address,
             )),
-            Box::pin(prover_job_manager.listen_for_batch_jobs(batch_receiver)),
+            Box::pin(prover_job_manager.listen_for_batch_jobs(batch_for_prover_receiver)),
         )
     } else {
-        tracing::info!("Prover API via configuration; draining channel to avoid backpressure");
+        tracing::info!(
+            "Prover API is disabled via configuration; draining channel to avoid backpressure"
+        );
         let mut stop_receiver = stop_receiver.clone();
         (
             Box::pin(async move {
-                while batch_receiver.recv().await.is_some() { // Drop messages silently to prevent backpressure
+                while batch_for_prover_receiver.recv().await.is_some() { // Drop messages silently to prevent backpressure
                 }
                 Ok(())
             }),
@@ -464,6 +492,7 @@ pub async fn run(
             }),
         )
     };
+
     // ======= Run tasks ===========
 
     tokio::select! {
@@ -484,9 +513,7 @@ pub async fn run(
             }
         }
 
-
         // todo: only start after the sequencer caught up?
-        // ── JSON-RPC task ────────────────────────────────────────────────
         res = run_jsonrpsee_server(
             rpc_config,
             repositories.clone(),
@@ -500,7 +527,6 @@ pub async fn run(
             }
         }
 
-        // ── TREE task ────────────────────────────────────────────────
         res = tree_manager.run_loop() => {
             match res {
                 Ok(_)  => tracing::warn!("TREE server unexpectedly exited"),
@@ -508,28 +534,6 @@ pub async fn run(
             }
         }
 
-        // ── BATCHER task (may be disabled) ──────────────────────────────────
-        res = batcher_task => {
-            match res {
-                Ok(_)  => tracing::warn!("Batcher task exited"),
-                Err(e) => tracing::error!("Batcher task failed: {e:#}"),
-            }
-        }
-
-        // ── Prover Server tasks (todo: should be conditioned) ──────────────────────────────────
-        _res = prover_job_manager_task => {
-            tracing::warn!("Prover job manager task exited")
-        }
-
-        res = prover_server_task => {
-            match res {
-                Ok(_)  => tracing::warn!("prover_server_job task exited"),
-                Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),
-            }
-
-        }
-
-        // ── L1 Watcher task ────────────────────────────────────────────────
         res = l1_watcher_task => {
             match res {
                 Ok(_)  => tracing::warn!("L1 watcher unexpectedly exited"),
@@ -537,11 +541,32 @@ pub async fn run(
             }
         }
 
-        // ── L1 sender task ────────────────────────────────────────────────
-        res = l1_sender_task => {
+        // == batcher tasks ==
+        res = batcher_task => {
+            match res {
+                Ok(_)  => tracing::warn!("Batcher task exited"),
+                Err(e) => tracing::error!("Batcher task failed: {e:#}"),
+            }
+        }
+        res = prover_input_generator_task => {
+            match res {
+                Ok(_)  => tracing::warn!("ProverInputGenerator task exited"),
+                Err(e) => tracing::error!("ProverInputGenerator task failed: {e:#}"),
+            }
+        }
+        res = l1_sender.run() => {
             match res {
                 Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
                 Err(e) => tracing::error!("L1 sender failed: {e:#}"),
+            }
+        }
+        _res = prover_job_manager_task => {
+            tracing::warn!("Prover job manager task exited")
+        }
+        res = prover_server_task => {
+            match res {
+                Ok(_)  => tracing::warn!("prover_server_job task exited"),
+                Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),
             }
         }
 

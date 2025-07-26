@@ -1,10 +1,10 @@
-use alloy::primitives::B256;
-use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::pin::Pin;
 use std::time::Duration;
 use zk_os_forward_system::run::BatchContext as BlockContext;
-use zksync_os_l1_sender::commitment::CommitBatchInfo;
+use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_mempool::TxStream;
 use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
 type L1TxSerialId = u64;
@@ -42,6 +42,24 @@ pub struct ReplayRecord {
     /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
     pub starting_l1_priority_id: L1TxSerialId,
     pub transactions: Vec<ZkTransaction>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BatchMetadata {
+    pub previous_batch: StoredBatchInfo,
+    pub commit_batch_info: CommitBatchInfo,
+}
+
+#[derive(Clone, Debug)]
+pub struct BatchReplayData {
+    pub batch: BatchMetadata,
+    pub block_replays: Vec<ReplayRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BatchForProving {
+    pub batch: BatchMetadata,
+    pub prover_input: Vec<u32>,
 }
 
 impl ReplayRecord {
@@ -85,7 +103,7 @@ pub struct PreparedBlockCommand {
     pub block_context: BlockContext,
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
-    pub tx_source: BoxStream<'static, ZkTransaction>,
+    pub tx_source: Pin<Box<dyn TxStream<Item = ZkTransaction> + Send + 'static>>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,
@@ -108,14 +126,6 @@ pub enum SealPolicy {
     Decide(Duration, usize),
     /// Seal when all txs from tx source are executed. Used when replaying a block (ReplayLog / Replica / EN)
     UntilExhausted,
-}
-
-/// Currently used both for prover api and eth-sender - may reconsider later on
-pub struct BatchJob {
-    pub block_number: u64,
-    pub prover_input: Vec<u32>,
-    pub previous_state_commitment: B256,
-    pub commit_batch_info: CommitBatchInfo,
 }
 
 impl BlockCommand {
