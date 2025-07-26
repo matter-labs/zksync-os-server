@@ -20,6 +20,7 @@ use reth_trie_common::{
 use ruint::aliases::B160;
 use std::fmt::Debug;
 use std::sync::Arc;
+use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_state::StateHandle;
 
@@ -109,7 +110,11 @@ impl AccountReader for ZkState {
             .map(|props| Account {
                 nonce: get_nonce(&props),
                 balance: get_balance(&props),
-                bytecode_hash: Some(B256::from_slice(&props.bytecode_hash.as_u8_array())),
+                bytecode_hash: if props.bytecode_hash == Bytes32::ZERO {
+                    None
+                } else {
+                    Some(B256::from_slice(&props.bytecode_hash.as_u8_array()))
+                },
             }))
     }
 }
