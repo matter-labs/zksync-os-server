@@ -1,4 +1,6 @@
+use backon::{ConstantBuilder, Retryable};
 use reqwest::{Client, StatusCode};
+use std::time::Duration;
 
 pub struct ProverApi {
     client: Client,
@@ -28,5 +30,26 @@ impl ProverApi {
                 s
             )),
         }
+    }
+
+    /// Resolves when the requested batch gets reported as proven by prover API.
+    pub async fn wait_for_batch_proven(&self, batch_number: u64) -> anyhow::Result<()> {
+        (|| async {
+            let status = self.check_batch_status(batch_number).await?;
+            if status {
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("batch is not ready yet"))
+            }
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(30))
+                .with_max_times(40),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(?err, ?dur, "proof not ready yet, retrying");
+        })
+        .await
     }
 }
