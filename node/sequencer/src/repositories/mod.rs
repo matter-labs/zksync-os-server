@@ -8,10 +8,8 @@
 //! Additionally, it provides a RepositoryManager that holds all three repositories
 //! and provides unified methods for managing block outputs.
 
-pub mod account_property_repository;
 pub mod api_interface;
 pub mod block_receipt_repository;
-pub mod bytecode_property_respository;
 mod db;
 mod metrics;
 pub mod notifications;
@@ -19,14 +17,11 @@ pub mod transaction_receipt_repository;
 
 use crate::metrics::GENERAL_METRICS;
 use crate::repositories::{
-    account_property_repository::extract_account_properties,
-    bytecode_property_respository::BytecodeRepository,
     db::{RepositoryCF, RepositoryDB},
     metrics::REPOSITORIES_METRICS,
     notifications::{BlockNotification, SubscribeToBlocks},
     transaction_receipt_repository::{TransactionReceiptRepository, transaction_to_api_data},
 };
-pub use account_property_repository::AccountPropertyRepository;
 use alloy::primitives::{BlockHash, Bloom, Sealed, TxHash};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::ops::Div;
@@ -51,10 +46,6 @@ const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct RepositoryManager {
-    // TODO: get rid of `account_property_repository` and `bytecode_repository`
-    pub account_property_repository: AccountPropertyRepository,
-    pub bytecode_repository: BytecodeRepository,
-
     block_receipt_repository: BlockReceiptRepository,
     transaction_receipt_repository: TransactionReceiptRepository,
 
@@ -72,8 +63,6 @@ impl RepositoryManager {
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
         RepositoryManager {
-            account_property_repository: AccountPropertyRepository::new(blocks_to_retain),
-            bytecode_repository: BytecodeRepository::new(blocks_to_retain),
             block_receipt_repository: BlockReceiptRepository::new(),
             transaction_receipt_repository: TransactionReceiptRepository::new(),
             db,
@@ -123,21 +112,6 @@ impl RepositoryManager {
 
         // Drop rejected transactions from the block output
         block_output.tx_results.retain(|result| result.is_ok());
-
-        // Extract account properties from the block output
-        let (account_properties, bytecodes) = extract_account_properties(&block_output);
-
-        // Add account properties to the account property repository
-        let account_properties_latency_observer =
-            REPOSITORIES_METRICS.insert_block[&"account_properties"].start();
-        self.account_property_repository
-            .add_diff(block_number, account_properties);
-        let account_properties_latency = account_properties_latency_observer.observe();
-
-        // Add bytecodes to the bytecode repository
-        let bytecodes_latency_observer = REPOSITORIES_METRICS.insert_block[&"bytecodes"].start();
-        self.bytecode_repository.add_diff(block_number, bytecodes);
-        let bytecodes_latency = bytecodes_latency_observer.observe();
 
         // Add transaction receipts to the transaction receipt repository
         let mut log_index = 0;
@@ -191,8 +165,6 @@ impl RepositoryManager {
         tracing::debug!(
             block_number,
             total_latency = ?latency,
-            ?account_properties_latency,
-            ?bytecodes_latency,
             ?transaction_receipts_latency,
             ?block_receipt_latency,
             "Stored a block in memory with {} transactions",

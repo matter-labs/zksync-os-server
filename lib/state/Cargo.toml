@@ -19,6 +19,7 @@ smart-config.workspace = true
 
 zksync_storage.workspace = true
 zk_os_forward_system.workspace = true
+zk_os_basic_system.workspace = true
 zk_ee.workspace = true
 dashmap.workspace = true
 vise.workspace = true

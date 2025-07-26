@@ -10,6 +10,8 @@ use alloy::network::TransactionBuilder;
 use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
+use ruint::aliases::B160;
+use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::{BatchContext, ExecutionResult, InvalidTransaction};
 use zksync_os_state::StateHandle;
@@ -70,13 +72,17 @@ impl<R: ApiRepository> EthCallHandler<R> {
         } = request;
 
         let gas_limit = gas.unwrap_or(self.config.eth_call_gas as u64);
-        let nonce = nonce.unwrap_or_else(|| {
-            self.repository
-                .account_property_repository()
-                .get_at_block(block_context.block_number, &from.unwrap_or_default())
-                .map(|props| props.nonce)
+        let nonce = if let Some(nonce) = nonce {
+            nonce
+        } else {
+            self.state_handle
+                .state_view_at_block(block_context.block_number)
+                .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
+                .get_account(B160::from_be_bytes(from.unwrap_or_default().into_array()))
+                .as_ref()
+                .map(get_nonce)
                 .unwrap_or_default()
-        });
+        };
 
         let CallFees {
             max_priority_fee_per_gas,
@@ -238,14 +244,16 @@ impl<R: ApiRepository> EthCallHandler<R> {
             > 0
         {
             let balance = self
-                .repository
-                .account_property_repository()
-                .get_at_block(
-                    block_context.block_number,
-                    &request.from.unwrap_or_default(),
-                )
-                .map(|props| props.balance)
+                .state_handle
+                .state_view_at_block(block_context.block_number)
+                .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
+                .get_account(B160::from_be_bytes(
+                    request.from.unwrap_or_default().into_array(),
+                ))
+                .as_ref()
+                .map(get_balance)
                 .unwrap_or_default();
+
             let value = request.value.unwrap_or_default();
             // Subtract transferred value from the caller balance. Return error if the caller has
             // insufficient funds.
