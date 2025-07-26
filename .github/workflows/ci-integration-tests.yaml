@@ -64,7 +64,7 @@ jobs:
       # Run prover tests. They need to be compiled in release mode for efficiency and to avoid stack overflow errors.
       # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
       # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
-      run: ci_run cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)'
+      run: ci_run cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
 
     - name: Show sccache logs
       if: always()
