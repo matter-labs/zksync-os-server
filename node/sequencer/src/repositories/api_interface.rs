@@ -1,7 +1,6 @@
-use crate::repositories::bytecode_property_respository::BytecodeRepository;
+use crate::repositories::RepositoryManager;
 use crate::repositories::db::DbError;
 use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
-use crate::repositories::{AccountPropertyRepository, RepositoryManager};
 use alloy::consensus::{Block, ReceiptEnvelope};
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
@@ -44,12 +43,6 @@ pub trait ApiRepository: Send + Sync {
 
     /// Returns number of the last known block.
     fn get_latest_block(&self) -> u64;
-
-    // todo(#36): temporary, remove from here
-    fn account_property_repository(&self) -> &AccountPropertyRepository;
-
-    // todo(#36): temporary, remove from here
-    fn bytecode_repository(&self) -> &BytecodeRepository;
 }
 
 /// Extension methods for `ApiRepository` implementations.
@@ -191,14 +184,6 @@ impl ApiRepository for RepositoryManager {
 
     fn get_latest_block(&self) -> u64 {
         *self.latest_block.borrow()
-    }
-
-    fn account_property_repository(&self) -> &AccountPropertyRepository {
-        &self.account_property_repository
-    }
-
-    fn bytecode_repository(&self) -> &BytecodeRepository {
-        &self.bytecode_repository
     }
 }
 
