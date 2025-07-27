@@ -1,11 +1,9 @@
 mod config;
-mod rocksdb;
 
 pub use crate::config::L1WatcherConfig;
 use zksync_os_mempool::DynL1Pool;
 use zksync_os_types::L1Envelope;
 
-use crate::rocksdb::L1WatcherRocksdbStorage;
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
@@ -15,22 +13,21 @@ use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::time::Duration;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_contract_interface::{Bridgehub, ZkChain};
 
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
     l1_pool: DynL1Pool,
     zk_chain_address: Address,
+    next_l1_block: BlockNumber,
+
     poll_interval: Duration,
     max_blocks_to_process: u64,
-    storage: L1WatcherRocksdbStorage,
 }
 
 impl L1Watcher {
     pub async fn new(config: L1WatcherConfig, l1_pool: DynL1Pool) -> anyhow::Result<Self> {
-        let storage = L1WatcherRocksdbStorage::new(config.rocks_db_path);
-
         let provider = DynProvider::new(
             ProviderBuilder::new()
                 .connect_ws(WsConnect::new(config.l1_api_url))
@@ -42,7 +39,6 @@ impl L1Watcher {
             config.max_blocks_to_process,
             ?config.poll_interval,
             ?config.bridgehub_address,
-            next_l1_block = storage.next_l1_block().unwrap_or(0),
             "initializing L1 watcher"
         );
         let bridgehub = Bridgehub::new(
@@ -50,15 +46,18 @@ impl L1Watcher {
             provider.clone(),
             config.chain_id,
         );
-        let zk_chain_address = bridgehub.zk_chain_address().await?;
-        tracing::info!(?zk_chain_address, "resolved on L1");
+        let zk_chain = bridgehub.zk_chain().await?;
+        let zk_chain_address = *zk_chain.address();
+        let next_l1_block = find_first_unprocessed_l1_block(zk_chain).await?;
+        tracing::info!(?zk_chain_address, next_l1_block, "resolved on L1");
+
         Ok(Self {
             provider,
             l1_pool,
             zk_chain_address,
+            next_l1_block,
             poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
-            storage,
         })
     }
 
@@ -80,10 +79,7 @@ impl L1Watcher {
             .get_block(BlockId::latest())
             .await?
             .context("L1 does not have any blocks")?;
-        // TODO: Do not start from genesis; figure out when diamond proxy was first deployed instead?
-        //       Alternatively presume that we should continue from `latest_block - N` and panic if
-        //       first priority id does not match expected value.
-        let from_block = self.storage.next_l1_block().unwrap_or(0);
+        let from_block = self.next_l1_block;
         // Inspect up to `self.max_blocks_to_process` blocks at a time
         let to_block = latest_block
             .header
@@ -99,19 +95,9 @@ impl L1Watcher {
                 hash = ?tx.hash(),
                 "adding new priority transaction to mempool",
             );
-            // We assume mempool is persistent, i.e. that inserting an L1 transaction into it
-            // guarantees it will get executed eventually.
-            //
-            // Moreover, we assume that all transactions are idempotent - inserting the same
-            // transaction multiple times does not affect sequencer's operation where sequencer is
-            // the sole consumer of mempool.
             self.l1_pool.add_transaction(tx);
         }
-        // L1 transactions already added to mempool are guaranteed to be processed eventually so we
-        // do not have to process these blocks ever again. If L1 watcher were to fail before calling
-        // `set_next_l1_block` then these L1 transactions will be added to mempool twice but that
-        // does not matter as we assume sequencer will treat them  as idempotent (see comment above).
-        self.storage.set_next_l1_block(to_block + 1);
+        self.next_l1_block = to_block + 1;
         Ok(())
     }
 
@@ -152,4 +138,38 @@ impl L1Watcher {
 
         Ok(priority_txs)
     }
+}
+
+async fn find_first_unprocessed_l1_block(
+    zk_chain: ZkChain<DynProvider>,
+) -> anyhow::Result<BlockNumber> {
+    let block_number = zk_chain.provider().get_block_number().await?;
+    let next_l1_priority_id = zk_chain
+        .get_first_unprocessed_priority_tx_at_block(block_number.into())
+        .await?;
+    // We want to find the first block where `total_l1_priority_txs(block) >= next_l1_priority_id`
+    // (not strict equality as multiple L1->L2 transactions can be added in a single L1 block).
+    // Invariant is to maintain interval `[low; high)` where:
+    // * `total_l1_priority_txs(low) < next_l1_priority_id`
+    // * `total_l1_priority_txs(high) >= next_l1_priority_id`
+    let mut low = 0;
+    let mut high = block_number + 1;
+    while (high - low) > 1 {
+        let mid = (low + high) / 2;
+        // Assume 0 total L1 transactions when the call fails (presume that ZK chain has not
+        // been deployed yet).
+        let mid_l1_priority_id = zk_chain
+            .get_total_priority_txs_at_block(mid.into())
+            .await
+            .unwrap_or(0);
+
+        if mid_l1_priority_id < next_l1_priority_id {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    // Resulting range is `[low; low + 1)` meaning next L1 priority transaction was observed in
+    // block `low`
+    Ok(low)
 }

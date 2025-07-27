@@ -83,7 +83,6 @@ impl Tester {
             ..Default::default()
         };
         let l1_watcher_config = L1WatcherConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
             l1_api_url: l1_address.clone(),
             ..Default::default()
         };
