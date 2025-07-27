@@ -1,9 +1,10 @@
 use alloy::eips::eip1559::Eip1559Estimation;
+use alloy::eips::eip2930::AccessList;
 use alloy::network::{TransactionBuilder, TxSigner};
 use alloy::primitives::{Address, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
-use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::{AccessListItem, TransactionRequest};
 use std::str::FromStr;
 use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
@@ -141,6 +142,26 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let alice_l2_final_balance = tester.l2_provider.get_balance(alice).await?;
     assert!(alice_l1_final_balance <= alice_l1_initial_balance - fee - amount);
     assert!(alice_l2_final_balance >= alice_l2_initial_balance + amount);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn eip2930() -> anyhow::Result<()> {
+    // Test that the node can process EIP-2930 transactions
+    let tester = Tester::setup().await?;
+
+    let tx = TransactionRequest::default()
+        .from(tester.l2_wallet.default_signer().address())
+        .to(Address::random())
+        .value(U256::from(100))
+        .access_list(AccessList(vec![AccessListItem::default()]));
+    tester
+        .l2_provider
+        .send_transaction(tx)
+        .await?
+        .expect_successful_receipt()
+        .await?;
 
     Ok(())
 }
