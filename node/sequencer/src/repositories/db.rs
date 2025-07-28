@@ -64,12 +64,12 @@ impl NamedColumnFamily for RepositoryCF {
 }
 
 #[derive(Clone, Debug)]
-pub struct RepositoryDB {
+pub struct RepositoryDb {
     db: RocksDB<RepositoryCF>,
     latest_block_number: watch::Sender<u64>,
 }
 
-impl RepositoryDB {
+impl RepositoryDb {
     pub fn new(db: RocksDB<RepositoryCF>) -> Self {
         let latest_block_number_value = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())

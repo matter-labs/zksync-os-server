@@ -17,7 +17,7 @@ pub mod transaction_receipt_repository;
 
 use crate::metrics::GENERAL_METRICS;
 use crate::repositories::{
-    db::{RepositoryCF, RepositoryDB},
+    db::{RepositoryCF, RepositoryDb},
     metrics::REPOSITORIES_METRICS,
     notifications::{BlockNotification, SubscribeToBlocks},
     transaction_receipt_repository::{TransactionReceiptRepository, transaction_to_api_data},
@@ -49,7 +49,7 @@ pub struct RepositoryManager {
     block_receipt_repository: BlockReceiptRepository,
     transaction_receipt_repository: TransactionReceiptRepository,
 
-    db: RepositoryDB,
+    db: RepositoryDb,
     latest_block: watch::Sender<u64>,
     max_blocks_in_memory: u64,
     block_sender: broadcast::Sender<BlockNotification>,
@@ -58,7 +58,7 @@ pub struct RepositoryManager {
 impl RepositoryManager {
     pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
         let db = RocksDB::<RepositoryCF>::new(&db_path).expect("Failed to open db");
-        let db = RepositoryDB::new(db);
+        let db = RepositoryDb::new(db);
         let db_block_number = db.latest_block_number();
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
