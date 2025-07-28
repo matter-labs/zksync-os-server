@@ -216,7 +216,7 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
                                 logs.push(build_api_log(
                                     *tx.tx.hash(),
                                     inner_log.clone(),
-                                    tx.meta,
+                                    tx.meta.clone(),
                                     log_index_in_block - tx.meta.number_of_logs_before_this_tx,
                                 ));
                                 at_least_one_log_added = true;

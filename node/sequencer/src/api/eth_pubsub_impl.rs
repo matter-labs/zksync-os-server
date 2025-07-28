@@ -59,7 +59,7 @@ impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
                             logs.push(build_api_log(
                                 *tx_hash,
                                 log.clone(),
-                                stored_tx.meta,
+                                stored_tx.meta.clone(),
                                 i as u64,
                             ));
                         }
