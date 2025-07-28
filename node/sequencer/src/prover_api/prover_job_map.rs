@@ -1,7 +1,7 @@
 use crate::model::batches::{BatchEnvelope, ProverInput};
 use crate::prover_api::prover_job_manager::JobState;
 use dashmap::DashMap;
-use itertools::Itertools;
+use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ impl ProverJobMap {
     /// Inserts a job just assigned to a prover.
     /// If an entry already exists for the same batch number, it is overwritten.
     pub fn insert(&self, batch_envelope: BatchEnvelope<ProverInput>) {
-        let job_id = batch_envelope.batch.commit_batch_info.batch_number;
+        let job_id = batch_envelope.batch_number();
         let job_entry = AssignedJobEntry {
             batch_envelope,
             assigned_at: Instant::now(),
@@ -97,10 +97,17 @@ impl ProverJobMap {
         self.jobs
             .iter()
             .map(|r| JobState {
-                batch_number: r.batch_envelope.batch.commit_batch_info.batch_number,
+                batch_number: r.batch_envelope.batch_number(),
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
             .sorted_by_key(|e| e.batch_number)
             .collect()
+    }
+
+    pub fn minmax_assigned_batch_number(&self) -> MinMaxResult<u64> {
+        self.jobs
+            .iter()
+            .map(|r| r.batch_envelope.batch_number())
+            .minmax()
     }
 }

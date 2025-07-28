@@ -9,10 +9,6 @@ pub struct RpcConfig {
     #[config(default_t = "0.0.0.0:3050".into())]
     pub address: String,
 
-    /// Chain ID of the chain node operates on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
-
     /// Gas limit of transactions executed via eth_call
     #[config(default_t = 10000000)]
     pub eth_call_gas: usize,
@@ -99,6 +95,13 @@ pub struct ProverApiConfig {
     #[config(default_t = Duration::from_secs(300))]
     pub job_timeout: Duration,
 
+    /// Max difference between the oldest and newest batch number being proven
+    /// If the difference is larger than this, provers will not be assigned new jobs.
+    /// We use max range instead of length limit to avoid having one old batch stuck -
+    /// otherwise GaplessCommitter's buffer would grow indefinitely.
+    #[config(default_t = 50)]
+    pub max_assigned_batch_range: usize,
+
     /// Prover API address to listen on.
     #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,
@@ -124,4 +127,12 @@ pub struct FakeProversConfig {
     /// This gives real provers a head start when picking jobs
     #[config(default_t = Duration::from_millis(3000))]
     pub min_age: Duration,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct GenesisConfig {
+    /// Chain ID of the chain node operates on.
+    #[config(default_t = 270)]
+    pub chain_id: u64,
 }

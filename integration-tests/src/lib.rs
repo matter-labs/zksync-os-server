@@ -1,7 +1,8 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::prover_api::ProverApi;
 use crate::utils::LockedPort;
-use alloy::network::EthereumWallet;
+use alloy::network::{EthereumWallet, TxSigner};
+use alloy::primitives::U256;
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
@@ -111,7 +112,6 @@ impl TesterBuilder {
             ..Default::default()
         };
         let l1_watcher_config = L1WatcherConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
             l1_api_url: l1_address.clone(),
             ..Default::default()
         };
@@ -126,6 +126,7 @@ impl TesterBuilder {
         let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
+                Default::default(),
                 rpc_config,
                 MempoolConfig::default(),
                 sequencer_config,
@@ -175,6 +176,26 @@ impl TesterBuilder {
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
             tracing::info!(?err, ?dur, "retrying connection to L2 node");
+        })
+        .await?;
+
+        // Wait for all L1 priority transaction to get executed and for our L2 account to become rich
+        (|| async {
+            let balance = l2_provider
+                .get_balance(l2_wallet.default_signer().address())
+                .await?;
+            if balance == U256::ZERO {
+                anyhow::bail!("L2 rich wallet balance is zero")
+            }
+            Ok(())
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(?err, ?dur, "waiting for L2 account to become rich");
         })
         .await?;
 
