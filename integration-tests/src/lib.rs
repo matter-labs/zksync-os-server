@@ -13,7 +13,8 @@ use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{
-    FakeProversConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    FakeProversConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig,
 };
 
 pub mod assert_traits;
