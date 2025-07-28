@@ -38,7 +38,8 @@ pub async fn execute_block(
 
     /* ---------- main loop ------------------------------------------ */
     loop {
-        let wait_for_tx_latency = EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
+        let wait_for_tx_latency_observer =
+            EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {
@@ -59,11 +60,11 @@ pub async fn execute_block(
                 match maybe_tx {
                     /* ----- got a transaction ---------------------- */
                     Some(tx) => {
-                        wait_for_tx_latency.observe();
-                        let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
+                        wait_for_tx_latency_observer.observe();
+                        let execute_latency_observer = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx.clone().encode()).await {
                             Ok(_res) => {
-                                latency.observe();
+                                execute_latency_observer.observe();
                                 GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();
 
                                 executed_txs.push(tx);
@@ -138,7 +139,7 @@ pub async fn execute_block(
             }
         }
     }
-    let latency = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
+    let seal_latency_observer = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
 
     /* ---------- seal & return ------------------------------------- */
     let output = runner
@@ -148,7 +149,7 @@ pub async fn execute_block(
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
-    latency.observe();
+    seal_latency_observer.observe();
 
     Ok((
         output,

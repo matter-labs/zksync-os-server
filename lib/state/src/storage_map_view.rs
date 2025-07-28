@@ -26,15 +26,15 @@ impl ReadStorage for StorageMapView {
     /// Reads `key` by scanning block diffs from `block` down to `base_block + 1`,
     /// then falling back to the persistence
     fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
-        let latency_diffs = STORAGE_VIEW_METRICS.access[&"diff"].start();
-        let latency_total = STORAGE_VIEW_METRICS.access[&"total"].start();
+        let diffs_latency_observer = STORAGE_VIEW_METRICS.access[&"diff"].start();
+        let total_latency_observer = STORAGE_VIEW_METRICS.access[&"total"].start();
 
         for bn in (self.base_block + 1..=self.block).rev() {
             if let Some(diff) = self.diffs.get(&bn) {
                 let res = diff.map.get(&key);
                 if let Some(value) = res {
-                    latency_diffs.observe();
-                    latency_total.observe();
+                    diffs_latency_observer.observe();
+                    total_latency_observer.observe();
                     STORAGE_VIEW_METRICS.diffs_scanned.observe(self.block - bn);
                     return Some(*value);
                 }
@@ -53,17 +53,17 @@ impl ReadStorage for StorageMapView {
             }
         }
 
-        latency_diffs.observe();
+        diffs_latency_observer.observe();
         STORAGE_VIEW_METRICS
             .diffs_scanned
             .observe(self.block - self.base_block);
 
         // Fallback to base_state
-        let latency_base = STORAGE_VIEW_METRICS.access[&"base"].start();
+        let base_latency_observer = STORAGE_VIEW_METRICS.access[&"base"].start();
         let r = self.persistent_storage_map.get(key);
-        latency_base.observe();
+        base_latency_observer.observe();
 
-        latency_total.observe();
+        total_latency_observer.observe();
         r
     }
 }
