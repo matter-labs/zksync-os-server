@@ -13,6 +13,7 @@ categories.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
+zksync_os_rpc.workspace = true
 zksync_os_rpc_api =  { workspace = true, features = ["server"] }
 zksync_os_types.workspace = true
 
