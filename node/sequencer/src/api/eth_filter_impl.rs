@@ -232,15 +232,16 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
 
                     // size check but only if range is multiple blocks, so we always return all
                     // logs of a single block
-                    if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response {
-                        if is_multi_block_range && logs.len() > max_logs_per_response {
-                            let suggested_to = number.saturating_sub(1);
-                            return Err(EthFilterError::QueryExceedsMaxResults {
-                                max_logs: max_logs_per_response,
-                                from_block: from,
-                                to_block: suggested_to,
-                            });
-                        }
+                    if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response
+                        && is_multi_block_range
+                        && logs.len() > max_logs_per_response
+                    {
+                        let suggested_to = number.saturating_sub(1);
+                        return Err(EthFilterError::QueryExceedsMaxResults {
+                            max_logs: max_logs_per_response,
+                            from_block: from,
+                            to_block: suggested_to,
+                        });
                     }
                 } else {
                     negative_scanned_blocks += 1;

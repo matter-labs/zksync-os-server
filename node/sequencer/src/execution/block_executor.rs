@@ -70,10 +70,8 @@ pub async fn execute_block(
                                 executed_txs.push(tx);
 
                                 // arm the timer once, after the first successful tx
-                                if deadline.is_none() {
-                                    if let Some(dur) = deadline_dur {
-                                        deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                                    }
+                                if deadline.is_none() && let Some(dur) = deadline_dur {
+                                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
