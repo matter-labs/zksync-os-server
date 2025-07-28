@@ -5,8 +5,8 @@ use tracing_subscriber::EnvFilter;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
-    SequencerConfig,
+    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RpcConfig, SequencerConfig,
 };
 use zksync_os_sequencer::run;
 use zksync_vlog::prometheus::PrometheusExporterConfig;
@@ -23,6 +23,7 @@ pub async fn main() {
 
     // =========== load configs ===========
     let (
+        genesis_config,
         rpc_config,
         mempool_config,
         sequencer_config,
@@ -45,6 +46,7 @@ pub async fn main() {
         // ── Main task ───────────────────────────────────────────────
         _ = run(
             stop_receiver.clone(),
+            genesis_config,
             rpc_config,
             mempool_config,
             sequencer_config,
@@ -67,6 +69,7 @@ pub async fn main() {
 }
 
 fn build_configs() -> (
+    GenesisConfig,
     RpcConfig,
     MempoolConfig,
     SequencerConfig,
@@ -78,6 +81,9 @@ fn build_configs() -> (
 ) {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
+    schema
+        .insert(&GenesisConfig::DESCRIPTION, "genesis")
+        .expect("Failed to insert genesis config");
     schema
         .insert(&RpcConfig::DESCRIPTION, "rpc")
         .expect("Failed to insert rpc config");
@@ -107,6 +113,12 @@ fn build_configs() -> (
         .expect("Failed to insert prover api config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
+
+    let genesis_config = repo
+        .single::<GenesisConfig>()
+        .expect("Failed to load genesis config")
+        .parse()
+        .expect("Failed to parse genesis config");
 
     let rpc_config = repo
         .single::<RpcConfig>()
@@ -156,6 +168,7 @@ fn build_configs() -> (
         .parse()
         .expect("Failed to parse prover api config");
     (
+        genesis_config,
         rpc_config,
         mempool_config,
         sequencer_config,

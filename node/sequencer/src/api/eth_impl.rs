@@ -1,4 +1,3 @@
-use crate::CHAIN_ID;
 use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
@@ -56,6 +55,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
         state_handle: StateHandle,
         mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
+        chain_id: u64,
     ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
 
@@ -64,6 +64,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
             state_handle.clone(),
             block_replay_storage,
             repository.clone(),
+            chain_id,
         );
         Self {
             tx_handler,
@@ -71,7 +72,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
             repository,
             mempool,
             state_handle,
-            chain_id: CHAIN_ID,
+            chain_id,
         }
     }
 }
@@ -579,12 +580,12 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        let latency = API_METRICS.response_time[&"call"].start();
+        let latency_observer = API_METRICS.response_time[&"call"].start();
         let r = self
             .eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
             .to_rpc_result();
-        latency.observe();
+        latency_observer.observe();
         r
     }
 
@@ -614,12 +615,12 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        let latency = API_METRICS.response_time[&"estimate_gas"].start();
+        let latency_observer = API_METRICS.response_time[&"estimate_gas"].start();
         let result = self
             .eth_call_handler
             .estimate_gas_impl(request, block_number, state_override)
             .to_rpc_result()?;
-        latency.observe();
+        latency_observer.observe();
         Ok(result)
     }
 
@@ -666,14 +667,14 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
     }
 
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        let latency = API_METRICS.response_time[&"send_raw_transaction"].start();
+        let latency_observer = API_METRICS.response_time[&"send_raw_transaction"].start();
 
         let r = self
             .tx_handler
             .send_raw_transaction_impl(bytes)
             .await
             .to_rpc_result();
-        latency.observe();
+        latency_observer.observe();
 
         r
     }

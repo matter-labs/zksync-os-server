@@ -112,7 +112,7 @@ impl StorageMap {
     /// Adds a diff for block `block` (thus providing state for `block + 1`)
     /// Must be contiguous - that is, can only add blocks in order
     pub fn add_diff(&self, block_number: u64, writes: Vec<StorageWrite>) {
-        let started_at = STORAGE_MAP_METRICS.add_diff.start();
+        let total_latency_observer = STORAGE_MAP_METRICS.add_diff.start();
 
         let latest_memory_block = self.latest_block.load(Ordering::Relaxed);
 
@@ -156,7 +156,7 @@ impl StorageMap {
             self.diffs.insert(block_number, Arc::new(new_diff));
         }
         self.latest_block.store(block_number, Ordering::Relaxed);
-        started_at.observe();
+        total_latency_observer.observe();
     }
 
     /// Moves elements from `diffs` to the persistence

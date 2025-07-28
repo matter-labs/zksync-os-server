@@ -20,8 +20,8 @@ use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
-    BatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
-    SequencerConfig,
+    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RpcConfig, SequencerConfig,
 };
 use crate::execution::{
     block_context_provider::BlockContextProvider, block_executor::execute_block,
@@ -55,8 +55,6 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
-
-const CHAIN_ID: u64 = 270;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -222,6 +220,7 @@ fn command_source(
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     stop_receiver: watch::Receiver<bool>,
+    genesis_config: GenesisConfig,
     rpc_config: RpcConfig,
     mempool_config: MempoolConfig,
     sequencer_config: SequencerConfig,
@@ -264,7 +263,8 @@ pub async fn run(
     )
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
-    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db, CHAIN_ID);
+    let block_replay_storage =
+        BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
 
     tracing::info!("Initializing StateHandle");
     let state_handle = StateHandle::new(StateConfig {
@@ -288,7 +288,11 @@ pub async fn run(
 
     tracing::info!("Initializing mempools");
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
-        ZkClient::new(repositories.clone(), state_handle.clone()),
+        ZkClient::new(
+            repositories.clone(),
+            state_handle.clone(),
+            genesis_config.chain_id,
+        ),
         forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
@@ -300,7 +304,12 @@ pub async fn run(
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
     tracing::info!("Initializing L1Watcher");
-    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone()).await;
+    let l1_watcher = L1Watcher::new(
+        l1_watcher_config,
+        l1_mempool.clone(),
+        genesis_config.chain_id,
+    )
+    .await;
     let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -369,6 +378,7 @@ pub async fn run(
         l1_mempool,
         l2_mempool.clone(),
         block_hashes_for_next_block,
+        genesis_config.chain_id,
     );
 
     if !batcher_config.subsystem_enabled {
@@ -392,7 +402,7 @@ pub async fn run(
         L1Sender,
         L1SenderHandle,
         u64,
-    ) = L1Sender::new(l1_sender_config).await.expect(
+    ) = L1Sender::new(l1_sender_config, genesis_config.chain_id).await.expect(
         "Failed to initialize L1Sender. Consider disabling batcher subsystem via configuration.",
     );
 
@@ -421,6 +431,7 @@ pub async fn run(
     let batcher_task = {
         let batcher = Batcher::new(
             last_committed_batch_number + 1,
+            genesis_config.chain_id,
             sequencer_config.rocks_db_path.clone(),
             blocks_for_batcher_receiver,
             batch_replay_data_sender,
@@ -513,6 +524,7 @@ pub async fn run(
         // todo: only start after the sequencer caught up?
         res = run_jsonrpsee_server(
             rpc_config,
+            genesis_config.clone(),
             bridgehub_address,
             repositories.clone(),
             state_handle.clone(),

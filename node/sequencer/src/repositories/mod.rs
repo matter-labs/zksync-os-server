@@ -102,7 +102,7 @@ impl RepositoryManager {
     /// - No atomicity or ordering guarantees are provided for repository updates.
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
     fn populate_in_memory(&self, mut block_output: BatchOutput, transactions: Vec<ZkTransaction>) {
-        let total_latency = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
         let tx_count = transactions.len();
         let tx_hashes = transactions
@@ -157,7 +157,7 @@ impl RepositoryManager {
         // Ignore error if there are no subscribed receivers
         let _ = self.block_sender.send(notification);
 
-        let latency = total_latency.observe();
+        let latency = total_latency_observer.observe();
         REPOSITORIES_METRICS
             .insert_block_per_tx
             .observe(latency.div(tx_count as u32));

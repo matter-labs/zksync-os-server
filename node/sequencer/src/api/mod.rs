@@ -12,7 +12,7 @@ use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
 use crate::api::eth_pubsub_impl::EthPubsubNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
-use crate::config::RpcConfig;
+use crate::config::{GenesisConfig, RpcConfig};
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use alloy::primitives::Address;
@@ -30,6 +30,7 @@ use zksync_os_state::StateHandle;
 // stripped-down version of `api_server/src/web3/mod.rs`
 pub async fn run_jsonrpsee_server(
     config: RpcConfig,
+    genesis_config: GenesisConfig,
     bridgehub_address: Address,
 
     repository_manager: RepositoryManager,
@@ -47,6 +48,7 @@ pub async fn run_jsonrpsee_server(
             state_handle,
             mempool.clone(),
             block_replay_storage,
+            genesis_config.chain_id,
         )
         .into_rpc(),
     )?;
