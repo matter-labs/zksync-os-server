@@ -14,6 +14,7 @@ mod prover_input_generator;
 pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
+mod util;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
@@ -22,8 +23,13 @@ use crate::config::{
     BatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
     SequencerConfig,
 };
+use crate::execution::{
+    block_context_provider::BlockContextProvider, block_executor::execute_block,
+};
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{BatchForProving, BatchReplayData, ProduceCommand, ReplayRecord};
+use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
+use crate::prover_api::fake_provers_pool::FakeProversPool;
+use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
@@ -32,13 +38,10 @@ use crate::repositories::RepositoryManager;
 use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
-use crate::{
-    execution::{block_context_provider::BlockContextProvider, block_executor::execute_block},
-    model::BlockCommand,
-};
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
+use model::blocks::{BlockCommand, ProduceCommand, ReplayRecord};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,21 +55,6 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
-// Terms:
-// * BlockReplayData     - minimal info to (re)apply the block.
-//
-// * `Canonize` block operation   - after block is processed in the VM, we want to expose it in API asap.
-//                         But we also want to make it durable - that is, it will not change after node crashes or restarts.
-//
-//                         Canonization is the process of making a block durable.
-//                         For the centralized sequencer we persist a WAL of `BlockReplayData`s
-//                         For leader rotation we only consider block Canonized when it's accepted by the network (we have quorum).
-
-// Minimal sequencer state is the following:
-// * State (storage logs + factory deps - see `state` crate)
-// * WAL of BlockReplayData (only in centralized case)
-//
-// Note that for API additional data may be reqiured (block/tx receipts)
 
 const CHAIN_ID: u64 = 270;
 
@@ -75,11 +63,9 @@ const TREE_DB_NAME: &str = "tree";
 const PROOF_STORAGE_DB_NAME: &str = "proofs";
 const REPOSITORY_DB_NAME: &str = "repository";
 
-// todo: clean up list of fields passed; split into two function (canonization and sequencing)
-
 #[allow(clippy::too_many_arguments)]
 pub async fn run_sequencer_actor(
-    block_to_start: u64,
+    starting_block: u64,
 
     batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
@@ -87,25 +73,22 @@ pub async fn run_sequencer_actor(
     mut command_block_context_provider: BlockContextProvider,
     state: StateHandle,
     wal: BlockReplayStorage,
-    // todo: do it outside - as one of the sinks (only needed in API)
     repositories: RepositoryManager,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
-    tracing::info!(block_to_start, "starting sequencer");
-
     let mut stream = command_source(
         &wal,
-        block_to_start,
+        starting_block,
         sequencer_config.block_time,
         sequencer_config.max_transactions_in_block,
     );
 
     while let Some(cmd) = stream.next().await {
         // todo: also report full latency between command invocations
-        let bn = cmd.block_number();
+        let block_number = cmd.block_number();
 
         tracing::info!(
-            block = bn,
+            block_number,
             cmd = cmd.to_string(),
             "▶ starting command. Turning into PreparedCommand.."
         );
@@ -113,8 +96,8 @@ pub async fn run_sequencer_actor(
 
         let prepared_cmd = command_block_context_provider.process_command(cmd)?;
 
-        tracing::info!(
-            block_number = bn,
+        tracing::debug!(
+            block_number,
             starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
             "▶ Prepared command in {:?}. Executing..",
             stage_started_at.elapsed()
@@ -126,17 +109,17 @@ pub async fn run_sequencer_actor(
             .context("execute_block")?;
 
         tracing::info!(
-            block_number = bn,
+            block_number,
             transactions = replay_record.transactions.len(),
             preimages = block_output.published_preimages.len(),
             storage_writes = block_output.storage_writes.len(),
-            "▶ Executed in {:?}. Adding to state...",
+            "▶ Executed after {:?}. Adding to state...",
             stage_started_at.elapsed()
         );
         stage_started_at = Instant::now();
 
         state.add_block_result(
-            bn,
+            block_number,
             block_output.storage_writes.clone(),
             block_output
                 .published_preimages
@@ -144,8 +127,8 @@ pub async fn run_sequencer_actor(
                 .map(|(k, v, _)| (*k, v)),
         )?;
 
-        tracing::info!(
-            block_number = bn,
+        tracing::debug!(
+            block_number,
             "▶ Added to state in {:?}. Adding to repos...",
             stage_started_at.elapsed()
         );
@@ -156,8 +139,8 @@ pub async fn run_sequencer_actor(
             .populate_in_memory_blocking(block_output.clone(), replay_record.transactions.clone())
             .await;
 
-        tracing::info!(
-            block_number = bn,
+        tracing::debug!(
+            block_number,
             "▶ Added to repos in {:?}. Reporting back to block_transaction_provider (mempools)...",
             stage_started_at.elapsed()
         );
@@ -169,8 +152,8 @@ pub async fn run_sequencer_actor(
         let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
         command_block_context_provider.remove_txs(purged_txs_hashes);
 
-        tracing::info!(
-            block_number = bn,
+        tracing::debug!(
+            block_number,
             "▶ Reported to block_transaction_provider in {:?}. Adding to wal...",
             stage_started_at.elapsed()
         );
@@ -179,8 +162,8 @@ pub async fn run_sequencer_actor(
 
         wal.append_replay(replay_record.clone());
 
-        tracing::info!(
-            block_number = bn,
+        tracing::debug!(
+            block_number,
             "▶ Added to wal and canonized in {:?}. Sending to sinks...",
             stage_started_at.elapsed()
         );
@@ -192,12 +175,12 @@ pub async fn run_sequencer_actor(
         tree_sink.send(block_output).await?;
 
         tracing::info!(
-            block_number = bn,
+            block_number,
             "✔ sent to sinks in {:?}",
             stage_started_at.elapsed()
         );
 
-        GENERAL_METRICS.block_number[&"execute"].set(bn);
+        GENERAL_METRICS.block_number[&"execute"].set(block_number);
     }
     Ok::<(), anyhow::Error>(())
 }
@@ -258,12 +241,15 @@ pub async fn run(
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(10);
 
     // Channel between `Batcher` and `ProverInputGenerator`
-    let (batch_data_sender, batch_data_receiver) =
-        tokio::sync::mpsc::channel::<BatchReplayData>(10);
+    let (batch_replay_data_sender, batch_replay_data_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<Vec<ReplayRecord>>>(10);
 
     // Channel between `ProverInputGenerator` and `ProverAPI`
-    let (batch_for_proving_sender, mut batch_for_prover_receiver) =
-        tokio::sync::mpsc::channel::<BatchForProving>(10);
+    let (batch_for_proving_sender, batch_for_prover_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(10);
+
+    let (batch_with_proof_sender, batch_with_proof_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
     // =========== Boilerplate - initialize components that don't need state recovery  ===========
     tracing::info!("Initializing BlockReplayStorage");
@@ -295,10 +281,6 @@ pub async fn run(
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(proof_storage_db);
-    tracing::info!(
-        "Proof storage initialized with {} proofs already present",
-        proof_storage.get_batches_with_proof().len()
-    );
 
     tracing::info!("Initializing mempools");
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
@@ -410,20 +392,23 @@ pub async fn run(
         "Failed to initialize L1Sender. Consider disabling batcher subsystem via configuration.",
     );
 
-    // todo: will not hold when we do proper batching,
+    // todo: this will not hold when we do proper batching,
     //  but both number are needed to initialize the batcher
     //  (it needs to know until what block to skip, and it also needs to know the batch number to start with)
     //  potential solution: modify batcher persistence to also store block range per batch - and use it to recover that block number
     let last_committed_block_number = last_committed_batch_number;
+    let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
     tracing::info!(
         last_committed_batch_number,
         last_committed_block_number,
+        last_stored_batch_with_proof,
         "L1 sender initialized"
     );
     assert!(
         last_committed_block_number <= wal_block
-            && last_committed_block_number >= storage_map_compacted_block,
+            && last_committed_block_number >= storage_map_compacted_block
+            && last_stored_batch_with_proof >= last_committed_batch_number,
         "L1 sender last committed block number is inconsistent with WAL or storage map"
     );
 
@@ -434,7 +419,7 @@ pub async fn run(
             last_committed_batch_number + 1,
             sequencer_config.rocks_db_path.clone(),
             blocks_for_batcher_receiver,
-            batch_data_sender,
+            batch_replay_data_sender,
             persistent_tree.clone(),
         );
         Box::pin(batcher.run_loop())
@@ -445,9 +430,8 @@ pub async fn run(
         let prover_input_generator = ProverInputGenerator::new(
             prover_input_generator_config.logging_enabled,
             prover_input_generator_config.maximum_in_flight_blocks,
-            batch_data_receiver,
+            batch_replay_data_receiver,
             batch_for_proving_sender,
-            l1_sender_handle,
             persistent_tree,
             state_handle.clone(),
         );
@@ -456,42 +440,51 @@ pub async fn run(
 
     // ======= Initialize Prover Api Server========
 
-    let (prover_job_manager_task, prover_server_task): (
-        BoxFuture<anyhow::Result<()>>,
-        BoxFuture<anyhow::Result<()>>,
-    ) = if prover_api_config.component_enabled {
-        let prover_job_manager = Arc::new(ProverJobManager::new(
-            proof_storage,
-            prover_api_config.job_timeout,
-            prover_api_config.max_unproved_blocks,
-        ));
-        (
-            Box::pin(prover_server::run(
-                prover_job_manager.clone(),
-                prover_api_config.address,
-            )),
-            Box::pin(prover_job_manager.listen_for_batch_jobs(batch_for_prover_receiver)),
-        )
-    } else {
-        tracing::info!(
-            "Prover API is disabled via configuration; draining channel to avoid backpressure"
-        );
-        let mut stop_receiver = stop_receiver.clone();
-        (
-            Box::pin(async move {
-                while batch_for_prover_receiver.recv().await.is_some() { // Drop messages silently to prevent backpressure
-                }
-                Ok(())
-            }),
+    let fri_prover_job_manager = Arc::new(ProverJobManager::new(
+        batch_for_prover_receiver,
+        batch_with_proof_sender,
+        prover_api_config.job_timeout,
+    ));
+
+    let prover_gapless_committer = GaplessCommitter::new(
+        last_committed_batch_number + 1,
+        batch_with_proof_receiver,
+        proof_storage.clone(),
+        l1_sender_handle,
+    );
+
+    let prover_server_task = Box::pin(prover_server::run(
+        fri_prover_job_manager.clone(),
+        proof_storage,
+        prover_api_config.address,
+    ));
+
+    let fake_provers_task_optional: BoxFuture<anyhow::Result<()>> =
+        if prover_api_config.fake_provers.enabled {
+            tracing::info!(
+                workers = prover_api_config.fake_provers.workers,
+                compute_time = ?prover_api_config.fake_provers.compute_time,
+                min_task_age = ?prover_api_config.fake_provers.min_age,
+                "Initializing FakeProversPool"
+            );
+            let fake_provers_pool = FakeProversPool::new(
+                fri_prover_job_manager.clone(),
+                prover_api_config.fake_provers.workers,
+                prover_api_config.fake_provers.compute_time,
+                prover_api_config.fake_provers.min_age,
+            );
+            Box::pin(fake_provers_pool.run())
+        } else {
+            // noop task
+            let mut stop_receiver = stop_receiver.clone();
             Box::pin(async move {
                 // Defer until we receive stop signal, i.e. a task that does nothing
                 stop_receiver
                     .changed()
                     .await
                     .map_err(|e| anyhow::anyhow!(e))
-            }),
-        )
-    };
+            })
+        };
 
     // ======= Run tasks ===========
 
@@ -554,19 +547,32 @@ pub async fn run(
                 Err(e) => tracing::error!("ProverInputGenerator task failed: {e:#}"),
             }
         }
-        res = l1_sender.run() => {
-            match res {
-                Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
-                Err(e) => tracing::error!("L1 sender failed: {e:#}"),
-            }
-        }
-        _res = prover_job_manager_task => {
-            tracing::warn!("Prover job manager task exited")
-        }
+
         res = prover_server_task => {
             match res {
                 Ok(_)  => tracing::warn!("prover_server_job task exited"),
                 Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),
+            }
+        }
+
+        res = prover_gapless_committer.run() => {
+            match res {
+                Ok(_)  => tracing::warn!("prover_gapless_committer task exited"),
+                Err(e) => tracing::error!("prover_gapless_committer task failed: {e:#}"),
+            }
+        }
+
+        res = fake_provers_task_optional => {
+            match res {
+                Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
+                Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
+            }
+        }
+
+        res = l1_sender.run() => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
+                Err(e) => tracing::error!("L1 sender failed: {e:#}"),
             }
         }
 

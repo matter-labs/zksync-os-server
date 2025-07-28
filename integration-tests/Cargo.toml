@@ -29,11 +29,11 @@ tracing.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 backon.workspace = true
+futures.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
 test-log.workspace = true
-futures.workspace = true
 
 [features]
 prover-tests = ["dep:zkos_prover"]

@@ -1,5 +1,7 @@
 use crate::CHAIN_ID;
-use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
+use crate::model::blocks::{
+    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
+};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
