@@ -1,5 +1,5 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
-use crate::model::{BlockCommand, ReplayRecord};
+use crate::model::blocks::{BlockCommand, ReplayRecord};
 use alloy::eips::{Decodable2718, Encodable2718};
 use futures::stream::{self, BoxStream, StreamExt};
 use ruint::aliases::U256;

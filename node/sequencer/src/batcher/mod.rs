@@ -1,6 +1,7 @@
 use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{BatchMetadata, BatchReplayData, ReplayRecord};
+use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
+use crate::model::blocks::ReplayRecord;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::future::ready;
 use std::path::PathBuf;
@@ -30,7 +31,7 @@ pub struct Batcher {
     // inbound
     block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
     // outbound
-    batch_data_sender: Sender<BatchReplayData>,
+    batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 }
@@ -45,7 +46,7 @@ impl Batcher {
 
         // == plumbing ==
         block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-        batch_data_sender: Sender<BatchReplayData>,
+        batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
         // todo: will not need storage in the future
@@ -103,6 +104,8 @@ impl Batcher {
                         leaf_count,
                     };
 
+                    let tx_count = replay_record.transactions.len();
+
                     let commit_batch_info = CommitBatchInfo::new(
                         block_output,
                         &replay_record.block_context,
@@ -117,33 +120,38 @@ impl Batcher {
                     self.storage
                         .set(commit_batch_info.batch_number, &stored_batch_info)?;
 
+                    // Create batch
+                    let batch_envelope: BatchEnvelope<Vec<ReplayRecord>> = BatchEnvelope {
+                        batch: BatchMetadata {
+                            previous_stored_batch_info: prev_batch_info,
+                            commit_batch_info,
+                            first_block_number: block_number,
+                            last_block_number: block_number,
+                            tx_count,
+                        },
+                        data: vec![replay_record],
+                        trace: Trace::default(),
+                    };
+
+
                     tracing::info!(
                         block_number_from = block_number,
                         block_number_to = block_number,
                         batch_number = block_number,
-                        state_commitment = ?commit_batch_info.new_state_commitment,
+                        state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                         "Batch produced",
                     );
 
-                    // Create batch replay data (currently just one block per batch)
-                    let batch_replay_data = BatchReplayData {
-                        batch: BatchMetadata {
-                            previous_batch: prev_batch_info.clone(),
-                            commit_batch_info,
-                        },
-                        block_replays: vec![replay_record],
-                    };
-
                     tracing::debug!(
-                        ?batch_replay_data.batch,
-                        "Batch produced",
+                        ?batch_envelope.batch,
+                        "Batch details",
                     );
 
                     GENERAL_METRICS.block_number[&"batcher"].set(block_number);
 
                     // Send to ProverInputGenerator
                     self.batch_data_sender
-                        .send(batch_replay_data)
+                        .send(batch_envelope)
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
                     Ok(stored_batch_info)

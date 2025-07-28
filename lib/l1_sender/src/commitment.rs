@@ -81,7 +81,7 @@ impl From<&StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredB
 }
 
 /// User-friendly version of [`zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitBatchInfo {
     pub batch_number: u64,
     pub new_state_commitment: B256,

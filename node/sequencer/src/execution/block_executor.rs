@@ -1,7 +1,7 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
+use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use alloy::primitives::TxHash;
 use anyhow::{Result, anyhow};
 use futures::StreamExt;
