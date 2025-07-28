@@ -25,6 +25,7 @@ pub struct EthCallHandler<R> {
 
     block_replay_storage: BlockReplayStorage,
     repository: R,
+    chain_id: u64,
 }
 
 impl<R: ApiRepository> EthCallHandler<R> {
@@ -33,12 +34,14 @@ impl<R: ApiRepository> EthCallHandler<R> {
         state_handle: StateHandle,
         block_replay_storage: BlockReplayStorage,
         repository: R,
+        chain_id: u64,
     ) -> EthCallHandler<R> {
         Self {
             config,
             state_handle,
             block_replay_storage,
             repository,
+            chain_id,
         }
     }
 
@@ -93,7 +96,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
         )?;
-        let chain_id = chain_id.unwrap_or(self.config.chain_id);
+        let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
         let to = to.unwrap_or(TxKind::Create);
         let value = value.unwrap_or_default();
@@ -485,9 +488,9 @@ pub enum EthCallError {
 
     // Below is more or less temporary as the error hierarchy in ZKsync OS is going through a major
     // refactoring.
-    /// Internal error propagated by ZKsync OS.
+    /// Internal error propagated by ZKsync OS. Boxed due to its large size.
     #[error("ZKsync OS error: {0:?}")]
-    ForwardSubsystemError(ForwardSubsystemError),
+    ForwardSubsystemError(Box<ForwardSubsystemError>),
     /// Transaction is invalid according to ZKsync OS.
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),

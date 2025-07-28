@@ -111,7 +111,6 @@ impl TesterBuilder {
             ..Default::default()
         };
         let l1_watcher_config = L1WatcherConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
             l1_api_url: l1_address.clone(),
             ..Default::default()
         };
@@ -126,6 +125,7 @@ impl TesterBuilder {
         let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
+                Default::default(),
                 rpc_config,
                 MempoolConfig::default(),
                 sequencer_config,
