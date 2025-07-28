@@ -69,7 +69,7 @@ impl L1Sender {
         let validator_timelock_address = bridgehub.validator_timelock_address().await?;
         tracing::info!(?validator_timelock_address, "resolved on L1");
 
-        let (command_sender, command_receiver) = mpsc::channel(128);
+        let (command_sender, command_receiver) = mpsc::channel(50);
         let this = Self {
             provider,
             chain_id: config.chain_id,
@@ -101,6 +101,14 @@ impl L1Sender {
             .await
             != 0
         {
+            // only used for logging
+            let batch_number_range =
+                cmd_buffer[0].batch_number()..=cmd_buffer.last().unwrap().batch_number();
+            tracing::info!(
+                ?batch_number_range,
+                count = batch_number_range.clone().count(),
+                "Committing batches...",
+            );
             let pending_tx_hashes = futures::stream::iter(cmd_buffer.drain(..))
                 .then(|cmd| async {
                     match cmd {
@@ -116,9 +124,19 @@ impl L1Sender {
                 // don't wait for inclusion here)
                 .try_collect::<HashMap<TxHash, u64>>()
                 .await?;
+            tracing::info!(
+                ?batch_number_range,
+                count = batch_number_range.clone().count(),
+                "Waiting for tx inclusion...",
+            );
             heartbeat
                 .wait_for_pending_txs(&self.provider, pending_tx_hashes)
                 .await?;
+            tracing::info!(
+                ?batch_number_range,
+                count = batch_number_range.clone().count(),
+                "All batches committed",
+            );
         }
 
         tracing::trace!("channel has been closed; stopping L1 sender");
@@ -141,7 +159,7 @@ impl L1Sender {
         );
 
         let eip1559_est = self.provider.estimate_eip1559_fees().await?;
-        tracing::info!(
+        tracing::debug!(
             eip1559_est.max_priority_fee_per_gas,
             "estimated median priority fee (20% percentile) for the last 10 blocks"
         );
@@ -323,6 +341,14 @@ impl L1SenderHandle {
 #[derive(Debug)]
 enum Command {
     Commit(CommitCommand),
+}
+
+impl Command {
+    pub fn batch_number(&self) -> u64 {
+        match self {
+            Command::Commit(cmd) => cmd.batch.batch_number,
+        }
+    }
 }
 
 #[derive(Debug)]

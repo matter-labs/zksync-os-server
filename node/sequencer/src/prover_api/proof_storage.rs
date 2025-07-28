@@ -1,8 +1,8 @@
-//! RocksDB-backed persistence for FRI proofs.
-//!
-//! A proof is a binary blob (`Vec<u8>`) identified by its block number.
+//! RocksDB-backed persistence for Batch metadata and FRI proofs.
+//! May be extracted to a separate service later on (aka FRI Cache)
 //!
 
+use crate::model::batches::{BatchEnvelope, FriProof};
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
@@ -35,45 +35,47 @@ impl ProofStorage {
         Self { db }
     }
 
-    /// Persist a proof. Overwrites any existing entry for the same block.
-    pub fn save_proof(&self, block_number: u64, proof: &[u8]) -> anyhow::Result<()> {
-        let key = block_number.to_be_bytes();
+    /// Persist a BatchWithProof. Overwrites any existing entry for the same batch.
+    /// Doesn't allow gaps - if a proof for batch `n` is missing, then no proof for batch `n+1` is allowed.
+    pub fn save_proof(&self, value: &BatchEnvelope<FriProof>) -> anyhow::Result<()> {
+        let latest_batch_number = self.latest_stored_batch_number().unwrap_or(0);
+        anyhow::ensure!(
+            value.batch_number() == latest_batch_number + 1,
+            "Attempted to store FRI proofs out of order: previous stored {}, got {}",
+            latest_batch_number,
+            value.batch_number(),
+        );
+
+        let key = value.batch_number().to_be_bytes();
         let mut batch: WriteBatch<'_, ProofColumnFamily> = self.db.new_write_batch();
-        batch.put_cf(ProofColumnFamily::Proofs, &key, proof);
+        batch.put_cf(
+            ProofColumnFamily::Proofs,
+            &key,
+            serde_json::to_vec(value)?.as_slice(),
+        );
         self.db.write(batch)?;
         Ok(())
     }
 
-    /// Persist a proof with prover ID label. Overwrites any existing entry for the same block.
-    pub fn save_proof_with_prover(
-        &self,
-        block_number: u64,
-        proof: &[u8],
-        prover_id: &str,
-    ) -> anyhow::Result<()> {
-        let key = block_number.to_be_bytes();
-        let mut batch: WriteBatch<'_, ProofColumnFamily> = self.db.new_write_batch();
-        batch.put_cf(ProofColumnFamily::Proofs, &key, proof);
-        tracing::info!(block_number, prover_id, "Saving proof with prover ID");
-        self.db.write(batch)?;
-        Ok(())
+    pub fn latest_stored_batch_number(&self) -> Option<u64> {
+        let max_key = u64::MAX.to_be_bytes();
+
+        let mut iter = self
+            .db
+            .to_iterator_cf(ProofColumnFamily::Proofs, ..=&max_key[..]);
+
+        iter.next().map(|(key, _value)| {
+            assert_eq!(key.len(), 8);
+            u64::from_be_bytes(key[..8].try_into().unwrap())
+        })
     }
 
-    /// Loads a proof for `block_number`, if present.
-    pub fn get_proof(&self, block_number: u64) -> Option<Vec<u8>> {
-        let key = block_number.to_be_bytes();
-        self.db
-            .get_cf(ProofColumnFamily::Proofs, &key)
-            .expect("DB read failure")
-    }
-
-    pub fn get_blocks_with_proof(&self) -> Vec<u64> {
-        self.db
-            .prefix_iterator_cf(ProofColumnFamily::Proofs, &[])
-            .map(|(key, _)| {
-                let arr: [u8; 8] = key.as_ref()[..8].try_into().expect("key length");
-                u64::from_be_bytes(arr)
-            })
-            .collect()
+    /// Loads a BatchWithProof for `batch_number`, if present.
+    pub fn get_proof(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
+        let key = batch_number.to_be_bytes();
+        let bytes = self.db.get_cf(ProofColumnFamily::Proofs, &key)?;
+        let Some(bytes) = bytes else { return Ok(None) };
+        let res = serde_json::from_slice(&bytes)?;
+        Ok(Some(res))
     }
 }

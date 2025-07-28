@@ -1,11 +1,13 @@
 use crate::CHAIN_ID;
-use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
+use crate::model::blocks::{
+    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
+};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::{Address, BlockHash};
-use futures::StreamExt;
+use alloy::primitives::{Address, BlockHash, TxHash};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
+use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,10 +18,10 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, DynL1Pool, L2TransactionPool, PoolUpdateKind, RethPool,
-    RethTransactionPoolExt,
+    CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, ReplayTxStream, RethPool,
+    RethTransactionPoolExt, best_transactions,
 };
-use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -31,14 +33,14 @@ use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction};
 /// Note: unlike other components, this one doesn't tolerate replaying blocks -
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
-pub struct CommandBlockContextProvider {
+pub struct BlockContextProvider {
     next_l1_priority_id: u64,
     l1_mempool: DynL1Pool,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
 }
 
-impl CommandBlockContextProvider {
+impl BlockContextProvider {
     pub fn new(
         next_l1_priority_id: u64,
         l1_mempool: DynL1Pool,
@@ -86,11 +88,7 @@ impl CommandBlockContextProvider {
                 }
 
                 // Create stream: L1 transactions first, then L2 transactions
-                let l1_stream = futures::stream::iter(l1_transactions).map(ZkTransaction::from);
-                let l2_stream = self
-                    .l2_mempool
-                    .best_l2_transactions()
-                    .map(ZkTransaction::from);
+                let best_txs = best_transactions(&self.l2_mempool, l1_transactions);
                 let gas_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BatchContext {
@@ -108,7 +106,7 @@ impl CommandBlockContextProvider {
                 };
                 Ok(PreparedBlockCommand {
                     block_context,
-                    tx_source: Box::pin(l1_stream.chain(l2_stream)),
+                    tx_source: Box::pin(best_txs),
                     seal_policy: SealPolicy::Decide(
                         produce_command.block_time,
                         produce_command.max_transactions_in_block,
@@ -122,11 +120,15 @@ impl CommandBlockContextProvider {
                 block_context: record.block_context,
                 seal_policy: SealPolicy::UntilExhausted,
                 invalid_tx_policy: InvalidTxPolicy::Abort,
-                tx_source: Box::pin(futures::stream::iter(record.transactions)),
+                tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                 starting_l1_priority_id: record.starting_l1_priority_id,
                 metrics_label: "replay",
             }),
         }
+    }
+
+    pub fn remove_txs(&self, tx_hashes: Vec<TxHash>) {
+        self.l2_mempool.remove_transactions(tx_hashes);
     }
 
     pub fn on_canonical_state_change(

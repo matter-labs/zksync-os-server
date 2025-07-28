@@ -1,8 +1,10 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
-use crate::model::{BlockCommand, ReplayRecord};
+use crate::model::blocks::{BlockCommand, ReplayRecord};
 use alloy::eips::{Decodable2718, Encodable2718};
 use futures::stream::{self, BoxStream, StreamExt};
+use ruint::aliases::U256;
 use std::convert::TryInto;
+use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BatchContext;
 use zksync_os_types::ZkEnvelope;
 use zksync_storage::RocksDB;
@@ -54,8 +56,31 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub fn new(db: RocksDB<BlockReplayColumnFamily>) -> Self {
-        Self { db }
+    pub fn new(db: RocksDB<BlockReplayColumnFamily>, chain_id: u64) -> Self {
+        let this = Self { db };
+        if this.latest_block().is_none() {
+            tracing::info!(
+                "block replay DB is empty, assuming start of the chain; appending genesis"
+            );
+            this.append_replay_unchecked(ReplayRecord {
+                // todo: save real genesis here once we have genesis logic
+                block_context: BlockMetadataFromOracle {
+                    chain_id,
+                    block_number: 0,
+                    block_hashes: Default::default(),
+                    timestamp: 0,
+                    eip1559_basefee: U256::from(0),
+                    gas_per_pubdata: U256::from(0),
+                    native_price: U256::from(1),
+                    coinbase: Default::default(),
+                    gas_limit: 100_000_000,
+                    mix_hash: Default::default(),
+                },
+                starting_l1_priority_id: 0,
+                transactions: vec![],
+            })
+        }
+        this
     }
     /// Appends a replay command (context + raw transactions) to the WAL.
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
@@ -72,7 +97,11 @@ impl BlockReplayStorage {
             );
             return;
         }
+        self.append_replay_unchecked(record);
+        latency.observe();
+    }
 
+    fn append_replay_unchecked(&self, record: ReplayRecord) {
         // Prepare record
         let block_num = record.block_context.block_number.to_be_bytes();
         let context_value =
@@ -108,7 +137,6 @@ impl BlockReplayStorage {
         batch.put_cf(BlockReplayColumnFamily::Txs, &block_num, &txs_value);
 
         self.db.write(batch).expect("Failed to write to WAL");
-        latency.observe();
     }
 
     /// Returns the greatest block number that has been appended, or None if empty.

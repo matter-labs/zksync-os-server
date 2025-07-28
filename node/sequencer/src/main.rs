@@ -5,7 +5,8 @@ use tracing_subscriber::EnvFilter;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig,
+    BatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig,
 };
 use zksync_os_sequencer::run;
 use zksync_vlog::prometheus::PrometheusExporterConfig;
@@ -28,6 +29,7 @@ pub async fn main() {
         l1_sender_config,
         l1_watcher_config,
         batcher_config,
+        prover_input_generator_config,
         prover_api_config,
     ) = build_configs();
 
@@ -49,6 +51,7 @@ pub async fn main() {
             l1_sender_config,
             l1_watcher_config,
             batcher_config,
+            prover_input_generator_config,
             prover_api_config
         ) => {}
 
@@ -70,6 +73,7 @@ fn build_configs() -> (
     L1SenderConfig,
     L1WatcherConfig,
     BatcherConfig,
+    ProverInputGeneratorConfig,
     ProverApiConfig,
 ) {
     // todo: change with the idiomatic approach
@@ -92,6 +96,12 @@ fn build_configs() -> (
     schema
         .insert(&BatcherConfig::DESCRIPTION, "batcher")
         .expect("Failed to insert batcher config");
+    schema
+        .insert(
+            &ProverInputGeneratorConfig::DESCRIPTION,
+            "prover_input_generator",
+        )
+        .expect("Failed to insert prover_input_generator config");
     schema
         .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
         .expect("Failed to insert prover api config");
@@ -134,6 +144,12 @@ fn build_configs() -> (
         .parse()
         .expect("Failed to parse L1 watcher config");
 
+    let prover_input_generator_config = repo
+        .single::<ProverInputGeneratorConfig>()
+        .expect("Failed to load ProverInputGenerator config")
+        .parse()
+        .expect("Failed to parse ProverInputGenerator config");
+
     let prover_api_config = repo
         .single::<ProverApiConfig>()
         .expect("Failed to load prover api config")
@@ -146,6 +162,7 @@ fn build_configs() -> (
         l1_sender_config,
         l1_watcher_config,
         batcher_config,
+        prover_input_generator_config,
         prover_api_config,
     )
 }

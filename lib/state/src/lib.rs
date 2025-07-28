@@ -6,10 +6,15 @@ pub mod storage_map;
 mod storage_map_view;
 mod storage_metrics;
 
+use ruint::aliases::B160;
 use std::fs;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
+use zk_os_basic_system::system_implementation::flat_storage_model::{
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
+};
 use zk_os_forward_system::run::{
     LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
 };
@@ -77,15 +82,10 @@ impl StateHandle {
         }
     }
 
-    /// Returns (state_block_number, preimages_block_number)
-    ///
-    /// Hint: we can return `min` of these two values
-    /// for all intents and purposes - only returning both values for easier logging/context
-    pub fn latest_block_numbers(&self) -> (u64, u64) {
-        (
-            self.storage_map.latest_block.load(Ordering::Relaxed),
-            self.persistent_preimages.rocksdb_block_number(),
-        )
+    pub fn compacted_block_number(&self) -> u64 {
+        self.storage_map
+            .persistent_storage_map
+            .rocksdb_block_number()
     }
 
     pub fn state_view_at_block(&self, block_number: u64) -> anyhow::Result<StateView> {
@@ -163,5 +163,17 @@ impl ReadStorageTree for StateView {
 
     fn prev_tree_index(&mut self, _key: Bytes32) -> u64 {
         unreachable!("VM forward run should not invoke the tree")
+    }
+}
+
+impl StateView {
+    pub fn get_account(&mut self, address: B160) -> Option<AccountProperties> {
+        let key = derive_flat_storage_key(
+            &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
+            &address_into_special_storage_key(&address),
+        );
+        self.read(key).map(|hash| {
+            AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
+        })
     }
 }
