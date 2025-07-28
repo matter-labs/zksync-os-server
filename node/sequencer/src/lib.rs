@@ -33,7 +33,7 @@ use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::prover_input_generator::ProverInputGenerator;
+use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorBatchData};
 use crate::repositories::RepositoryManager;
 use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
@@ -242,7 +242,7 @@ pub async fn run(
 
     // Channel between `Batcher` and `ProverInputGenerator`
     let (batch_replay_data_sender, batch_replay_data_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<Vec<ReplayRecord>>>(10);
+        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInputGeneratorBatchData>>(10);
 
     // Channel between `ProverInputGenerator` and `ProverAPI`
     let (batch_for_proving_sender, batch_for_prover_receiver) =

@@ -1,7 +1,9 @@
 use crate::CHAIN_ID;
+use crate::batcher::batcher_rocks_db_storage::StoredBatchInfoWithTimestamp;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
 use crate::model::blocks::ReplayRecord;
+use crate::prover_input_generator::ProverInputGeneratorBatchData;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::future::ready;
 use std::path::PathBuf;
@@ -20,7 +22,7 @@ pub mod util;
 pub struct Batcher {
     // == state ==
     // holds info about the last processed batch (genesis if none)
-    prev_batch_info: StoredBatchInfo,
+    prev_batch_info: StoredBatchInfoWithTimestamp,
     // only used on startup. Skips all upstream blocks until this one.
     batcher_starting_block: u64,
 
@@ -31,7 +33,7 @@ pub struct Batcher {
     // inbound
     block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
     // outbound
-    batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+    batch_data_sender: Sender<BatchEnvelope<ProverInputGeneratorBatchData>>,
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 }
@@ -46,14 +48,17 @@ impl Batcher {
 
         // == plumbing ==
         block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-        batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+        batch_data_sender: Sender<BatchEnvelope<ProverInputGeneratorBatchData>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
         // todo: will not need storage in the future
         let storage = batcher_rocks_db_storage::BatcherRocksDBStorage::new(rocks_db_path);
 
         let prev_batch_info = if batcher_starting_block == 1 {
-            util::genesis_stored_batch_info()
+            StoredBatchInfoWithTimestamp {
+                info: util::genesis_stored_batch_info(),
+                last_block_timestamp: 0,
+            }
         } else {
             storage
                 .get(batcher_starting_block - 1)
@@ -68,7 +73,6 @@ impl Batcher {
             batcher_starting_block,
             storage,
             prev_batch_info,
-            // block_timestamps,
         }
     }
 
@@ -116,21 +120,28 @@ impl Batcher {
                     );
 
                     let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
+                    let stored_batch_info_with_timestamp = StoredBatchInfoWithTimestamp {
+                        info: stored_batch_info,
+                        last_block_timestamp: replay_record.block_context.timestamp,
+                    };
 
                     // Store batch info (todo: will not need storage in the future)
                     self.storage
-                        .set(commit_batch_info.batch_number, &stored_batch_info)?;
+                        .set(commit_batch_info.batch_number, &stored_batch_info_with_timestamp)?;
 
                     // Create batch
-                    let batch_envelope: BatchEnvelope<Vec<ReplayRecord>> = BatchEnvelope {
+                    let batch_envelope = BatchEnvelope {
                         batch: BatchMetadata {
-                            previous_stored_batch_info: prev_batch_info,
+                            previous_stored_batch_info: prev_batch_info.info,
                             commit_batch_info,
                             first_block_number: block_number,
                             last_block_number: block_number,
                             tx_count,
                         },
-                        data: vec![replay_record],
+                        data: ProverInputGeneratorBatchData {
+                            previous_block_timestamp: prev_batch_info.last_block_timestamp,
+                            replay_records: vec![replay_record]
+                        },
                         trace: Trace::default(),
                     };
 
@@ -155,7 +166,7 @@ impl Batcher {
                         .send(batch_envelope)
                         .await
                         .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
-                    Ok(stored_batch_info)
+                    Ok(stored_batch_info_with_timestamp)
                 },
             )
             .await

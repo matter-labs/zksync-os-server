@@ -1,3 +1,5 @@
+use jsonrpsee::core::Serialize;
+use serde::Deserialize;
 use std::path::PathBuf;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_storage::RocksDB;
@@ -19,6 +21,13 @@ impl NamedColumnFamily for BatcherColumnFamily {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredBatchInfoWithTimestamp {
+    pub info: StoredBatchInfo,
+    pub last_block_timestamp: u64,
+}
+
 pub struct BatcherRocksDBStorage {
     db: RocksDB<BatcherColumnFamily>,
 }
@@ -31,7 +40,8 @@ impl BatcherRocksDBStorage {
                 .with_sync_writes();
         Self { db }
     }
-    pub fn get(&self, batch_number: u64) -> anyhow::Result<Option<StoredBatchInfo>> {
+
+    pub fn get(&self, batch_number: u64) -> anyhow::Result<Option<StoredBatchInfoWithTimestamp>> {
         let key = batch_number.to_be_bytes();
         let data = self.db.get_cf(BatcherColumnFamily::StoredBatchInfo, &key)?;
         let Some(bytes) = data else { return Ok(None) };
@@ -43,7 +53,7 @@ impl BatcherRocksDBStorage {
     pub fn set(
         &self,
         batch_number: u64,
-        stored_batch_info: &StoredBatchInfo,
+        stored_batch_info: &StoredBatchInfoWithTimestamp,
     ) -> anyhow::Result<()> {
         let mut batch: WriteBatch<'_, BatcherColumnFamily> = self.db.new_write_batch();
         let key = batch_number.to_be_bytes();
