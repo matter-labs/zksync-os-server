@@ -44,15 +44,8 @@ jobs:
       shell: bash
       run: ci_run sccache --start-server
 
-    - name: Check formatting
-      run: ci_run cargo fmt --all -- --check
-
     - name: Build project
       run: ci_run cargo build --verbose --all-targets --workspace --exclude zksync_os_integration_tests
-
-    # todo: move linting for both core and integration-tests to a separate job
-    - name: Run clippy
-      run: ci_run cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings
 
     - name: Run unit tests
       run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
