@@ -65,13 +65,11 @@ impl GaplessCommitter {
         }
 
         tracing::info!(
-            range = format!(
-                "{}-{}",
-                ready[0].batch_number(),
-                ready.last().unwrap().batch_number()
-            ),
-            "Sending {} ordered batch proofs downstream",
-            ready.len()
+            buffer_size = self.buffer.len(),
+            "Sending {} (batches {}-{}) ordered batch proofs downstream",
+            ready.len(),
+            ready[0].batch_number(),
+            ready.last().unwrap().batch_number()
         );
         for mut batch in ready {
             batch.trace = batch.trace.with_stage("gapless_committer");

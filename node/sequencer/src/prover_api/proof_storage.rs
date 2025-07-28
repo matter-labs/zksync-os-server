@@ -40,11 +40,19 @@ impl ProofStorage {
     pub fn save_proof(&self, value: &BatchEnvelope<FriProof>) -> anyhow::Result<()> {
         let latest_batch_number = self.latest_stored_batch_number().unwrap_or(0);
         anyhow::ensure!(
-            value.batch_number() == latest_batch_number + 1,
+            value.batch_number() <= latest_batch_number + 1,
             "Attempted to store FRI proofs out of order: previous stored {}, got {}",
             latest_batch_number,
             value.batch_number(),
         );
+
+        if value.batch_number() < latest_batch_number + 1 {
+            tracing::warn!(
+                "Overriding FRI proof for batch {}. Latest stored batch is {}.",
+                value.batch_number(),
+                latest_batch_number,
+            )
+        }
 
         let key = value.batch_number().to_be_bytes();
         let mut batch: WriteBatch<'_, ProofColumnFamily> = self.db.new_write_batch();

@@ -136,7 +136,6 @@ impl Batcher {
                         trace: Trace::default(),
                     };
 
-
                     tracing::info!(
                         block_number_from = block_number,
                         block_number_to = block_number,

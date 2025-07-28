@@ -95,6 +95,13 @@ pub struct ProverApiConfig {
     #[config(default_t = Duration::from_secs(300))]
     pub job_timeout: Duration,
 
+    /// Max difference between the oldest and newest batch number being proven
+    /// If the difference is larger than this, provers will not be assigned new jobs.
+    /// We use max range instead of length limit to avoid having one old batch stuck -
+    /// otherwise GaplessCommitter's buffer would grow indefinitely.
+    #[config(default_t = 50)]
+    pub max_assigned_batch_range: usize,
+
     /// Prover API address to listen on.
     #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,
