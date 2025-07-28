@@ -18,6 +18,8 @@ zksync_os_sequencer.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_types.workspace = true
 
+zkos_prover = { git = "https://github.com/matter-labs/zksync-era.git", branch = "zksync-os-integration-di", optional = true }
+
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 fs2.workspace = true
@@ -27,7 +29,12 @@ tracing.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 backon.workspace = true
+futures.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 test-log.workspace = true
-futures.workspace = true
+
+[features]
+prover-tests = ["dep:zkos_prover"]
+gpu-prover-tests = ["prover-tests", "zkos_prover/gpu"]

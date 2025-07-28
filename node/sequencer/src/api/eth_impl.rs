@@ -28,6 +28,7 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
+use zk_os_api::helpers::{get_balance, get_code, get_nonce};
 use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::{RethPool, RethTransactionPool};
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -288,10 +289,12 @@ impl<R: ApiRepository> EthNamespace<R> {
             return Err(EthError::BlockNotFound(block_id));
         };
         Ok(self
-            .repository
-            .account_property_repository()
-            .get_at_block(block_number, &address)
-            .map(|props| props.balance)
+            .state_handle
+            .state_view_at_block(block_number)
+            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
+            .get_account(B160::from_be_bytes(address.into_array()))
+            .as_ref()
+            .map(get_balance)
             .unwrap_or(U256::ZERO))
     }
 
@@ -332,10 +335,12 @@ impl<R: ApiRepository> EthNamespace<R> {
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let nonce = self
-            .repository
-            .account_property_repository()
-            .get_at_block(block_number, &address)
-            .map(|props| props.nonce)
+            .state_handle
+            .state_view_at_block(block_number)
+            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
+            .get_account(B160::from_be_bytes(address.into_array()))
+            .as_ref()
+            .map(get_nonce)
             .unwrap_or(0);
         Ok(U256::from(nonce))
     }
@@ -348,22 +353,15 @@ impl<R: ApiRepository> EthNamespace<R> {
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
-        let Some(props) = self
-            .repository
-            .account_property_repository()
-            .get_at_block(block_number, &address)
-        else {
+        let mut view = self
+            .state_handle
+            .state_view_at_block(block_number)
+            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
+        let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
             return Ok(Bytes::default());
         };
-        let bytecode_hash = B256::from(props.bytecode_hash.as_u8_array());
-        // todo(#36): temporary logic, replace with zksync-os helper methods when they are available
-        let full_bytecode = self
-            .repository
-            .bytecode_repository()
-            .get_at_block(block_number, &bytecode_hash)
-            .unwrap_or_default();
-        let unpadded_bytecode = &full_bytecode[0..props.unpadded_code_len as usize];
-        Ok(Bytes::copy_from_slice(unpadded_bytecode))
+        let bytecode = get_code(&mut view, &props);
+        Ok(Bytes::copy_from_slice(&bytecode))
     }
 }
 
