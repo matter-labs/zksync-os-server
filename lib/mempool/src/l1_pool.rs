@@ -32,9 +32,8 @@ pub struct L1Mempool {
 }
 
 impl L1Mempool {
-    pub fn new(forced_transaction: L1Envelope) -> Self {
+    pub fn new() -> Self {
         let transactions = DashMap::new();
-        transactions.insert(forced_transaction.nonce(), forced_transaction);
         Self {
             transactions: Arc::new(transactions),
         }
@@ -47,11 +46,7 @@ impl L1Pool for L1Mempool {
     }
 
     fn add_transaction(&self, transaction: L1Envelope) {
-        // Do not overwrite forced transactions
-        // FIXME: get rid of forced transactions and this respectively
-        self.transactions
-            .entry(transaction.nonce())
-            .or_insert(transaction);
+        self.transactions.insert(transaction.nonce(), transaction);
     }
 
     fn get(&self, id: u64) -> Option<L1Envelope> {
