@@ -2,17 +2,12 @@ use alloy::primitives::Address;
 use smart_config::Serde;
 use smart_config::metadata::TimeUnit;
 use smart_config::{DescribeConfig, DeserializeConfig};
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// Configuration of L1 watcher.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct L1WatcherConfig {
-    /// Path to the root directory for RocksDB.
-    #[config(default_t = "./db/node1".into())]
-    pub rocks_db_path: PathBuf,
-
     /// L1's JSON RPC API.
     #[config(default_t = "ws://localhost:8545".into())]
     pub l1_api_url: String,
