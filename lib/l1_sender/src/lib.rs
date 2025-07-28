@@ -63,6 +63,8 @@ impl L1Sender {
             config.chain_id,
         );
         let last_committed_batch = bridgehub
+            .zk_chain()
+            .await?
             .get_total_batches_committed()
             .await?
             .saturating_to::<u64>();
