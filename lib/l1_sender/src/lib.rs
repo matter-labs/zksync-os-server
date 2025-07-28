@@ -39,7 +39,10 @@ impl L1Sender {
     ///
     /// Resulting [`L1Sender`] is expected to be consumed by calling [`Self::run`]. Additionally,
     /// returns a cloneable handle that can be used to send requests to this instance of [`L1Sender`].
-    pub async fn new(config: L1SenderConfig) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
+    pub async fn new(
+        config: L1SenderConfig,
+        chain_id: u64,
+    ) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
         anyhow::ensure!(config.command_limit > 0, "command limit must be positive");
         let operator_wallet = EthereumWallet::from(
             PrivateKeySigner::from_str(config.operator_private_key.expose_secret())
@@ -54,15 +57,23 @@ impl L1Sender {
         );
         tracing::info!(
             bridgehub_address = ?config.bridgehub_address,
-            chain_id = config.chain_id,
+            chain_id,
             "initializing L1 sender"
         );
         let bridgehub = Bridgehub::new(
             config.bridgehub_address.0.into(),
             provider.clone(),
-            config.chain_id,
+            chain_id,
+        );
+        let all_chaid_ids = bridgehub.get_all_zk_chain_chain_ids().await?;
+        anyhow::ensure!(
+            all_chaid_ids.contains(&U256::from(chain_id)),
+            "chain ID {} is not registered on L1",
+            chain_id
         );
         let last_committed_batch = bridgehub
+            .zk_chain()
+            .await?
             .get_total_batches_committed()
             .await?
             .saturating_to::<u64>();
@@ -72,7 +83,7 @@ impl L1Sender {
         let (command_sender, command_receiver) = mpsc::channel(50);
         let this = Self {
             provider,
-            chain_id: config.chain_id,
+            chain_id,
             validator_timelock_address,
             max_fee_per_gas: config.max_fee_per_gas(),
             max_priority_fee_per_gas: config.max_priority_fee_per_gas(),

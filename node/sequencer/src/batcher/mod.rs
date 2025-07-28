@@ -1,4 +1,3 @@
-use crate::CHAIN_ID;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
 use crate::model::blocks::ReplayRecord;
@@ -23,6 +22,8 @@ pub struct Batcher {
     prev_batch_info: StoredBatchInfo,
     // only used on startup. Skips all upstream blocks until this one.
     batcher_starting_block: u64,
+    // L2 chain id
+    chain_id: u64,
 
     // == persistence (todo: get rid of it - see zksync-os-server/README.md for details) - only used to recover initial `prev_batch_info` ==
     storage: batcher_rocks_db_storage::BatcherRocksDBStorage,
@@ -40,6 +41,7 @@ impl Batcher {
     pub fn new(
         // == initial state ==
         batcher_starting_block: u64,
+        chain_id: u64,
 
         // == config ==
         rocks_db_path: PathBuf,
@@ -68,6 +70,7 @@ impl Batcher {
             batcher_starting_block,
             storage,
             prev_batch_info,
+            chain_id,
         }
     }
 
@@ -111,7 +114,7 @@ impl Batcher {
                         &replay_record.block_context,
                         &replay_record.transactions,
                         tree_output,
-                        CHAIN_ID,
+                        self.chain_id,
                     );
 
                     let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
