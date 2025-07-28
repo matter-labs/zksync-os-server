@@ -3,7 +3,7 @@ use alloy::primitives::{Address, B256, Log, LogData, Sealed, TxHash, TxNonce};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;
-use zk_os_forward_system::run::{BatchOutput, ExecutionResult};
+use zk_os_forward_system::run::{BlockOutput, ExecutionResult};
 use zksync_os_types::{ZkTransaction, ZkTxType};
 
 #[derive(Debug, Clone, Copy, RlpEncodable, RlpDecodable)]
@@ -119,7 +119,7 @@ impl Default for TransactionReceiptRepository {
 }
 
 pub fn transaction_to_api_data(
-    block_output: &Sealed<BatchOutput>,
+    block_output: &Sealed<BlockOutput>,
     index: usize,
     number_of_logs_before_this_tx: u64,
     tx: ZkTransaction,

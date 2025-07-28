@@ -4,7 +4,7 @@ use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{BatchContext, BatchOutput};
+use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
@@ -98,8 +98,8 @@ pub struct CommitBatchInfo {
 
 impl CommitBatchInfo {
     pub fn new(
-        batch_output: BatchOutput,
-        batch_context: &BatchContext,
+        block_output: BlockOutput,
+        block_context: &BlockContext,
         transactions: &[ZkTransaction],
         tree_output: zksync_os_merkle_tree::TreeBatchOutput,
         chain_id: u64,
@@ -120,10 +120,10 @@ impl CommitBatchInfo {
 
         let last_256_block_hashes_blake = {
             let mut blocks_hasher = Blake2s256::new();
-            for block_hash in &batch_context.block_hashes.0[1..] {
+            for block_hash in &block_context.block_hashes.0[1..] {
                 blocks_hasher.update(block_hash.to_be_bytes::<32>());
             }
-            blocks_hasher.update(batch_output.header.hash());
+            blocks_hasher.update(block_output.header.hash());
 
             blocks_hasher.finalize()
         };
@@ -131,9 +131,9 @@ impl CommitBatchInfo {
         let mut hasher = Blake2s256::new();
         hasher.update(tree_output.root_hash.as_slice());
         hasher.update(tree_output.leaf_count.to_be_bytes());
-        hasher.update(batch_output.header.number.to_be_bytes());
+        hasher.update(block_output.header.number.to_be_bytes());
         hasher.update(last_256_block_hashes_blake);
-        hasher.update(batch_output.header.timestamp.to_be_bytes());
+        hasher.update(block_output.header.timestamp.to_be_bytes());
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
         let mut operator_da_input: Vec<u8> = vec![];
@@ -147,7 +147,7 @@ impl CommitBatchInfo {
         // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
         // Ok(hasher.finalize().into())
         operator_da_input.extend(B256::ZERO.as_slice());
-        operator_da_input.extend(keccak256(&batch_output.pubdata));
+        operator_da_input.extend(keccak256(&block_output.pubdata));
         operator_da_input.push(1);
         operator_da_input.extend(B256::ZERO.as_slice());
 
@@ -155,12 +155,12 @@ impl CommitBatchInfo {
         let operator_da_input_header_hash = keccak256(&operator_da_input);
 
         operator_da_input.extend([PUBDATA_SOURCE_CALLDATA]);
-        operator_da_input.extend(&batch_output.pubdata);
+        operator_da_input.extend(&block_output.pubdata);
         // blob_commitment should be set to zero in ZK OS
         operator_da_input.extend(B256::ZERO.as_slice());
 
         let mut encoded_l2_l1_logs = Vec::new();
-        for tx_output in batch_output.tx_results.into_iter().flatten() {
+        for tx_output in block_output.tx_results.into_iter().flatten() {
             encoded_l2_l1_logs.extend(
                 tx_output
                     .l2_to_l1_logs
@@ -176,7 +176,7 @@ impl CommitBatchInfo {
         let l2_to_l1_logs_root_hash = keccak256([l2_l1_local_root.0, [0u8; 32]].concat());
 
         Self {
-            batch_number: batch_output.header.number,
+            batch_number: block_output.header.number,
             new_state_commitment,
             number_of_layer1_txs,
             priority_operations_hash,
@@ -184,8 +184,8 @@ impl CommitBatchInfo {
             // TODO: Update once enforced, not sure where to source it from yet
             l2_da_validator: Default::default(),
             da_commitment: operator_da_input_header_hash,
-            first_block_timestamp: batch_output.header.timestamp,
-            last_block_timestamp: batch_output.header.timestamp,
+            first_block_timestamp: block_output.header.timestamp,
+            last_block_timestamp: block_output.header.timestamp,
             chain_id,
             operator_da_input,
         }

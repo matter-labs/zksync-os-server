@@ -28,7 +28,7 @@ use std::ops::Div;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_types::ZkTransaction;
 use zksync_storage::RocksDB;
 
@@ -76,7 +76,7 @@ impl RepositoryManager {
     /// Blocks until the database has enough blocks persisted to allow in-memory population.
     pub async fn populate_in_memory_blocking(
         &self,
-        block_output: BatchOutput,
+        block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
     ) {
         let should_be_persisted_up_to = self
@@ -92,16 +92,16 @@ impl RepositoryManager {
 
     /// Adds a block's output to all relevant repositories.
     ///
-    /// This method processes a `BatchOutput` and distributes its contents across the appropriate
+    /// This method processes a `BlockOutput` and distributes its contents across the appropriate
     /// repositories:
     /// - Extracts account properties and stores them in `AccountPropertyRepository`.
-    /// - Stores the full `BatchOutput` in `BlockReceiptRepository`.
+    /// - Stores the full `BlockOutput` in `BlockReceiptRepository`.
     /// - Generates transaction receipts and stores them in `TransactionReceiptRepository`.
     ///
     /// Notes:
     /// - No atomicity or ordering guarantees are provided for repository updates.
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
-    fn populate_in_memory(&self, mut block_output: BatchOutput, transactions: Vec<ZkTransaction>) {
+    fn populate_in_memory(&self, mut block_output: BlockOutput, transactions: Vec<ZkTransaction>) {
         let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
         let tx_count = transactions.len();

@@ -3,7 +3,7 @@ use alloy::primitives::{Address, B64, B256, BlockHash, BlockNumber, Bloom, Seale
 use dashmap::DashMap;
 use std::sync::Arc;
 
-/// In-memory repository of the most recent N `BatchOutput`s, keyed by block number.
+/// In-memory repository of the most recent N `BlockOutput`s, keyed by block number.
 ///
 /// Inserts must happen in strictly ascending order.
 ///
@@ -21,7 +21,7 @@ impl BlockReceiptRepository {
         BlockReceiptRepository::default()
     }
 
-    /// Insert the `BatchOutput` for `block`.
+    /// Insert the `BlockOutput` for `block`.
     ///
     /// Must be called with `block == latest_block() + 1`.
     pub fn insert(

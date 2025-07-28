@@ -48,7 +48,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio::time::Instant;
-use zk_os_forward_system::run::{BatchOutput as BlockOutput, BatchOutput};
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
@@ -241,10 +241,10 @@ pub async fn run(
 
     // Channel between `BlockExecutor` and `Batcher`
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
-        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(10);
+        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
 
     // Channel between `BlockExecutor` and `TreeManager`
-    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(10);
+    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BlockOutput>(10);
 
     // Channel between `Batcher` and `ProverInputGenerator`
     let (batch_replay_data_sender, batch_replay_data_receiver) =

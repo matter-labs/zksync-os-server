@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 
@@ -32,7 +32,7 @@ pub struct Batcher {
 
     // == plumbing ==
     // inbound
-    block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+    block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
     // outbound
     batch_data_sender: Sender<BatchEnvelope<ProverInputGeneratorBatchData>>,
     // dependencies
@@ -49,7 +49,7 @@ impl Batcher {
         rocks_db_path: PathBuf,
 
         // == plumbing ==
-        block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+        block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
         batch_data_sender: Sender<BatchEnvelope<ProverInputGeneratorBatchData>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
