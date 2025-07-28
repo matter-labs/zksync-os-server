@@ -46,6 +46,7 @@ alloy::sol! {
         function getZKChain(uint256 _chainId) external view returns (address);
         function chainTypeManager(uint256 _chainId) external view returns (address);
         function sharedBridge() public view returns (address);
+        function getAllZKChainChainIDs() external view returns (uint256[] memory);
 
         struct L2TransactionRequestDirect {
             uint256 chainId;
@@ -211,6 +212,10 @@ impl<P: Provider + Clone> Bridgehub<P> {
             zk_chain_address,
             self.instance.provider().clone(),
         ))
+    }
+
+    pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
+        self.instance.getAllZKChainChainIDs().call().await
     }
 }
 
