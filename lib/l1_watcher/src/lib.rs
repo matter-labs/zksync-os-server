@@ -48,6 +48,10 @@ impl L1Watcher {
         );
         let zk_chain = bridgehub.zk_chain().await?;
         let zk_chain_address = *zk_chain.address();
+        // The first priority transaction to be retrieved here is the earliest one that wasn't
+        // `executed` on-chain yet. The main sequencer stream starts earlier than that, but we will
+        // not have `Produce` commands before this number. We don't validate priority transactions
+        // yet, so it's fine
         let next_l1_block = find_first_unprocessed_l1_block(zk_chain).await?;
         tracing::info!(?zk_chain_address, next_l1_block, "resolved on L1");
 
