@@ -10107,6 +10107,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_rpc"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "async-trait",
+ "jsonrpsee",
+ "zksync_os_rpc_api",
+]
+
+[[package]]
 name = "zksync_os_rpc_api"
 version = "0.1.0"
 dependencies = [
@@ -10177,6 +10187,7 @@ dependencies = [
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
+ "zksync_os_rpc",
  "zksync_os_rpc_api",
  "zksync_os_state",
  "zksync_os_types",
