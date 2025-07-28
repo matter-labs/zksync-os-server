@@ -53,7 +53,6 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_state::{StateConfig, StateHandle};
-use zksync_os_types::forced_deposit_transaction;
 use zksync_storage::RocksDB;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -80,6 +79,10 @@ pub async fn run_sequencer_actor(
         sequencer_config.block_time,
         sequencer_config.max_transactions_in_block,
     );
+
+    // fixme(#49): wait for l1-watcher to propagate all L1 transactions present by default
+    //             delete this when we start streaming them
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     while let Some(cmd) = stream.next().await {
         // todo: also report full latency between command invocations
@@ -293,7 +296,6 @@ pub async fn run(
             state_handle.clone(),
             genesis_config.chain_id,
         ),
-        forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
 
