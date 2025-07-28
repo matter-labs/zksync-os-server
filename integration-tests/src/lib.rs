@@ -11,7 +11,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
-use zksync_os_sequencer::config::{MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig};
+use zksync_os_sequencer::config::{
+    FakeProversConfig, MempoolConfig, ProverApiConfig, RpcConfig, SequencerConfig,
+};
 
 pub mod assert_traits;
 pub mod contracts;
@@ -88,6 +90,10 @@ impl Tester {
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
+            fake_provers: FakeProversConfig {
+                enabled: true,
+                ..Default::default()
+            },
             address: format!("0.0.0.0:{}", prover_api_locked_port.port),
             ..Default::default()
         };

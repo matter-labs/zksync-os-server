@@ -1,3 +1,4 @@
+pub mod fake_provers_pool;
 pub mod gapless_committer;
 mod metrics;
 pub mod proof_storage;
