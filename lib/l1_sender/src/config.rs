@@ -12,10 +12,6 @@ pub struct L1SenderConfig {
     #[config(default_t = "ws://localhost:8545".into())]
     pub l1_api_url: String,
 
-    /// L2 chain ID to operate on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
-
     /// Private key of the L2 chain's operator address.
     // TODO: Pre-configured value, to be removed (pk for 0x5927c313861c01b82a026e35d93cc787e5356c0f)
     #[config(default_t = "0xc9ee945b2f6d4c462a743f5af3904a4ee78aec0218f1f4f3c53d0bfbf809b520".into())]
