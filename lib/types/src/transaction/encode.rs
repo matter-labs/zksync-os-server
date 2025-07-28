@@ -173,6 +173,20 @@ impl From<L2Transaction> for TransactionData {
             U256::ZERO
         };
 
+        let encoded_access_list = l2_tx
+            .access_list()
+            .map(|access_list| {
+                let access_list = access_list
+                    .clone()
+                    .0
+                    .into_iter()
+                    .map(|item| (item.address, item.storage_keys))
+                    .collect::<Vec<_>>();
+                // Single element list to be able to extend reserved_dynamic
+                vec![access_list].abi_encode()
+            })
+            .unwrap_or_default();
+
         TransactionData {
             tx_type: U256::from(l2_tx.tx_type() as u8),
             from,
@@ -198,7 +212,7 @@ impl From<L2Transaction> for TransactionData {
             signature: l2_tx.signature().as_bytes().to_vec(),
             factory_deps: vec![],
             paymaster_input: vec![],
-            reserved_dynamic: vec![],
+            reserved_dynamic: encoded_access_list,
         }
     }
 }
