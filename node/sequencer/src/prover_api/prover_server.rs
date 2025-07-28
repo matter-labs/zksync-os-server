@@ -11,6 +11,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -49,7 +50,9 @@ struct AppState {
 // ───────────── HTTP handlers ─────────────
 
 async fn pick_fri_job(State(state): State<AppState>) -> Response {
-    match state.job_manager.pick_next_job() {
+    // for real provers, we return the next job immediately -
+    // see `FakeProversPool` for fake provers implementation
+    match state.job_manager.pick_next_job(Duration::from_secs(0)) {
         Some((block, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(NextProverJobPayload {
@@ -116,12 +119,12 @@ async fn status(State(state): State<AppState>) -> Response {
     Json(status).into_response()
 }
 pub async fn run(
-    job_manager: ProverJobManager,
+    job_manager: Arc<ProverJobManager>,
     proof_storage: ProofStorage,
     bind_address: String,
 ) -> anyhow::Result<()> {
     let app_state = AppState {
-        job_manager: Arc::new(job_manager),
+        job_manager,
         proof_storage,
     };
 

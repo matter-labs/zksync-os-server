@@ -14,6 +14,7 @@ mod prover_input_generator;
 pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
+mod util;
 
 use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
@@ -27,6 +28,7 @@ use crate::execution::{
 };
 use crate::metrics::GENERAL_METRICS;
 use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
+use crate::prover_api::fake_provers_pool::FakeProversPool;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
@@ -41,6 +43,7 @@ use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand, ReplayRecord};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
@@ -437,11 +440,11 @@ pub async fn run(
 
     // ======= Initialize Prover Api Server========
 
-    let fri_prover_job_manager = ProverJobManager::new(
+    let fri_prover_job_manager = Arc::new(ProverJobManager::new(
         batch_for_prover_receiver,
         batch_with_proof_sender,
         prover_api_config.job_timeout,
-    );
+    ));
 
     let prover_gapless_committer = GaplessCommitter::new(
         last_committed_batch_number + 1,
@@ -451,10 +454,37 @@ pub async fn run(
     );
 
     let prover_server_task = Box::pin(prover_server::run(
-        fri_prover_job_manager,
+        fri_prover_job_manager.clone(),
         proof_storage,
         prover_api_config.address,
     ));
+
+    let fake_provers_task_optional: BoxFuture<anyhow::Result<()>> =
+        if prover_api_config.fake_provers.enabled {
+            tracing::info!(
+                workers = prover_api_config.fake_provers.workers,
+                compute_time = ?prover_api_config.fake_provers.compute_time,
+                min_task_age = ?prover_api_config.fake_provers.min_age,
+                "Initializing FakeProversPool"
+            );
+            let fake_provers_pool = FakeProversPool::new(
+                fri_prover_job_manager.clone(),
+                prover_api_config.fake_provers.workers,
+                prover_api_config.fake_provers.compute_time,
+                prover_api_config.fake_provers.min_age,
+            );
+            Box::pin(fake_provers_pool.run())
+        } else {
+            // noop task
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        };
 
     // ======= Run tasks ===========
 
@@ -529,6 +559,13 @@ pub async fn run(
             match res {
                 Ok(_)  => tracing::warn!("prover_gapless_committer task exited"),
                 Err(e) => tracing::error!("prover_gapless_committer task failed: {e:#}"),
+            }
+        }
+
+        res = fake_provers_task_optional => {
+            match res {
+                Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
+                Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
             }
         }
 

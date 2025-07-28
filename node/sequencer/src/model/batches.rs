@@ -57,6 +57,12 @@ impl Trace {
         self.stages.push((stage, Instant::now()));
         self
     }
+    pub fn last_stage_age(&self) -> std::time::Duration {
+        self.stages
+            .last()
+            .map(|(_, instant)| instant.elapsed())
+            .unwrap_or(self.start_instant.elapsed())
+    }
 }
 impl Default for Trace {
     fn default() -> Self {
