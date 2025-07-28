@@ -127,3 +127,50 @@ Process finished with exit code 0
 
 ```
 Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--load-state zkos-l1-state.json`  (`--load-state` - not `--state`, otherwise it will be overwritten). Commit the new file in git.
+In the future, these things will be available in production-grade component.
+
+
+## Running multiple chains
+
+
+### Create a new chain (era2)
+
+```shell
+zkstack ecosystem create --ecosystem-name local-v1 --l1-network localhost --chain-name era2 --chain-id 271 --prover-mode no-proofs --wallet-creation random --link-to-code ../../zksync-era --l1-batch-commit-data-generator-mode rollup --start-containers false   --base-token-address 0x0000000000000000000000000000000000000001 --base-token-price-nominator 1 --base-token-price-denominator 1 --evm-emulator false
+```
+
+Make sure to fund the accounts again (see the script in the docs above).
+
+
+Init new chain (deploying contacts etc):
+
+```shell
+zkstack ecosystem init --deploy-paymaster=false --deploy-erc20=false --observability=false \
+  --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --chain era2 \
+  --server-db-url=postgres://invalid --server-db-name=invalid
+```
+
+And start the sequencer -- make sure that all the config values are set correctly:
+
+* rpc_chain_id
+* rpc_address
+* rpc_prometheus_port
+* sequencer_rocks_db_path
+* prover_api_address
+* l1_watcher_rocks_db_path
+* l1_watcher_chain_id
+* l1_sender_chain_id
+
+
+
+
+```shell
+l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 rpc_prometheus_port=3313 l1_sender_operator_private_key=0xf32ac37325f0b1249b9bfd3c25c91309ec89f524225534db6194c7cc75ab9b51 l1_sender_bridgehub_address=0xbfb1f781d4c7123213050b1870cc9e3f2b0f2e1b  l1_watcher_bridgehub_address=0xbfb1f781d4c7123213050b1870cc9e3f2b0f2e1b cargo run --release
+
+```
+
+Stuff that didn't work:
+* prometheus port not part of the config
+* invalid chain_id (hardcoded!!) 
+* nit: multiple thing has to be defined in many configs
+* typos in config names 
