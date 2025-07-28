@@ -231,6 +231,10 @@ pub async fn run(
     prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
 ) {
+    // todo: decide on an approach to configuration to stop having to set up the same parameters in
+    //       multiple places
+    let bridgehub_address = l1_watcher_config.bridgehub_address;
+
     // ======= Boilerplate - Initialize async channels  ===========
 
     // Channel between `BlockExecutor` and `Batcher`
@@ -509,6 +513,7 @@ pub async fn run(
         // todo: only start after the sequencer caught up?
         res = run_jsonrpsee_server(
             rpc_config,
+            bridgehub_address,
             repositories.clone(),
             state_handle.clone(),
             l2_mempool,

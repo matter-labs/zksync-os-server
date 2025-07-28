@@ -15,18 +15,22 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
+use alloy::primitives::Address;
 use anyhow::Context;
 use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use zksync_os_mempool::RethPool;
+use zksync_os_rpc::zks_impl::ZksNamespace;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
+use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_state::StateHandle;
 
 // stripped-down version of `api_server/src/web3/mod.rs`
 pub async fn run_jsonrpsee_server(
     config: RpcConfig,
+    bridgehub_address: Address,
 
     repository_manager: RepositoryManager,
     state_handle: StateHandle,
@@ -51,6 +55,7 @@ pub async fn run_jsonrpsee_server(
             .into_rpc(),
     )?;
     rpc.merge(EthPubsubNamespace::new(repository_manager, mempool).into_rpc())?;
+    rpc.merge(ZksNamespace::new(bridgehub_address).into_rpc())?;
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
