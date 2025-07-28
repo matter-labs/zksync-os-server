@@ -2,6 +2,7 @@ use crate::api::eth_impl::build_api_log;
 use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::notifications::SubscribeToBlocks;
 use crate::reth_state::ZkClient;
+use alloy::consensus::Sealed;
 use alloy::consensus::transaction::TransactionInfo;
 use alloy::primitives::TxHash;
 use alloy::rpc::types::pubsub::{Params, SubscriptionKind};
@@ -35,7 +36,14 @@ impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
     /// Returns a stream that yields all new RPC blocks.
     fn new_headers_stream(&self) -> impl Stream<Item = alloy::rpc::types::Header> + use<R> {
         self.repository.block_stream().map(|notification| {
-            alloy::rpc::types::Header::from_consensus((*notification.header).clone(), None, None)
+            alloy::rpc::types::Header::from_consensus(
+                Sealed::new_unchecked(
+                    notification.block.as_ref().header.clone(),
+                    notification.block.hash(),
+                ),
+                None,
+                None,
+            )
         })
     }
 
@@ -45,11 +53,11 @@ impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
             .block_stream()
             .flat_map(move |notification| {
                 let mut logs = Vec::new();
-                for stored_tx in notification.transactions.iter() {
+                for (tx_hash, stored_tx) in notification.transactions.iter() {
                     for (i, log) in stored_tx.receipt.logs().iter().enumerate() {
                         if filter.matches(log) {
                             logs.push(build_api_log(
-                                *stored_tx.tx.hash(),
+                                *tx_hash,
                                 log.clone(),
                                 stored_tx.meta,
                                 i as u64,
