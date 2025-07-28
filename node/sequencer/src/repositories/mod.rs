@@ -95,7 +95,9 @@ impl RepositoryManager {
     pub async fn run_persist_loop(&self) {
         loop {
             let db_block_number = self.db.get_latest_block();
-            self.in_memory.wait_for_block_number(db_block_number).await;
+            self.in_memory
+                .wait_for_block_number(db_block_number + 1)
+                .await;
 
             let number = db_block_number + 1;
             let (block, txs) = self
