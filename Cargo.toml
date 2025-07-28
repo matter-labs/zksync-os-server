@@ -47,10 +47,6 @@ zk_os_forward_system = { package = "forward_system", git = "https://github.com/m
 zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "ad-update-state-commitment"}
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "ad-update-state-commitment"}
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", branch = "ad-update-state-commitment"}
-#zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "v0.0.5-zksync-os-server", features = ["evm-compatibility", "unlimited_native", "no_print"] }
-#zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "v0.0.5-zksync-os-server"}
-#zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "v0.0.5-zksync-os-server"}
-#zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", branch = "v0.0.5-zksync-os-server"}
 
 #air-compiler-cli = { package = "cli", path = "../zksync-airbender/tools/cli" }
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
