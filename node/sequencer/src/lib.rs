@@ -455,6 +455,7 @@ pub async fn run(
         batch_for_prover_receiver,
         batch_with_proof_sender,
         prover_api_config.job_timeout,
+        prover_api_config.max_assigned_batch_range,
     ));
 
     let prover_gapless_committer = GaplessCommitter::new(
