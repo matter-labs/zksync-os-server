@@ -10,7 +10,7 @@ use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
-use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
 
 #[test_log::test(tokio::test)]
 async fn basic_transfers() -> anyhow::Result<()> {
@@ -20,26 +20,18 @@ async fn basic_transfers() -> anyhow::Result<()> {
     let alice_balance_before = tester.l2_provider.get_balance(alice).await?;
 
     let deposit_amount = U256::from(100);
-    let mut receipt_futures = vec![];
+    let mut pending_txs = vec![];
     let start = Instant::now();
     for _ in 0..100 {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
             .with_value(deposit_amount);
-        let receipt_future = tester
-            .l2_provider
-            .send_transaction(tx)
-            .await?
-            .expect_successful_receipt();
-        receipt_futures.push(receipt_future);
+        pending_txs.push(tester.l2_provider.send_transaction(tx).await?);
     }
     tracing::info!(elapsed = ?start.elapsed(), "submitted all tx requests");
 
     let start = Instant::now();
-    let receipts = futures::future::join_all(receipt_futures)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
+    let receipts = pending_txs.expect_successful_receipts().await?;
     tracing::info!(elapsed = ?start.elapsed(), "resolved all tx receipts");
 
     let start = Instant::now();
