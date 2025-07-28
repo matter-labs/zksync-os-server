@@ -28,7 +28,11 @@ pub struct L1Watcher {
 }
 
 impl L1Watcher {
-    pub async fn new(config: L1WatcherConfig, l1_pool: DynL1Pool, chain_id: u64) -> anyhow::Result<Self> {
+    pub async fn new(
+        config: L1WatcherConfig,
+        l1_pool: DynL1Pool,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
         let storage = L1WatcherRocksdbStorage::new(config.rocks_db_path);
 
         let provider = DynProvider::new(

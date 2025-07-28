@@ -39,7 +39,10 @@ impl L1Sender {
     ///
     /// Resulting [`L1Sender`] is expected to be consumed by calling [`Self::run`]. Additionally,
     /// returns a cloneable handle that can be used to send requests to this instance of [`L1Sender`].
-    pub async fn new(config: L1SenderConfig, chain_id: u64) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
+    pub async fn new(
+        config: L1SenderConfig,
+        chain_id: u64,
+    ) -> anyhow::Result<(Self, L1SenderHandle, u64)> {
         anyhow::ensure!(config.command_limit > 0, "command limit must be positive");
         let operator_wallet = EthereumWallet::from(
             PrivateKeySigner::from_str(config.operator_private_key.expose_secret())

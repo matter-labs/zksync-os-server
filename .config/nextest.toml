@@ -9,3 +9,9 @@ global-timeout = "1h"
 fail-fast = false
 # Adds retries (at least one success is required to mark test as successful). Uncomment if integrtaion tests become flaky.
 #retries = { backoff = "fixed", count = 2, delay = "1s" }
+
+[[profile.default.overrides]]
+# Tests in `prover.rs` rely on prover (CPU or GPU). CPU prover can take >10m to prove one batch, so we give these tests
+# a longer timeout.
+filter = 'binary(prover)'
+slow-timeout = { period = "15m", terminate-after = 3 }
