@@ -28,7 +28,7 @@ pub struct L1Watcher {
 }
 
 impl L1Watcher {
-    pub async fn new(config: L1WatcherConfig, l1_pool: DynL1Pool) -> anyhow::Result<Self> {
+    pub async fn new(config: L1WatcherConfig, l1_pool: DynL1Pool, chain_id: u64) -> anyhow::Result<Self> {
         let storage = L1WatcherRocksdbStorage::new(config.rocks_db_path);
 
         let provider = DynProvider::new(
@@ -38,7 +38,7 @@ impl L1Watcher {
                 .context("failed to connect to L1 api")?,
         );
         tracing::info!(
-            config.chain_id,
+            chain_id,
             config.max_blocks_to_process,
             ?config.poll_interval,
             ?config.bridgehub_address,
@@ -48,7 +48,7 @@ impl L1Watcher {
         let bridgehub = Bridgehub::new(
             config.bridgehub_address.0.into(),
             provider.clone(),
-            config.chain_id,
+            chain_id,
         );
         let zk_chain_address = bridgehub.zk_chain_address().await?;
         tracing::info!(?zk_chain_address, "resolved on L1");

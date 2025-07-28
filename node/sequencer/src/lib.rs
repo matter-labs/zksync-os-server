@@ -318,7 +318,7 @@ pub async fn run(
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
     tracing::info!("Initializing L1Watcher");
-    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone()).await;
+    let l1_watcher = L1Watcher::new(l1_watcher_config, l1_mempool.clone(), genesis_config.chain_id).await;
     let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -411,7 +411,7 @@ pub async fn run(
         L1Sender,
         L1SenderHandle,
         u64,
-    ) = L1Sender::new(l1_sender_config).await.expect(
+    ) = L1Sender::new(l1_sender_config, genesis_config.chain_id).await.expect(
         "Failed to initialize L1Sender. Consider disabling batcher subsystem via configuration.",
     );
 

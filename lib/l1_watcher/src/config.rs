@@ -17,10 +17,6 @@ pub struct L1WatcherConfig {
     #[config(default_t = "ws://localhost:8545".into())]
     pub l1_api_url: String,
 
-    /// L2 chain ID to monitor priority requests for.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
-
     /// Max number of L1 blocks to be processed at a time.
     #[config(default_t = 100)]
     pub max_blocks_to_process: u64,
