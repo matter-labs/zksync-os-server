@@ -2,31 +2,23 @@
 //!
 //! * Incoming jobs are received through an async channel (see
 //!   [`ProverJobManager::listen_for_batch_jobs`]).
-//! * Provers request work via [`pick_next_job`], which always returns the
-//!   smallest batch number that is **pending** or has **timed‑out**.
-//! * When a proof is submitted and verified, the job is removed so the map
-//!   cannot grow unbounded.
-//!
+//! * Job is only consumed from the channel once there is a prover available.
+//! * Assigned jobs are added to `ProverJobMap` immediately.
+//! * Provers request work via [`pick_next_job`]:
+//!     * If there is an already assigned job that has timed out, it is reassigned.
+//!     * Otherwise, the next job from channel is assigned and inserted into `ProverJobMap`.
+//! * When a proof is submitted and verified:
+//!     * It is stored in persistent storage as `BatchEnvelope<FriProof>` (FRI cache).
+//!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
 
-use std::time::{Duration, Instant};
-
-use crate::model::BatchForProving;
+use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
 use crate::prover_api::metrics::PROVER_METRICS;
-use crate::prover_api::proof_storage::ProofStorage;
-use air_compiler_cli::prover_utils::{
-    generate_oracle_data_from_metadata_and_proof_list, proof_list_and_metadata_from_program_proof,
-};
-use alloy::primitives::B256;
-use dashmap::DashMap;
-use execution_utils::ProgramProof;
-use itertools::Itertools;
+use crate::prover_api::proof_verifier;
+use crate::prover_api::prover_job_map::ProverJobMap;
 use serde::Serialize;
-use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::mpsc::Receiver;
-use zk_os_basic_system::system_implementation::system::BatchPublicInput;
-use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
-// ───────────── Error types ─────────────
+use tokio::sync::{Mutex, mpsc};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -40,282 +32,148 @@ pub enum SubmitError {
     Other(String),
 }
 
-// ───────────── Internal state ─────────────
-
-#[derive(Debug, Clone)]
-struct JobEntry {
-    prover_input: Vec<u32>,
-    previous_state_commitment: B256,
-    commit_batch_info: CommitBatchInfo,
-    status: JobStatus,
-}
-
-#[derive(Debug, Clone)]
-enum JobStatus {
-    Pending,
-    Assigned { assigned_at: Instant },
-}
-
-/// Public view of one job’s state.
 #[derive(Debug, Serialize)]
 pub struct JobState {
     pub batch_number: u64,
-    pub status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prover_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assigned_seconds_ago: Option<u32>,
+    pub assigned_seconds_ago: u64,
 }
-// ───────────── Public API ─────────────
 
+/// Thread-safe queue for FRI prover work.
+///
+/// Internals use a `DashMap` through `ProverJobMap`, so this type is `Send + Sync`
+/// and can be shared behind an `Arc<ProverJobManager>` for concurrent API handlers.
+#[derive(Debug)]
 pub struct ProverJobManager {
-    jobs: DashMap<u64, JobEntry>,
-    proof_storage: ProofStorage,
-    assignment_timeout: Duration,
-    // applies backpressure when `jobs` reaches this number
-    max_jobs_count: usize,
-    /// Ensures that only one thread performs the *scan* -> *assign* sequence at a
-    /// time, avoiding racy double‑assignments while leaving inserts and
-    /// submissions fully concurrent.
-    pick_lock: parking_lot::Mutex<()>,
+    // == state ==
+    jobs: ProverJobMap,
+    // == plumbing ==
+    // inbound
+    batches_for_prove_receiver: Mutex<mpsc::Receiver<BatchEnvelope<ProverInput>>>,
+    // outbound
+    batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
 }
 
 impl ProverJobManager {
     pub fn new(
-        proof_storage: ProofStorage,
+        batches_for_prove_receiver: mpsc::Receiver<BatchEnvelope<ProverInput>>,
+        batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+
         assignment_timeout: Duration,
-        max_jobs_count: usize,
     ) -> Self {
+        let jobs = ProverJobMap::new(assignment_timeout);
         Self {
-            jobs: DashMap::new(),
-            proof_storage,
-            assignment_timeout,
-            max_jobs_count,
-            pick_lock: parking_lot::Mutex::new(()),
+            jobs,
+            batches_for_prove_receiver: Mutex::new(batches_for_prove_receiver),
+            batches_with_proof_sender,
         }
     }
 
-    pub async fn listen_for_batch_jobs(
-        self: Arc<Self>,
-        mut rx: Receiver<BatchForProving>,
-    ) -> anyhow::Result<()> {
-        while let Some(job) = rx.recv().await {
-            while self.jobs.len() >= self.max_jobs_count {
-                // wait for `jobs` to be empty
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            let batch_number = job.batch.commit_batch_info.batch_number;
-            tracing::info!(batch_number, "Received a new batch job");
-            self.jobs.insert(
-                batch_number,
-                JobEntry {
-                    prover_input: job.prover_input,
-                    previous_state_commitment: job.batch.previous_batch.state_commitment,
-                    commit_batch_info: job.batch.commit_batch_info,
-                    status: JobStatus::Pending,
-                },
-            );
+    /// Picks the **smallest** batch number that is either **pending** (from channel)
+    /// or whose assignment has **timed‑out** (from the assigned map).
+    /// When picking a fresh job from the channel, it is **inserted into ProverJobMap**
+    /// immediately so that it can later be timed-out and reassigned if needed.
+    pub fn pick_next_job(&self) -> Option<(u64, ProverInput)> {
+        // Prefer a timed-out reassignment.
+        if let Some(batch_envelope) = self.jobs.pick_timed_out_job() {
+            let batch_number = batch_envelope.batch_number();
+            let prover_input = batch_envelope.data;
+            return Some((batch_number, prover_input));
         }
-        Ok(())
-    }
 
-    /// Picks the **smallest** batch number that is either **pending** or whose
-    /// assignment has **timed‑out**. Returns its `(batch, prover_input)`.
-    pub fn pick_next_job(&self) -> Option<(u64, Vec<u32>)> {
-        let _guard = self.pick_lock.lock();
-        let now = Instant::now();
-
-        // Single scan to locate the minimal eligible key.
-        let candidate = self
-            .jobs
-            .iter()
-            .filter_map(|entry| {
-                let key = *entry.key();
-                match &entry.status {
-                    JobStatus::Pending => Some(key),
-                    JobStatus::Assigned { assigned_at, .. }
-                        if now.duration_since(*assigned_at) > self.assignment_timeout =>
-                    {
-                        Some(key)
-                    }
-                    _ => None,
+        // Otherwise, try to receive a fresh job and immediately insert it.
+        // Note: alternatively we could wait for mutex unlock and then access it -
+        //       but we return early instead and let the caller poll again
+        if let Ok(mut rx) = self.batches_for_prove_receiver.try_lock() {
+            match rx.try_recv() {
+                Ok(env) => {
+                    // Insert a clone into the assigned map; return ownership to the caller.
+                    let batch_number = env.batch_number();
+                    let prover_input = env.data.clone();
+                    tracing::info!(
+                        batch_number,
+                        assigned_jobs_count = self.jobs.len(),
+                        "received new job from channel"
+                    );
+                    self.jobs.insert(env);
+                    Some((batch_number, prover_input))
                 }
-            })
-            .min();
-
-        if let Some(batch_number) = candidate {
-            if let Some(mut entry) = self.jobs.get_mut(&batch_number) {
-                tracing::info!(batch_number, "Picked a FRI job");
-                let input = entry.prover_input.clone();
-                entry.status = JobStatus::Assigned { assigned_at: now };
-                return Some((batch_number, input));
+                Err(_) => None,
             }
+        } else {
+            tracing::warn!(
+                "couldn't lock batches_for_prove_receiver - retuning None even though there might be a job available"
+            );
+            None
         }
-        None
     }
 
     /// Called by the HTTP handler after verifying a proof. On success the entry
     /// is removed so the map cannot grow without bounds.
-    pub fn submit_proof(
+    ///
+    /// Races:
+    /// - We do **not** try to suppress timeouts while verifying. If the job is reassigned
+    ///   in parallel, a second prover may also submit a proof. The first successful path
+    ///   will remove the job; later submitters will observe `UnknownJob`.
+    pub async fn submit_proof(
         &self,
         batch_number: u64,
-        proof: Vec<u8>,
+        proof_bytes: Vec<u8>,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        let entry_ref = self
-            .jobs
-            .get(&batch_number)
-            .ok_or(SubmitError::UnknownJob(batch_number))?;
-        let entry = entry_ref.value();
-
-        match &entry.status {
-            JobStatus::Assigned { assigned_at } => {
-                let prove_time = assigned_at.elapsed();
-                let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
-                PROVER_METRICS.prove_time[&label].observe(prove_time);
-            }
-            JobStatus::Pending => {
-                tracing::warn!(batch_number, "submitting prove for unassigned job");
-            }
+        // Snapshot the assigned job entry (if any).
+        let assigned = match self.jobs.get(batch_number) {
+            Some(e) => e,
+            None => return Err(SubmitError::UnknownJob(batch_number)),
         };
 
-        let program_proof = bincode_v1::deserialize(&proof).map_err(|err| {
+        // Metrics: observe time since the last assignment.
+        let prove_time = assigned.assigned_at.elapsed();
+        let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
+        PROVER_METRICS.prove_time[&label].observe(prove_time);
+        PROVER_METRICS.prove_time_per_tx[&label]
+            .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
+
+        let program_proof = bincode_v1::deserialize(&proof_bytes).map_err(|err| {
             tracing::warn!(batch_number, "failed to deserialize proof: {err}");
             SubmitError::DeserializationFailed(err)
         })?;
 
-        match verify_fri_proof(
-            entry.previous_state_commitment,
-            entry.commit_batch_info.clone().into(),
+        // Verify using metadata from the batch.
+        let meta = &assigned.batch_envelope.batch;
+        if let Err(err) = proof_verifier::verify_fri_proof(
+            meta.previous_stored_batch_info.state_commitment,
+            meta.commit_batch_info.clone().into(),
             program_proof,
         ) {
-            Ok(()) => {
-                tracing::info!(
-                    batch_number = entry.commit_batch_info.batch_number,
-                    "Proof was verified successfully"
-                )
-            }
-            Err(err) => {
-                tracing::warn!(
-                    batch_number = entry.commit_batch_info.batch_number,
-                    "Proof verification failed"
-                );
-                return Err(err);
-            }
+            tracing::warn!(batch_number, "Proof verification failed: {err}");
+            return Err(SubmitError::VerificationFailed);
         }
 
-        self.proof_storage
-            .save_proof_with_prover(batch_number, &proof, prover_id)
-            .map_err(|e| SubmitError::Other(e.to_string()))?;
-        drop(entry_ref);
-        self.jobs.remove(&batch_number);
+        // Remove the job from the assigned map. If already removed due to a race
+        // (another submit won), we treat it as success to keep the API idempotent.
+        if self.jobs.remove(batch_number).is_none() {
+            tracing::warn!(
+                batch_number,
+                "Proof persisted; job already removed (racing submit)"
+            );
+        } else {
+            tracing::info!(batch_number, "Proof verified");
+        }
+
+        let envelope = BatchEnvelope {
+            batch: assigned.batch_envelope.batch,
+            data: FriProof::Real(proof_bytes),
+            trace: assigned.batch_envelope.trace.with_stage("proof_generated"),
+        };
+        self.batches_with_proof_sender
+            .send(envelope)
+            .await
+            .map_err(|err| SubmitError::Other(err.to_string()))?;
+
         Ok(())
     }
 
     pub fn status(&self) -> Vec<JobState> {
-        self.jobs
-            .iter()
-            .sorted_by_key(|entry| *entry.key())
-            .map(|entry| {
-                let batch_number = *entry.key();
-                match &entry.status {
-                    JobStatus::Pending => JobState {
-                        batch_number,
-                        status: "Pending",
-                        prover_id: None,
-                        assigned_seconds_ago: None,
-                    },
-                    JobStatus::Assigned { assigned_at } => JobState {
-                        batch_number,
-                        status: "Assigned",
-                        prover_id: None,
-                        assigned_seconds_ago: Some((*assigned_at).elapsed().as_secs() as u32),
-                    },
-                }
-            })
-            .collect()
+        self.jobs.status()
     }
-
-    // The following delegate to persistent storage (stubs for now).
-    pub fn available_proofs(&self) -> Vec<(u64, Vec<String>)> {
-        self.proof_storage
-            .get_batches_with_proof()
-            .into_iter()
-            .map(|number| (number, vec!["fri".to_string()]))
-            .collect()
-    }
-
-    pub fn get_fri_proof(&self, batch_number: u64) -> Option<Vec<u8>> {
-        self.proof_storage.get_proof(batch_number)
-    }
-}
-
-fn verify_fri_proof(
-    previous_state_commitment: B256,
-    stored_batch_info: StoredBatchInfo,
-    proof: ProgramProof,
-) -> Result<(), SubmitError> {
-    let expected_pi = BatchPublicInput {
-        state_before: previous_state_commitment.0.into(),
-        state_after: stored_batch_info.state_commitment.0.into(),
-        batch_output: stored_batch_info.commitment.0.into(),
-    };
-
-    let expected_hash_u32s: [u32; 8] = batch_output_hash_as_register_values(&expected_pi);
-
-    let proof_final_register_values: [u32; 16] = extract_final_register_values(proof);
-
-    tracing::debug!(
-        batch_number = stored_batch_info.batch_number,
-        "Program final registers: {:?}",
-        proof_final_register_values
-    );
-    tracing::debug!(
-        batch_number = stored_batch_info.batch_number,
-        ?previous_state_commitment,
-        ?stored_batch_info,
-        "Expected values for Public Inputs hash: {:?}",
-        expected_hash_u32s
-    );
-
-    // compare expected_hash_u32s with the last 8 values of proof_final_register_values
-    (proof_final_register_values[..8] == expected_hash_u32s)
-        .then_some(())
-        .ok_or(SubmitError::VerificationFailed)
-}
-
-fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32; 8] {
-    public_input
-        .hash()
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("Slice with incorrect length")))
-        .collect::<Vec<u32>>()
-        .try_into()
-        .expect("Hash should be exactly 32 bytes long")
-}
-
-fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16] {
-    let (metadata, proof_list) = proof_list_and_metadata_from_program_proof(input_program_proof);
-
-    let oracle_data = generate_oracle_data_from_metadata_and_proof_list(&metadata, &proof_list);
-    tracing::debug!(
-        "Oracle data iterator created with {} items",
-        oracle_data.len()
-    );
-
-    let it = oracle_data.into_iter();
-
-    verifier_common::prover::nd_source_std::set_iterator(it);
-
-    // Assume that program proof has only recursion proofs.
-    tracing::debug!("Running continue recursive");
-    assert!(metadata.reduced_proof_count > 0);
-
-    let final_register_values = full_statement_verifier::verify_recursion_layer();
-
-    assert!(
-        verifier_common::prover::nd_source_std::try_read_word().is_none(),
-        "Expected that all words from CSR were consumed"
-    );
-    final_register_values
 }

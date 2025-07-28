@@ -92,11 +92,6 @@ pub struct ProverInputGeneratorConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverApiConfig {
-    /// Whether to run the prover api or not.
-    /// If enabled, prover jobs must be consumed - otherwise it will apply back-pressure upstream.
-    #[config(default_t = false)]
-    pub component_enabled: bool,
-
     /// Timeout after which a prover job is assigned to another Prover Worker.
     #[config(default_t = Duration::from_secs(180))]
     pub job_timeout: Duration,
@@ -104,15 +99,4 @@ pub struct ProverApiConfig {
     /// Prover API address to listen on.
     #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,
-
-    /// Upper bound on the number of FRI blocks whose **prover inputs** are still
-    /// retained in memory while a proof is outstanding.
-    ///
-    /// * When the threshold is reached, the batching stage applies back-pressure,
-    ///   which propagates up to block production.
-    /// * Each unproved block holds its entire prover-input blob in RAM, so this
-    ///   value must remain bounded.
-    ///
-    #[config(default_t = 1000)]
-    pub max_unproved_blocks: usize,
 }

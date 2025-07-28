@@ -1,7 +1,10 @@
+use crate::model::batches::{BatchEnvelope, FriProof};
+use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_job_manager::{ProverJobManager, SubmitError};
+use axum::extract::Path;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -36,9 +39,11 @@ struct ProverQuery {
     id: Option<String>,
 }
 
+// ───────────── Application state ─────────────
 #[derive(Clone)]
 struct AppState {
     job_manager: Arc<ProverJobManager>,
+    proof_storage: ProofStorage,
 }
 
 // ───────────── HTTP handlers ─────────────
@@ -70,6 +75,7 @@ async fn submit_fri_proof(
     match state
         .job_manager
         .submit_proof(payload.block_number, proof_bytes, prover_id)
+        .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
         Err(SubmitError::VerificationFailed) => Err((
@@ -87,27 +93,21 @@ async fn submit_fri_proof(
     }
 }
 
-async fn list_available_proofs(State(state): State<AppState>) -> Response {
-    let payload: Vec<_> = state
-        .job_manager
-        .available_proofs()
-        .into_iter()
-        .map(|(block_number, available_proofs)| AvailableProofsPayload {
-            block_number,
-            available_proofs,
-        })
-        .collect();
-    Json(payload).into_response()
-}
-
 async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
-    match state.job_manager.get_fri_proof(block) {
-        Some(bytes) => Json(ProofPayload {
+    match state.proof_storage.get_proof(block) {
+        Ok(Some(BatchEnvelope {
+            data: FriProof::Real(proof_bytes),
+            ..
+        })) => Json(ProofPayload {
             block_number: block,
-            proof: general_purpose::STANDARD.encode(&bytes),
+            proof: general_purpose::STANDARD.encode(&proof_bytes),
         })
         .into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            error!("error getting proof: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 
@@ -115,14 +115,23 @@ async fn status(State(state): State<AppState>) -> Response {
     let status = state.job_manager.status();
     Json(status).into_response()
 }
-pub async fn run(job_manager: Arc<ProverJobManager>, bind_address: String) -> anyhow::Result<()> {
-    let app_state = AppState { job_manager };
+pub async fn run(
+    job_manager: ProverJobManager,
+    proof_storage: ProofStorage,
+    bind_address: String,
+) -> anyhow::Result<()> {
+    let app_state = AppState {
+        job_manager: Arc::new(job_manager),
+        proof_storage,
+    };
 
     let app = Router::new()
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
-        .route("/prover-jobs/available", get(list_available_proofs))
+        // this method is only used in prover e2e test -
+        // it shouldn't be here otherwise. If we want to expose FRI proofs,
+        // we need to extract FRI cache to a separate service
         .route("/prover-jobs/FRI/:block", get(get_fri_proof))
         .with_state(app_state);
 
