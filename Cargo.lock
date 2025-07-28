@@ -9976,19 +9976,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync_os_api"
+name = "zksync_os_checkpoint_state"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
- "basic_system",
- "crypto",
- "evm_interpreter",
+ "anyhow",
+ "dashmap",
  "forward_system",
- "oracle_provider",
- "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.3.1)",
  "ruint",
+ "smart-config",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.19",
+ "vise",
  "zk_ee",
- "zksync_os_runner",
+ "zksync_storage",
 ]
 
 [[package]]
@@ -10182,14 +10183,13 @@ dependencies = [
  "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
  "vise",
  "zk_ee",
- "zksync_os_api",
+ "zksync_os_checkpoint_state",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
  "zksync_os_rpc",
  "zksync_os_rpc_api",
- "zksync_os_state",
  "zksync_os_types",
  "zksync_storage",
  "zksync_vlog",
@@ -10226,8 +10226,7 @@ dependencies = [
 [[package]]
 name = "zksync_storage"
 version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "400244889929450d4559a05dd5c9ac5af081b74527bcf1848f40cbfee4a22df1"
+source = "git+https://github.com/matter-labs/zksync-era.git?branch=bf-checkpoint-28#afa8b0b49ab1e1dec175d60c50624718cf2b13c2"
 dependencies = [
  "num_cpus",
  "once_cell",
