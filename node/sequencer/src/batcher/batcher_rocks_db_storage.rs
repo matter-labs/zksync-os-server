@@ -37,7 +37,7 @@ impl BatcherRocksDBStorage {
         let Some(bytes) = data else { return Ok(None) };
         let res = serde_json::from_slice(&bytes)?;
 
-        Ok(res)
+        Ok(Some(res))
     }
 
     pub fn set(

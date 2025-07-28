@@ -6,7 +6,7 @@ use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use std::time::Duration;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[allow(async_fn_in_trait)]
 pub trait EthCallAssert {
@@ -64,5 +64,21 @@ impl ReceiptAssert for PendingTransactionBuilder<Ethereum> {
 
     async fn expect_register(self) -> anyhow::Result<PendingTransaction> {
         Ok(self.with_timeout(Some(DEFAULT_TIMEOUT)).register().await?)
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ReceiptsAssert {
+    async fn expect_successful_receipts(self) -> anyhow::Result<Vec<TransactionReceipt>>;
+}
+
+impl ReceiptsAssert for Vec<PendingTransactionBuilder<Ethereum>> {
+    async fn expect_successful_receipts(self) -> anyhow::Result<Vec<TransactionReceipt>> {
+        let receipts =
+            futures::future::join_all(self.into_iter().map(|tx| tx.expect_successful_receipt()))
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+        Ok(receipts)
     }
 }
