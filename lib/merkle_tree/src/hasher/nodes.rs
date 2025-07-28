@@ -5,9 +5,8 @@ use std::{collections::HashMap, iter};
 use alloy::primitives::B256;
 
 use crate::{
-    max_nibbles_for_internal_node,
+    HashTree, TreeParams, max_nibbles_for_internal_node,
     types::{InternalNode, Root},
-    HashTree, TreeParams,
 };
 
 /// Internal hashes for a single `InternalNode`. Ordered by ascending depth `1..internal_node_depth`
@@ -18,7 +17,7 @@ use crate::{
 /// The latter requires potential padding for rightmost internal nodes; see [`InternalNode::internal_hashes()`].
 /// As a result of these efforts, generating proofs is ~2x more efficient than with layered `Vec<Vec<B256>>`.
 #[derive(Debug)]
-struct InternalNodeHashes(Vec<B256>);
+pub(crate) struct InternalNodeHashes(pub Vec<B256>);
 
 impl InternalNode {
     pub(crate) fn hash<P: TreeParams>(&self, hasher: &P::Hasher, depth: u8) -> B256 {
@@ -59,19 +58,23 @@ impl InternalNode {
         hashes[0]
     }
 
-    fn internal_hashes<P: TreeParams>(&self, hasher: &P::Hasher, depth: u8) -> InternalNodeHashes {
+    pub(crate) fn internal_hashes<P: TreeParams>(
+        &self,
+        hasher: &P::Hasher,
+        mut depth: u8,
+    ) -> InternalNodeHashes {
         // capacity = 2 + 4 + ... + 2 ** (P::INTERNAL_NODE_DEPTH - 1) = 2 * (2 ** (P::INTERNAL_NODE_DEPTH - 1) - 1) = 2 ** P::INTERNAL_NODE_DEPTH - 2
         let capacity = (1 << P::INTERNAL_NODE_DEPTH) - 2;
         let mut hashes = InternalNodeHashes(Vec::with_capacity(capacity));
         let mut full_level_len = 1 << (P::INTERNAL_NODE_DEPTH - 1);
         self.hash_inner::<P>(hasher, depth, false, |level_hashes| {
             hashes.0.extend_from_slice(level_hashes);
-            // Pad if necessary so that there are uniform offsets for each level. The padding should never be read.
-            // It doesn't waste that much space given that it may be required only for one internal node per level.
+            // Pad if necessary so that there are uniform offsets for each level.
             hashes.0.extend(iter::repeat_n(
-                B256::ZERO,
+                hasher.empty_subtree_hash(depth + 1),
                 full_level_len - level_hashes.len(),
             ));
+            depth += 1;
             full_level_len /= 2;
         });
         hashes
@@ -147,8 +150,8 @@ impl<'a> InternalHashes<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blake2::Blake2Hasher;
     use crate::DefaultTreeParams;
+    use crate::blake2::Blake2Hasher;
 
     #[test]
     fn constructing_internal_hashes() {

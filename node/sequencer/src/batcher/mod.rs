@@ -1,318 +1,165 @@
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{BatchJob, ReplayRecord};
-use crate::CHAIN_ID;
-use std::alloc::Global;
-use std::collections::{HashMap, VecDeque};
+use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
+use crate::model::blocks::ReplayRecord;
+use futures::{FutureExt, StreamExt, TryStreamExt};
+use std::future::ready;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
-use zk_os_basic_system::system_implementation::flat_storage_model::TestingTree;
-use zk_os_forward_system::run::test_impl::{InMemoryTree, TxListSource};
-use zk_os_forward_system::run::{generate_proof_input, BatchOutput, StorageCommitment};
+use tokio_stream::wrappers::ReceiverStream;
+use tracing;
+use zk_os_forward_system::run::BatchOutput;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
-use zksync_os_l1_sender::L1SenderHandle;
-use zksync_os_state::StateHandle;
-use zksync_os_types::ZksyncOsEncode;
+use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 
-// used in two places:
-// * number of blocks received by Batcher but not distributed to Workers yet
-// * number of blocks processed by Workers, but not sent to l1 sender yet because of gaps (we need to send in order)
-const MAX_INFLIGHT: usize = 30;
+mod batcher_rocks_db_storage;
+pub mod util;
 
-/// This component will generate l1 batches from the stream of blocks
-/// It will also generate Prover Input for each batch.
-///
-/// Currently, batching is not implemented on zksync-os side, so we do 1 batch == 1 block
-/// Thus, this component only generates prover input.
-/// Additionally, it doesn't use the Persistent Merkle Tree yet -
-/// so we spawn multiple workers with in-memory tree in each.
-/// The component will be heavily reworked once we migrate to the Peristent Tree
+/// This component handles batching logic - receives blocks and prepares batch data
+/// todo: we still do 1 batch == 1 block, implement proper batching
 pub struct Batcher {
-    block_sender: Receiver<(BatchOutput, ReplayRecord)>,
-    // todo: the following two may just need to be a broadcast with backpressure instead (to eth-sender and prover-api)
-    batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
-    // handled by l1-sender. We ensure that they are sent in order.
-    commit_batch_info_sender: Option<L1SenderHandle>,
-    state_handle: StateHandle,
-    bin_path: &'static str,
-    num_workers: usize,
+    // == state ==
+    // holds info about the last processed batch (genesis if none)
+    prev_batch_info: StoredBatchInfo,
+    // only used on startup. Skips all upstream blocks until this one.
+    batcher_starting_block: u64,
+    // L2 chain id
+    chain_id: u64,
+
+    // == persistence (todo: get rid of it - see zksync-os-server/README.md for details) - only used to recover initial `prev_batch_info` ==
+    storage: batcher_rocks_db_storage::BatcherRocksDBStorage,
+
+    // == plumbing ==
+    // inbound
+    block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+    // outbound
+    batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+    // dependencies
+    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 }
 
 impl Batcher {
     pub fn new(
-        // In the future it will only need ReplayRecord - it only uses BatchOutput for in-memory tree
-        block_sender: tokio::sync::mpsc::Receiver<(BatchOutput, ReplayRecord)>,
-        batch_sender: tokio::sync::mpsc::Sender<BatchJob>,
-        // handled by l1-sender
-        commit_batch_info_sender: Option<L1SenderHandle>,
-        state_handle: StateHandle,
+        // == initial state ==
+        batcher_starting_block: u64,
+        chain_id: u64,
 
-        enable_logging: bool,
-        num_workers: usize,
+        // == config ==
+        rocks_db_path: PathBuf,
+
+        // == plumbing ==
+        block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+        batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+        persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
-        // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
-        let bin_path = if enable_logging {
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../app_logging_enabled.bin")
+        // todo: will not need storage in the future
+        let storage = batcher_rocks_db_storage::BatcherRocksDBStorage::new(rocks_db_path);
+
+        let prev_batch_info = if batcher_starting_block == 1 {
+            util::genesis_stored_batch_info()
         } else {
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../app.bin")
+            storage
+                .get(batcher_starting_block - 1)
+                .expect("cannot access batcher storage")
+                .expect("no prev batch info")
         };
+
         Self {
-            block_sender,
-            state_handle,
-            batch_sender,
-            commit_batch_info_sender,
-            bin_path,
-            num_workers,
+            block_receiver,
+            batch_data_sender,
+            persistent_tree,
+            batcher_starting_block,
+            storage,
+            prev_batch_info,
+            chain_id,
         }
     }
 
-    /// Spawns num_workers threads and distributed work (block_source) among them
-    /// todo: currently it forwards the block message to each of the workers - we could broadcast instead - no need for this forwarding then
-    ///
-    pub async fn run_loop(mut self) -> anyhow::Result<()> {
-        let mut worker_block_senders = Vec::new();
-
-        // todo: will be reworked when migrating batcher to the persistent tree
-        let commit_tx = self
-            .commit_batch_info_sender
-            .map(|commit_batch_info_sender| {
-                let (commit_tx, commit_rx) = tokio::sync::mpsc::channel(MAX_INFLIGHT);
-                // CommitBatchInfo proxy that ensures order
-                tokio::spawn(async move {
-                    if let Err(e) = ordered_committer(commit_rx, commit_batch_info_sender).await {
-                        tracing::error!("ordered_committer exited: {e:?}");
-                    }
-                });
-                commit_tx
-            });
-
-        for worker_id in 0..self.num_workers {
-            let (block_sender, block_receiver) = tokio::sync::mpsc::channel(MAX_INFLIGHT);
-
-            worker_block_senders.push(block_sender);
-            let batch_sender = self.batch_sender.clone();
-            let state_handle = self.state_handle.clone();
-            let commit_tx = commit_tx.clone();
-            std::thread::spawn(move || {
-                if let Err(err) = worker_loop(
-                    worker_id,
-                    self.num_workers,
-                    block_receiver,
-                    batch_sender,
-                    commit_tx,
-                    state_handle,
-                    self.bin_path,
-                ) {
-                    tracing::error!(?err, "batcher worker exited unexpectedly");
-                }
-            });
-        }
-
-        loop {
-            // Wait for a replay record from the channel
-            // todo - just forwarding, could use broadcast instead
-            match self.block_sender.recv().await {
-                Some((batch_output, replay_record)) => {
-                    BATCHER_METRICS
-                        .current_block_number
-                        .set(replay_record.block_context.block_number);
-                    let block_number = replay_record.block_context.block_number;
+    /// Main processing loop for the batcher
+    pub async fn run_loop(self) -> anyhow::Result<()> {
+        ReceiverStream::new(self.block_receiver)
+            .skip_while(move |(_, record)| {
+                let skip = record.block_context.block_number < self.batcher_starting_block;
+                if skip {
                     tracing::debug!(
-                        "Batcher dispatcher received block {} with {} transactions",
-                        block_number,
-                        replay_record.transactions.len()
+                        "Skipping block {} (batcher starting block is {})",
+                        record.block_context.block_number,
+                        self.batcher_starting_block
                     );
-                    for tx in worker_block_senders.iter() {
-                        tx.send((batch_output.clone(), replay_record.clone()))
-                            .await?;
-                    }
                 }
-                None => {
-                    // Channel closed, exit the loop
-                    tracing::info!("Block replay channel closed, exiting batcher",);
-                    break;
-                }
-            }
-        }
+                ready(skip)
+            })
+            // wait for tree to have processed block
+            .then(|(block_output, replay_record)| {
+                self.persistent_tree
+                    .clone()
+                    .get_at_block(replay_record.block_context.block_number)
+                    .map(|tree| Ok::<_, anyhow::Error>((tree, block_output, replay_record)))
+            })
+            .try_fold(
+                self.prev_batch_info,
+                async |prev_batch_info, (tree, block_output, replay_record)| {
+                    let block_number = replay_record.block_context.block_number;
 
-        Ok(())
-    }
-}
+                    let (root_hash, leaf_count) = tree.root_info().unwrap();
 
-fn worker_loop(
-    worker_id: usize,
-    total_workers_count: usize,
-    mut block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-    batch_sender: Sender<BatchJob>,
-    commit_batch_info_sender: Option<Sender<CommitBatchInfo>>,
-    state_handle: StateHandle,
-    bin_path: &'static str,
-) -> anyhow::Result<()> {
-    tracing::info!(
-        worker_id = worker_id,
-        "batcher prover input generation worker started"
-    );
+                    let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
+                        root_hash,
+                        leaf_count,
+                    };
 
-    // still need to read `block_receiver` channel async
-    // although creating a Runtime here is awkward - todo
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+                    let tx_count = replay_record.transactions.len();
 
-    // thread owns its own tree - as it's not thread-safe.
-    let tree = Arc::new(RwLock::new(InMemoryTree::<false> {
-        storage_tree: TestingTree::new_in(Global),
-        cold_storage: HashMap::new(),
-    }));
+                    let commit_batch_info = CommitBatchInfo::new(
+                        block_output,
+                        &replay_record.block_context,
+                        &replay_record.transactions,
+                        tree_output,
+                        self.chain_id,
+                    );
 
-    loop {
-        let Some((batch_output, replay_record)) = rt.block_on(block_receiver.recv()) else {
-            tracing::warn!("Worker {} block receiver channel closed", worker_id);
-            return Ok(());
-        };
+                    let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
 
-        let bn = replay_record.block_context.block_number;
-        tracing::debug!(worker_id = worker_id, bn = bn, "Received block");
+                    // Store batch info (todo: will not need storage in the future)
+                    self.storage
+                        .set(commit_batch_info.batch_number, &stored_batch_info)?;
 
-        if bn % total_workers_count as u64 != worker_id as u64 {
-            // Not my job - but still need to update the tree
-            update_tree_with_batch_output(&tree, &batch_output);
-            continue;
-        } else {
-            // my job! Computing prover input and sending the result to batcher_sender
-            tracing::info!(
-                worker_id = worker_id,
-                block_number = bn,
-                "starting prover input computation",
-            );
+                    // Create batch
+                    let batch_envelope: BatchEnvelope<Vec<ReplayRecord>> = BatchEnvelope {
+                        batch: BatchMetadata {
+                            previous_stored_batch_info: prev_batch_info,
+                            commit_batch_info,
+                            first_block_number: block_number,
+                            last_block_number: block_number,
+                            tx_count,
+                        },
+                        data: vec![replay_record],
+                        trace: Trace::default(),
+                    };
 
-            let initial_storage_commitment = StorageCommitment {
-                root: *tree.read().unwrap().storage_tree.root(),
-                next_free_slot: tree.read().unwrap().storage_tree.next_free_slot,
-            };
+                    tracing::info!(
+                        block_number_from = block_number,
+                        block_number_to = block_number,
+                        batch_number = block_number,
+                        state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
+                        "Batch produced",
+                    );
 
-            let state_view = state_handle.state_view_at_block(bn)?;
+                    tracing::debug!(
+                        ?batch_envelope.batch,
+                        "Batch details",
+                    );
 
-            let transactions: VecDeque<Vec<u8>> = replay_record
-                .transactions
-                .clone()
-                .into_iter()
-                .map(|tx| tx.encode())
-                .collect();
-            let tx_count = transactions.len();
-            let list_source = TxListSource { transactions };
+                    GENERAL_METRICS.block_number[&"batcher"].set(block_number);
 
-            let prover_input_generation_latency =
-                BATCHER_METRICS.prover_input_generation[&"prover_input_generation"].start();
-            let prover_input = generate_proof_input(
-                PathBuf::from(bin_path),
-                replay_record.block_context,
-                initial_storage_commitment,
-                tree.clone(),
-                state_view,
-                list_source,
+                    // Send to ProverInputGenerator
+                    self.batch_data_sender
+                        .send(batch_envelope)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
+                    Ok(stored_batch_info)
+                },
             )
-            .expect("proof gen failed");
-
-            let latency = prover_input_generation_latency.observe();
-
-            tracing::info!(
-                worker_id = worker_id,
-                block_number = bn,
-                tx_count = tx_count,
-                next_free_slot = tree.read().unwrap().storage_tree.next_free_slot,
-                "Completed prover input computation in {:?}.",
-                latency
-            );
-
-            update_tree_with_batch_output(&tree, &batch_output);
-
-            let tree_output = zksync_os_merkle_tree::BatchOutput {
-                root_hash: tree
-                    .read()
-                    .unwrap()
-                    .storage_tree
-                    .root()
-                    .as_u8_array_ref()
-                    .into(),
-                leaf_count: tree.read().unwrap().storage_tree.next_free_slot,
-            };
-
-            let commit_batch_info = CommitBatchInfo::new(
-                batch_output,
-                &replay_record.transactions,
-                tree_output,
-                CHAIN_ID,
-            );
-            tracing::debug!("Expected commit batch info: {:?}", commit_batch_info);
-
-            if let Some(commit_batch_info_sender) = &commit_batch_info_sender {
-                rt.block_on(commit_batch_info_sender.send(commit_batch_info.clone()))?;
-            }
-
-            let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
-            tracing::debug!("Expected stored batch info: {:?}", stored_batch_info);
-
-            let batch = BatchJob {
-                block_number: bn,
-                prover_input,
-                commit_batch_info,
-            };
-            GENERAL_METRICS.block_number[&"batcher"].set(bn);
-            GENERAL_METRICS.executed_transactions[&"batcher"].inc_by(tx_count as u64);
-            rt.block_on(batch_sender.send(batch))?;
-        }
+            .await
+            .map(|_| ())
     }
 }
-
-/// Receives `CommitBatchInfo`s from all workers, buffers anything that
-/// arrives early, and forwards them strictly in block-number order.
-///
-/// todo: will be removed/replaced when batcher is reworked to use persistent tree
-async fn ordered_committer(
-    mut rx: Receiver<CommitBatchInfo>,
-    l1: L1SenderHandle,
-) -> anyhow::Result<()> {
-    use std::collections::BTreeMap;
-
-    // batcher always starts from the first block for now
-    // since it needs to build the in-memory tree.
-    let mut expected = 1;
-    let mut buffer = BTreeMap::new(); // early arrivals keyed by block_no
-
-    while let Some(info) = rx.recv().await {
-        let bn = info.batch_number;
-        buffer.insert(bn, info);
-
-        while let Some(in_order) = buffer.remove(&expected) {
-            l1.commit(in_order).await?; // <-- now it is definitely in order
-            expected += 1;
-        }
-    }
-    Ok(())
-}
-
-fn update_tree_with_batch_output(tree: &Arc<RwLock<InMemoryTree>>, batch_output: &BatchOutput) {
-    // update tree - note that we need to do it for every block, not only the ones we need to process
-    let mut write_tree = tree.write().unwrap();
-    for w in &batch_output.storage_writes {
-        write_tree.cold_storage.insert(w.key, w.value);
-        write_tree.storage_tree.insert(&w.key, &w.value);
-    }
-    drop(write_tree);
-}
-
-const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
-#[derive(Debug, Metrics)]
-#[metrics(prefix = "batcher")]
-pub struct BatcherMetrics {
-    #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
-    pub prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
-
-    pub current_block_number: Gauge<u64>,
-}
-
-#[vise::register]
-pub(crate) static BATCHER_METRICS: vise::Global<BatcherMetrics> = vise::Global::new();

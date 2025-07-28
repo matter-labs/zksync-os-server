@@ -1,9 +1,21 @@
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::providers::Provider;
-use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::TransactionRequest;
-use zksync_os_integration_tests::assert_traits::EthCallAssert;
+use alloy::rpc::types::state::StateOverride;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::EthCallAssert;
+
+#[test_log::test(tokio::test)]
+async fn call_genesis() -> anyhow::Result<()> {
+    // Test that the node can run `eth_call` on genesis
+    let tester = Tester::setup().await?;
+    tester
+        .l2_provider
+        .call(TransactionRequest::default())
+        .block(0.into())
+        .await?;
+    Ok(())
+}
 
 #[test_log::test(tokio::test)]
 async fn call_fail() -> anyhow::Result<()> {

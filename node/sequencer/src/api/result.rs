@@ -6,6 +6,7 @@
 
 use crate::api::eth_call_handler::EthCallError;
 use crate::api::eth_filter_impl::EthFilterError;
+use crate::api::eth_impl::EthError;
 use crate::api::tx_handler::EthSendRawTransactionError;
 use jsonrpsee::core::RpcResult;
 use std::fmt;
@@ -108,6 +109,7 @@ macro_rules! impl_to_rpc_result {
 impl_to_rpc_result!(EthCallError);
 impl_to_rpc_result!(EthSendRawTransactionError);
 impl_to_rpc_result!(EthFilterError);
+impl_to_rpc_result!(EthError);
 
 /// Constructs an unimplemented JSON-RPC error.
 pub fn unimplemented_rpc_err() -> jsonrpsee::types::error::ErrorObject<'static> {

@@ -109,12 +109,14 @@ async fn main() -> anyhow::Result<()> {
         else                 { GasMode::Fixed(U256::from(60_000)) },
     ).await?;
 
+    // ----------  NEW: pass the RPC URL for batch-sending ----------
     erc20_worker::spawn_erc20_workers(
         provider.clone(), wallets.clone(), gas, metrics.clone(),
         running.clone(), args.max_in_flight, mean_transfer,
         token_nm.address(), rng_arc.clone(), dest_rand,
+        args.rpc_url.clone(),
     );
-    println!("▶ ERC-20 test started with {} wallets\n", args.wallets);
+    println!("▶ ERC-20 test started with {} wallets, gas: {}", args.wallets, gas);
 
     //-------------------------------- run ----------------------------------//
     tokio::time::sleep(*args.duration).await;

@@ -1,15 +1,13 @@
-use super::resolve_block_id;
 use crate::api::eth_impl::build_api_log;
 use crate::api::metrics::API_METRICS;
 use crate::api::result::ToRpcResult;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::ApiRepository;
-use crate::repositories::RepositoryManager;
+use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use crate::reth_state::ZkClient;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::{TxHash, B256, U128};
+use alloy::primitives::{B256, BlockNumber, TxHash, U128};
 use alloy::rpc::types::{
     Filter, FilterBlockOption, FilterChanges, FilterId, Log, PendingTransactionFilterKind,
     Transaction,
@@ -20,15 +18,15 @@ use jsonrpsee::core::RpcResult;
 use reth_transaction_pool::{EthPooledTransaction, NewSubpoolTransactionStream, TransactionPool};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]
-pub(crate) struct EthFilterNamespace {
-    repository_manager: RepositoryManager,
+pub(crate) struct EthFilterNamespace<R> {
+    repository: R,
     query_limits: QueryLimits,
     /// Duration since the last filter poll, after which the filter is considered stale
     stale_filter_ttl: Duration,
@@ -36,16 +34,12 @@ pub(crate) struct EthFilterNamespace {
     active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
 }
 
-impl EthFilterNamespace {
-    pub fn new(
-        config: RpcConfig,
-        repository_manager: RepositoryManager,
-        mempool: RethPool<ZkClient>,
-    ) -> Self {
+impl<R: ApiRepository + Clone + 'static> EthFilterNamespace<R> {
+    pub fn new(config: RpcConfig, repository: R, mempool: RethPool<ZkClient>) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         let this = Self {
-            repository_manager,
+            repository,
             query_limits,
             stale_filter_ttl: config.stale_filter_ttl,
             mempool,
@@ -62,9 +56,9 @@ impl EthFilterNamespace {
     }
 }
 
-impl EthFilterNamespace {
+impl<R: ApiRepository> EthFilterNamespace<R> {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
-        let last_poll_block_number = self.repository_manager.get_canonized_block();
+        let last_poll_block_number = self.repository.get_latest_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
 
         self.active_filters.insert(
@@ -82,7 +76,7 @@ impl EthFilterNamespace {
         &self,
         id: FilterId,
     ) -> EthFilterResult<FilterChanges<Transaction<L2Envelope>>> {
-        let latest_block = self.repository_manager.get_canonized_block();
+        let latest_block = self.repository.get_latest_block();
 
         // start_block is the block from which we should start fetching changes, the next block from
         // the last time changes were polled, in other words the best block at last poll + 1
@@ -112,9 +106,8 @@ impl EthFilterNamespace {
             FilterKind::Block => {
                 let mut block_hashes = Vec::new();
                 for block_number in start_block..=latest_block {
-                    let Some(block) = self.repository_manager.get_block_by_number(block_number)
-                    else {
-                        return Err(EthFilterError::InvalidBlockRangeParams);
+                    let Some(block) = self.repository.get_block_by_number(block_number)? else {
+                        return Err(EthFilterError::BlockNotFound(block_number.into()));
                     };
                     block_hashes.push(B256::from(block.header.hash_slow()));
                 }
@@ -125,17 +118,7 @@ impl EthFilterNamespace {
                     FilterBlockOption::Range {
                         from_block,
                         to_block,
-                    } => {
-                        let from = resolve_block_id(
-                            from_block.unwrap_or_default().into(),
-                            &self.repository_manager,
-                        );
-                        let to = resolve_block_id(
-                            to_block.unwrap_or_default().into(),
-                            &self.repository_manager,
-                        );
-                        (from, to)
-                    }
+                    } => self.resolve_range(from_block, to_block)?,
                     FilterBlockOption::AtBlockHash(_) => {
                         // blockHash is equivalent to fromBlock = toBlock = the block number with
                         // hash blockHash
@@ -171,27 +154,16 @@ impl EthFilterNamespace {
     fn logs_impl(&self, filter: Filter) -> EthFilterResult<Vec<Log>> {
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
-                let block =
-                    resolve_block_id(BlockId::Hash(block_hash.into()), &self.repository_manager);
+                let block_id = block_hash.into();
+                let Some(block) = self.repository.resolve_block_number(block_id)? else {
+                    return Err(EthFilterError::BlockNotFound(block_id));
+                };
                 (block, block)
             }
             FilterBlockOption::Range {
                 from_block,
                 to_block,
-            } => (
-                resolve_block_id(
-                    from_block
-                        .map(BlockId::Number)
-                        .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
-                    &self.repository_manager,
-                ),
-                resolve_block_id(
-                    to_block
-                        .map(BlockId::Number)
-                        .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest)),
-                    &self.repository_manager,
-                ),
-            ),
+            } => self.resolve_range(from_block, to_block)?,
         };
         tracing::trace!(from, to, ?filter, "getting filtered logs");
         self.get_logs_in_block_range(filter, from, to)
@@ -218,7 +190,7 @@ impl EthFilterNamespace {
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some(block) = self.repository_manager.get_block_by_number(number) {
+            if let Some(block) = self.repository.get_block_by_number(number)? {
                 let mut log_index_in_block = 0u64;
                 if filter.matches_bloom(block.header.logs_bloom) {
                     tracing::trace!(
@@ -226,13 +198,17 @@ impl EthFilterNamespace {
                         ?filter,
                         "Block matches bloom filter, scanning receipts",
                     );
-                    let stored_txs = block.body.transactions.into_iter().map(|hash| {
-                        self.repository_manager
-                            .get_stored_tx_by_hash(hash)
-                            .unwrap_or_else(|| {
-                                panic!("Missing tx receipt for hash: {hash:?} in block {number}")
-                            })
-                    });
+                    let stored_txs = block
+                        .unseal()
+                        .body
+                        .transactions
+                        .into_iter()
+                        .map(|hash| {
+                            self.repository
+                                .get_stored_transaction(hash)?
+                                .ok_or(EthFilterError::BlockNotFound(number.into()))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let mut at_least_one_log_added = false;
                     for tx in stored_txs {
                         for inner_log in tx.receipt.logs() {
@@ -307,10 +283,26 @@ impl EthFilterNamespace {
             is_valid
         })
     }
+
+    fn resolve_range(
+        &self,
+        from_block: Option<BlockNumberOrTag>,
+        to_block: Option<BlockNumberOrTag>,
+    ) -> EthFilterResult<(BlockNumber, BlockNumber)> {
+        let from_block_id = from_block.unwrap_or_default().into();
+        let Some(from) = self.repository.resolve_block_number(from_block_id)? else {
+            return Err(EthFilterError::BlockNotFound(from_block_id));
+        };
+        let to_block_id = to_block.unwrap_or_default().into();
+        let Some(to) = self.repository.resolve_block_number(to_block_id)? else {
+            return Err(EthFilterError::BlockNotFound(to_block_id));
+        };
+        Ok((from, to))
+    }
 }
 
 #[async_trait]
-impl EthFilterApiServer for EthFilterNamespace {
+impl<R: ApiRepository + 'static> EthFilterApiServer for EthFilterNamespace<R> {
     async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Log(Box::new(filter)))
     }
@@ -361,9 +353,9 @@ impl EthFilterApiServer for EthFilterNamespace {
     }
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency = API_METRICS.response_time[&"get_logs"].start();
+        let latency_observer = API_METRICS.response_time[&"get_logs"].start();
         let logs = self.logs_impl(filter).to_rpc_result()?;
-        latency.observe();
+        latency_observer.observe();
 
         Ok(logs)
     }
@@ -469,12 +461,12 @@ type EthFilterResult<T> = Result<T, EthFilterError>;
 /// Errors that can occur in the handler implementation
 #[derive(Debug, thiserror::Error)]
 pub enum EthFilterError {
+    /// Block could not be found by its id (hash/number/tag).
+    #[error("block not found")]
+    BlockNotFound(BlockId),
     /// Filter not found.
     #[error("filter not found")]
     FilterNotFound(FilterId),
-    /// Invalid block range.
-    #[error("invalid block range params")]
-    InvalidBlockRangeParams,
     /// Query scope is too broad.
     #[error("query exceeds max block range {0}")]
     QueryExceedsMaxBlocks(u64),
@@ -488,4 +480,7 @@ pub enum EthFilterError {
         /// End block of the suggested retry range (last successfully processed block)
         to_block: u64,
     },
+
+    #[error(transparent)]
+    RepositoryError(#[from] RepositoryError),
 }

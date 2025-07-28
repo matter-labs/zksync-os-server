@@ -5,14 +5,14 @@ use std::{ops, path::Path};
 use alloy::primitives::B256;
 use anyhow::Context as _;
 use once_cell::sync::OnceCell;
-use zksync_storage::{db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice, RocksDB};
+use zksync_storage::{RocksDB, db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice};
 
 use crate::{
+    Database, DeserializeError,
     errors::{DeserializeContext, DeserializeErrorKind},
     metrics::{LoadStage, METRICS},
     storage::{InsertedKeyEntry, PartialPatchSet, PatchSet},
     types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root},
-    Database, DeserializeError,
 };
 
 impl NodeKey {
@@ -255,14 +255,15 @@ impl Database for RocksDBWrapper {
         const MIN_KEY_COUNT_TO_REPORT: usize = 1_000;
 
         // First, get indices for all existing keys using multi-gets.
-        let get_latency = METRICS.load_nodes_latency[&LoadStage::KeyLookupGets].start();
+        let get_latency_observer = METRICS.load_nodes_latency[&LoadStage::KeyLookupGets].start();
         let existing_indices = self.multi_get_key_indices(version, keys)?;
-        let get_latency = get_latency.observe();
+        let get_latency = get_latency_observer.observe();
 
         // Then, fill in missing keys using iterators. Iterators are less performant than exact lookups
         // since they cannot use Bloom filters etc.; hence, for workflows mostly loading / updating existing keys,
         // starting with multi-gets is significantly more efficient.
-        let iterators_latency = METRICS.load_nodes_latency[&LoadStage::KeyLookupIteration].start();
+        let iterators_latency_observer =
+            METRICS.load_nodes_latency[&LoadStage::KeyLookupIteration].start();
         let output = keys
             .par_iter()
             .zip(existing_indices)
@@ -274,7 +275,7 @@ impl Database for RocksDBWrapper {
                 }
             })
             .collect();
-        let iterators_latency = iterators_latency.observe();
+        let iterators_latency = iterators_latency_observer.observe();
 
         // Do not spam logs for operations with a few keys.
         if keys.len() > MIN_KEY_COUNT_TO_REPORT {
@@ -491,8 +492,9 @@ mod tests {
     use super::*;
     use crate::blake2::Blake2Hasher;
     use crate::{
-        leaf_nibbles, max_nibbles_for_internal_node, max_node_children, storage::PartialPatchSet,
-        types::TreeTags, DefaultTreeParams, MerkleTree, TreeEntry, TreeParams,
+        DefaultTreeParams, MerkleTree, TreeEntry, TreeParams, leaf_nibbles,
+        max_nibbles_for_internal_node, max_node_children, storage::PartialPatchSet,
+        types::TreeTags,
     };
 
     #[test]

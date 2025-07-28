@@ -6,17 +6,18 @@ members = [
     "lib/l1_watcher",
     "lib/mempool",
     "lib/merkle_tree",
+    "lib/rpc",
     "lib/rpc_api",
     "lib/state",
     "lib/types",
     "node/sequencer",
     "integration-tests",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"
 repository = "https://github.com/matter-labs/zksync-os-server"
@@ -42,14 +43,25 @@ serde_json = "1"
 #zk_os_forward_system = { package = "forward_system", path="../zksync-os/forward_system", features = ["evm-compatibility", "unlimited_native", "no_print"] }
 #zk_ee = { package = "zk_ee", path="../zksync-os/zk_ee" }
 #zk_os_basic_system = { package = "basic_system", path="../zksync-os/basic_system"}
-#zk_os_evm_interpreter = { package = "evm_interpreter", path="../zksync-os/evm_interpreter", features = ["evm-compatibility"] }
+#zk_os_api = { package = "zksync_os_api", path="../zksync-os/api"}
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.3-new-sequencer", features = ["evm-compatibility", "unlimited_native", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.3-new-sequencer"}
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.3-new-sequencer"}
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "rb-0.0.3-new-sequencer", features = ["evm-compatibility"] }
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.6", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.6" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.6" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.6" }
 
-tokio = "1"
+#air-compiler-cli = { package = "cli", path = "../zksync-airbender/tools/cli" }
+#execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
+#verifier_common = { package = "verifier_common", path = "../zksync-airbender/verifier_common" }
+#full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
+
+air-compiler-cli = { package = "cli", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
+execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
+verifier_common = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
+full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
+
+tokio = "1.45.1"
+tokio-stream = "0.1.17"
 ruint = { version = "1.12", default-features = false }
 dashmap = "6.1.0"
 itertools = "0.14.0"
@@ -58,7 +70,8 @@ vise = "0.3.0"
 vise-exporter = "0.3.0"
 hex = "0.4"
 crossbeam-queue = "0.3"
-bincode = {version ="2.0.1", features = ["serde"] }
+bincode = { version ="2.0.1", features = ["serde"] }
+bincode_v1 = { package = "bincode", version = "1" }
 smart-config = "=0.2.0-pre"
 thiserror = "2.0.12"
 clap = "4.2.2"
@@ -77,6 +90,7 @@ parking_lot = "0.12.4"
 fs2 = "0.4.3"
 test-log = "0.2.18"
 backon = "1.5.1"
+reqwest = "0.12.22"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 #zksync_storage = "28.1.0-non-semver-compat"
@@ -99,9 +113,14 @@ zksync_os_l1_sender = { path = "lib/l1_sender" }
 zksync_os_l1_watcher = { path = "lib/l1_watcher" }
 zksync_os_mempool = { path = "lib/mempool" }
 zksync_os_merkle_tree = {path = "lib/merkle_tree" }
+zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
 #zksync_os_state = { path = "lib/state" }
 zksync_os_state = { path = "lib/checkpoint_state", package = "zksync_os_checkpoint_state" }
 zksync_os_types = { path = "lib/types" }
 
 zksync_os_sequencer = { path = "node/sequencer" }
+
+[profile.release]
+# This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
+overflow-checks = true

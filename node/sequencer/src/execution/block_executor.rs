@@ -1,14 +1,15 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
-use anyhow::{anyhow, Result};
+use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
+use alloy::primitives::TxHash;
+use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::{BatchOutput, InvalidTransaction};
 use zksync_os_state::StateHandle;
-use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -18,14 +19,15 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand,
     state: StateHandle,
-) -> Result<(BatchOutput, ReplayRecord)> {
+) -> Result<(BatchOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
-    let state_view = state.state_view_at_block(ctx.block_number)?;
+    let state_view = state.state_view_at_block(ctx.block_number - 1)?;
     let mut runner = VmWrapper::new(ctx, state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
+    let mut purged_txs = Vec::new();
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match command.seal_policy {
@@ -36,7 +38,8 @@ pub async fn execute_block(
 
     /* ---------- main loop ------------------------------------------ */
     loop {
-        let wait_for_tx_latency = EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
+        let wait_for_tx_latency_observer =
+            EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {
@@ -57,11 +60,11 @@ pub async fn execute_block(
                 match maybe_tx {
                     /* ----- got a transaction ---------------------- */
                     Some(tx) => {
-                        wait_for_tx_latency.observe();
-                        let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
+                        wait_for_tx_latency_observer.observe();
+                        let execute_latency_observer = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx.clone().encode()).await {
                             Ok(_res) => {
-                                latency.observe();
+                                execute_latency_observer.observe();
                                 GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();
 
                                 executed_txs.push(tx);
@@ -83,23 +86,29 @@ pub async fn execute_block(
                                 }
                             }
                             Err(e) => {
+                                let is_l1 = tx.tx_type() == ZkTxType::L1;
+                                if is_l1 {
+                                    return Err(anyhow!("invalid l1 tx: {e:?}"));
+                                } else {
+                                    match command.invalid_tx_policy {
+                                        InvalidTxPolicy::RejectAndContinue => {
+                                            let rejection_method = rejection_method(e.clone());
 
-                                // todo: Some error types mean that the transaction is invalid but could be valid in the future (NonceTooHigh, GasPriceLessThanBasefee etc),
-                                // todo: some mean it will never be valid (NonceTooLow, BaseFeeGreaterThanMaxFee etc),
-                                // todo: some are in the gray zone (e.g. LackOfFundForMaxFee)
-                                // todo: and some are just fatal protocol errors (e.g. UpgradeTxNotFirst, BlockGasLimitTooHigh).
-                                // todo: we may apply this classification on zksync-os side or on the server side
-
-                                // todo: we'll need to mark tx as invalid for RETH mempool - use the same hook to bail on invalid l1 transactions
-                                // todo: (that is, the difference in l1/l2 logic on invalid tx will be handled in block_transactions_provider -
-                                // todo: for l2 forwarded to mempool, for l1 bailed)
-                                match command.invalid_tx_policy {
-                                    InvalidTxPolicy::RejectAndContinue => {
-                                        tracing::warn!(block = ctx.block_number, ?e,
-                                                       "invalid tx → skipped");
-                                    }
-                                    InvalidTxPolicy::Abort => {
-                                        return Err(anyhow!("invalid tx: {e:?}"));
+                                            // mark the tx as invalid regardless of the `rejection_method`.
+                                            command.tx_source.as_mut().mark_last_tx_as_invalid();
+                                            // add tx to `purged_txs` only if we are purging it.
+                                            match rejection_method {
+                                                TxRejectionMethod::Purge => {
+                                                    purged_txs.push((*tx.hash(), e.clone()));
+                                                }
+                                                TxRejectionMethod::Skip => {},
+                                            }
+                                            tracing::warn!(block = ctx.block_number, ?e,
+                                                           "invalid tx → skipped");
+                                        }
+                                        InvalidTxPolicy::Abort => {
+                                            return Err(anyhow!("invalid l2 tx: {e:?}"));
+                                        }
                                     }
                                 }
                             }
@@ -130,7 +139,7 @@ pub async fn execute_block(
             }
         }
     }
-    let latency = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
+    let seal_latency_observer = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
 
     /* ---------- seal & return ------------------------------------- */
     let output = runner
@@ -140,10 +149,58 @@ pub async fn execute_block(
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
-    latency.observe();
+    seal_latency_observer.observe();
 
     Ok((
         output,
         ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
+        purged_txs,
     ))
+}
+
+enum TxRejectionMethod {
+    // purge tx from the mempool
+    Purge,
+    // skip tx and all its descendants for the current block
+    Skip,
+}
+
+fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
+    match error {
+        InvalidTransaction::InvalidEncoding
+        | InvalidTransaction::InvalidStructure
+        | InvalidTransaction::PriorityFeeGreaterThanMaxFee
+        | InvalidTransaction::BaseFeeGreaterThanMaxFee
+        | InvalidTransaction::CallerGasLimitMoreThanBlock
+        | InvalidTransaction::CallGasCostMoreThanGasLimit
+        | InvalidTransaction::RejectCallerWithCode
+        | InvalidTransaction::OverflowPaymentInTransaction
+        | InvalidTransaction::NonceOverflowInTransaction
+        | InvalidTransaction::NonceTooLow { .. }
+        | InvalidTransaction::MalleableSignature
+        | InvalidTransaction::IncorrectFrom { .. }
+        | InvalidTransaction::CreateInitCodeSizeLimit
+        | InvalidTransaction::InvalidChainId
+        | InvalidTransaction::AccessListNotSupported
+        | InvalidTransaction::GasPerPubdataTooHigh
+        | InvalidTransaction::BlockGasLimitTooHigh
+        | InvalidTransaction::UpgradeTxNotFirst
+        | InvalidTransaction::Revert { .. }
+        | InvalidTransaction::ReceivedInsufficientFees { .. }
+        | InvalidTransaction::InvalidMagic
+        | InvalidTransaction::InvalidReturndataLength
+        | InvalidTransaction::OutOfGasDuringValidation
+        | InvalidTransaction::OutOfNativeResourcesDuringValidation
+        | InvalidTransaction::NonceUsedAlready
+        | InvalidTransaction::NonceNotIncreased
+        | InvalidTransaction::PaymasterReturnDataTooShort
+        | InvalidTransaction::PaymasterInvalidMagic
+        | InvalidTransaction::PaymasterContextInvalid
+        | InvalidTransaction::PaymasterContextOffsetTooLong
+        | InvalidTransaction::UpgradeTxFailed => TxRejectionMethod::Purge,
+
+        InvalidTransaction::GasPriceLessThanBasefee
+        | InvalidTransaction::LackOfFundForMaxFee { .. }
+        | InvalidTransaction::NonceTooHigh { .. } => TxRejectionMethod::Skip,
+    }
 }

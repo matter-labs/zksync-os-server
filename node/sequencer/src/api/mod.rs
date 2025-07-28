@@ -2,6 +2,7 @@ mod call_fees;
 mod eth_call_handler;
 mod eth_filter_impl;
 mod eth_impl;
+mod eth_pubsub_impl;
 mod metrics;
 mod result;
 mod tx_handler;
@@ -9,24 +10,28 @@ mod types;
 
 use crate::api::eth_filter_impl::EthFilterNamespace;
 use crate::api::eth_impl::EthNamespace;
+use crate::api::eth_pubsub_impl::EthPubsubNamespace;
 use crate::block_replay_storage::BlockReplayStorage;
-use crate::config::RpcConfig;
-use crate::repositories::api_interface::ApiRepository;
+use crate::config::{GenesisConfig, RpcConfig};
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
-use alloy::eips::{BlockId, BlockNumberOrTag};
-use alloy::primitives::BlockNumber;
+use alloy::primitives::Address;
 use anyhow::Context;
-use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::RpcModule;
+use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use zksync_os_mempool::RethPool;
+use zksync_os_rpc::zks_impl::ZksNamespace;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
+use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_state::StateHandle;
 
 // stripped-down version of `api_server/src/web3/mod.rs`
 pub async fn run_jsonrpsee_server(
     config: RpcConfig,
+    genesis_config: GenesisConfig,
+    bridgehub_address: Address,
 
     repository_manager: RepositoryManager,
     state_handle: StateHandle,
@@ -43,14 +48,19 @@ pub async fn run_jsonrpsee_server(
             state_handle,
             mempool.clone(),
             block_replay_storage,
+            genesis_config.chain_id,
         )
         .into_rpc(),
     )?;
-    rpc.merge(EthFilterNamespace::new(config.clone(), repository_manager, mempool).into_rpc())?;
+    rpc.merge(
+        EthFilterNamespace::new(config.clone(), repository_manager.clone(), mempool.clone())
+            .into_rpc(),
+    )?;
+    rpc.merge(EthPubsubNamespace::new(repository_manager, mempool).into_rpc())?;
+    rpc.merge(ZksNamespace::new(bridgehub_address).into_rpc())?;
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
-        .http_only()
         .build();
     let server_builder = ServerBuilder::default().set_config(server_config);
     // .set_http_middleware(middleware)
@@ -67,25 +77,4 @@ pub async fn run_jsonrpsee_server(
 
     server_handle.stopped().await;
     Ok(())
-}
-
-// todo: consider best place for this logic
-pub fn resolve_block_id(block: BlockId, repository_manager: &RepositoryManager) -> BlockNumber {
-    match block {
-        BlockId::Hash(_) => unimplemented!(),
-        // TODO: return last sealed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Pending) => repository_manager.get_canonized_block(),
-        BlockId::Number(BlockNumberOrTag::Latest) => repository_manager.get_canonized_block(),
-        // TODO: return last committed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Safe) => repository_manager.get_canonized_block(),
-        // TODO: return last executed block here when available instead
-        BlockId::Number(BlockNumberOrTag::Finalized) => repository_manager.get_canonized_block(),
-        BlockId::Number(BlockNumberOrTag::Earliest) => unimplemented!(),
-        BlockId::Number(BlockNumberOrTag::Number(number)) => {
-            // note: we don't check whether the requested Block Number is less than `BLOCKS_TO_RETAIN` behind -
-            // we won't be able to serve `eth_call`s and `storage_at`s for it
-            // this will be handled when instantiating `StorageView` for it
-            number
-        }
-    }
 }

@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +14,9 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: matterlabs-ci-runner-ultra-performance
+    strategy:
+      matrix:
+        filterset: [ "core", "prover" ]
 
     steps:
     - name: Checkout code
@@ -52,15 +54,17 @@ jobs:
         ci_run /root/.foundry/bin/foundryup
         echo /root/.foundry/bin >> $GITHUB_PATH
 
-    - name: Build test-contracts
-      run: ci_run forge build --root integration-tests/test-contracts
+    - name: Run integration tests (no prover)
+      if: matrix.filterset == 'core'
+      # Run all tests that don't require features enabled (e.g. `prover-tests`/`gpu-prover-tests`).
+      run: ci_run cargo nextest run --profile ci -p zksync_os_integration_tests
 
-    # todo: move linting for both core and integration-tests to a separate job
-    - name: Run clippy
-      run: ci_run cargo clippy --all-targets --all-features -p zksync_os_integration_tests -- -D warnings
-
-    - name: Run integration tests
-      run: ci_run cargo test --verbose -p zksync_os_integration_tests
+    - name: Run integration tests (prover)
+      if: matrix.filterset == 'prover'
+      # Run prover tests. They need to be compiled in release mode for efficiency and to avoid stack overflow errors.
+      # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
+      # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
+      run: ci_run cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
 
     - name: Show sccache logs
       if: always()

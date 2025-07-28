@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use std::sync::atomic::AtomicU64;
 use std::{
     collections::HashMap,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
 };
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::StorageWrite;
@@ -69,8 +69,8 @@ impl StorageMap {
         );
 
         // we cannot provide keys for block N when it's already compacted
-        // because view_at(N) should return view for the BEGINNING of block N
-        if block_number <= persistent_block_upper_bound {
+        // because view_at(N) should return view immediately after block N
+        if block_number < persistent_block_upper_bound {
             return Err(anyhow::anyhow!(
                 "Cannot create StorageView for potentially compacted block {} (potentially compacted until {}, at least until {})",
                 block_number,
@@ -79,7 +79,7 @@ impl StorageMap {
             ));
         }
 
-        if block_number > latest_block + 1 {
+        if block_number > latest_block {
             return Err(anyhow::anyhow!(
                 "Cannot create StorageView for block {} - latest known block number is {}",
                 block_number,
@@ -112,7 +112,7 @@ impl StorageMap {
     /// Adds a diff for block `block` (thus providing state for `block + 1`)
     /// Must be contiguous - that is, can only add blocks in order
     pub fn add_diff(&self, block_number: u64, writes: Vec<StorageWrite>) {
-        let started_at = STORAGE_MAP_METRICS.add_diff.start();
+        let total_latency_observer = STORAGE_MAP_METRICS.add_diff.start();
 
         let latest_memory_block = self.latest_block.load(Ordering::Relaxed);
 
@@ -156,7 +156,7 @@ impl StorageMap {
             self.diffs.insert(block_number, Arc::new(new_diff));
         }
         self.latest_block.store(block_number, Ordering::Relaxed);
-        started_at.observe();
+        total_latency_observer.observe();
     }
 
     /// Moves elements from `diffs` to the persistence
@@ -220,7 +220,7 @@ impl StorageMap {
                     return Err(anyhow::anyhow!(
                         "StorageMap: compacting diffs, but no diff found for block {}",
                         block_number
-                    ))
+                    ));
                 }
             }
         }

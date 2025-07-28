@@ -8,7 +8,7 @@ use crate::{
 };
 use alloy::primitives::U256;
 use rand::prelude::IndexedRandom;
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod consistency;

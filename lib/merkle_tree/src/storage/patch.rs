@@ -10,12 +10,12 @@ use anyhow::Context as _;
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
+    DeserializeError, HashTree, MerkleTree, TreeBatchOutput, TreeEntry, TreeParams,
     errors::{DeserializeContext, DeserializeErrorKind},
     hasher::{BatchTreeProof, IntermediateHash, InternalHashes, TreeOperation},
     leaf_nibbles, max_nibbles_for_internal_node, max_node_children,
     metrics::{BatchProofStage, LoadStage, METRICS},
     types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root, TreeTags},
-    BatchOutput, DeserializeError, HashTree, MerkleTree, TreeEntry, TreeParams,
 };
 
 #[derive(Debug)]
@@ -485,7 +485,7 @@ impl<P: TreeParams> WorkingPatchSet<P> {
         self,
         hasher: &P::Hasher,
         update: FinalTreeUpdate,
-    ) -> (PatchSet, BatchOutput) {
+    ) -> (PatchSet, TreeBatchOutput) {
         use rayon::prelude::*;
 
         let mut this = self.inner;
@@ -515,7 +515,7 @@ impl<P: TreeParams> WorkingPatchSet<P> {
         assert_eq!(hashes.len(), 1);
         let (root_idx, root_hash) = hashes[0];
         assert_eq!(root_idx, 0);
-        let output = BatchOutput {
+        let output = TreeBatchOutput {
             leaf_count: this.leaf_count,
             root_hash,
         };
@@ -561,12 +561,12 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             .chain(read_keys.iter().copied())
             .collect();
 
-        let key_lookup_latency = METRICS.load_nodes_latency[&LoadStage::KeyLookup].start();
+        let key_lookup_latency_observer = METRICS.load_nodes_latency[&LoadStage::KeyLookup].start();
         let lookup = self
             .db
             .indices(latest_version, &touched_keys)
             .context("failed loading indices")?;
-        let elapsed = key_lookup_latency.observe();
+        let elapsed = key_lookup_latency_observer.observe();
         tracing::debug!(?elapsed, "loaded lookup info");
 
         // Collect all distinct indices that need to be loaded.
@@ -635,10 +635,10 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             read_operations.push(read_op);
         }
 
-        let tree_nodes_latency = METRICS.load_nodes_latency[&LoadStage::TreeNodes].start();
+        let tree_nodes_latency_observer = METRICS.load_nodes_latency[&LoadStage::TreeNodes].start();
         let mut patch = WorkingPatchSet::new(root);
         patch.load_nodes(&self.db, distinct_indices.iter().copied())?;
-        let elapsed = tree_nodes_latency.observe();
+        let elapsed = tree_nodes_latency_observer.observe();
         tracing::debug!(
             ?elapsed,
             distinct_indices.len = distinct_indices.len(),

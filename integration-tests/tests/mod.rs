@@ -1,14 +1,16 @@
 use alloy::eips::eip1559::Eip1559Estimation;
+use alloy::eips::eip2930::AccessList;
 use alloy::network::{TransactionBuilder, TxSigner};
 use alloy::primitives::{Address, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
-use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::{AccessListItem, TransactionRequest};
 use std::str::FromStr;
 use tokio::time::Instant;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
+use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
 
 #[test_log::test(tokio::test)]
 async fn basic_transfers() -> anyhow::Result<()> {
@@ -18,27 +20,22 @@ async fn basic_transfers() -> anyhow::Result<()> {
     let alice_balance_before = tester.l2_provider.get_balance(alice).await?;
 
     let deposit_amount = U256::from(100);
-    let mut receipt_futures = vec![];
+    let mut pending_txs = vec![];
     let start = Instant::now();
     for _ in 0..100 {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
             .with_value(deposit_amount);
-        let receipt_future = tester.l2_provider.send_transaction(tx).await?.get_receipt();
-        receipt_futures.push(receipt_future);
+        pending_txs.push(tester.l2_provider.send_transaction(tx).await?);
     }
     tracing::info!(elapsed = ?start.elapsed(), "submitted all tx requests");
 
     let start = Instant::now();
-    let receipts = futures::future::join_all(receipt_futures)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
+    let receipts = pending_txs.expect_successful_receipts().await?;
     tracing::info!(elapsed = ?start.elapsed(), "resolved all tx receipts");
 
     let start = Instant::now();
     for receipt in receipts {
-        assert!(receipt.status(), "transaction failed");
         let balance = tester.l2_provider.get_balance(receipt.to.unwrap()).await?;
         assert_eq!(balance, deposit_amount);
     }
@@ -78,14 +75,15 @@ async fn l1_deposit() -> anyhow::Result<()> {
             }
         }))
         .await?;
+    let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
-            U256::from(base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas),
+            U256::from(max_fee_per_gas + max_priority_fee_per_gas),
             gas_limit,
             gas_per_pubdata,
         )
         .await?;
-    let l1_deposit_receipt = bridgehub
+    let l1_deposit_request = bridgehub
         .request_l2_transaction_direct(
             amount + tx_base_cost,
             alice,
@@ -96,11 +94,15 @@ async fn l1_deposit() -> anyhow::Result<()> {
             alice,
         )
         .value(amount + tx_base_cost)
-        .send()
+        .max_fee_per_gas(max_fee_per_gas)
+        .max_priority_fee_per_gas(max_priority_fee_per_gas)
+        .into_transaction_request();
+    let l1_deposit_receipt = tester
+        .l1_provider
+        .send_transaction(l1_deposit_request)
         .await?
-        .get_receipt()
+        .expect_successful_receipt()
         .await?;
-    assert!(l1_deposit_receipt.status(), "deposit failed on L1");
     let l1_to_l2_tx_log = l1_deposit_receipt
         .logs()
         .iter()
@@ -114,20 +116,17 @@ async fn l1_deposit() -> anyhow::Result<()> {
         let tx = TransactionRequest::default()
             .with_to(Address::random())
             .with_value(U256::from(100));
-        let receipt = tester
+        tester
             .l2_provider
             .send_transaction(tx)
             .await?
-            .get_receipt()
+            .expect_successful_receipt()
             .await?;
-        assert!(receipt.status(), "transaction failed");
     }
 
-    let l2_deposit_receipt =
-        PendingTransactionBuilder::new(tester.l2_provider.root().clone(), l2_tx_hash)
-            .get_receipt()
-            .await?;
-    assert!(l2_deposit_receipt.status(), "deposit failed on L2");
+    PendingTransactionBuilder::new(tester.l2_provider.root().clone(), l2_tx_hash)
+        .expect_successful_receipt()
+        .await?;
     let fee = U256::from(l1_deposit_receipt.effective_gas_price)
         * U256::from(l1_deposit_receipt.gas_used);
 
@@ -135,6 +134,26 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let alice_l2_final_balance = tester.l2_provider.get_balance(alice).await?;
     assert!(alice_l1_final_balance <= alice_l1_initial_balance - fee - amount);
     assert!(alice_l2_final_balance >= alice_l2_initial_balance + amount);
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn eip2930() -> anyhow::Result<()> {
+    // Test that the node can process EIP-2930 transactions
+    let tester = Tester::setup().await?;
+
+    let tx = TransactionRequest::default()
+        .from(tester.l2_wallet.default_signer().address())
+        .to(Address::random())
+        .value(U256::from(100))
+        .access_list(AccessList(vec![AccessListItem::default()]));
+    tester
+        .l2_provider
+        .send_transaction(tx)
+        .await?
+        .expect_successful_receipt()
+        .await?;
 
     Ok(())
 }
