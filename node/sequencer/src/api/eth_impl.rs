@@ -605,7 +605,7 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         _block_number: Option<BlockId>,
         _state_override: Option<StateOverride>,
     ) -> RpcResult<AccessListResult> {
-        // todo(EIP-7702)
+        // todo(#119)
         Err(unimplemented_rpc_err())
     }
 

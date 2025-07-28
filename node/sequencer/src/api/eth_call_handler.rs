@@ -488,9 +488,9 @@ pub enum EthCallError {
 
     // Below is more or less temporary as the error hierarchy in ZKsync OS is going through a major
     // refactoring.
-    /// Internal error propagated by ZKsync OS.
+    /// Internal error propagated by ZKsync OS. Boxed due to its large size.
     #[error("ZKsync OS error: {0:?}")]
-    ForwardSubsystemError(ForwardSubsystemError),
+    ForwardSubsystemError(Box<ForwardSubsystemError>),
     /// Transaction is invalid according to ZKsync OS.
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),

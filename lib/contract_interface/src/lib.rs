@@ -1,7 +1,9 @@
 use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, requestL2TransactionDirectCall,
 };
+use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
+use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, B256, U256};
 use alloy::providers::Provider;
@@ -81,6 +83,8 @@ alloy::sol! {
     interface IZKChain {
         function storedBatchHash(uint256 _batchNumber) external view returns (bytes32);
         function getTotalBatchesCommitted() external view returns (uint256);
+        function getTotalPriorityTxs() external view returns (uint256);
+        function getFirstUnprocessedPriorityTx() external view returns (uint256);
     }
 
     // Taken from `IExecutor.sol`
@@ -124,7 +128,7 @@ pub struct Bridgehub<P: Provider> {
     l2_chain_id: u64,
 }
 
-impl<P: Provider> Bridgehub<P> {
+impl<P: Provider + Clone> Bridgehub<P> {
     pub fn new(address: Address, provider: P, l2_chain_id: u64) -> Self {
         let instance = IBridgehub::new(address, provider);
         Self {
@@ -198,31 +202,73 @@ impl<P: Provider> Bridgehub<P> {
             .await
     }
 
-    pub async fn zk_chain_address(&self) -> alloy::contract::Result<Address> {
-        self.instance
+    pub async fn zk_chain(&self) -> alloy::contract::Result<ZkChain<P>> {
+        let zk_chain_address = self
+            .instance
             .getZKChain(U256::from(self.l2_chain_id))
             .call()
-            .await
+            .await?;
+        Ok(ZkChain::new(
+            zk_chain_address,
+            self.instance.provider().clone(),
+        ))
     }
 
-    // TODO: Consider creating a separate `ZkChain` struct
+    pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
+        self.instance.getAllZKChainChainIDs().call().await
+    }
+}
+
+pub struct ZkChain<P: Provider> {
+    instance: IZKChainInstance<P, Ethereum>,
+}
+
+impl<P: Provider> ZkChain<P> {
+    pub fn new(address: Address, provider: P) -> Self {
+        let instance = IZKChainInstance::new(address, provider);
+        Self { instance }
+    }
+
+    pub fn address(&self) -> &Address {
+        self.instance.address()
+    }
+
+    pub fn provider(&self) -> &P {
+        self.instance.provider()
+    }
+
     pub async fn stored_batch_hash(&self, batch_number: u64) -> alloy::contract::Result<B256> {
-        let zk_chain_address = self.zk_chain_address().await?;
-        let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider());
-        zk_chain
+        self.instance
             .storedBatchHash(U256::from(batch_number))
             .call()
             .await
     }
 
-    // TODO: Consider creating a separate `ZkChain` struct
     pub async fn get_total_batches_committed(&self) -> alloy::contract::Result<U256> {
-        let zk_chain_address = self.zk_chain_address().await?;
-        let zk_chain = IZKChain::new(zk_chain_address, self.instance.provider());
-        zk_chain.getTotalBatchesCommitted().call().await
+        self.instance.getTotalBatchesCommitted().call().await
     }
 
-    pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
-        self.instance.getAllZKChainChainIDs().call().await
+    pub async fn get_total_priority_txs_at_block(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<u64> {
+        self.instance
+            .getTotalPriorityTxs()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
+    }
+
+    pub async fn get_first_unprocessed_priority_tx_at_block(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<u64> {
+        self.instance
+            .getFirstUnprocessedPriorityTx()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
     }
 }

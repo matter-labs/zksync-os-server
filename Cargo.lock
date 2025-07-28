@@ -1740,7 +1740,7 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "arrayvec",
  "basic_system",
@@ -1758,7 +1758,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -2501,7 +2501,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -2606,7 +2606,7 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 
 [[package]]
 name = "darling"
@@ -2997,7 +2997,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3047,7 +3047,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "arrayvec",
  "crypto",
@@ -3282,7 +3282,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "arrayvec",
  "basic_bootloader",
@@ -4900,7 +4900,7 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 
 [[package]]
 name = "modular-bitfield"
@@ -5345,7 +5345,7 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.3.1)",
  "zk_ee",
@@ -7200,7 +7200,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7266,7 +7266,7 @@ dependencies = [
  "security-framework 3.2.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8072,7 +8072,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "crypto",
  "zk_ee",
@@ -8267,7 +8267,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "arrayvec",
  "cycle_marker",
@@ -8294,7 +8294,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9893,7 +9893,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "arrayvec",
  "bitflags 2.9.1",
@@ -9978,7 +9978,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_api"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "basic_system",
  "crypto",
@@ -10118,7 +10118,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?branch=v0.0.5-zksync-os-server#96e89adf1a1b9a1b6bfaf65ac9d8e66711e4af8f"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.6#09b86d0eea4424f464a1ed8253ee4fd95ffc77a1"
 dependencies = [
  "cycle_marker",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.3.1)",
