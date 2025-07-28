@@ -353,9 +353,9 @@ impl<R: ApiRepository + 'static> EthFilterApiServer for EthFilterNamespace<R> {
     }
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency = API_METRICS.response_time[&"get_logs"].start();
+        let latency_observer = API_METRICS.response_time[&"get_logs"].start();
         let logs = self.logs_impl(filter).to_rpc_result()?;
-        latency.observe();
+        latency_observer.observe();
 
         Ok(logs)
     }
