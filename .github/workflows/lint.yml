@@ -1,0 +1,60 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  PASSED_ENV_VARS: RUST_BACKTRACE
+
+jobs:
+  lint:
+    name: Build and Test
+    runs-on: matterlabs-ci-runner-highmem-long
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup misc environment variables
+        shell: bash
+        run: |
+          echo $(pwd)/.github/scripts >> $GITHUB_PATH
+          echo ZKSYNC_OS_HOME=$(pwd) >> $GITHUB_ENV
+
+      - name: Setup sccache for building Rust code inside Docker
+        shell: bash
+        run: |
+          echo SCCACHE_CACHE_SIZE=50G >> .github/.env
+          echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> .github/.env
+          echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> .github/.env
+          echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> .github/.env
+          echo SCCACHE_GCS_RW_MODE=READ_WRITE >> .github/.env
+          echo RUSTC_WRAPPER=sccache >> .github/.env
+          echo DOCKER_PWD=$(pwd) >> .github/.env
+
+      - name: Start CI Docker
+        shell: bash
+        run: ci_up
+
+      - name: Start sccache server
+        shell: bash
+        run: ci_run sccache --start-server
+
+      - name: Check formatting
+        run: ci_run cargo fmt --all -- --check
+
+      - name: Run clippy (core)
+        run: ci_run cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings
+
+      - name: Run clippy (integration tests)
+        run: ci_run cargo clippy --all-targets -p zksync_os_integration_tests -- -D warnings
+
+      - name: Show sccache logs
+        if: always()
+        run: |
+          ci_run sccache --show-stats || true
+          ci_run cat /tmp/sccache_log.txt || true
