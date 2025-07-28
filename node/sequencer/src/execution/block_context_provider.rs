@@ -1,4 +1,3 @@
-use crate::CHAIN_ID;
 use crate::model::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
@@ -36,6 +35,7 @@ pub struct BlockContextProvider {
     l1_mempool: DynL1Pool,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
+    chain_id: u64,
 }
 
 impl BlockContextProvider {
@@ -44,12 +44,14 @@ impl BlockContextProvider {
         l1_mempool: DynL1Pool,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
+        chain_id: u64,
     ) -> Self {
         Self {
             next_l1_priority_id,
             l1_mempool,
             l2_mempool,
             block_hashes_for_next_block,
+            chain_id,
         }
     }
 
@@ -95,7 +97,7 @@ impl BlockContextProvider {
                     gas_per_pubdata: Default::default(),
                     block_number: produce_command.block_number,
                     timestamp,
-                    chain_id: CHAIN_ID,
+                    chain_id: self.chain_id,
                     gas_limit,
                     coinbase: Default::default(),
                     block_hashes: self.block_hashes_for_next_block,

@@ -19,8 +19,8 @@ use crate::api::run_jsonrpsee_server;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
-    BatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
-    SequencerConfig,
+    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RpcConfig, SequencerConfig,
 };
 use crate::metrics::GENERAL_METRICS;
 use crate::model::{BatchForProving, BatchReplayData, ProduceCommand, ReplayRecord};
@@ -67,8 +67,6 @@ use zksync_storage::RocksDB;
 // * WAL of BlockReplayData (only in centralized case)
 //
 // Note that for API additional data may be reqiured (block/tx receipts)
-
-const CHAIN_ID: u64 = 270;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -239,6 +237,7 @@ fn command_source(
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     stop_receiver: watch::Receiver<bool>,
+    genesis_config: GenesisConfig,
     rpc_config: RpcConfig,
     mempool_config: MempoolConfig,
     sequencer_config: SequencerConfig,
@@ -274,7 +273,8 @@ pub async fn run(
     )
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
-    let block_replay_storage = BlockReplayStorage::new(block_replay_storage_rocks_db, CHAIN_ID);
+    let block_replay_storage =
+        BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
 
     tracing::info!("Initializing StateHandle");
     let state_handle = StateHandle::new(StateConfig {
@@ -302,7 +302,11 @@ pub async fn run(
 
     tracing::info!("Initializing mempools");
     let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
-        ZkClient::new(repositories.clone(), state_handle.clone()),
+        ZkClient::new(
+            repositories.clone(),
+            state_handle.clone(),
+            genesis_config.chain_id,
+        ),
         forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
@@ -383,6 +387,7 @@ pub async fn run(
         l1_mempool,
         l2_mempool.clone(),
         block_hashes_for_next_block,
+        genesis_config.chain_id,
     );
 
     if !batcher_config.subsystem_enabled {
@@ -432,6 +437,7 @@ pub async fn run(
     let batcher_task = {
         let batcher = Batcher::new(
             last_committed_batch_number + 1,
+            genesis_config.chain_id,
             sequencer_config.rocks_db_path.clone(),
             blocks_for_batcher_receiver,
             batch_data_sender,
@@ -516,6 +522,7 @@ pub async fn run(
         // todo: only start after the sequencer caught up?
         res = run_jsonrpsee_server(
             rpc_config,
+            genesis_config.clone(),
             repositories.clone(),
             state_handle.clone(),
             l2_mempool,

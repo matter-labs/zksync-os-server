@@ -1,4 +1,3 @@
-use crate::CHAIN_ID;
 use crate::repositories::RepositoryManager;
 use crate::repositories::api_interface::ApiRepository;
 use alloy::eips::{BlockNumHash, BlockNumberOrTag};
@@ -32,9 +31,9 @@ pub struct ZkClient {
 }
 
 impl ZkClient {
-    pub fn new(repositories: RepositoryManager, state_handle: StateHandle) -> Self {
+    pub fn new(repositories: RepositoryManager, state_handle: StateHandle, chain_id: u64) -> Self {
         let builder = ChainSpecBuilder::default()
-            .chain(Chain::from(CHAIN_ID))
+            .chain(Chain::from(chain_id))
             // Activate everything up to Cancun
             // TODO: Does it make sense to active Cancun if we do not support 4844 transactions?
             //       Maybe drop down to Shanghai?

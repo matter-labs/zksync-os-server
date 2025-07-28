@@ -1,4 +1,3 @@
-use crate::CHAIN_ID;
 use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
@@ -56,6 +55,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
         state_handle: StateHandle,
         mempool: RethPool<ZkClient>,
         block_replay_storage: BlockReplayStorage,
+        chain_id: u64,
     ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
 
@@ -64,6 +64,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
             state_handle.clone(),
             block_replay_storage,
             repository.clone(),
+            chain_id,
         );
         Self {
             tx_handler,
@@ -71,7 +72,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
             repository,
             mempool,
             state_handle,
-            chain_id: CHAIN_ID,
+            chain_id,
         }
     }
 }

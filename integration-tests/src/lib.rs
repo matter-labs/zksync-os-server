@@ -94,6 +94,7 @@ impl Tester {
         let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
+                Default::default(),
                 rpc_config,
                 MempoolConfig::default(),
                 sequencer_config,

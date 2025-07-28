@@ -9,10 +9,6 @@ pub struct RpcConfig {
     #[config(default_t = "0.0.0.0:3050".into())]
     pub address: String,
 
-    /// Chain ID of the chain node operates on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
-
     /// Gas limit of transactions executed via eth_call
     #[config(default_t = 10000000)]
     pub eth_call_gas: usize,
@@ -115,4 +111,12 @@ pub struct ProverApiConfig {
     ///
     #[config(default_t = 1000)]
     pub max_unproved_blocks: usize,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct GenesisConfig {
+    /// Chain ID of the chain node operates on.
+    #[config(default_t = 270)]
+    pub chain_id: u64,
 }
