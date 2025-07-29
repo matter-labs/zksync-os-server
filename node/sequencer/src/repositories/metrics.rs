@@ -21,6 +21,7 @@ pub struct RepositoriesMetrics {
     pub block_data_size: Histogram<usize>,
     #[metrics(unit = Unit::Bytes, buckets = BLOCK_DATA_SIZES)]
     pub block_data_size_per_tx: Histogram<usize>,
+    pub in_memory_txs_count: Gauge<usize>,
 }
 
 #[vise::register]

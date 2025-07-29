@@ -12,7 +12,7 @@ pub struct BlockReceiptRepository {
     /// Map from block number → block hash.
     hash_index: Arc<DashMap<BlockNumber, BlockHash>>,
     /// Map from block hash → block.
-    receipts: Arc<DashMap<BlockHash, alloy::consensus::Block<TxHash>>>,
+    receipts: Arc<DashMap<BlockHash, Arc<Sealed<alloy::consensus::Block<TxHash>>>>>,
 }
 
 impl BlockReceiptRepository {
@@ -24,23 +24,11 @@ impl BlockReceiptRepository {
     /// Insert the `BatchOutput` for `block`.
     ///
     /// Must be called with `block == latest_block() + 1`.
-    pub fn insert(
-        &self,
-        header: &Sealed<zk_os_forward_system::run::output::BlockHeader>,
-        tx_hashes: Vec<TxHash>,
-    ) {
-        let number = header.number;
-        let block = alloy::consensus::Block {
-            header: alloy_header(header),
-            body: alloy::consensus::BlockBody {
-                transactions: tx_hashes.clone(),
-                ommers: vec![],
-                withdrawals: None,
-            },
-        };
-        // Store the new receipt
-        self.receipts.insert(header.hash(), block);
-        self.hash_index.insert(number, header.hash());
+    pub fn insert(&self, block: Arc<Sealed<alloy::consensus::Block<TxHash>>>) {
+        let number = block.number;
+        let hash = block.hash();
+        self.receipts.insert(hash, block);
+        self.hash_index.insert(number, hash);
     }
 
     /// Retrieve the block by its number, if present.
@@ -51,9 +39,7 @@ impl BlockReceiptRepository {
 
     /// Retrieve the block by its hash, if present.
     pub fn get_by_hash(&self, hash: BlockHash) -> Option<RepositoryBlock> {
-        self.receipts
-            .get(&hash)
-            .map(|r| Sealed::new_unchecked(r.value().clone(), hash))
+        self.receipts.get(&hash).map(|r| r.value().as_ref().clone())
     }
 
     pub fn remove_by_number(&self, number: BlockNumber) {

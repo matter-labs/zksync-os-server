@@ -263,7 +263,7 @@ impl<R: ApiRepository> EthNamespace<R> {
         };
         let mut log_index_in_tx = 0;
         let inner_receipt = stored_tx.receipt.map_logs(|inner_log| {
-            let log = build_api_log(tx_hash, inner_log, stored_tx.meta, log_index_in_tx);
+            let log = build_api_log(tx_hash, inner_log, stored_tx.meta.clone(), log_index_in_tx);
             log_index_in_tx += 1;
             log
         });
