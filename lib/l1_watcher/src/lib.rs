@@ -1,6 +1,5 @@
 mod config;
 
-
 pub use crate::config::L1WatcherConfig;
 use zksync_os_types::L1Envelope;
 
@@ -12,8 +11,8 @@ use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
-use tokio::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 

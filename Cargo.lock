@@ -10068,7 +10068,6 @@ dependencies = [
  "tokio",
  "tracing",
  "zksync_os_contract_interface",
- "zksync_os_mempool",
  "zksync_os_types",
  "zksync_storage",
 ]
