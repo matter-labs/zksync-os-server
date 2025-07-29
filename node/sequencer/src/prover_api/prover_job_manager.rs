@@ -87,16 +87,16 @@ impl ProverJobManager {
             return Some((batch_number, prover_input));
         }
 
-        if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number() {
-            if max - min >= self.max_assigned_batch_range as u64 {
-                // fresh assignments are not allowed when there are too many assigned jobs
-                tracing::debug!(
-                    assigned_jobs_count = self.assigned_jobs.len(),
-                    max_assigned_batch_range = self.max_assigned_batch_range,
-                    "too many assigned jobs; returning None"
-                );
-                return None;
-            }
+        if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
+            && max - min >= self.max_assigned_batch_range as u64
+        {
+            // fresh assignments are not allowed when there are too many assigned jobs
+            tracing::debug!(
+                assigned_jobs_count = self.assigned_jobs.len(),
+                max_assigned_batch_range = self.max_assigned_batch_range,
+                "too many assigned jobs; returning None"
+            );
+            return None;
         }
 
         // 2) Otherwise, consume one item from inbound - if it meets the age gate.

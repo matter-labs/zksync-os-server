@@ -15,7 +15,7 @@ use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
-use zk_os_forward_system::run::{BatchContext, BatchOutput};
+use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, ReplayTxStream, RethPool,
     RethTransactionPoolExt, best_transactions,
@@ -93,7 +93,7 @@ impl BlockContextProvider {
                 let best_txs = best_transactions(&self.l2_mempool, l1_transactions);
                 let gas_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
-                let block_context = BatchContext {
+                let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
                     native_price: U256::from(1),
                     gas_per_pubdata: Default::default(),
@@ -135,7 +135,7 @@ impl BlockContextProvider {
 
     pub fn on_canonical_state_change(
         &mut self,
-        block_output: &BatchOutput,
+        block_output: &BlockOutput,
         replay_record: &ReplayRecord,
     ) {
         let mut l2_transactions = Vec::new();
@@ -188,11 +188,11 @@ impl BlockContextProvider {
     }
 }
 
-/// Extract changed accounts from a BatchOutput.
+/// Extract changed accounts from a BlockOutput.
 ///
 /// This method processes the published preimages and storage writes to extract
 /// accounts that were updated during block execution.
-pub fn extract_changed_accounts(block_output: &BatchOutput) -> Vec<ChangedAccount> {
+pub fn extract_changed_accounts(block_output: &BlockOutput) -> Vec<ChangedAccount> {
     // First, collect all account properties from published preimages
     let mut account_properties_preimages = HashMap::new();
     for (hash, preimage, preimage_type) in &block_output.published_preimages {

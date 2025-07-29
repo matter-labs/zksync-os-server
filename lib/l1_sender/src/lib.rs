@@ -237,16 +237,16 @@ impl Heartbeat {
             };
             let block = block?;
 
-            if let Some(last_l1_block_number) = self.last_l1_block_number {
-                if block.header.number != last_l1_block_number + 1 {
-                    // This can happen if there is a reorg on L1. As a temporary measure we restart which
-                    // forces us to re-initialize L1 sender.
-                    anyhow::bail!(
-                        "received non-sequential L1 block #{} (expected #{}); restarting",
-                        block.header.number,
-                        last_l1_block_number + 1
-                    );
-                }
+            if let Some(last_l1_block_number) = self.last_l1_block_number
+                && block.header.number != last_l1_block_number + 1
+            {
+                // This can happen if there is a reorg on L1. As a temporary measure we restart which
+                // forces us to re-initialize L1 sender.
+                anyhow::bail!(
+                    "received non-sequential L1 block #{} (expected #{}); restarting",
+                    block.header.number,
+                    last_l1_block_number + 1
+                );
             }
             self.last_l1_block_number.replace(block.header.number);
 

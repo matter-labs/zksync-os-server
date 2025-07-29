@@ -19,6 +19,7 @@ impl NamedColumnFamily for BatcherColumnFamily {
         }
     }
 }
+
 pub struct BatcherRocksDBStorage {
     db: RocksDB<BatcherColumnFamily>,
 }
@@ -31,6 +32,7 @@ impl BatcherRocksDBStorage {
                 .with_sync_writes();
         Self { db }
     }
+
     pub fn get(&self, batch_number: u64) -> anyhow::Result<Option<StoredBatchInfo>> {
         let key = batch_number.to_be_bytes();
         let data = self.db.get_cf(BatcherColumnFamily::StoredBatchInfo, &key)?;

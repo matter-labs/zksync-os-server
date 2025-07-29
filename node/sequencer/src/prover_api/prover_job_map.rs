@@ -64,17 +64,17 @@ impl ProverJobMap {
             })
             .min();
 
-        if let Some(batch_number) = candidate {
-            if let Some(mut entry) = self.jobs.get_mut(&batch_number) {
-                tracing::info!(
-                    batch_number,
-                    elapsed = ?now.duration_since(entry.assigned_at),
-                    "Picked a timed out FRI job"
-                );
-                // Refresh assignment time to avoid immediate re-pick.
-                entry.assigned_at = now;
-                return Some(entry.batch_envelope.clone());
-            }
+        if let Some(batch_number) = candidate
+            && let Some(mut entry) = self.jobs.get_mut(&batch_number)
+        {
+            tracing::info!(
+                batch_number,
+                elapsed = ?now.duration_since(entry.assigned_at),
+                "Picked a timed out FRI job"
+            );
+            // Refresh assignment time to avoid immediate re-pick.
+            entry.assigned_at = now;
+            return Some(entry.batch_envelope.clone());
         }
         None
     }

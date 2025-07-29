@@ -15,6 +15,7 @@ jobs:
     name: Integration Tests
     runs-on: matterlabs-ci-runner-ultra-performance
     strategy:
+      fail-fast: false
       matrix:
         filterset: [ "core", "prover" ]
 

@@ -9,7 +9,7 @@ use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use std::sync::Arc;
 use tokio::sync::watch;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_types::ZkTransaction;
 
 /// In-memory repositories that store node data required for RPC but not for VM execution.
@@ -49,7 +49,7 @@ impl RepositoryInMemory {
 
     /// Adds a block's output to all relevant repositories.
     ///
-    /// This method processes a `BatchOutput` and distributes its contents across the appropriate
+    /// This method processes a `BlockOutput` and distributes its contents across the appropriate
     /// repositories:
     /// - Stores the block in `BlockReceiptRepository`.
     /// - Generates transaction receipts and stores them in `TransactionReceiptRepository`.
@@ -59,7 +59,7 @@ impl RepositoryInMemory {
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
     pub fn populate_in_memory(
         &self,
-        mut block_output: BatchOutput,
+        mut block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
     ) -> (Arc<RepositoryBlock>, Vec<(B256, Arc<StoredTxData>)>) {
         let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();

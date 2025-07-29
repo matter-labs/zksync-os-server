@@ -90,7 +90,7 @@ impl Display for BlockCommand {
                 record.transactions.len(),
                 record.starting_l1_priority_id,
             ),
-            BlockCommand::Produce(command) => write!(f, "Produce block: {:?}", command),
+            BlockCommand::Produce(command) => write!(f, "Produce block: {command:?}"),
         }
     }
 }

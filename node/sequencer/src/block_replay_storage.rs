@@ -5,7 +5,7 @@ use futures::stream::{self, BoxStream, StreamExt};
 use ruint::aliases::U256;
 use std::convert::TryInto;
 use zk_ee::system::metadata::BlockMetadataFromOracle;
-use zk_os_forward_system::run::BatchContext;
+use zk_os_forward_system::run::BlockContext;
 use zksync_os_types::ZkEnvelope;
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
@@ -151,7 +151,7 @@ impl BlockReplayStorage {
             })
     }
 
-    pub fn get_context(&self, block_number: u64) -> Option<BatchContext> {
+    pub fn get_context(&self, block_number: u64) -> Option<BlockContext> {
         let key = block_number.to_be_bytes();
         self.db
             .get_cf(BlockReplayColumnFamily::Context, &key)

@@ -1,13 +1,13 @@
 use ruint::aliases::U256;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
-use zk_os_forward_system::run::{BatchContext, simulate_tx};
+use zk_os_forward_system::run::{BlockContext, simulate_tx};
 use zksync_os_state::StateView;
 use zksync_os_types::{L2Transaction, ZksyncOsEncode};
 
 pub fn execute(
     tx: L2Transaction,
-    mut block_context: BatchContext,
+    mut block_context: BlockContext,
     state_view: StateView,
 ) -> Result<TxResult, Box<ForwardSubsystemError>> {
     // tracing::info!(

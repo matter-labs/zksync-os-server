@@ -17,12 +17,10 @@ impl<Resp: RpcRecv> EthCallAssert for EthCall<Ethereum, Resp> {
     async fn expect_to_fail(self, msg: &str) {
         let err = self
             .await
-            .expect_err(&format!("`eth_call` should fail with error: {}", msg));
+            .expect_err(&format!("`eth_call` should fail with error: {msg}"));
         assert!(
             err.to_string().contains(msg),
-            "expected `eth_call` to fail with error '{}' but got: {}",
-            msg,
-            err
+            "expected `eth_call` to fail with error '{msg}' but got: {err}",
         );
     }
 }

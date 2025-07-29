@@ -13,7 +13,7 @@ use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use ruint::aliases::B160;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::{BatchContext, ExecutionResult, InvalidTransaction};
+use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
 use zksync_os_state::StateHandle;
 use zksync_os_types::{L2Envelope, L2Transaction};
 
@@ -48,7 +48,7 @@ impl<R: ApiRepository> EthCallHandler<R> {
     fn create_tx_from_request(
         &self,
         request: TransactionRequest,
-        block_context: &BatchContext,
+        block_context: &BlockContext,
     ) -> Result<L2Transaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 

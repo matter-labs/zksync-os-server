@@ -8,7 +8,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Histogram, Metrics, Unit};
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
@@ -17,8 +17,8 @@ use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
 pub struct TreeManager {
     pub tree: Arc<RwLock<MerkleTree<RocksDBWrapper>>>,
-    // todo: it only needs the BatchOutput - sending both for now
-    block_receiver: tokio::sync::mpsc::Receiver<BatchOutput>,
+    // todo: it only needs the BlockOutput - sending both for now
+    block_receiver: tokio::sync::mpsc::Receiver<BlockOutput>,
     latest_block_sender: watch::Sender<u64>,
 }
 
@@ -39,7 +39,7 @@ impl TreeManager {
     }
     pub fn new(
         tree_wrapper: RocksDBWrapper,
-        block_receiver: Receiver<BatchOutput>,
+        block_receiver: Receiver<BlockOutput>,
     ) -> (TreeManager, MerkleTreeForReading<RocksDBWrapper>) {
         let (latest_block_sender, latest_block_receiver) = watch::channel(0u64);
         let mut tree = MerkleTree::new(tree_wrapper).unwrap();
@@ -84,9 +84,9 @@ impl TreeManager {
     pub async fn run_loop(mut self) -> anyhow::Result<()> {
         loop {
             match self.block_receiver.recv().await {
-                Some(batch_output) => {
+                Some(block_output) => {
                     let started_at = Instant::now();
-                    let block_number = batch_output.header.number;
+                    let block_number = block_output.header.number;
 
                     if block_number <= self.last_processed_block()? {
                         tracing::debug!(
@@ -98,12 +98,12 @@ impl TreeManager {
 
                     tracing::info!(
                         "Processing {} storage writes in tree for block {}",
-                        batch_output.storage_writes.len(),
+                        block_output.storage_writes.len(),
                         block_number
                     );
 
                     // Convert StorageWrite to TreeEntry
-                    let tree_entries = batch_output
+                    let tree_entries = block_output
                         .storage_writes
                         .into_iter()
                         .map(|write| TreeEntry {
@@ -142,11 +142,11 @@ impl TreeManager {
                     TREE_METRICS.processing_range.observe(count as u64);
                     GENERAL_METRICS.block_number[&"tree_manager"].set(block_number);
                     GENERAL_METRICS.executed_transactions[&"tree_manager"]
-                        .inc_by(batch_output.tx_results.len() as u64);
+                        .inc_by(block_output.tx_results.len() as u64);
                 }
                 None => {
                     // Channel closed, exit the loop
-                    tracing::info!("BatchOutput channel closed, exiting tree manager",);
+                    tracing::info!("BlockOutput channel closed, exiting tree manager",);
                     break;
                 }
             }

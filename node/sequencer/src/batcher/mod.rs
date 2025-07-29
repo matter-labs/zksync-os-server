@@ -1,13 +1,14 @@
 use crate::metrics::GENERAL_METRICS;
 use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
 use crate::model::blocks::ReplayRecord;
+use crate::prover_input_generator::ProverInputGeneratorBatchData;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::future::ready;
 use std::path::PathBuf;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 
@@ -30,9 +31,9 @@ pub struct Batcher {
 
     // == plumbing ==
     // inbound
-    block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+    block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
     // outbound
-    batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+    batch_data_sender: Sender<BatchEnvelope<ProverInputGeneratorBatchData>>,
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 }
@@ -47,8 +48,8 @@ impl Batcher {
         rocks_db_path: PathBuf,
 
         // == plumbing ==
-        block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-        batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+        block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
+        batch_data_sender: Sender<BatchEnvelope<ProverInputGeneratorBatchData>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
         // todo: will not need storage in the future
@@ -124,15 +125,18 @@ impl Batcher {
                         .set(commit_batch_info.batch_number, &stored_batch_info)?;
 
                     // Create batch
-                    let batch_envelope: BatchEnvelope<Vec<ReplayRecord>> = BatchEnvelope {
+                    let batch_envelope = BatchEnvelope {
                         batch: BatchMetadata {
-                            previous_stored_batch_info: prev_batch_info,
+                            previous_stored_batch_info: prev_batch_info.clone(),
                             commit_batch_info,
                             first_block_number: block_number,
                             last_block_number: block_number,
                             tx_count,
                         },
-                        data: vec![replay_record],
+                        data: ProverInputGeneratorBatchData {
+                            previous_block_timestamp: prev_batch_info.last_block_timestamp,
+                            replay_records: vec![replay_record]
+                        },
                         trace: Trace::default(),
                     };
 

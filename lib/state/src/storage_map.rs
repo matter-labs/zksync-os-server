@@ -130,10 +130,7 @@ impl StorageMap {
         } else {
             // transaction replay or rollback
             let old_diff = self.diffs.get(&block_number).unwrap_or_else(|| {
-                panic!(
-                    "missing diff for block {} - latest_memory_block is be {}",
-                    block_number, latest_memory_block,
-                )
+                panic!("missing diff for block {block_number} - latest_memory_block is be {latest_memory_block}")
             });
 
             // Temporary:
@@ -199,7 +196,7 @@ impl StorageMap {
             if let Some(_diff) = self.diffs.remove(&block_number) {
                 tracing::debug!("Compacted diff for block {}", block_number);
             } else {
-                panic!("No diff found for block {} while compacting", block_number);
+                panic!("No diff found for block {block_number} while compacting");
             }
         }
     }
