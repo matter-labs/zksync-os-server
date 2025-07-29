@@ -1,9 +1,10 @@
 use crate::dyn_wallet_provider::EthDynProvider;
+use crate::network::Zksync;
 use crate::prover_api::ProverApi;
 use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::U256;
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
@@ -21,6 +22,7 @@ use zksync_os_sequencer::config::{
 pub mod assert_traits;
 pub mod contracts;
 pub mod dyn_wallet_provider;
+mod network;
 mod prover_api;
 mod utils;
 
@@ -30,6 +32,10 @@ const L1_CHAIN_ID: u64 = 9;
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,
+    /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
+    /// system to be Ethereum-compatible. But this can be useful if you need to assert custom fields
+    /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
+    pub l2_zk_provier: DynProvider<Zksync>,
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -199,11 +205,16 @@ impl TesterBuilder {
         })
         .await?;
 
+        let l2_zk_provier = ProviderBuilder::new_with_network::<Zksync>()
+            .connect(&l2_address)
+            .await?;
+
         let l1_wallet = l1_provider.wallet().clone();
 
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
+            l2_zk_provier: DynProvider::new(l2_zk_provier),
             l1_wallet,
             l2_wallet,
             prover_api: ProverApi::new(prover_api_url),
