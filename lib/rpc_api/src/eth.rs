@@ -9,13 +9,13 @@ use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     AccessListResult, AccountInfo, Block, BlockOverrides, Bundle, EIP1186AccountProofResponse,
-    EthCallResponse, FeeHistory, Header, Index, StateContext, SyncStatus, Transaction,
+    EthCallResponse, FeeHistory, Header, Index, Log, StateContext, SyncStatus, Transaction,
     TransactionReceipt, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use zksync_os_types::ZkEnvelope;
+use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope};
 
 /// Eth rpc interface: <https://ethereum.github.io/execution-apis/docs/reference/json-rpc-api>
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "eth"))]
@@ -85,8 +85,10 @@ pub trait EthApi {
 
     /// Returns all transaction receipts for a given block.
     #[method(name = "getBlockReceipts")]
-    async fn block_receipts(&self, block_id: BlockId)
-    -> RpcResult<Option<Vec<TransactionReceipt>>>;
+    async fn block_receipts(
+        &self,
+        block_id: BlockId,
+    ) -> RpcResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>>;
 
     /// Returns an uncle block of the given block and index.
     #[method(name = "getUncleByBlockHashAndIndex")]
@@ -157,7 +159,10 @@ pub trait EthApi {
 
     /// Returns the receipt of a transaction by transaction hash.
     #[method(name = "getTransactionReceipt")]
-    async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>>;
+    async fn transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>>;
 
     /// Returns the balance of the account of given address.
     #[method(name = "getBalance")]

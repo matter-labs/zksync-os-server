@@ -1,8 +1,8 @@
 use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
-use alloy::consensus::{Block, ReceiptEnvelope};
+use alloy::consensus::Block;
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
-use zksync_os_types::ZkTransaction;
+use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::rocksdb;
 
 /// Sealed block (i.e. pre-computed hash) along with transaction hashes included in that block.
@@ -24,7 +24,7 @@ pub trait ApiRepository: Send + Sync {
     fn get_transaction(&self, hash: TxHash) -> RepositoryResult<Option<ZkTransaction>>;
 
     /// Get transaction's receipt by its hash.
-    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ReceiptEnvelope>>;
+    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ZkReceiptEnvelope>>;
 
     /// Get transaction's metadata (additional fields in the context of a block that contains this
     /// transaction) by its hash.
