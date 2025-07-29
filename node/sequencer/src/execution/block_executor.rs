@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
-use zk_os_forward_system::run::{BatchOutput, InvalidTransaction};
+use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
 use zksync_os_state::StateHandle;
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
@@ -19,7 +19,7 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand,
     state: StateHandle,
-) -> Result<(BatchOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
+) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
@@ -70,10 +70,8 @@ pub async fn execute_block(
                                 executed_txs.push(tx);
 
                                 // arm the timer once, after the first successful tx
-                                if deadline.is_none() {
-                                    if let Some(dur) = deadline_dur {
-                                        deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                                    }
+                                if deadline.is_none() && let Some(dur) = deadline_dur {
+                                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
@@ -143,7 +141,7 @@ pub async fn execute_block(
 
     /* ---------- seal & return ------------------------------------- */
     let output = runner
-        .seal_batch()
+        .seal_block()
         .await
         .map_err(|e| anyhow!("VM seal failed: {e:?}"))?;
     EXECUTION_METRICS

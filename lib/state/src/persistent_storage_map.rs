@@ -65,8 +65,7 @@ impl PersistentStorageMap {
 
         assert_eq!(
             prev_persisted, initial_upper,
-            "StorageMap: persistent bounds must be equal when starting compaction, got: {} and {}",
-            prev_persisted, initial_upper,
+            "StorageMap: persistent bounds must be equal when starting compaction, got: {prev_persisted} and {initial_upper}",
         );
 
         let mut batch = self.rocks.new_write_batch();

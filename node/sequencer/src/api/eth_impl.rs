@@ -180,19 +180,19 @@ impl<R: ApiRepository> EthNamespace<R> {
                 },
             )));
         }
-        if let Some(tx) = self.repository.get_transaction(hash)? {
-            if let Some(meta) = self.repository.get_transaction_meta(hash)? {
-                return Ok(Some(Transaction::from_transaction(
-                    tx.inner,
-                    TransactionInfo {
-                        hash: Some(hash),
-                        index: Some(meta.tx_index_in_block),
-                        block_hash: Some(meta.block_hash),
-                        block_number: Some(meta.block_number),
-                        base_fee: Some(meta.effective_gas_price as u64),
-                    },
-                )));
-            }
+        if let Some(tx) = self.repository.get_transaction(hash)?
+            && let Some(meta) = self.repository.get_transaction_meta(hash)?
+        {
+            return Ok(Some(Transaction::from_transaction(
+                tx.inner,
+                TransactionInfo {
+                    hash: Some(hash),
+                    index: Some(meta.tx_index_in_block),
+                    block_hash: Some(meta.block_hash),
+                    block_number: Some(meta.block_number),
+                    base_fee: Some(meta.effective_gas_price as u64),
+                },
+            )));
         }
         Ok(None)
     }

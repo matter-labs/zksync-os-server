@@ -31,7 +31,7 @@ pub use block_receipt_repository::BlockReceiptRepository;
 use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_types::ZkTransaction;
 use zksync_storage::RocksDB;
 
@@ -68,7 +68,7 @@ impl RepositoryManager {
     /// Blocks until the database has enough blocks persisted to allow in-memory population.
     pub async fn populate_in_memory_blocking(
         &self,
-        block_output: BatchOutput,
+        block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
     ) {
         let should_be_persisted_up_to = self

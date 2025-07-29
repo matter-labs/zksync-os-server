@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
 use zk_os_forward_system::run::{StorageCommitment, generate_proof_input};
 use zksync_os_merkle_tree::{
@@ -16,6 +17,12 @@ use zksync_os_merkle_tree::{
 };
 use zksync_os_state::StateHandle;
 use zksync_os_types::ZksyncOsEncode;
+
+#[derive(Debug)]
+pub struct ProverInputGeneratorBatchData {
+    pub replay_records: Vec<ReplayRecord>,
+    pub previous_block_timestamp: u64,
+}
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator {
@@ -25,7 +32,7 @@ pub struct ProverInputGenerator {
 
     // == plumbing ==
     // inbound
-    batch_replay_data_receiver: Receiver<BatchEnvelope<Vec<ReplayRecord>>>,
+    batch_replay_data_receiver: Receiver<BatchEnvelope<ProverInputGeneratorBatchData>>,
 
     // outbound
     batch_for_proving_sender: Sender<BatchEnvelope<ProverInput>>,
@@ -43,7 +50,7 @@ impl ProverInputGenerator {
         maximum_in_flight_blocks: usize,
 
         // == plumbing ==
-        batch_replay_data_receiver: Receiver<BatchEnvelope<Vec<ReplayRecord>>>,
+        batch_replay_data_receiver: Receiver<BatchEnvelope<ProverInputGeneratorBatchData>>,
         batch_for_proving_sender: Sender<BatchEnvelope<ProverInput>>,
 
         // == dependencies ==
@@ -83,12 +90,16 @@ impl ProverInputGenerator {
                     // we can change approach (e.g. don't have a separate stream step for tree)
                     // note: in fact tree is guaranteed to be available here
                     // since this batch was already processed by batcher that also needs/waits for the tree
-                    for replay_record in batch_replay_data.data {
+                    let mut previous_block_timestamp =
+                        batch_replay_data.data.previous_block_timestamp;
+                    for replay_record in batch_replay_data.data.replay_records {
                         let tree = tree
                             .clone()
                             .get_at_block(replay_record.block_context.block_number - 1)
                             .await;
-                        processed_replays.push((tree, replay_record));
+                        let current_block_timestamp = replay_record.block_context.timestamp;
+                        processed_replays.push((tree, previous_block_timestamp, replay_record));
+                        previous_block_timestamp = current_block_timestamp;
                     }
 
                     (
@@ -102,7 +113,8 @@ impl ProverInputGenerator {
             .map(|(batch_metadata, trace, processed_replays)| {
                 // For now, we only have one block per batch
                 assert_eq!(processed_replays.len(), 1);
-                let (tree, replay_record) = processed_replays.into_iter().next().unwrap();
+                let (tree, previous_block_timestamp, replay_record) =
+                    processed_replays.into_iter().next().unwrap();
                 let block_number = replay_record.block_context.block_number;
 
                 tracing::debug!(
@@ -116,7 +128,13 @@ impl ProverInputGenerator {
                     (
                         batch_metadata,
                         trace,
-                        compute_prover_input(&replay_record, state_handle, tree, self.bin_path),
+                        compute_prover_input(
+                            &replay_record,
+                            state_handle,
+                            tree,
+                            self.bin_path,
+                            previous_block_timestamp,
+                        ),
                     )
                 })
             })
@@ -149,6 +167,7 @@ fn compute_prover_input(
     state_handle: StateHandle,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
     bin_path: &'static str,
+    last_block_timestamp: u64,
 ) -> Vec<u32> {
     let batch_number = replay_record.block_context.block_number;
 
@@ -172,7 +191,10 @@ fn compute_prover_input(
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
         replay_record.block_context,
-        initial_storage_commitment,
+        ProofData {
+            state_root_view: initial_storage_commitment,
+            last_block_timestamp,
+        },
         tree_view,
         state_view,
         list_source,

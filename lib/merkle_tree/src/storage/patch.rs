@@ -667,20 +667,18 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
                     let mut prev_index = Some(prev_index);
                     if let Some((&local_prev_key, _)) =
                         sorted_new_leaves.range(..entry.key).next_back()
+                        && local_prev_key > prev_key_and_index.0
                     {
-                        if local_prev_key > prev_key_and_index.0 {
-                            prev_index = None;
-                        }
+                        prev_index = None;
                     }
 
                     let mut next_index = next_key_and_index.1;
                     let next_range = (ops::Bound::Excluded(entry.key), ops::Bound::Unbounded);
                     if let Some((&local_next_key, inserted)) =
                         sorted_new_leaves.range(next_range).next()
+                        && local_next_key < next_key_and_index.0
                     {
-                        if local_next_key < next_key_and_index.0 {
-                            next_index = inserted.index;
-                        }
+                        next_index = inserted.index;
                     }
 
                     let leaf = Leaf {
