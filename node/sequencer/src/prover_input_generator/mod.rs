@@ -90,24 +90,16 @@ impl ProverInputGenerator {
                     // we can change approach (e.g. don't have a separate stream step for tree)
                     // note: in fact tree is guaranteed to be available here
                     // since this batch was already processed by batcher that also needs/waits for the tree
-
-                    let iter = batch_replay_data.data.replay_records.into_iter().scan(
-                        batch_replay_data.data.previous_block_timestamp,
-                        |previous_block_timestamp, replay_record| {
-                            let next_previous_block_timestamp =
-                                replay_record.block_context.timestamp;
-                            let item = Some((*previous_block_timestamp, replay_record));
-                            *previous_block_timestamp = next_previous_block_timestamp;
-                            item
-                        },
-                    );
-
-                    for (previous_block_timestamp, replay_record) in iter {
+                    let mut previous_block_timestamp = batch_replay_data.data.previous_block_timestamp;
+                    for replay_record in batch_replay_data.data.replay_records {
                         let tree = tree
                             .clone()
                             .get_at_block(replay_record.block_context.block_number - 1)
                             .await;
+                        let current_block_timestamp =
+                            replay_record.block_context.timestamp;
                         processed_replays.push((tree, previous_block_timestamp, replay_record));
+                        *previous_block_timestamp = current_block_timestamp;
                     }
 
                     (

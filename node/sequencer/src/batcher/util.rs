@@ -17,6 +17,7 @@ pub fn genesis_stored_batch_info() -> StoredBatchInfo {
         blocks_hasher.finalize()
     };
 
+    // TODO: replace empty tree hash and leaf count with the ones from the genesis block
     let empty_tree_hash = MerkleTree::<PatchSet>::empty_tree_hash();
     let leaf_count = 2u64;
 
