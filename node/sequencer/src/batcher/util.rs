@@ -41,5 +41,6 @@ pub fn genesis_stored_batch_info() -> StoredBatchInfo {
         commitment: "0x753b52ab98b0062963a4b2ea1c061c4ab522f53f50b8fefe0a52760cbcc9e183"
             .parse()
             .unwrap(),
+        last_block_timestamp: timestamp,
     }
 }

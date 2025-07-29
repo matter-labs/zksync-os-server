@@ -20,6 +20,7 @@ pub struct StoredBatchInfo {
     pub priority_operations_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub commitment: B256,
+    pub last_block_timestamp: u64,
 }
 
 impl StoredBatchInfo {
@@ -53,6 +54,7 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
             priority_operations_hash: value.priority_operations_hash,
             l2_to_l1_logs_root_hash: value.l2_to_l1_logs_root_hash,
             commitment,
+            last_block_timestamp: value.last_block_timestamp,
         }
     }
 }
