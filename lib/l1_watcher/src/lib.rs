@@ -1,7 +1,7 @@
 mod config;
 
+
 pub use crate::config::L1WatcherConfig;
-use zksync_os_mempool::DynL1Pool;
 use zksync_os_types::L1Envelope;
 
 use alloy::consensus::Transaction;
@@ -12,15 +12,17 @@ use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
+use tokio::sync::mpsc;
 use std::time::Duration;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
-    l1_pool: DynL1Pool,
     zk_chain_address: Address,
     next_l1_block: BlockNumber,
+
+    output: mpsc::Sender<L1Envelope>,
 
     poll_interval: Duration,
     max_blocks_to_process: u64,
@@ -29,8 +31,8 @@ pub struct L1Watcher {
 impl L1Watcher {
     pub async fn new(
         config: L1WatcherConfig,
-        l1_pool: DynL1Pool,
         chain_id: u64,
+        output: mpsc::Sender<L1Envelope>,
     ) -> anyhow::Result<Self> {
         let provider = DynProvider::new(
             ProviderBuilder::new()
@@ -61,9 +63,9 @@ impl L1Watcher {
 
         Ok(Self {
             provider,
-            l1_pool,
             zk_chain_address,
             next_l1_block,
+            output,
             poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
         })
@@ -103,7 +105,7 @@ impl L1Watcher {
                 hash = ?tx.hash(),
                 "adding new priority transaction to mempool",
             );
-            self.l1_pool.add_transaction(tx);
+            self.output.send(tx).await?;
         }
         self.next_l1_block = to_block + 1;
         Ok(())

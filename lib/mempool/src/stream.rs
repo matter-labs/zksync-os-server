@@ -11,7 +11,7 @@ use reth_transaction_pool::{
     ValidPoolTransaction,
 };
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use zksync_os_types::{L1Envelope, L2Envelope, ZkTransaction};
@@ -21,10 +21,10 @@ pub trait TxStream: Stream {
 }
 
 pub struct BestTransactionsStream {
+    l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<EthPooledTransaction>>>>,
-    best_l1_transactions: Box<dyn Iterator<Item = L1Envelope> + Send>,
     last_polled_l2_tx: Option<Arc<ValidPoolTransaction<EthPooledTransaction>>>,
 }
 
@@ -33,14 +33,14 @@ pub fn best_transactions<
     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
 >(
     l2_mempool: &RethPool<Client>,
-    best_l1_transactions: Vec<L1Envelope>,
+    l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
 ) -> impl TxStream<Item = ZkTransaction> + Send + 'static {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
+        l1_transactions,
         pending_transactions_listener,
         best_l2_transactions: l2_mempool.best_transactions(),
-        best_l1_transactions: Box::new(best_l1_transactions.into_iter()),
         last_polled_l2_tx: None,
     }
 }
@@ -51,8 +51,15 @@ impl Stream for BestTransactionsStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            if let Some(tx) = this.best_l1_transactions.next() {
-                return Poll::Ready(Some(tx.into()));
+            match this
+                .l1_transactions
+                .try_lock()
+                .expect("more than one reader on l1 transaction channel")
+                .poll_recv(cx)
+            {
+                Poll::Ready(Some(tx)) => return Poll::Ready(Some(tx.into())),
+                Poll::Pending => {}
+                Poll::Ready(None) => todo!("channel closed"),
             }
 
             if let Some(tx) = this.best_l2_transactions.next() {

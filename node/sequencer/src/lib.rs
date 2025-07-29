@@ -45,7 +45,7 @@ use model::blocks::{BlockCommand, ProduceCommand, ReplayRecord};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BlockOutput;
@@ -79,10 +79,6 @@ pub async fn run_sequencer_actor(
         sequencer_config.block_time,
         sequencer_config.max_transactions_in_block,
     );
-
-    // fixme(#49): wait for l1-watcher to propagate all L1 transactions present by default
-    //             delete this when we start streaming them
-    tokio::time::sleep(Duration::from_secs(3)).await;
 
     while let Some(cmd) = stream.next().await {
         // todo: also report full latency between command invocations
@@ -290,7 +286,7 @@ pub async fn run(
     let proof_storage = ProofStorage::new(proof_storage_db);
 
     tracing::info!("Initializing mempools");
-    let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
+    let l2_mempool = zksync_os_mempool::in_memory(
         ZkClient::new(
             repositories.clone(),
             state_handle.clone(),
@@ -306,10 +302,11 @@ pub async fn run(
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
     tracing::info!("Initializing L1Watcher");
+    let (l1_transactions_sender, l1_transactions) = mpsc::channel(10);
     let l1_watcher = L1Watcher::new(
         l1_watcher_config,
-        l1_mempool.clone(),
         genesis_config.chain_id,
+        l1_transactions_sender,
     )
     .await;
     let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
@@ -377,7 +374,7 @@ pub async fn run(
         .unwrap_or_default(); // TODO: take into account genesis block hash.
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
-        l1_mempool,
+        l1_transactions,
         l2_mempool.clone(),
         block_hashes_for_next_block,
         genesis_config.chain_id,

@@ -9,7 +9,9 @@ use reth_primitives::SealedBlock;
 use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -17,10 +19,10 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, ReplayTxStream, RethPool,
-    RethTransactionPoolExt, best_transactions,
+    CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPoolExt,
+    best_transactions,
 };
-use zksync_os_types::{L2Envelope, ZkEnvelope};
+use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -34,7 +36,7 @@ use zksync_os_types::{L2Envelope, ZkEnvelope};
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider {
     next_l1_priority_id: u64,
-    l1_mempool: DynL1Pool,
+    l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     chain_id: u64,
@@ -43,14 +45,14 @@ pub struct BlockContextProvider {
 impl BlockContextProvider {
     pub fn new(
         next_l1_priority_id: u64,
-        l1_mempool: DynL1Pool,
+        l1_transactions: mpsc::Receiver<L1Envelope>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         chain_id: u64,
     ) -> Self {
         Self {
             next_l1_priority_id,
-            l1_mempool,
+            l1_transactions: Arc::new(Mutex::new(l1_transactions)),
             l2_mempool,
             block_hashes_for_next_block,
             chain_id,
@@ -66,31 +68,12 @@ impl BlockContextProvider {
 
         match block_command {
             BlockCommand::Produce(produce_command) => {
-                // Materialize L1 transactions from mempool to Vec<L1Transaction>
-                let mut l1_transactions = Vec::new();
-
                 let starting_l1_priority_id = self.next_l1_priority_id;
-                let mut next_l1_priority_id = self.next_l1_priority_id;
 
-                // todo: maybe we need to limit their number here -
-                //  relevant after extended downtime
-                //  alternatively we can use the same approach as with l2 transactions -
-                //  and just pass the stream (downstream will then consume as many as needed)
-                while let Some(l1_tx) = self.l1_mempool.get(next_l1_priority_id) {
-                    l1_transactions.push(l1_tx.clone());
-
-                    anyhow::ensure!(
-                        l1_tx.priority_id() == next_l1_priority_id,
-                        "L1 priority ID mismatch: expected {}, got {}",
-                        next_l1_priority_id,
-                        l1_tx.priority_id()
-                    );
-
-                    next_l1_priority_id += 1;
-                }
+                // TODO: should drop the l1 tx that come before starting_l1_priority_id
 
                 // Create stream: L1 transactions first, then L2 transactions
-                let best_txs = best_transactions(&self.l2_mempool, l1_transactions);
+                let best_txs = best_transactions(&self.l2_mempool, self.l1_transactions.clone());
                 let gas_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
