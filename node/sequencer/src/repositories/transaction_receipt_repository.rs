@@ -119,6 +119,16 @@ impl TransactionReceiptRepository {
     pub fn contains(&self, tx_hash: TxHash) -> bool {
         self.tx_data.contains_key(&tx_hash)
     }
+
+    /// Fetches the total number of transactions kept in-memory.
+    pub fn len(&self) -> usize {
+        self.tx_data.len()
+    }
+
+    /// Check if the transaction repository is empty or not.
+    pub fn is_empty(&self) -> bool {
+        self.tx_data.is_empty()
+    }
 }
 
 impl Default for TransactionReceiptRepository {

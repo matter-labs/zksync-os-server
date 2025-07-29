@@ -123,6 +123,10 @@ impl RepositoryInMemory {
             .insert_block_per_tx
             .observe(latency / (tx_count as u32));
 
+        REPOSITORIES_METRICS
+            .in_memory_txs_count
+            .set(self.transaction_receipt_repository.len());
+
         tracing::debug!(
             block_number,
             total_latency = ?latency,

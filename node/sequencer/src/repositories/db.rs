@@ -68,6 +68,8 @@ impl NamedColumnFamily for RepositoryCF {
 #[derive(Clone, Debug)]
 pub struct RepositoryDb {
     db: RocksDB<RepositoryCF>,
+    /// Points to the latest block whose data has been persisted in `db`. There might be partial
+    /// data written for the next block, in other words `db` is caught up to *AT LEAST* this number.
     latest_block_number: watch::Sender<u64>,
 }
 
