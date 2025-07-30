@@ -1,7 +1,8 @@
 mod config;
+mod metrics;
 
 pub use crate::config::L1WatcherConfig;
-use zksync_os_types::L1Envelope;
+pub use crate::metrics::L1_METRICS;
 
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
@@ -15,6 +16,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
+use zksync_os_types::L1Envelope;
 
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
@@ -95,6 +97,11 @@ impl L1Watcher {
             return Ok(());
         }
         let priority_txs = self.process_l1_blocks(from_block, to_block).await?;
+        L1_METRICS
+            .l1_transactions_loaded
+            .inc_by(priority_txs.len() as u64);
+        L1_METRICS.most_recently_scanned_l1_block.set(to_block);
+
         for tx in priority_txs {
             tracing::debug!(
                 serial_id = tx.nonce(),
@@ -103,6 +110,7 @@ impl L1Watcher {
             );
             self.output.send(tx).await?;
         }
+
         self.next_l1_block = to_block + 1;
         Ok(())
     }
