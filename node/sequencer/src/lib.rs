@@ -91,7 +91,7 @@ pub async fn run_sequencer_actor(
         );
         let mut stage_started_at = Instant::now();
 
-        let prepared_cmd = command_block_context_provider.process_command(cmd)?;
+        let prepared_cmd = command_block_context_provider.process_command(cmd).await?;
 
         tracing::debug!(
             block_number,
@@ -301,29 +301,6 @@ pub async fn run(
     ));
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
-    tracing::info!("Initializing L1Watcher");
-    let (l1_transactions_sender, l1_transactions) = mpsc::channel(10);
-    let l1_watcher = L1Watcher::new(
-        l1_watcher_config,
-        genesis_config.chain_id,
-        l1_transactions_sender,
-    )
-    .await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
-        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
-        Err(err) => {
-            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
-        }
-    };
-
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
 
     // this will be the starting block
@@ -356,8 +333,7 @@ pub async fn run(
         "Block numbers are inconsistent on startup!"
     );
 
-    // ========== Initialize BlockContextProvider and its state ===========
-    tracing::info!("Initializing BlockContextProvider");
+    tracing::info!("Initializing L1Watcher");
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
@@ -368,6 +344,33 @@ pub async fn run(
     let next_l1_priority_id = first_replay_record
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
+
+    let (l1_transactions_sender, l1_transactions) = mpsc::channel(10);
+    let l1_watcher = L1Watcher::new(
+        l1_watcher_config,
+        genesis_config.chain_id,
+        l1_transactions_sender,
+        next_l1_priority_id,
+    )
+    .await;
+    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        }
+    };
+
+    // ========== Initialize BlockContextProvider and its state ===========
+    tracing::info!("Initializing BlockContextProvider");
+
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
         .map(|record| record.block_context.block_hashes)

@@ -11,9 +11,9 @@ use reth_transaction_pool::{
     ValidPoolTransaction,
 };
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use zksync_os_types::{L1Envelope, L2Envelope, ZkTransaction};
 
 pub trait TxStream: Stream {

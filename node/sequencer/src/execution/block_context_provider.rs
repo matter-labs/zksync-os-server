@@ -9,9 +9,9 @@ use reth_primitives::SealedBlock;
 use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -59,7 +59,7 @@ impl BlockContextProvider {
         }
     }
 
-    pub fn process_command(
+    pub async fn process_command(
         &mut self,
         block_command: BlockCommand,
     ) -> anyhow::Result<PreparedBlockCommand> {
@@ -101,14 +101,33 @@ impl BlockContextProvider {
                     starting_l1_priority_id,
                 })
             }
-            BlockCommand::Replay(record) => Ok(PreparedBlockCommand {
-                block_context: record.block_context,
-                seal_policy: SealPolicy::UntilExhausted,
-                invalid_tx_policy: InvalidTxPolicy::Abort,
-                tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
-                starting_l1_priority_id: record.starting_l1_priority_id,
-                metrics_label: "replay",
-            }),
+            BlockCommand::Replay(record) => {
+                for tx in &record.transactions {
+                    match tx.envelope() {
+                        ZkEnvelope::L1(l1_tx) => {
+                            assert_eq!(
+                                self.l1_transactions
+                                    .try_lock()
+                                    .unwrap()
+                                    .recv()
+                                    .await
+                                    .unwrap()
+                                    .priority_id(),
+                                l1_tx.priority_id()
+                            );
+                        }
+                        ZkEnvelope::L2(_) => {} // already consumed l1 transactions in execution},
+                    }
+                }
+                Ok(PreparedBlockCommand {
+                    block_context: record.block_context,
+                    seal_policy: SealPolicy::UntilExhausted,
+                    invalid_tx_policy: InvalidTxPolicy::Abort,
+                    tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
+                    starting_l1_priority_id: record.starting_l1_priority_id,
+                    metrics_label: "replay",
+                })
+            }
         }
     }
 

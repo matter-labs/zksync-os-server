@@ -259,16 +259,4 @@ impl<P: Provider> ZkChain<P> {
             .await
             .map(|n| n.saturating_to())
     }
-
-    pub async fn get_first_unprocessed_priority_tx_at_block(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<u64> {
-        self.instance
-            .getFirstUnprocessedPriorityTx()
-            .block(block_id)
-            .call()
-            .await
-            .map(|n| n.saturating_to())
-    }
 }
