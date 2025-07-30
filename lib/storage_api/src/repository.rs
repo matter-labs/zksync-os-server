@@ -1,4 +1,4 @@
-use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
+use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};

@@ -4,8 +4,6 @@ use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::api::tx_handler::TxHandler;
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
-use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::reth_state::ZkClient;
 use alloy::consensus::Account;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
@@ -33,6 +31,7 @@ use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::{RethPool, RethTransactionPool};
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::{ApiRepository, ApiRepositoryExt, RepositoryError, TxMeta};
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
 
 pub(crate) struct EthNamespace<R> {

@@ -1,7 +1,6 @@
-use crate::repositories::api_interface::{ApiRepository, RepositoryBlock, RepositoryResult};
 use crate::repositories::metrics::REPOSITORIES_METRICS;
 use crate::repositories::transaction_receipt_repository::{
-    StoredTxData, TransactionReceiptRepository, TxMeta, transaction_to_api_data,
+    TransactionReceiptRepository, transaction_to_api_data,
 };
 use crate::repositories::{BlockReceiptRepository, block_receipt_repository};
 use alloy::consensus::Sealed;
@@ -10,6 +9,9 @@ use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, Tx
 use std::sync::Arc;
 use tokio::sync::watch;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_storage_api::{
+    ApiRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+};
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
 /// In-memory repositories that store node data required for RPC but not for VM execution.

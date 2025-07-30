@@ -1,5 +1,4 @@
 use crate::api::eth_impl::build_api_log;
-use crate::repositories::api_interface::ApiRepository;
 use crate::repositories::notifications::SubscribeToBlocks;
 use crate::reth_state::ZkClient;
 use alloy::consensus::Sealed;
@@ -16,6 +15,7 @@ use serde::Serialize;
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
+use zksync_os_storage_api::ApiRepository;
 
 #[derive(Clone)]
 pub(crate) struct EthPubsubNamespace<R> {

@@ -2,7 +2,6 @@ use crate::api::call_fees::{CallFees, CallFeesError};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
-use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, Transaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
@@ -15,6 +14,7 @@ use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use zksync_os_types::{L2Envelope, L2Transaction};
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;

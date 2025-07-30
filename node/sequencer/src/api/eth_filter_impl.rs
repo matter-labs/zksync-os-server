@@ -3,7 +3,6 @@ use crate::api::metrics::API_METRICS;
 use crate::api::result::ToRpcResult;
 use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use crate::reth_state::ZkClient;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -22,6 +21,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_storage_api::{ApiRepository, ApiRepositoryExt, RepositoryError};
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]

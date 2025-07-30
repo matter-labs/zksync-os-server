@@ -1,0 +1,20 @@
+[package]
+name = "zksync_os_storage_api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_types.workspace = true
+
+zksync_storage.workspace = true
+
+alloy = { workspace = true, default-features = false, features = ["eips", "rlp"] }
+# In order to use RlpDecodable, RlpEncodable alloy-rlp crate must be imported directly.
+alloy-rlp.workspace = true
+thiserror.workspace = true
