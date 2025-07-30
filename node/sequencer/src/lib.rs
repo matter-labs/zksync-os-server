@@ -89,7 +89,7 @@ pub async fn run_sequencer_actor(
             cmd = cmd.to_string(),
             "▶ starting command. Turning into PreparedCommand.."
         );
-        let mut stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         let prepared_cmd = command_block_context_provider.process_command(cmd).await?;
 
@@ -99,7 +99,7 @@ pub async fn run_sequencer_actor(
             "▶ Prepared command in {:?}. Executing..",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         let (block_output, replay_record, purged_txs) = execute_block(prepared_cmd, state.clone())
             .await
@@ -113,7 +113,7 @@ pub async fn run_sequencer_actor(
             "▶ Executed after {:?}. Adding to state...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         state.add_block_result(
             block_number,
@@ -129,7 +129,7 @@ pub async fn run_sequencer_actor(
             "▶ Added to state in {:?}. Adding to repos...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         // todo: do not call if api is not enabled.
         repositories
@@ -142,7 +142,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         // TODO: would updating mempool in parallel with state make sense?
         command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
@@ -155,7 +155,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         wal.append_replay(replay_record.clone());
 
@@ -164,7 +164,7 @@ pub async fn run_sequencer_actor(
             "▶ Added to wal and canonized in {:?}. Sending to sinks...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         batcher_sink
             .send((block_output.clone(), replay_record))
