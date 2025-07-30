@@ -1,5 +1,4 @@
 use crate::api::call_fees::{CallFees, CallFeesError};
-use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
 use crate::execution::sandbox::execute;
 use alloy::consensus::transaction::Recovered;
@@ -14,33 +13,35 @@ use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
 use zksync_os_state::StateHandle;
-use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, RepositoryError};
+use zksync_os_storage_api::{ReadReplay, ReadRepository, ReadRepositoryExt, RepositoryError};
 use zksync_os_types::{L2Envelope, L2Transaction};
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 
-pub struct EthCallHandler<R> {
+pub struct EthCallHandler<Repository, ReplayStorage> {
     config: RpcConfig,
     state_handle: StateHandle,
 
-    block_replay_storage: BlockReplayStorage,
-    repository: R,
+    repository: Repository,
+    replay_storage: ReplayStorage,
     chain_id: u64,
 }
 
-impl<R: ReadRepository> EthCallHandler<R> {
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
+    EthCallHandler<Repository, ReplayStorage>
+{
     pub fn new(
         config: RpcConfig,
         state_handle: StateHandle,
-        block_replay_storage: BlockReplayStorage,
-        repository: R,
+        repository: Repository,
+        replay_storage: ReplayStorage,
         chain_id: u64,
-    ) -> EthCallHandler<R> {
+    ) -> Self {
         Self {
             config,
             state_handle,
-            block_replay_storage,
             repository,
+            replay_storage,
             chain_id,
         }
     }
@@ -180,7 +181,7 @@ impl<R: ReadRepository> EthCallHandler<R> {
 
         // using previous block context
         let block_context = self
-            .block_replay_storage
+            .replay_storage
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
         let tx = self.create_tx_from_request(request, &block_context)?;
@@ -212,10 +213,9 @@ impl<R: ReadRepository> EthCallHandler<R> {
             return Err(EthCallError::BlockNotFound(block_id));
         };
         let block_context = self
-            .block_replay_storage
-            .get_replay_record(block_number)
-            .ok_or(EthCallError::BlockStateNotAvailable(block_number))?
-            .block_context;
+            .replay_storage
+            .get_context(block_number)
+            .ok_or(EthCallError::BlockStateNotAvailable(block_number))?;
 
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:

@@ -13,7 +13,7 @@ pub type RepositoryBlock = Sealed<Block<TxHash>>;
 /// Read-only view on repositories that can fetch data required for RPC but not for VM execution.
 ///
 /// This includes auxiliary data such as block headers, raw transactions and transaction receipts.
-pub trait ReadRepository: Send + Sync {
+pub trait ReadRepository: Send + Sync + 'static {
     /// Get sealed block with transaction hashes by its number.
     fn get_block_by_number(&self, number: BlockNumber)
     -> RepositoryResult<Option<RepositoryBlock>>;

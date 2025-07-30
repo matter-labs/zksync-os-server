@@ -1,6 +1,5 @@
 use crate::metrics::GENERAL_METRICS;
 use crate::model::batches::{BatchEnvelope, ProverInput};
-use crate::model::blocks::ReplayRecord;
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
@@ -16,6 +15,7 @@ use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::ZksyncOsEncode;
 
 #[derive(Debug)]

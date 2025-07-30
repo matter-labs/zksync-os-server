@@ -1,5 +1,8 @@
 mod model;
-pub use model::{StoredTxData, TxMeta};
+pub use model::{ReplayRecord, StoredTxData, TxMeta};
+
+mod replay;
+pub use replay::ReadReplay;
 
 mod repository;
 pub use repository::{

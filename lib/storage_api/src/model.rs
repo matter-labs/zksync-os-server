@@ -1,6 +1,8 @@
 use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
-use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
+use serde::{Deserialize, Serialize};
+use zk_os_forward_system::run::BlockContext;
+use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
 #[rlp(trailing)]
@@ -20,4 +22,43 @@ pub struct StoredTxData {
     pub tx: ZkTransaction,
     pub receipt: ZkReceiptEnvelope,
     pub meta: TxMeta,
+}
+
+/// Full data needed to replay a block - assuming storage is already in the correct state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReplayRecord {
+    pub block_context: BlockContext,
+    /// L1 transaction serial id (0-based) expected at the beginning of this block.
+    /// If `l1_transactions` is non-empty, equals to the first tx id in this block
+    /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
+    pub starting_l1_priority_id: L1TxSerialId,
+    pub transactions: Vec<ZkTransaction>,
+}
+
+impl ReplayRecord {
+    pub fn new(
+        block_context: BlockContext,
+        starting_l1_priority_id: L1TxSerialId,
+        transactions: Vec<ZkTransaction>,
+    ) -> Self {
+        let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
+            ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
+            ZkEnvelope::L2(_) => None,
+        });
+        if let Some(first_l1_tx_priority_id) = first_l1_tx_priority_id {
+            assert_eq!(
+                first_l1_tx_priority_id, starting_l1_priority_id,
+                "First L1 tx priority id must match next_l1_priority_id"
+            );
+        }
+        assert!(
+            !transactions.is_empty(),
+            "Block must contain at least one tx"
+        );
+        Self {
+            block_context,
+            starting_l1_priority_id,
+            transactions,
+        }
+    }
 }

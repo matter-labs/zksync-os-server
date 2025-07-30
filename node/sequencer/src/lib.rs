@@ -40,7 +40,7 @@ use crate::tree_manager::TreeManager;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
-use model::blocks::{BlockCommand, ProduceCommand, ReplayRecord};
+use model::blocks::{BlockCommand, ProduceCommand};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,7 +52,7 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_state::{StateConfig, StateHandle};
-use zksync_os_storage_api::ReadRepository;
+use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";

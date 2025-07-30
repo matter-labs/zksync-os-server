@@ -10231,6 +10231,8 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "alloy-rlp",
+ "forward_system",
+ "serde",
  "thiserror 2.0.12",
  "zksync_os_types",
  "zksync_storage",
