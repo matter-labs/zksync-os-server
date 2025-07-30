@@ -5,14 +5,14 @@ use crate::repositories::{
     transaction_receipt_repository::{StoredTxData, TxMeta},
 };
 use alloy::{
-    consensus::{Block, ReceiptEnvelope, Transaction},
+    consensus::{Block, Transaction},
     eips::{Decodable2718, Encodable2718},
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
 use std::sync::Arc;
 use tokio::sync::watch;
-use zksync_os_types::{ZkEnvelope, ZkTransaction};
+use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
@@ -199,11 +199,11 @@ impl ApiRepository for RepositoryDb {
         Ok(Some(tx))
     }
 
-    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ReceiptEnvelope>> {
+    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ZkReceiptEnvelope>> {
         let Some(receipt_bytes) = self.db.get_cf(RepositoryCF::TxReceipt, &hash.0)? else {
             return Ok(None);
         };
-        let receipt = ReceiptEnvelope::decode_2718(&mut receipt_bytes.as_slice())?;
+        let receipt = ZkReceiptEnvelope::decode_2718(&mut receipt_bytes.as_slice())?;
         Ok(Some(receipt))
     }
 

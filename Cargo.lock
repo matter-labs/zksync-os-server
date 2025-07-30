@@ -10020,6 +10020,7 @@ dependencies = [
  "fs2",
  "futures",
  "reqwest 0.12.22",
+ "serde",
  "serde_json",
  "tempfile",
  "test-log",

@@ -1,10 +1,9 @@
-use alloy::consensus::{Receipt, ReceiptEnvelope, ReceiptWithBloom, TxType};
 use alloy::primitives::{Address, B256, Log, LogData, Sealed, TxHash, TxNonce};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_os_forward_system::run::{BlockOutput, ExecutionResult};
-use zksync_os_types::{ZkTransaction, ZkTxType};
+use zksync_os_types::{L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
 #[rlp(trailing)]
@@ -22,7 +21,7 @@ pub struct TxMeta {
 #[derive(Debug, Clone)]
 pub struct StoredTxData {
     pub tx: ZkTransaction,
-    pub receipt: ReceiptEnvelope,
+    pub receipt: ZkReceiptEnvelope,
     pub meta: TxMeta,
 }
 
@@ -66,7 +65,7 @@ impl TransactionReceiptRepository {
     }
 
     /// Retrieves transaction receipt by its hash, if present.
-    pub fn get_transaction_receipt(&self, tx_hash: TxHash) -> Option<ReceiptEnvelope> {
+    pub fn get_transaction_receipt(&self, tx_hash: TxHash) -> Option<ZkReceiptEnvelope> {
         self.tx_data
             .get(&tx_hash)
             .map(|r| r.value().receipt.clone())
@@ -160,24 +159,25 @@ pub fn transaction_to_api_data(
             .unwrap(),
         })
         .collect::<Vec<_>>();
-    let tx_receipt = Receipt {
-        status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
-        // todo
-        cumulative_gas_used: 7777,
-        logs,
-    };
-    let logs_bloom = tx_receipt.bloom_slow();
-    let receipt_with_bloom = ReceiptWithBloom::new(tx_receipt, logs_bloom);
-    let receipt_envelope = match tx.tx_type() {
-        // TODO: For now, pretend like L1 transactions are legacy for the purposes of API
-        //       Needs to be changed when we add L1-specific receipt type
-        ZkTxType::L1 => ReceiptEnvelope::Legacy(receipt_with_bloom),
-        ZkTxType::L2(TxType::Legacy) => ReceiptEnvelope::Legacy(receipt_with_bloom),
-        ZkTxType::L2(TxType::Eip2930) => ReceiptEnvelope::Eip2930(receipt_with_bloom),
-        ZkTxType::L2(TxType::Eip1559) => ReceiptEnvelope::Eip1559(receipt_with_bloom),
-        ZkTxType::L2(TxType::Eip4844) => ReceiptEnvelope::Eip4844(receipt_with_bloom),
-        ZkTxType::L2(TxType::Eip7702) => ReceiptEnvelope::Eip7702(receipt_with_bloom),
-    };
+    let l2_to_l1_logs = tx_output
+        .l2_to_l1_logs
+        .iter()
+        .map(|l2_to_l1_log| L2ToL1Log {
+            sender: Address::new(l2_to_l1_log.log.sender.to_be_bytes()),
+            key: B256::new(l2_to_l1_log.log.key.as_u8_array()),
+            value: B256::new(l2_to_l1_log.log.value.as_u8_array()),
+        })
+        .collect();
+    let receipt = ZkReceiptEnvelope::from_typed(
+        tx.tx_type(),
+        ZkReceipt {
+            status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
+            // todo
+            cumulative_gas_used: 7777,
+            logs,
+            l2_to_l1_logs,
+        },
+    );
     let meta = TxMeta {
         block_hash: B256::from(block_output.hash()),
         block_number: block_output.header.number,
@@ -191,9 +191,5 @@ pub fn transaction_to_api_data(
             .map(|a| Address::new(a.to_be_bytes())),
     };
 
-    StoredTxData {
-        tx,
-        receipt: receipt_envelope,
-        meta,
-    }
+    StoredTxData { tx, receipt, meta }
 }

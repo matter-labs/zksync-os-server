@@ -25,14 +25,13 @@ use crate::repositories::{
     metrics::REPOSITORIES_METRICS,
     notifications::{BlockNotification, SubscribeToBlocks},
 };
-use alloy::consensus::ReceiptEnvelope;
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 pub use block_receipt_repository::BlockReceiptRepository;
 use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use zk_os_forward_system::run::BlockOutput;
-use zksync_os_types::ZkTransaction;
+use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::RocksDB;
 
 /// Size of the broadcast channel used to notify about new blocks.
@@ -165,7 +164,7 @@ impl ApiRepository for RepositoryManager {
         self.db.get_transaction(hash)
     }
 
-    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ReceiptEnvelope>> {
+    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ZkReceiptEnvelope>> {
         if let Some(receipt) = self.in_memory.get_transaction_receipt(hash)? {
             return Ok(Some(receipt));
         }
