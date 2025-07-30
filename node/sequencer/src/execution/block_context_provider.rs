@@ -35,6 +35,7 @@ use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider {
+    next_l1_priority_id: u64,
     l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
@@ -43,12 +44,14 @@ pub struct BlockContextProvider {
 
 impl BlockContextProvider {
     pub fn new(
+        next_l1_priority_id: u64,
         l1_transactions: mpsc::Receiver<L1Envelope>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         chain_id: u64,
     ) -> Self {
         Self {
+            next_l1_priority_id,
             l1_transactions: Arc::new(Mutex::new(l1_transactions)),
             l2_mempool,
             block_hashes_for_next_block,
@@ -65,6 +68,10 @@ impl BlockContextProvider {
 
         match block_command {
             BlockCommand::Produce(produce_command) => {
+                let starting_l1_priority_id = self.next_l1_priority_id;
+
+                // TODO: should drop the l1 tx that come before starting_l1_priority_id
+
                 // Create stream: L1 transactions first, then L2 transactions
                 let best_txs = best_transactions(&self.l2_mempool, self.l1_transactions.clone());
                 let gas_limit = 100_000_000;
@@ -91,6 +98,7 @@ impl BlockContextProvider {
                     ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
+                    starting_l1_priority_id,
                 })
             }
             BlockCommand::Replay(record) => {
@@ -116,6 +124,7 @@ impl BlockContextProvider {
                     seal_policy: SealPolicy::UntilExhausted,
                     invalid_tx_policy: InvalidTxPolicy::Abort,
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
+                    starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                 })
             }
@@ -134,7 +143,9 @@ impl BlockContextProvider {
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
-                ZkEnvelope::L1(_) => {}
+                ZkEnvelope::L1(l1_tx) => {
+                    self.next_l1_priority_id = l1_tx.priority_id() + 1;
+                }
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());
                 }

@@ -95,6 +95,7 @@ pub async fn run_sequencer_actor(
 
         tracing::debug!(
             block_number,
+            starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
             "▶ Prepared command in {:?}. Executing..",
             stage_started_at.elapsed()
         );
@@ -375,6 +376,7 @@ pub async fn run(
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_default(); // TODO: take into account genesis block hash.
     let command_block_context_provider = BlockContextProvider::new(
+        next_l1_priority_id,
         l1_transactions,
         l2_mempool.clone(),
         block_hashes_for_next_block,
