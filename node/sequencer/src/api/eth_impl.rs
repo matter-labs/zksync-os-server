@@ -2,10 +2,7 @@ use crate::api::eth_call_handler::EthCallHandler;
 use crate::api::metrics::API_METRICS;
 use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::api::tx_handler::TxHandler;
-use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
-use crate::repositories::transaction_receipt_repository::TxMeta;
 use crate::reth_state::ZkClient;
 use alloy::consensus::Account;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
@@ -33,29 +30,34 @@ use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::{RethPool, RethTransactionPool};
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::{
+    ReadReplay, ReadRepository, ReadRepositoryExt, RepositoryError, TxMeta,
+};
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
 
-pub(crate) struct EthNamespace<R> {
+pub(crate) struct EthNamespace<Repository, ReplayStorage> {
     tx_handler: TxHandler,
-    eth_call_handler: EthCallHandler<R>,
+    eth_call_handler: EthCallHandler<Repository, ReplayStorage>,
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
     // reconsider approach to API in this regard
-    pub(super) repository: R,
+    pub(super) repository: Repository,
     mempool: RethPool<ZkClient>,
     state_handle: StateHandle,
 
     pub(super) chain_id: u64,
 }
 
-impl<R: ApiRepository + Clone> EthNamespace<R> {
+impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay>
+    EthNamespace<Repository, ReplayStorage>
+{
     pub fn new(
         config: RpcConfig,
 
-        repository: R,
+        repository: Repository,
+        block_replay_storage: ReplayStorage,
         state_handle: StateHandle,
         mempool: RethPool<ZkClient>,
-        block_replay_storage: BlockReplayStorage,
         chain_id: u64,
     ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
@@ -63,8 +65,8 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
         let eth_call_handler = EthCallHandler::new(
             config,
             state_handle.clone(),
-            block_replay_storage,
             repository.clone(),
+            block_replay_storage,
             chain_id,
         );
         Self {
@@ -78,7 +80,9 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
     }
 }
 
-impl<R: ApiRepository> EthNamespace<R> {
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
+    EthNamespace<Repository, ReplayStorage>
+{
     fn block_number_impl(&self) -> EthResult<U256> {
         Ok(U256::from(self.repository.get_latest_block()))
     }
@@ -379,7 +383,9 @@ impl<R: ApiRepository> EthNamespace<R> {
 }
 
 #[async_trait]
-impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay> EthApiServer
+    for EthNamespace<Repository, ReplayStorage>
+{
     async fn protocol_version(&self) -> RpcResult<String> {
         Ok("zksync_os/0.0.1".to_string())
     }

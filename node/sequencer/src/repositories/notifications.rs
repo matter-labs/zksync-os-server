@@ -1,5 +1,3 @@
-use crate::repositories::api_interface::RepositoryBlock;
-use crate::repositories::transaction_receipt_repository::StoredTxData;
 use alloy::primitives::TxHash;
 use futures::Stream;
 use std::pin::Pin;
@@ -7,6 +5,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use zksync_os_storage_api::{RepositoryBlock, StoredTxData};
 
 #[derive(Debug, Clone)]
 pub struct BlockNotification {

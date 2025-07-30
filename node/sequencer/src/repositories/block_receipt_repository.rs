@@ -1,7 +1,7 @@
-use crate::repositories::api_interface::RepositoryBlock;
 use alloy::primitives::{Address, B64, B256, BlockHash, BlockNumber, Bloom, Sealed, TxHash, U256};
 use dashmap::DashMap;
 use std::sync::Arc;
+use zksync_os_storage_api::RepositoryBlock;
 
 /// In-memory repository of the most recent N `BlockOutput`s, keyed by block number.
 ///

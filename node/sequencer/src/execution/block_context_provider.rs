@@ -1,6 +1,4 @@
-use crate::model::blocks::{
-    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
-};
+use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
@@ -20,6 +18,7 @@ use zksync_os_mempool::{
     CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, ReplayTxStream, RethPool,
     RethTransactionPoolExt, best_transactions,
 };
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.

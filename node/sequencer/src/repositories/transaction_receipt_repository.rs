@@ -1,29 +1,9 @@
 use alloy::primitives::{Address, B256, Log, LogData, Sealed, TxHash, TxNonce};
-use alloy_rlp::{RlpDecodable, RlpEncodable};
 use dashmap::DashMap;
 use std::sync::Arc;
 use zk_os_forward_system::run::{BlockOutput, ExecutionResult};
+use zksync_os_storage_api::{StoredTxData, TxMeta};
 use zksync_os_types::{L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
-
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
-#[rlp(trailing)]
-pub struct TxMeta {
-    pub block_hash: B256,
-    pub block_number: u64,
-    pub block_timestamp: u64,
-    pub tx_index_in_block: u64,
-    pub effective_gas_price: u128,
-    pub number_of_logs_before_this_tx: u64,
-    pub gas_used: u64,
-    pub contract_address: Option<Address>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredTxData {
-    pub tx: ZkTransaction,
-    pub receipt: ZkReceiptEnvelope,
-    pub meta: TxMeta,
-}
 
 /// Thread-safe in-memory repository of transaction receipts, keyed by transaction hash.
 ///

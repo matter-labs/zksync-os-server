@@ -10154,7 +10154,6 @@ name = "zksync_os_sequencer"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "alloy-rlp",
  "anyhow",
  "async-trait",
  "axum 0.7.9",
@@ -10202,6 +10201,7 @@ dependencies = [
  "zksync_os_rpc",
  "zksync_os_rpc_api",
  "zksync_os_state",
+ "zksync_os_storage_api",
  "zksync_os_types",
  "zksync_storage",
  "zksync_vlog",
@@ -10222,6 +10222,19 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "vise",
  "zk_ee",
+ "zksync_storage",
+]
+
+[[package]]
+name = "zksync_os_storage_api"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-rlp",
+ "forward_system",
+ "serde",
+ "thiserror 2.0.12",
+ "zksync_os_types",
  "zksync_storage",
 ]
 
