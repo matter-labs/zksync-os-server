@@ -10000,6 +10000,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_generate_deposit"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "tokio",
+ "zksync_os_contract_interface",
+]
+
+[[package]]
 name = "zksync_os_integration_tests"
 version = "0.1.0"
 dependencies = [
