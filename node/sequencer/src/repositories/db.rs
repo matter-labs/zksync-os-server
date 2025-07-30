@@ -8,7 +8,7 @@ use alloy::{
 use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_storage_api::{
-    ApiRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::RocksDB;
@@ -157,7 +157,7 @@ impl RepositoryDb {
     }
 }
 
-impl ApiRepository for RepositoryDb {
+impl ReadRepository for RepositoryDb {
     fn get_block_by_number(
         &self,
         number: BlockNumber,

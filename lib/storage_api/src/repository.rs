@@ -7,9 +7,13 @@ use zksync_storage::rocksdb;
 
 /// Sealed block (i.e. pre-computed hash) along with transaction hashes included in that block.
 /// This is the structure stored in the repository and hence what is served in its API.
+// todo: to be replaced with a ZKsync OS specific block structure with extra fields
 pub type RepositoryBlock = Sealed<Block<TxHash>>;
 
-pub trait ApiRepository: Send + Sync {
+/// Read-only view on repositories that can fetch data required for RPC but not for VM execution.
+///
+/// This includes auxiliary data such as block headers, raw transactions and transaction receipts.
+pub trait ReadRepository: Send + Sync {
     /// Get sealed block with transaction hashes by its number.
     fn get_block_by_number(&self, number: BlockNumber)
     -> RepositoryResult<Option<RepositoryBlock>>;
@@ -44,8 +48,8 @@ pub trait ApiRepository: Send + Sync {
     fn get_latest_block(&self) -> u64;
 }
 
-/// Extension methods for `ApiRepository` implementations.
-pub trait ApiRepositoryExt: ApiRepository {
+/// Extension methods for `ReadRepository` implementations.
+pub trait ReadRepositoryExt: ReadRepository {
     /// Get sealed block with transaction hashes by its hash OR number.
     fn get_block_by_hash_or_number(
         &self,
@@ -103,7 +107,7 @@ pub trait ApiRepositoryExt: ApiRepository {
     }
 }
 
-impl<R: ApiRepository> ApiRepositoryExt for R {}
+impl<R: ReadRepository> ReadRepositoryExt for R {}
 
 /// Repository result type.
 pub type RepositoryResult<Ok> = Result<Ok, RepositoryError>;

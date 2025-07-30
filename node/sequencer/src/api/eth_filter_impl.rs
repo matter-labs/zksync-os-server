@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
-use zksync_os_storage_api::{ApiRepository, ApiRepositoryExt, RepositoryError};
+use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, RepositoryError};
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]
@@ -34,7 +34,7 @@ pub(crate) struct EthFilterNamespace<R> {
     active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
 }
 
-impl<R: ApiRepository + Clone + 'static> EthFilterNamespace<R> {
+impl<R: ReadRepository + Clone + 'static> EthFilterNamespace<R> {
     pub fn new(config: RpcConfig, repository: R, mempool: RethPool<ZkClient>) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
@@ -56,7 +56,7 @@ impl<R: ApiRepository + Clone + 'static> EthFilterNamespace<R> {
     }
 }
 
-impl<R: ApiRepository> EthFilterNamespace<R> {
+impl<R: ReadRepository> EthFilterNamespace<R> {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
         let last_poll_block_number = self.repository.get_latest_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
@@ -303,7 +303,7 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
 }
 
 #[async_trait]
-impl<R: ApiRepository + 'static> EthFilterApiServer for EthFilterNamespace<R> {
+impl<R: ReadRepository + 'static> EthFilterApiServer for EthFilterNamespace<R> {
     async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Log(Box::new(filter)))
     }

@@ -15,7 +15,7 @@ use serde::Serialize;
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_mempool::RethPool;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
-use zksync_os_storage_api::ApiRepository;
+use zksync_os_storage_api::ReadRepository;
 
 #[derive(Clone)]
 pub(crate) struct EthPubsubNamespace<R> {
@@ -32,7 +32,7 @@ impl<R> EthPubsubNamespace<R> {
     }
 }
 
-impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
+impl<R: ReadRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
     /// Returns a stream that yields all new RPC blocks.
     fn new_headers_stream(&self) -> impl Stream<Item = alloy::rpc::types::Header> + use<R> {
         self.repository.block_stream().map(|notification| {
@@ -138,7 +138,7 @@ impl<R: ApiRepository + SubscribeToBlocks + 'static> EthPubsubNamespace<R> {
 }
 
 #[async_trait]
-impl<R: ApiRepository + SubscribeToBlocks + Clone + 'static> EthPubSubApiServer
+impl<R: ReadRepository + SubscribeToBlocks + Clone + 'static> EthPubSubApiServer
     for EthPubsubNamespace<R>
 {
     async fn subscribe(

@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use tokio::sync::broadcast;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_storage_api::{
-    ApiRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::RocksDB;
@@ -128,7 +128,7 @@ impl RepositoryManager {
     }
 }
 
-impl ApiRepository for RepositoryManager {
+impl ReadRepository for RepositoryManager {
     fn get_block_by_number(
         &self,
         number: BlockNumber,

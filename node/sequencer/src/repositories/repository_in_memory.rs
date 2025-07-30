@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_storage_api::{
-    ApiRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
@@ -159,7 +159,7 @@ impl RepositoryInMemory {
     }
 }
 
-impl ApiRepository for RepositoryInMemory {
+impl ReadRepository for RepositoryInMemory {
     fn get_block_by_number(
         &self,
         number: BlockNumber,

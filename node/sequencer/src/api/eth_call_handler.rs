@@ -14,7 +14,7 @@ use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
 use zksync_os_state::StateHandle;
-use zksync_os_storage_api::{ApiRepository, ApiRepositoryExt, RepositoryError};
+use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, RepositoryError};
 use zksync_os_types::{L2Envelope, L2Transaction};
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -28,7 +28,7 @@ pub struct EthCallHandler<R> {
     chain_id: u64,
 }
 
-impl<R: ApiRepository> EthCallHandler<R> {
+impl<R: ReadRepository> EthCallHandler<R> {
     pub fn new(
         config: RpcConfig,
         state_handle: StateHandle,

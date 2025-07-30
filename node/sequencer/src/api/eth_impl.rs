@@ -31,7 +31,7 @@ use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::{RethPool, RethTransactionPool};
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_os_storage_api::{ApiRepository, ApiRepositoryExt, RepositoryError, TxMeta};
+use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, RepositoryError, TxMeta};
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
 
 pub(crate) struct EthNamespace<R> {
@@ -47,7 +47,7 @@ pub(crate) struct EthNamespace<R> {
     pub(super) chain_id: u64,
 }
 
-impl<R: ApiRepository + Clone> EthNamespace<R> {
+impl<R: ReadRepository + Clone> EthNamespace<R> {
     pub fn new(
         config: RpcConfig,
 
@@ -77,7 +77,7 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
     }
 }
 
-impl<R: ApiRepository> EthNamespace<R> {
+impl<R: ReadRepository> EthNamespace<R> {
     fn block_number_impl(&self) -> EthResult<U256> {
         Ok(U256::from(self.repository.get_latest_block()))
     }
@@ -378,7 +378,7 @@ impl<R: ApiRepository> EthNamespace<R> {
 }
 
 #[async_trait]
-impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
+impl<R: ReadRepository + 'static> EthApiServer for EthNamespace<R> {
     async fn protocol_version(&self) -> RpcResult<String> {
         Ok("zksync_os/0.0.1".to_string())
     }
