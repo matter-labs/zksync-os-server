@@ -11,9 +11,8 @@ use reth_primitives::SealedBlock;
 use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
@@ -41,7 +40,7 @@ use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider {
     next_l1_priority_id: u64,
-    l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
+    l1_transactions: mpsc::Receiver<L1Envelope>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     chain_id: u64,
@@ -57,7 +56,7 @@ impl BlockContextProvider {
     ) -> Self {
         Self {
             next_l1_priority_id,
-            l1_transactions: Arc::new(Mutex::new(l1_transactions)),
+            l1_transactions,
             l2_mempool,
             block_hashes_for_next_block,
             chain_id,
@@ -87,7 +86,7 @@ impl BlockContextProvider {
                 // TODO: should drop the l1 tx that come before starting_l1_priority_id
 
                 // Create stream: L1 transactions first, then L2 transactions
-                let best_txs = best_transactions(&self.l2_mempool, self.l1_transactions.clone());
+                let best_txs = best_transactions(&self.l2_mempool, &mut self.l1_transactions);
                 let gas_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
@@ -120,13 +119,7 @@ impl BlockContextProvider {
                     match tx.envelope() {
                         ZkEnvelope::L1(l1_tx) => {
                             assert_eq!(
-                                self.l1_transactions
-                                    .try_lock()
-                                    .unwrap()
-                                    .recv()
-                                    .await
-                                    .unwrap()
-                                    .priority_id(),
+                                self.l1_transactions.recv().await.unwrap().priority_id(),
                                 l1_tx.priority_id()
                             );
                         }

@@ -13,15 +13,15 @@ use reth_transaction_pool::{
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use zksync_os_types::{L1Envelope, L2Envelope, ZkTransaction};
 
 pub trait TxStream: Stream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
 }
 
-pub struct BestTransactionsStream {
-    l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
+pub struct BestTransactionsStream<'a> {
+    l1_transactions: &'a mut mpsc::Receiver<L1Envelope>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<EthPooledTransaction>>>>,
@@ -33,8 +33,8 @@ pub fn best_transactions<
     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
 >(
     l2_mempool: &RethPool<Client>,
-    l1_transactions: Arc<Mutex<mpsc::Receiver<L1Envelope>>>,
-) -> impl TxStream<Item = ZkTransaction> + Send + 'static {
+    l1_transactions: &mut mpsc::Receiver<L1Envelope>,
+) -> impl TxStream<Item = ZkTransaction> + Send {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
@@ -45,18 +45,13 @@ pub fn best_transactions<
     }
 }
 
-impl Stream for BestTransactionsStream {
+impl Stream for BestTransactionsStream<'_> {
     type Item = ZkTransaction;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            match this
-                .l1_transactions
-                .try_lock()
-                .expect("more than one reader on l1 transaction channel")
-                .poll_recv(cx)
-            {
+            match this.l1_transactions.poll_recv(cx) {
                 Poll::Ready(Some(tx)) => return Poll::Ready(Some(tx.into())),
                 Poll::Pending => {}
                 Poll::Ready(None) => todo!("channel closed"),
@@ -79,7 +74,7 @@ impl Stream for BestTransactionsStream {
     }
 }
 
-impl TxStream for BestTransactionsStream {
+impl TxStream for BestTransactionsStream<'_> {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
         let this = self.get_mut();
         let tx = this.last_polled_l2_tx.take().unwrap();

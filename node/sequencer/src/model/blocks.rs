@@ -103,11 +103,11 @@ impl Display for BlockCommand {
 ///
 /// Downstream transform:
 /// `BlockExecutor: (State, PreparedBlockCommand) -> (BlockOutput, ReplayRecord)`
-pub struct PreparedBlockCommand {
+pub struct PreparedBlockCommand<'a> {
     pub block_context: BlockContext,
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
-    pub tx_source: Pin<Box<dyn TxStream<Item = ZkTransaction> + Send + 'static>>,
+    pub tx_source: Pin<Box<dyn TxStream<Item = ZkTransaction> + Send + 'a>>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,
