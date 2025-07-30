@@ -1,9 +1,8 @@
-use crate::api::eth_call_handler::EthCallHandler;
-use crate::api::metrics::API_METRICS;
-use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
-use crate::api::tx_handler::TxHandler;
 use crate::config::RpcConfig;
-use crate::reth_state::ZkClient;
+use crate::eth_call_handler::EthCallHandler;
+use crate::metrics::API_METRICS;
+use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
+use crate::tx_handler::TxHandler;
 use alloy::consensus::Account;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::dyn_abi::TypedData;
@@ -27,7 +26,7 @@ use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_code, get_nonce};
 use zk_os_forward_system::run::ReadStorage;
-use zksync_os_mempool::{RethPool, RethTransactionPool};
+use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::{
@@ -35,21 +34,21 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
 
-pub(crate) struct EthNamespace<Repository, ReplayStorage> {
-    tx_handler: TxHandler,
+pub struct EthNamespace<Repository, ReplayStorage, Mempool> {
+    tx_handler: TxHandler<Mempool>,
     eth_call_handler: EthCallHandler<Repository, ReplayStorage>,
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
     // reconsider approach to API in this regard
-    pub(super) repository: Repository,
-    mempool: RethPool<ZkClient>,
+    pub repository: Repository,
+    mempool: Mempool,
     state_handle: StateHandle,
 
-    pub(super) chain_id: u64,
+    pub chain_id: u64,
 }
 
-impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay>
-    EthNamespace<Repository, ReplayStorage>
+impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay, Mempool: L2TransactionPool>
+    EthNamespace<Repository, ReplayStorage, Mempool>
 {
     pub fn new(
         config: RpcConfig,
@@ -57,7 +56,7 @@ impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay>
         repository: Repository,
         block_replay_storage: ReplayStorage,
         state_handle: StateHandle,
-        mempool: RethPool<ZkClient>,
+        mempool: Mempool,
         chain_id: u64,
     ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
@@ -80,8 +79,8 @@ impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay>
     }
 }
 
-impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
-    EthNamespace<Repository, ReplayStorage>
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2TransactionPool>
+    EthNamespace<Repository, ReplayStorage, Mempool>
 {
     fn block_number_impl(&self) -> EthResult<U256> {
         Ok(U256::from(self.repository.get_latest_block()))
@@ -383,8 +382,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
 }
 
 #[async_trait]
-impl<Repository: ReadRepository, ReplayStorage: ReadReplay> EthApiServer
-    for EthNamespace<Repository, ReplayStorage>
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2TransactionPool> EthApiServer
+    for EthNamespace<Repository, ReplayStorage, Mempool>
 {
     async fn protocol_version(&self) -> RpcResult<String> {
         Ok("zksync_os/0.0.1".to_string())
@@ -729,7 +728,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay> EthApiServer
     }
 }
 
-pub(super) fn build_api_log(
+pub fn build_api_log(
     tx_hash: TxHash,
     primitive_log: alloy::primitives::Log,
     tx_meta: TxMeta,

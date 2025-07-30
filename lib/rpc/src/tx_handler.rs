@@ -1,16 +1,16 @@
-use crate::reth_state::ZkClient;
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes};
-use zksync_os_mempool::{L2TransactionPool, PoolError, RethPool};
+use zksync_os_mempool::{L2TransactionPool, PoolError};
 use zksync_os_types::{L2Envelope, L2Transaction};
 
 /// Handles transactions received in API
-pub struct TxHandler {
-    mempool: RethPool<ZkClient>,
+pub struct TxHandler<Mempool> {
+    mempool: Mempool,
 }
-impl TxHandler {
-    pub fn new(mempool: RethPool<ZkClient>) -> TxHandler {
+
+impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
+    pub fn new(mempool: Mempool) -> Self {
         Self { mempool }
     }
 

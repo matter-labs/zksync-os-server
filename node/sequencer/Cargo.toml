@@ -14,7 +14,6 @@ zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_rpc.workspace = true
-zksync_os_rpc_api =  { workspace = true, features = ["server"] }
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 
@@ -35,7 +34,6 @@ reth-primitives-traits = {workspace = true }
 reth-revm = { workspace = true }
 reth-storage-api = { workspace = true }
 reth-execution-types = { workspace = true }
-reth-transaction-pool = { workspace = true }
 
 zksync_storage.workspace = true
 
@@ -47,8 +45,6 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-hex.workspace = true
-async-trait.workspace = true
 thiserror.workspace = true
 itertools.workspace = true
 futures.workspace = true
@@ -68,4 +64,3 @@ zksync_os_state.workspace = true
 zksync_os_merkle_tree.workspace = true
 axum.workspace = true
 http.workspace = true
-parking_lot.workspace = true
