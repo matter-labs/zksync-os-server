@@ -25,6 +25,7 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
+use std::convert::identity;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_code, get_nonce};
@@ -32,7 +33,7 @@ use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::{RethPool, RethTransactionPool};
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_os_types::{L2Envelope, ZkEnvelope};
+use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
 
 pub(crate) struct EthNamespace<R> {
     tx_handler: TxHandler,
@@ -125,7 +126,10 @@ impl<R: ApiRepository> EthNamespace<R> {
         Ok(Some(U256::from(block.body.transactions.len())))
     }
 
-    fn block_receipts_impl(&self, block_id: BlockId) -> EthResult<Option<Vec<TransactionReceipt>>> {
+    fn block_receipts_impl(
+        &self,
+        block_id: BlockId,
+    ) -> EthResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
         let Some(block) = self.repository.get_block_by_id(block_id)? else {
             return Ok(None);
         };
@@ -257,16 +261,24 @@ impl<R: ApiRepository> EthNamespace<R> {
         self.transaction_by_hash_impl(tx_hash)
     }
 
-    fn transaction_receipt_impl(&self, tx_hash: B256) -> EthResult<Option<TransactionReceipt>> {
+    fn transaction_receipt_impl(
+        &self,
+        tx_hash: B256,
+    ) -> EthResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
         let Some(stored_tx) = self.repository.get_stored_transaction(tx_hash)? else {
             return Ok(None);
         };
         let mut log_index_in_tx = 0;
-        let inner_receipt = stored_tx.receipt.map_logs(|inner_log| {
-            let log = build_api_log(tx_hash, inner_log, stored_tx.meta.clone(), log_index_in_tx);
-            log_index_in_tx += 1;
-            log
-        });
+        let inner_receipt = stored_tx.receipt.map_logs(
+            |inner_log| {
+                let log =
+                    build_api_log(tx_hash, inner_log, stored_tx.meta.clone(), log_index_in_tx);
+                log_index_in_tx += 1;
+                log
+            },
+            // todo: convert L2->L1 logs to RPC variant when we have one
+            identity,
+        );
         Ok(Some(TransactionReceipt {
             inner: inner_receipt,
             transaction_hash: tx_hash,
@@ -445,7 +457,7 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
     async fn block_receipts(
         &self,
         block_id: BlockId,
-    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
+    ) -> RpcResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
         self.block_receipts_impl(block_id).to_rpc_result()
     }
 
@@ -520,7 +532,10 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
             .to_rpc_result()
     }
 
-    async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
+    async fn transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
         self.transaction_receipt_impl(hash).to_rpc_result()
     }
 

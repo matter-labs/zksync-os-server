@@ -4,13 +4,13 @@ use crate::repositories::transaction_receipt_repository::{
     StoredTxData, TransactionReceiptRepository, TxMeta, transaction_to_api_data,
 };
 use crate::repositories::{BlockReceiptRepository, block_receipt_repository};
-use alloy::consensus::{ReceiptEnvelope, Sealed};
+use alloy::consensus::Sealed;
 use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use std::sync::Arc;
 use tokio::sync::watch;
 use zk_os_forward_system::run::BlockOutput;
-use zksync_os_types::ZkTransaction;
+use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
 /// In-memory repositories that store node data required for RPC but not for VM execution.
 ///
@@ -179,7 +179,7 @@ impl ApiRepository for RepositoryInMemory {
         Ok(self.transaction_receipt_repository.get_transaction(hash))
     }
 
-    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ReceiptEnvelope>> {
+    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ZkReceiptEnvelope>> {
         Ok(self
             .transaction_receipt_repository
             .get_transaction_receipt(hash))
