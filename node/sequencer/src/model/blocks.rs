@@ -110,7 +110,6 @@ pub struct PreparedBlockCommand {
     pub tx_source: Pin<Box<dyn TxStream<Item = ZkTransaction> + Send + 'static>>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
-    pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
 }
 
