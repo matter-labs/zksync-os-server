@@ -12,7 +12,6 @@
 //!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
 //!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
 
-use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
 use crate::prover_api::metrics::PROVER_METRICS;
 use crate::prover_api::proof_verifier;
 use crate::prover_api::prover_job_map::ProverJobMap;
@@ -22,6 +21,7 @@ use serde::Serialize;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc};
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {

@@ -1,5 +1,4 @@
 use crate::metrics::GENERAL_METRICS;
-use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
 use crate::model::blocks::ReplayRecord;
 use crate::prover_input_generator::ProverInputGeneratorBatchData;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -10,6 +9,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_l1_sender::model::{BatchEnvelope, BatchMetadata, Trace};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 
 mod batcher_rocks_db_storage;

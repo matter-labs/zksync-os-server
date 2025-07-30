@@ -1,8 +1,8 @@
-use crate::model::batches::{BatchEnvelope, ProverInput};
 use crate::prover_api::prover_job_manager::JobState;
 use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
+use zksync_os_l1_sender::model::{BatchEnvelope, ProverInput};
 
 #[derive(Debug, Clone)]
 pub struct AssignedJobEntry {

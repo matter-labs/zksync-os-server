@@ -27,7 +27,7 @@ mod prover_api;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
-const L1_CHAIN_ID: u64 = 9;
+const L1_CHAIN_ID: u64 = 31337;
 
 pub struct Tester {
     pub l1_provider: EthDynProvider,
