@@ -18,6 +18,8 @@ use zksync_os_contract_interface::L2CanonicalTransaction;
 pub const FAKE_L1_PRIORITY_TX_TYPE_ID: u8 = 42;
 pub const REAL_L1_PRIORITY_TX_TYPE_ID: u8 = 255;
 
+pub type L1TxSerialId = u64;
+
 /// An L1->L2 priority transaction.
 ///
 /// Specific to ZKsync OS and hence has a custom transaction type.
@@ -51,7 +53,7 @@ pub struct TxL1Priority {
     /// Priority operation id that is sequential for the entire chain. Presented as nonce of the
     /// transaction.
     #[serde(with = "alloy::serde::quantity")]
-    pub nonce: u64,
+    pub nonce: L1TxSerialId,
     /// A scalar value equal to the number of Wei to be transferred to the message call’s recipient.
     pub value: U256,
     /// The amount of base token that should be minted on L2 as the result of this transaction.
@@ -239,7 +241,7 @@ impl L1Envelope {
         self.inner.hash()
     }
 
-    pub fn priority_id(&self) -> u64 {
+    pub fn priority_id(&self) -> L1TxSerialId {
         self.inner.tx().nonce
     }
 }
