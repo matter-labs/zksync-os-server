@@ -11,6 +11,7 @@ members = [
     "lib/types",
     "node/sequencer",
     "integration-tests",
+    "tools/generate-deposit",
 ]
 resolver = "3"
 
