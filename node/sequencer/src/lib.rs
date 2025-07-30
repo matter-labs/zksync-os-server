@@ -23,9 +23,7 @@ use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig,
 };
-use crate::execution::{
-    block_context_provider::BlockContextProvider, block_executor::execute_block,
-};
+use crate::execution::block_context_provider::BlockContextProvider;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
 use crate::prover_api::fake_provers_pool::FakeProversPool;
@@ -38,7 +36,7 @@ use crate::repositories::RepositoryManager;
 use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand, ReplayRecord};
@@ -84,35 +82,10 @@ pub async fn run_sequencer_actor(
         // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
-        tracing::info!(
-            block_number,
-            cmd = cmd.to_string(),
-            "▶ starting command. Turning into PreparedCommand.."
-        );
-        let stage_started_at = Instant::now();
+        let (block_output, replay_record, purged_txs) = command_block_context_provider
+            .process_command(cmd, state.clone())
+            .await?;
 
-        let prepared_cmd = command_block_context_provider.process_command(cmd).await?;
-
-        tracing::debug!(
-            block_number,
-            starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
-            "▶ Prepared command in {:?}. Executing..",
-            stage_started_at.elapsed()
-        );
-        let stage_started_at = Instant::now();
-
-        let (block_output, replay_record, purged_txs) = execute_block(prepared_cmd, state.clone())
-            .await
-            .context("execute_block")?;
-
-        tracing::info!(
-            block_number,
-            transactions = replay_record.transactions.len(),
-            preimages = block_output.published_preimages.len(),
-            storage_writes = block_output.storage_writes.len(),
-            "▶ Executed after {:?}. Adding to state...",
-            stage_started_at.elapsed()
-        );
         let stage_started_at = Instant::now();
 
         state.add_block_result(

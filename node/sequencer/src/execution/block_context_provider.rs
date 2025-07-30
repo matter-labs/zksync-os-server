@@ -1,9 +1,11 @@
+use crate::execution::block_executor::execute_block;
 use crate::model::blocks::{
     BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
 };
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
+use anyhow::Context;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use reth_transaction_pool::TransactionPool;
@@ -12,17 +14,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
+use tokio::time::Instant;
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
-use zk_os_forward_system::run::{BlockContext, BlockOutput};
+use zk_os_forward_system::run::{BlockContext, BlockOutput, InvalidTransaction};
 use zksync_os_l1_watcher::L1_METRICS;
 use zksync_os_mempool::{
     CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPoolExt,
     best_transactions,
 };
+use zksync_os_state::StateHandle;
 use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -63,11 +67,20 @@ impl BlockContextProvider {
     pub async fn process_command(
         &mut self,
         block_command: BlockCommand,
-    ) -> anyhow::Result<PreparedBlockCommand> {
+        state: StateHandle,
+    ) -> anyhow::Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
+        let block_number = block_command.block_number();
+        tracing::info!(
+            block_number,
+            cmd = block_command.to_string(),
+            "▶ starting command. Turning into PreparedCommand.."
+        );
+        let stage_started_at = Instant::now();
+
         // todo: validate next_l1_transaction_id by adding it directly to BlockCommand
         //  it's not clear whether we want to add it only to Replay or also in Produce
 
-        match block_command {
+        let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 let starting_l1_priority_id = self.next_l1_priority_id;
 
@@ -90,7 +103,7 @@ impl BlockContextProvider {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                 };
-                Ok(PreparedBlockCommand {
+                PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(best_txs),
                     seal_policy: SealPolicy::Decide(
@@ -100,7 +113,7 @@ impl BlockContextProvider {
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
                     starting_l1_priority_id,
-                })
+                }
             }
             BlockCommand::Replay(record) => {
                 for tx in &record.transactions {
@@ -120,16 +133,39 @@ impl BlockContextProvider {
                         ZkEnvelope::L2(_) => {} // already consumed l1 transactions in execution},
                     }
                 }
-                Ok(PreparedBlockCommand {
+                PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted,
                     invalid_tx_policy: InvalidTxPolicy::Abort,
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
-                })
+                }
             }
-        }
+        };
+
+        tracing::debug!(
+            block_number,
+            starting_l1_priority_id = prepared_command.starting_l1_priority_id,
+            "▶ Prepared command in {:?}. Executing..",
+            stage_started_at.elapsed()
+        );
+        let stage_started_at = Instant::now();
+
+        let (block_output, replay_record, purged_txs) = execute_block(prepared_command, state)
+            .await
+            .context("execute_block")?;
+
+        tracing::info!(
+            block_number,
+            transactions = replay_record.transactions.len(),
+            preimages = block_output.published_preimages.len(),
+            storage_writes = block_output.storage_writes.len(),
+            "▶ Executed after {:?}. Adding to state...",
+            stage_started_at.elapsed()
+        );
+
+        Ok((block_output, replay_record, purged_txs))
     }
 
     pub fn remove_txs(&self, tx_hashes: Vec<TxHash>) {
