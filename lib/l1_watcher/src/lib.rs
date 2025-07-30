@@ -56,7 +56,7 @@ impl L1Watcher {
         );
         let zk_chain = bridgehub.zk_chain().await?;
         let zk_chain_address = *zk_chain.address();
-        let next_l1_block = find_first_unprocessed_l1_block(zk_chain, next_l1_priority_id).await?;
+        let next_l1_block = find_l1_block_by_priority_id(zk_chain, next_l1_priority_id).await?;
         tracing::info!(?zk_chain_address, next_l1_block, "resolved on L1");
 
         Ok(Self {
@@ -154,7 +154,7 @@ impl L1Watcher {
     }
 }
 
-async fn find_first_unprocessed_l1_block(
+async fn find_l1_block_by_priority_id(
     zk_chain: ZkChain<DynProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
