@@ -9910,7 +9910,7 @@ dependencies = [
 [[package]]
 name = "zkos_prover"
 version = "20.2.0"
-source = "git+https://github.com/matter-labs/zksync-era.git?branch=zksync-os-integration-di#0b08d0093f90f8a7ac0f373772342d4a300b0fee"
+source = "git+https://github.com/matter-labs/zksync-era.git?branch=zksync-os-integration#21fcbbb01f9f7669ffa4a7bb1a83b74cea8a05c4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -9997,6 +9997,16 @@ name = "zksync_os_contract_interface"
 version = "0.1.0"
 dependencies = [
  "alloy",
+]
+
+[[package]]
+name = "zksync_os_generate_deposit"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "tokio",
+ "zksync_os_contract_interface",
 ]
 
 [[package]]
