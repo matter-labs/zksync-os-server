@@ -83,7 +83,7 @@ pub async fn run_sequencer_actor(
         let block_number = cmd.block_number();
 
         let (block_output, replay_record, purged_txs) = command_block_context_provider
-            .process_command(cmd, state.clone())
+            .execute_block(cmd, state.clone())
             .await?;
 
         let stage_started_at = Instant::now();
@@ -226,6 +226,9 @@ pub async fn run(
     let (batch_with_proof_sender, batch_with_proof_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
+    // Channel between `L1Watcher` and `BlockContextProvider`
+    let (l1_transactions_sender, l1_transactions) = mpsc::channel(10);
+
     // =========== Boilerplate - initialize components that don't need state recovery  ===========
     tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
@@ -318,7 +321,6 @@ pub async fn run(
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
 
-    let (l1_transactions_sender, l1_transactions) = mpsc::channel(10);
     let l1_watcher = L1Watcher::new(
         l1_watcher_config,
         genesis_config.chain_id,

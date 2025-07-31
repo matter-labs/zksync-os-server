@@ -84,7 +84,6 @@ alloy::sol! {
         function storedBatchHash(uint256 _batchNumber) external view returns (bytes32);
         function getTotalBatchesCommitted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
-        function getFirstUnprocessedPriorityTx() external view returns (uint256);
     }
 
     // Taken from `IExecutor.sol`

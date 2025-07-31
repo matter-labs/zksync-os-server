@@ -63,7 +63,7 @@ impl BlockContextProvider {
         }
     }
 
-    pub async fn process_command(
+    pub async fn execute_block(
         &mut self,
         block_command: BlockCommand,
         state: StateHandle,
