@@ -1,4 +1,3 @@
-use crate::model::batches::{BatchEnvelope, FriProof};
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_job_manager::{ProverJobManager, SubmitError};
 use axum::extract::Path;
@@ -15,6 +14,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ async fn submit_fri_proof(
 }
 
 async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
-    match state.proof_storage.get_proof(block) {
+    match state.proof_storage.get(block) {
         Ok(Some(BatchEnvelope {
             data: FriProof::Real(proof_bytes),
             ..

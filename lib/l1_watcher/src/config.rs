@@ -23,6 +23,6 @@ pub struct L1WatcherConfig {
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x4b37536b9824c4a4cf3d15362135e346adb7cb9c".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f".parse().unwrap())]
     pub bridgehub_address: Address,
 }

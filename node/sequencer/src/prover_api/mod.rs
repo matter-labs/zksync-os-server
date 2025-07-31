@@ -6,3 +6,4 @@ mod proof_verifier;
 pub mod prover_job_manager;
 mod prover_job_map;
 pub mod prover_server;
+pub mod snark_job_manager;

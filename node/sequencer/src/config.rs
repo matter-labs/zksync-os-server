@@ -129,6 +129,9 @@ pub struct FakeProversConfig {
     pub min_age: Duration,
 }
 
+// todo/consider: I'm not sure we need this as an external config.
+// maybe we should have an L1Config with minimal set of needed info,
+// and recover everything from there.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct GenesisConfig {
