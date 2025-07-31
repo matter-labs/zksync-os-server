@@ -1,12 +1,10 @@
-use crate::model::L1TxSerialId;
-use jsonrpsee::core::Serialize;
-use serde::Deserialize;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::time::Duration;
 use zk_ee::system::metadata::BlockMetadataFromOracle as BlockContext;
 use zksync_os_mempool::TxStream;
-use zksync_os_types::{ZkEnvelope, ZkTransaction};
+use zksync_os_storage_api::ReplayRecord;
+use zksync_os_types::{L1TxSerialId, ZkTransaction};
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from WAL
@@ -30,45 +28,6 @@ pub struct ProduceCommand {
     pub block_number: u64,
     pub block_time: Duration,
     pub max_transactions_in_block: usize,
-}
-
-/// Full data needed to replay a block - assuming storage is already in the correct state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReplayRecord {
-    pub block_context: BlockContext,
-    /// L1 transaction serial id (0-based) expected at the beginning of this block.
-    /// If `l1_transactions` is non-empty, equals to the first tx id in this block
-    /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
-    pub starting_l1_priority_id: L1TxSerialId,
-    pub transactions: Vec<ZkTransaction>,
-}
-
-impl ReplayRecord {
-    pub fn new(
-        block_context: BlockContext,
-        starting_l1_priority_id: L1TxSerialId,
-        transactions: Vec<ZkTransaction>,
-    ) -> Self {
-        let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
-            ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
-            ZkEnvelope::L2(_) => None,
-        });
-        if let Some(first_l1_tx_priority_id) = first_l1_tx_priority_id {
-            assert_eq!(
-                first_l1_tx_priority_id, starting_l1_priority_id,
-                "First L1 tx priority id must match next_l1_priority_id"
-            );
-        }
-        assert!(
-            !transactions.is_empty(),
-            "Block must contain at least one tx"
-        );
-        Self {
-            block_context,
-            starting_l1_priority_id,
-            transactions,
-        }
-    }
 }
 
 impl BlockCommand {

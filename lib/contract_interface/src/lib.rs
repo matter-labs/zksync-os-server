@@ -83,6 +83,7 @@ alloy::sol! {
     interface IZKChain {
         function storedBatchHash(uint256 _batchNumber) external view returns (bytes32);
         function getTotalBatchesCommitted() external view returns (uint256);
+        function getTotalBatchesVerified() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
     }
 
@@ -119,6 +120,16 @@ alloy::sol! {
             uint256 _processTo,
             bytes calldata _commitData
         ) external;
+
+       function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
+
+       function proveBatchesSharedBridge(
+            uint256, // always zero (used to be chain id)
+            uint256 _processBatchFrom,
+            uint256 _processBatchTo,
+            bytes calldata _proofData
+       );
+
     }
 }
 
@@ -245,6 +256,10 @@ impl<P: Provider> ZkChain<P> {
 
     pub async fn get_total_batches_committed(&self) -> alloy::contract::Result<U256> {
         self.instance.getTotalBatchesCommitted().call().await
+    }
+
+    pub async fn get_total_batches_proved(&self) -> alloy::contract::Result<U256> {
+        self.instance.getTotalBatchesVerified().call().await
     }
 
     pub async fn get_total_priority_txs_at_block(

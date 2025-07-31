@@ -13,7 +13,10 @@ pub trait L2TransactionPool:
     TransactionPoolExt<Transaction = EthPooledTransaction> + Send + Sync + Debug + 'static
 {
     /// Convenience method to add a local L2 transaction
-    async fn add_l2_transaction(&self, transaction: L2Transaction) -> PoolResult<TxHash> {
+    fn add_l2_transaction(
+        &self,
+        transaction: L2Transaction,
+    ) -> impl Future<Output = PoolResult<TxHash>> + Send {
         let (envelope, signer) = transaction.into_parts();
         let envelope = EthereumTxEnvelope::try_from(envelope)
             .expect("tried to insert an EIP-4844 transaction without sidecar into mempool");
@@ -22,6 +25,5 @@ pub trait L2TransactionPool:
             TransactionOrigin::Local,
             EthPooledTransaction::from_pooled(transaction),
         )
-        .await
     }
 }

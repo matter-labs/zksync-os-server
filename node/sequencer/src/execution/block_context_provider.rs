@@ -1,14 +1,11 @@
 use crate::execution::block_executor::execute_block;
-use crate::model::blocks::{
-    BlockCommand, InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy,
-};
+use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
 use anyhow::Context;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
-use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,10 +19,11 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zk_os_forward_system::run::{BlockContext, BlockOutput, InvalidTransaction};
 use zksync_os_l1_watcher::L1_METRICS;
 use zksync_os_mempool::{
-    CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPoolExt,
-    best_transactions,
+    CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
+    RethTransactionPoolExt, best_transactions,
 };
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -88,6 +86,7 @@ impl BlockContextProvider {
                 // Create stream: L1 transactions first, then L2 transactions
                 let best_txs = best_transactions(&self.l2_mempool, &mut self.l1_transactions);
                 let gas_limit = 100_000_000;
+                let pubdata_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
@@ -96,9 +95,10 @@ impl BlockContextProvider {
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
-                    gas_limit,
                     coinbase: Default::default(),
                     block_hashes: self.block_hashes_for_next_block,
+                    gas_limit,
+                    pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                 };

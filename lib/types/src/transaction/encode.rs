@@ -182,8 +182,8 @@ impl From<L2Transaction> for TransactionData {
                     .into_iter()
                     .map(|item| (item.address, item.storage_keys))
                     .collect::<Vec<_>>();
-                // Single element list to be able to extend reserved_dynamic
-                vec![access_list].abi_encode()
+                // todo(EIP-7702): encode authorization list in second slot
+                vec![access_list, vec![]].abi_encode()
             })
             .unwrap_or_default();
 

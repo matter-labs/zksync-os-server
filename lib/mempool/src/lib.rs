@@ -7,7 +7,8 @@ use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
 use reth_storage_api::StateProviderFactory;
 pub use reth_transaction_pool::error::PoolError;
 pub use reth_transaction_pool::{
-    CanonicalStateUpdate, PoolUpdateKind, TransactionPool as RethTransactionPool,
+    CanonicalStateUpdate, EthPooledTransaction, NewSubpoolTransactionStream, NewTransactionEvent,
+    PoolUpdateKind, TransactionPool as RethTransactionPool,
     TransactionPoolExt as RethTransactionPoolExt,
 };
 pub use stream::{BestTransactionsStream, ReplayTxStream, TxStream, best_transactions};

@@ -1,11 +1,13 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
-use crate::model::blocks::{BlockCommand, ReplayRecord};
+use crate::model::blocks::BlockCommand;
 use alloy::eips::{Decodable2718, Encodable2718};
+use alloy::primitives::BlockNumber;
 use futures::stream::{self, BoxStream, StreamExt};
 use ruint::aliases::U256;
 use std::convert::TryInto;
 use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
+use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
@@ -74,6 +76,7 @@ impl BlockReplayStorage {
                     native_price: U256::from(1),
                     coinbase: Default::default(),
                     gas_limit: 100_000_000,
+                    pubdata_limit: 100_000_000,
                     mix_hash: Default::default(),
                 },
                 starting_l1_priority_id: 0,
@@ -151,7 +154,24 @@ impl BlockReplayStorage {
             })
     }
 
-    pub fn get_context(&self, block_number: u64) -> Option<BlockContext> {
+    /// Streams all replay commands with block_number ≥ `start`, in ascending block order - used for state recovery
+    pub fn replay_commands_from(&self, start: u64) -> BoxStream<BlockCommand> {
+        let latest = self.latest_block().unwrap_or(0);
+        let stream = stream::iter(start..=latest).filter_map(move |block_num| {
+            let record = self.get_replay_record(block_num);
+            match record {
+                Some(record) => {
+                    futures::future::ready(Some(BlockCommand::Replay(Box::new(record))))
+                }
+                None => futures::future::ready(None),
+            }
+        });
+        Box::pin(stream)
+    }
+}
+
+impl ReadReplay for BlockReplayStorage {
+    fn get_context(&self, block_number: BlockNumber) -> Option<BlockContext> {
         let key = block_number.to_be_bytes();
         self.db
             .get_cf(BlockReplayColumnFamily::Context, &key)
@@ -163,7 +183,7 @@ impl BlockReplayStorage {
             .map(|(context, _)| context)
     }
 
-    pub fn get_replay_record(&self, block_number: u64) -> Option<ReplayRecord> {
+    fn get_replay_record(&self, block_number: u64) -> Option<ReplayRecord> {
         let key = block_number.to_be_bytes();
         let context_result = self
             .db
@@ -212,20 +232,5 @@ impl BlockReplayStorage {
             (None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
-    }
-
-    /// Streams all replay commands with block_number ≥ `start`, in ascending block order - used for state recovery
-    pub fn replay_commands_from(&self, start: u64) -> BoxStream<BlockCommand> {
-        let latest = self.latest_block().unwrap_or(0);
-        let stream = stream::iter(start..=latest).filter_map(move |block_num| {
-            let record = self.get_replay_record(block_num);
-            match record {
-                Some(record) => {
-                    futures::future::ready(Some(BlockCommand::Replay(Box::new(record))))
-                }
-                None => futures::future::ready(None),
-            }
-        });
-        Box::pin(stream)
     }
 }

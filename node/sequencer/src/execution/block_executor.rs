@@ -1,7 +1,7 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
+use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::primitives::TxHash;
 use anyhow::{Result, anyhow};
 use futures::StreamExt;
@@ -9,6 +9,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -196,6 +197,11 @@ fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PaymasterContextInvalid
         | InvalidTransaction::PaymasterContextOffsetTooLong
         | InvalidTransaction::UpgradeTxFailed => TxRejectionMethod::Purge,
+
+        InvalidTransaction::BlockGasLimitReached
+        | InvalidTransaction::BlockNativeLimitReached
+        | InvalidTransaction::BlockPubdataLimitReached
+        | InvalidTransaction::BlockL2ToL1LogsLimitReached => todo!("seal criteria"),
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }

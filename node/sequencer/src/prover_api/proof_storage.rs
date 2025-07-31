@@ -2,7 +2,7 @@
 //! May be extracted to a separate service later on (aka FRI Cache)
 //!
 
-use crate::model::batches::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
@@ -79,7 +79,7 @@ impl ProofStorage {
     }
 
     /// Loads a BatchWithProof for `batch_number`, if present.
-    pub fn get_proof(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
+    pub fn get(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
         let key = batch_number.to_be_bytes();
         let bytes = self.db.get_cf(ProofColumnFamily::Proofs, &key)?;
         let Some(bytes) = bytes else { return Ok(None) };

@@ -8,22 +8,17 @@
 //! Additionally, it provides a RepositoryManager that holds all three repositories
 //! and provides unified methods for managing block outputs.
 
-pub mod api_interface;
 pub mod block_receipt_repository;
 mod db;
 mod metrics;
-pub mod notifications;
 pub mod repository_in_memory;
 pub mod transaction_receipt_repository;
 
 use crate::metrics::GENERAL_METRICS;
-use crate::repositories::api_interface::{ApiRepository, RepositoryBlock, RepositoryResult};
 use crate::repositories::repository_in_memory::RepositoryInMemory;
-use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
 use crate::repositories::{
     db::{RepositoryCF, RepositoryDb},
     metrics::REPOSITORIES_METRICS,
-    notifications::{BlockNotification, SubscribeToBlocks},
 };
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 pub use block_receipt_repository::BlockReceiptRepository;
@@ -31,6 +26,10 @@ use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
+use zksync_os_storage_api::{
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+};
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::RocksDB;
 
@@ -128,7 +127,7 @@ impl RepositoryManager {
     }
 }
 
-impl ApiRepository for RepositoryManager {
+impl ReadRepository for RepositoryManager {
     fn get_block_by_number(
         &self,
         number: BlockNumber,
