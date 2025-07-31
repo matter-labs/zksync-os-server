@@ -11,7 +11,6 @@
 pub mod block_receipt_repository;
 mod db;
 mod metrics;
-pub mod notifications;
 pub mod repository_in_memory;
 pub mod transaction_receipt_repository;
 
@@ -20,7 +19,6 @@ use crate::repositories::repository_in_memory::RepositoryInMemory;
 use crate::repositories::{
     db::{RepositoryCF, RepositoryDb},
     metrics::REPOSITORIES_METRICS,
-    notifications::{BlockNotification, SubscribeToBlocks},
 };
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 pub use block_receipt_repository::BlockReceiptRepository;
@@ -28,6 +26,7 @@ use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };

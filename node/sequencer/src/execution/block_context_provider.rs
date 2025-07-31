@@ -4,7 +4,6 @@ use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
-use reth_transaction_pool::TransactionPool;
 use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +14,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, ReplayTxStream, RethPool,
+    CanonicalStateUpdate, DynL1Pool, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
     RethTransactionPoolExt, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;

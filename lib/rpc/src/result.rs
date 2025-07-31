@@ -4,10 +4,10 @@
 
 //! Additional helpers for converting errors.
 
-use crate::api::eth_call_handler::EthCallError;
-use crate::api::eth_filter_impl::EthFilterError;
-use crate::api::eth_impl::EthError;
-use crate::api::tx_handler::EthSendRawTransactionError;
+use crate::eth_call_handler::EthCallError;
+use crate::eth_filter_impl::EthFilterError;
+use crate::eth_impl::EthError;
+use crate::tx_handler::EthSendRawTransactionError;
 use jsonrpsee::core::RpcResult;
 use std::fmt;
 
@@ -63,7 +63,7 @@ macro_rules! impl_to_rpc_result {
                     Ok(t) => Ok(t),
                     Err(err) => {
                         let (code, msg, data) = op(err);
-                        Err($crate::api::result::rpc_err(code, msg, data))
+                        Err($crate::result::rpc_err(code, msg, data))
                     }
                 }
             }
@@ -74,7 +74,7 @@ macro_rules! impl_to_rpc_result {
                 F: FnOnce($err) -> M,
                 M: Into<String>,
             {
-                self.map_err(|err| $crate::api::result::internal_rpc_err(op(err)))
+                self.map_err(|err| $crate::result::internal_rpc_err(op(err)))
             }
 
             #[inline]
@@ -87,7 +87,7 @@ macro_rules! impl_to_rpc_result {
                     Ok(t) => Ok(t),
                     Err(err) => {
                         let (msg, data) = op(err);
-                        Err($crate::api::result::internal_rpc_err_with_data(msg, data))
+                        Err($crate::result::internal_rpc_err_with_data(msg, data))
                     }
                 }
             }
@@ -98,7 +98,7 @@ macro_rules! impl_to_rpc_result {
                     Ok(t) => Ok(t),
                     Err(err) => {
                         let msg = format!("{msg}: {err}");
-                        Err($crate::api::result::internal_rpc_err(msg))
+                        Err($crate::result::internal_rpc_err(msg))
                     }
                 }
             }

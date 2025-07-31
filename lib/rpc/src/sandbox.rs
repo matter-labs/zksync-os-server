@@ -1,4 +1,4 @@
-use ruint::aliases::U256;
+use alloy::primitives::U256;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::{BlockContext, simulate_tx};
