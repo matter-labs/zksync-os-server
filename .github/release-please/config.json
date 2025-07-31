@@ -8,13 +8,13 @@
   "release-type": "simple",
   "packages": {
     ".": {
-      "component": "node"
-    },
-    "extra-files": [
-      {
-        "type": "generic",
-        "path": "Cargo.toml"
-      }
-    ]
+      "component": "node",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "Cargo.toml"
+        }
+      ]
+    }
   }
 }
