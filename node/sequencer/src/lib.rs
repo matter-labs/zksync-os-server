@@ -23,9 +23,7 @@ use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig,
 };
-use crate::execution::{
-    block_context_provider::BlockContextProvider, block_executor::execute_block,
-};
+use crate::execution::block_context_provider::BlockContextProvider;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_provers_pool::FakeProversPool;
 use crate::prover_api::gapless_committer::GaplessCommitter;
@@ -85,44 +83,15 @@ pub async fn run_sequencer_actor(
         sequencer_config.max_transactions_in_block,
     );
 
-    // fixme(#49): wait for l1-watcher to propagate all L1 transactions present by default
-    //             delete this when we start streaming them
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
     while let Some(cmd) = stream.next().await {
         // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
-        tracing::info!(
-            block_number,
-            cmd = cmd.to_string(),
-            "▶ starting command. Turning into PreparedCommand.."
-        );
-        let mut stage_started_at = Instant::now();
+        let (block_output, replay_record, purged_txs) = command_block_context_provider
+            .execute_block(cmd, state.clone())
+            .await?;
 
-        let prepared_cmd = command_block_context_provider.process_command(cmd)?;
-
-        tracing::debug!(
-            block_number,
-            starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
-            "▶ Prepared command in {:?}. Executing..",
-            stage_started_at.elapsed()
-        );
-        stage_started_at = Instant::now();
-
-        let (block_output, replay_record, purged_txs) = execute_block(prepared_cmd, state.clone())
-            .await
-            .context("execute_block")?;
-
-        tracing::info!(
-            block_number,
-            transactions = replay_record.transactions.len(),
-            preimages = block_output.published_preimages.len(),
-            storage_writes = block_output.storage_writes.len(),
-            "▶ Executed after {:?}. Adding to state...",
-            stage_started_at.elapsed()
-        );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         state.add_block_result(
             block_number,
@@ -138,7 +107,7 @@ pub async fn run_sequencer_actor(
             "▶ Added to state in {:?}. Adding to repos...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         // todo: do not call if api is not enabled.
         repositories
@@ -151,7 +120,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         // TODO: would updating mempool in parallel with state make sense?
         command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
@@ -164,7 +133,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         wal.append_replay(replay_record.clone());
 
@@ -173,7 +142,7 @@ pub async fn run_sequencer_actor(
             "▶ Added to wal and canonized in {:?}. Sending to sinks...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         batcher_sink
             .send((block_output.clone(), replay_record))
@@ -262,6 +231,9 @@ pub async fn run(
     let (batch_with_proof_sender, batch_with_proof_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
+    // Channel between `L1Watcher` and `BlockContextProvider`
+    let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(10);
+
     // Channel between `GaplessCommitter` and `L1Committer`
     let (batch_for_commit_sender, batch_for_commit_receiver) =
         tokio::sync::mpsc::channel::<CommitCommand>(10);
@@ -311,7 +283,7 @@ pub async fn run(
     let proof_storage = ProofStorage::new(proof_storage_db);
 
     tracing::info!("Initializing mempools");
-    let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
+    let l2_mempool = zksync_os_mempool::in_memory(
         ZkClient::new(
             repositories.clone(),
             state_handle.clone(),
@@ -325,28 +297,6 @@ pub async fn run(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
     ));
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
-
-    tracing::info!("Initializing L1Watcher");
-    let l1_watcher = L1Watcher::new(
-        l1_watcher_config,
-        l1_mempool.clone(),
-        genesis_config.chain_id,
-    )
-    .await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
-        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
-        Err(err) => {
-            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
-        }
-    };
 
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
 
@@ -380,8 +330,7 @@ pub async fn run(
         "Block numbers are inconsistent on startup!"
     );
 
-    // ========== Initialize BlockContextProvider and its state ===========
-    tracing::info!("Initializing BlockContextProvider");
+    tracing::info!("Initializing L1Watcher");
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
@@ -392,13 +341,39 @@ pub async fn run(
     let next_l1_priority_id = first_replay_record
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
+
+    let l1_watcher = L1Watcher::new(
+        l1_watcher_config,
+        genesis_config.chain_id,
+        l1_transactions_sender,
+        next_l1_priority_id,
+    )
+    .await;
+    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        }
+    };
+
+    // ========== Initialize BlockContextProvider and its state ===========
+    tracing::info!("Initializing BlockContextProvider");
+
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_default(); // TODO: take into account genesis block hash.
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
-        l1_mempool,
+        l1_transactions,
         l2_mempool.clone(),
         block_hashes_for_next_block,
         genesis_config.chain_id,
