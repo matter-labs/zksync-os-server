@@ -34,7 +34,7 @@ async fn sensitive_to_balance_changes() -> anyhow::Result<()> {
         .with_to(Address::random())
         .with_value(value)
         .with_gas_price(gas_price)
-        .with_gas_limit(100_000)
+        .with_gas_limit(gas_limit)
         .with_nonce(1);
 
     // This is what it will cost to execute Bob's legacy transaction

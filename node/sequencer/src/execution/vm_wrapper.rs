@@ -3,6 +3,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, channel},
     task::{JoinHandle, spawn_blocking},
 };
+use zk_ee::system::tracer::NopTracer;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
@@ -40,6 +41,7 @@ impl VmWrapper {
                 state_view,
                 tx_source,
                 tx_callback,
+                &mut NopTracer::default(),
             )
         });
 

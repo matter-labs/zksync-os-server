@@ -198,6 +198,11 @@ fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PaymasterContextOffsetTooLong
         | InvalidTransaction::UpgradeTxFailed => TxRejectionMethod::Purge,
 
+        InvalidTransaction::BlockGasLimitReached
+        | InvalidTransaction::BlockNativeLimitReached
+        | InvalidTransaction::BlockPubdataLimitReached
+        | InvalidTransaction::BlockL2ToL1LogsLimitReached => todo!("seal criteria"),
+
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
         | InvalidTransaction::NonceTooHigh { .. } => TxRejectionMethod::Skip,

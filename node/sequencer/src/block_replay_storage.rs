@@ -76,6 +76,7 @@ impl BlockReplayStorage {
                     native_price: U256::from(1),
                     coinbase: Default::default(),
                     gas_limit: 100_000_000,
+                    pubdata_limit: 100_000_000,
                     mix_hash: Default::default(),
                 },
                 starting_l1_priority_id: 0,
