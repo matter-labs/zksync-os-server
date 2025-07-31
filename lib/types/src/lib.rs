@@ -1,5 +1,6 @@
 mod log;
 mod receipt;
+pub mod rpc;
 mod transaction;
 
 pub use log::L2ToL1Log;
