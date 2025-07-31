@@ -9,7 +9,7 @@ This repo includes a pre-setup L1 state `zkos-l1-state.json` that can be loaded 
 Before you run an L1 node, make sure you have a 1.x version of `anvil` installed (see [foundry guide](https://getfoundry.sh/)). Then:
 
 ```
-anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
+anvil --load-state zkos-l1-state.json --port 8545
 ...
 Listening on 127.0.0.1:8545
 ...
