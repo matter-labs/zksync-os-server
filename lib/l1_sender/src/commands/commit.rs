@@ -4,6 +4,7 @@ use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, OneElement};
+use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 #[derive(Debug)]
 pub struct CommitCommand {
@@ -33,19 +34,23 @@ impl L1SenderCommand for CommitCommand {
         vec![self.input]
     }
 
-    fn short_description(&self) -> String {
-        format!("commit batch {}", self.input.batch_number())
-    }
-
-    fn vec_fmt_debug(input: &[Self]) -> String {
+    fn display_vec(input: &[Self]) -> String {
         let minmax = input.iter().map(|cmd| cmd.input.batch_number()).minmax();
         match minmax {
-            OneElement(elem) => format!("commit batch {elem}"),
-            MinMax(f, t) => format!("commits batches {f}-{t}"),
+            OneElement(elem) => format!("{elem}"),
+            MinMax(f, t) => format!("{f}-{t}"),
             _ => "".into(),
         }
     }
 }
+
+impl Display for CommitCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "commit batch {}", self.input.batch_number())?;
+        Ok(())
+    }
+}
+
 impl CommitCommand {
     /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
     /// function makes sure last committed batch and new batch are encoded correctly.

@@ -641,15 +641,15 @@ pub async fn run(
 
         res = l1_committer => {
             match res {
-                Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
-                Err(e) => tracing::error!("L1 sender failed: {e:#}"),
+                Ok(_)  => tracing::warn!("L1 committer unexpectedly exited"),
+                Err(e) => tracing::error!("L1 committer failed: {e:#}"),
             }
         }
 
         res = l1_proof_submitter => {
             match res {
-                Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
-                Err(e) => tracing::error!("L1 sender failed: {e:#}"),
+                Ok(_)  => tracing::warn!("L1 proof submitter unexpectedly exited"),
+                Err(e) => tracing::error!("L1 proof submitter failed: {e:#}"),
             }
         }
 

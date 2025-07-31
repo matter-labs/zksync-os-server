@@ -67,12 +67,13 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     // This method only returns `0` if the channel has been closed and there are no more items
     // in the queue.
     while inbound.recv_many(&mut cmd_buffer, command_limit).await != 0 {
-        let batch_descr = Input::vec_fmt_debug(&cmd_buffer); // Only for logging
-        tracing::info!(batch_descr, "Sending l1 transactions...");
+        let batch_descr = Input::display_vec(&cmd_buffer); // Only for logging
+        let command_name = Input::NAME;
+        tracing::info!(command_name, batch_descr, "Sending l1 transactions...");
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
-        // Keep this in mind if changing sending logic.
+        // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
         let pending_tx_hashes: HashMap<TxHash, Input> = futures::stream::iter(cmd_buffer.drain(..))
             .then(|cmd| async {
                 let tx_request = tx_request_with_gas_fields(
@@ -90,13 +91,18 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
             // but this is not necessary for now - we wait for them to be included in parallel
             .try_collect::<HashMap<TxHash, Input>>()
             .await?;
-        tracing::info!(batch_descr, "Sent to L1. Waiting for inclusion...");
+        tracing::info!(
+            command_name,
+            batch_descr,
+            "Sent to L1. Waiting for inclusion..."
+        );
         let mined_envelopes = heartbeat
             .wait_for_pending_txs(&provider, pending_tx_hashes)
             .await?;
         tracing::info!(
+            command_name,
             batch_descr,
-            "All transactions included. Sending to output channel",
+            "All transactions included. Sending downstream.",
         );
         for command in mined_envelopes {
             for output_envelope in command.into_output_envelope() {
@@ -250,7 +256,7 @@ impl Heartbeat {
             // `BlockCommit` / `BlockProve`/ etc event but
             // not sure if this is 100% necessary yet.
             tracing::info!(
-                command = command.short_description(),
+                %command,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
                 "succeeded on L1",
@@ -259,7 +265,7 @@ impl Heartbeat {
             Ok(())
         } else {
             tracing::error!(
-                command = command.short_description(),
+                %command,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
                 "failed on L1",
@@ -285,8 +291,8 @@ impl Heartbeat {
                 );
             }
             anyhow::bail!(
-                "{} transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
-                command.short_description(),
+                "{} L1 command transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
+                command,
                 receipt.transaction_hash
             );
         }

@@ -4,6 +4,7 @@ use crate::model::{BatchEnvelope, FriProof, SnarkProof};
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
+use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
 
@@ -41,22 +42,30 @@ impl L1SenderCommand for ProofCommand {
     fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
         self.batches
     }
-
-    fn short_description(&self) -> String {
-        format!(
-            "proof {}-{}",
-            self.batches.first().unwrap().batch_number(),
-            self.batches.last().unwrap().batch_number()
-        )
-    }
-
-    fn vec_fmt_debug(input: &[Self]) -> String {
-        // todo: we can build a more detailed yet concise here
+    fn display_vec(input: &[Self]) -> String {
         input
             .iter()
-            .map(|x| x.short_description())
+            .map(|x| {
+                format!(
+                    "{}-{}",
+                    x.batches.first().unwrap().batch_number(),
+                    x.batches.last().unwrap().batch_number()
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+impl Display for ProofCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "prove batches {}-{}",
+            self.batches.first().unwrap().batch_number(),
+            self.batches.last().unwrap().batch_number()
+        )?;
+        Ok(())
     }
 }
 
@@ -121,9 +130,7 @@ impl ProofCommand {
             .collect();
 
         // todo: remove tostring
-        let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos)
-            .to_string()
-            .replace("0x", "");
+        let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos);
 
         tracing::info!(">> public input: {}", public_input);
 
@@ -135,7 +142,7 @@ impl ProofCommand {
             // Fake proof magic value (just for sanity)
             U256::from(FAKE_PROOF_MAGIC_VALUE),
             // Public input (fake proof **will** verify this against batch data stored in the contract)
-            U256::from_str_radix(&public_input, 16).unwrap(),
+            U256::from_be_bytes(public_input.0),
         ];
 
         let proof_payload = proofPayloadCall {
@@ -147,7 +154,9 @@ impl ProofCommand {
             proof,
         };
 
-        let mut proof_data = vec![0u8];
+        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+
+        let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
         proof_payload.abi_encode_raw(&mut proof_data);
         proof_data
     }

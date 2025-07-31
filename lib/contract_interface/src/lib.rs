@@ -124,12 +124,12 @@ alloy::sol! {
 
        function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
 
-        function proveBatchesSharedBridge(
+       function proveBatchesSharedBridge(
             uint256, // always zero (used to be chain id)
             uint256 _processBatchFrom,
             uint256 _processBatchTo,
             bytes calldata _proofData
-        );
+       );
 
     }
 }

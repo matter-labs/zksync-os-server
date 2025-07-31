@@ -1,6 +1,5 @@
 [package]
 name = "zksync_os_sequencer"
-default-run = "zksync_os_sequencer"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
