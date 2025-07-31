@@ -1,9 +1,4 @@
-use crate::repositories::api_interface::{ApiRepository, RepositoryResult};
-use crate::repositories::{
-    api_interface::RepositoryBlock,
-    metrics::REPOSITORIES_METRICS,
-    transaction_receipt_repository::{StoredTxData, TxMeta},
-};
+use crate::repositories::metrics::REPOSITORIES_METRICS;
 use alloy::{
     consensus::{Block, Transaction},
     eips::{Decodable2718, Encodable2718},
@@ -12,6 +7,9 @@ use alloy::{
 };
 use std::sync::Arc;
 use tokio::sync::watch;
+use zksync_os_storage_api::{
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+};
 use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
@@ -159,7 +157,7 @@ impl RepositoryDb {
     }
 }
 
-impl ApiRepository for RepositoryDb {
+impl ReadRepository for RepositoryDb {
     fn get_block_by_number(
         &self,
         number: BlockNumber,

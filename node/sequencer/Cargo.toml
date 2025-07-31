@@ -16,6 +16,7 @@ zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_rpc.workspace = true
 zksync_os_rpc_api =  { workspace = true, features = ["server"] }
+zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 
 zk_os_forward_system.workspace = true
@@ -41,8 +42,6 @@ zksync_storage.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256", "rand"] }
-# In order to use RlpDecodable, RlpEncodable alloy-rlp crate must be imported directly.
-alloy-rlp.workspace = true
 blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }

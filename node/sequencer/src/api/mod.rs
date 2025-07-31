@@ -45,9 +45,9 @@ pub async fn run_jsonrpsee_server(
         EthNamespace::new(
             config.clone(),
             repository_manager.clone(),
+            block_replay_storage,
             state_handle,
             mempool.clone(),
-            block_replay_storage,
             genesis_config.chain_id,
         )
         .into_rpc(),
