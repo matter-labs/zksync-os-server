@@ -14,7 +14,7 @@ Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
 To enable local L1 - in other tab (see "L1 State" below for more info)
 
 ```
-anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
+anvil --load-state zkos-l1-state.json --port 8545
 ```
 
 See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g.:
@@ -57,7 +57,7 @@ Erase the local DB and re-run anvil:
 
 ```
 rm -rf db/node1/*
-anvil --load-state zkos-l1-state.json --chain-id 9 --port 8545
+anvil --load-state zkos-l1-state.json --port 8545
 ```
 
 ## Design

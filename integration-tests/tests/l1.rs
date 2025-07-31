@@ -21,7 +21,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
 
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
-        Address::from_str("0x4b37536b9824c4a4cf3d15362135e346adb7cb9c").unwrap(),
+        Address::from_str("0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f").unwrap(),
         tester.l1_provider.clone(),
         270,
     );

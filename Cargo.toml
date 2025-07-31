@@ -15,6 +15,7 @@ members = [
     "tools/generate-deposit",
 ]
 resolver = "3"
+default-members = ["node/sequencer"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,7 +28,6 @@ keywords = ["blockchain", "zksync"]
 categories = ["cryptography"]
 
 [workspace.dependencies]
-
 auto_impl = "1.3.0"
 blake2 = "0.10.6"
 tracing = "0.1"
@@ -56,10 +56,10 @@ zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/z
 #verifier_common = { package = "verifier_common", path = "../zksync-airbender/verifier_common" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
 
-air-compiler-cli = { package = "cli", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
-execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
-verifier_common = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
-full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.3" }
+air-compiler-cli = { package = "cli", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
+execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
+verifier_common = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
+full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
@@ -71,7 +71,7 @@ vise = "0.3.0"
 vise-exporter = "0.3.0"
 hex = "0.4"
 crossbeam-queue = "0.3"
-bincode = { version ="2.0.1", features = ["serde"] }
+bincode = { version = "2.0.1", features = ["serde"] }
 bincode_v1 = { package = "bincode", version = "1" }
 smart-config = "=0.2.0-pre"
 thiserror = "2.0.12"
@@ -92,6 +92,7 @@ fs2 = "0.4.3"
 test-log = "0.2.18"
 backon = "1.5.1"
 reqwest = "0.12.22"
+time = "0.3"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
@@ -112,7 +113,7 @@ zksync_os_contract_interface = { path = "lib/contract_interface" }
 zksync_os_l1_sender = { path = "lib/l1_sender" }
 zksync_os_l1_watcher = { path = "lib/l1_watcher" }
 zksync_os_mempool = { path = "lib/mempool" }
-zksync_os_merkle_tree = {path = "lib/merkle_tree" }
+zksync_os_merkle_tree = { path = "lib/merkle_tree" }
 zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
 zksync_os_state = { path = "lib/state" }

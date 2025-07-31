@@ -14,9 +14,9 @@ async fn main() -> anyhow::Result<()> {
     let url = "http://localhost:8545";
     // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
     let private_key = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
-    let bridgehub_address = address!("0x4b37536b9824c4a4cf3d15362135e346adb7cb9c");
+    let bridgehub_address = address!("0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f");
     // Deposit 10k ETH by default
-    let amount = U256::from(10_000u128 * 10u128.pow(18));
+    let amount = U256::from(100u128 * 10u128.pow(18));
     let l2_chain_id = 270;
 
     let l1_wallet = EthereumWallet::new(LocalSigner::from_str(private_key).unwrap());
@@ -25,6 +25,11 @@ async fn main() -> anyhow::Result<()> {
         .connect(url)
         .await
         .unwrap();
+
+    let l1_balance = l1_provider
+        .get_balance(l1_wallet.default_signer().address())
+        .await?;
+    println!("L1 balance: {l1_balance}");
 
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(bridgehub_address, l1_provider.clone(), l2_chain_id);

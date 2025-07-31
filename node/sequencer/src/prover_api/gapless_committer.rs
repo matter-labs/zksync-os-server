@@ -1,8 +1,8 @@
-use crate::model::batches::{BatchEnvelope, FriProof};
 use crate::prover_api::proof_storage::ProofStorage;
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::L1SenderHandle;
+use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
 
 /// Receives Batches with proofs - potentially out of order;
 /// Fixes the order (by filling in the `buffer` field);  
@@ -21,7 +21,7 @@ pub struct GaplessCommitter {
     batches_with_proof_receiver: mpsc::Receiver<BatchEnvelope<FriProof>>,
     // outbound
     proof_storage: ProofStorage,
-    l1sender_handle: L1SenderHandle,
+    commit_batch_sender: mpsc::Sender<CommitCommand>,
 }
 
 impl GaplessCommitter {
@@ -29,14 +29,14 @@ impl GaplessCommitter {
         next_expected: u64,
         batches_with_proof_receiver: mpsc::Receiver<BatchEnvelope<FriProof>>,
         proof_storage: ProofStorage,
-        l1sender_handle: L1SenderHandle,
+        commit_batch_sender: mpsc::Sender<CommitCommand>,
     ) -> Self {
         GaplessCommitter {
             buffer: Default::default(),
             next_expected,
             batches_with_proof_receiver,
             proof_storage,
-            l1sender_handle,
+            commit_batch_sender,
         }
     }
 
@@ -74,11 +74,8 @@ impl GaplessCommitter {
         for mut batch in ready {
             batch.trace = batch.trace.with_stage("gapless_committer");
             self.proof_storage.save_proof(&batch)?;
-            self.l1sender_handle
-                .commit(
-                    batch.batch.previous_stored_batch_info,
-                    batch.batch.commit_batch_info,
-                )
+            self.commit_batch_sender
+                .send(CommitCommand::new(batch))
                 .await?;
         }
 
