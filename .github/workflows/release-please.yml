@@ -13,7 +13,6 @@ on:
   push:
     branches:
       - main
-      - setup-release-please # TODO: remove before merge
   workflow_dispatch:
 
 jobs:
