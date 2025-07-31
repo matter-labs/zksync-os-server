@@ -10,7 +10,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zk_os_forward_system::run::test_impl::TxListSource;
-use zk_os_forward_system::run::{StorageCommitment, generate_proof_input};
+use zk_os_forward_system::run::{StorageCommitment, generate_proof_input, BatchOutput};
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
@@ -25,10 +25,10 @@ pub struct ProverInputGenerator {
 
     // == plumbing ==
     // inbound
-    batch_replay_data_receiver: Receiver<BatchEnvelope<Vec<ReplayRecord>>>,
+    block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
 
     // outbound
-    batch_for_proving_sender: Sender<BatchEnvelope<ProverInput>>,
+    blocks_for_batcher_sender: Sender<(BatchOutput, ReplayRecord, ProverInput)>,
 
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
@@ -43,8 +43,8 @@ impl ProverInputGenerator {
         maximum_in_flight_blocks: usize,
 
         // == plumbing ==
-        batch_replay_data_receiver: Receiver<BatchEnvelope<Vec<ReplayRecord>>>,
-        batch_for_proving_sender: Sender<BatchEnvelope<ProverInput>>,
+        block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+        blocks_for_batcher_sender: Sender<(BatchOutput, ReplayRecord, ProverInput)>,
 
         // == dependencies ==
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
@@ -53,16 +53,16 @@ impl ProverInputGenerator {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
             concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../server_app_logging_enabled.bin"
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../server_app_logging_enabled.bin"
             )
         } else {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")
         };
 
         Self {
-            batch_replay_data_receiver,
-            batch_for_proving_sender,
+            block_receiver,
+            blocks_for_batcher_sender,
             persistent_tree,
             bin_path,
             maximum_in_flight_blocks,
@@ -73,36 +73,21 @@ impl ProverInputGenerator {
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> Result<()> {
-        ReceiverStream::new(self.batch_replay_data_receiver)
+        ReceiverStream::new(self.block_receiver)
             // wait for tree to have processed block for each replay record
-            .then(|batch_replay_data| {
+            .then(|(block_output, replay_record)| {
                 let tree = self.persistent_tree.clone();
                 async move {
-                    let mut processed_replays = Vec::new();
-                    // todo: now this loop is only doing one iteration (batch_replay_data.block_replays.len() == 1)
-                    // we can change approach (e.g. don't have a separate stream step for tree)
-                    // note: in fact tree is guaranteed to be available here
-                    // since this batch was already processed by batcher that also needs/waits for the tree
-                    for replay_record in batch_replay_data.data {
-                        let tree = tree
-                            .clone()
-                            .get_at_block(replay_record.block_context.block_number - 1)
-                            .await;
-                        processed_replays.push((tree, replay_record));
-                    }
+                    let tree = tree
+                        .clone()
+                        .get_at_block(replay_record.block_context.block_number - 1)
+                        .await;
 
-                    (
-                        batch_replay_data.batch,
-                        batch_replay_data.trace,
-                        processed_replays,
-                    )
+                    (block_output, replay_record, tree)
                 }
             })
             // generate prover input. Use up to `Self::maximum_in_flight_blocks` threads
-            .map(|(batch_metadata, trace, processed_replays)| {
-                // For now, we only have one block per batch
-                assert_eq!(processed_replays.len(), 1);
-                let (tree, replay_record) = processed_replays.into_iter().next().unwrap();
+            .map(|(block_output, replay_record, tree)| {
                 let block_number = replay_record.block_context.block_number;
 
                 tracing::debug!(
@@ -113,30 +98,21 @@ impl ProverInputGenerator {
 
                 let state_handle = self.state_handle.clone();
                 tokio::task::spawn_blocking(move || {
+                    let prover_input = compute_prover_input(&replay_record, state_handle, tree, self.bin_path);
                     (
-                        batch_metadata,
-                        trace,
-                        compute_prover_input(&replay_record, state_handle, tree, self.bin_path),
+                        block_output,
+                        replay_record,
+                        prover_input,
                     )
                 })
             })
-            // note on parallelism: currently we process multiple blocks/batches in parallel,
-            // when we have proper batching, we can process multiple blocks within one batch in paralle,
-            // but not have multiple batches in parallel
-            // still, we should be able to add cross-batch parallelism later on
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
-            .try_for_each(|(batch_metadata, trace, prover_input)| async {
+            .try_for_each(|(block_output, replay_record, prover_input)| async {
                 GENERAL_METRICS.block_number[&"prover_input_generator"]
-                    .set(batch_metadata.commit_batch_info.batch_number);
+                    .set(block_output.header.number);
 
-                let output_envelope = BatchEnvelope {
-                    batch: batch_metadata,
-                    data: prover_input,
-                    trace: trace.with_stage("prover_input_generated"),
-                };
-
-                self.batch_for_proving_sender.send(output_envelope).await?;
+                self.blocks_for_batcher_sender.send((block_output, replay_record, prover_input)).await?;
 
                 Ok(())
             })
@@ -177,7 +153,7 @@ fn compute_prover_input(
         state_view,
         list_source,
     )
-    .expect("proof gen failed");
+        .expect("proof gen failed");
 
     let latency = prover_input_generation_latency.observe();
 

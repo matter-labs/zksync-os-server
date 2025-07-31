@@ -1,38 +1,43 @@
 use crate::metrics::GENERAL_METRICS;
-use crate::model::batches::{BatchEnvelope, BatchMetadata, Trace};
+use crate::model::batches::{BatchEnvelope, BatchMetadata, ProverInput, Trace};
 use crate::model::blocks::ReplayRecord;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::future::ready;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use anyhow::Context;
+use reth_execution_types::BlockExecutionOutput;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing;
-use zk_os_forward_system::run::BatchOutput;
+use zk_os_forward_system::run::{BatchContext, BatchOutput};
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
+use zksync_os_types::ZkTransaction;
+use crate::config::BatcherConfig;
 
 mod batcher_rocks_db_storage;
 pub mod util;
 
 /// This component handles batching logic - receives blocks and prepares batch data
-/// todo: we still do 1 batch == 1 block, implement proper batching
 pub struct Batcher {
-    // == state ==
-    // holds info about the last processed batch (genesis if none)
-    prev_batch_info: StoredBatchInfo,
-    // only used on startup. Skips all upstream blocks until this one.
-    batcher_starting_block: u64,
+    // == initial state ==
     // L2 chain id
     chain_id: u64,
+    // first block to process
+    first_block_to_process: u64,
+    // last persisted block number
+    last_persisted_block: u64,
 
-    // == persistence (todo: get rid of it - see zksync-os-server/README.md for details) - only used to recover initial `prev_batch_info` ==
-    storage: batcher_rocks_db_storage::BatcherRocksDBStorage,
+    // == config ==
+    batcher_config: BatcherConfig,
 
     // == plumbing ==
     // inbound
-    block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+    block_receiver: Receiver<(BatchOutput, ReplayRecord, ProverInput)>,
     // outbound
-    batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+    batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 }
@@ -40,127 +45,199 @@ pub struct Batcher {
 impl Batcher {
     pub fn new(
         // == initial state ==
-        batcher_starting_block: u64,
         chain_id: u64,
+        first_block_to_process: u64,
+        last_persisted_block: u64,
 
         // == config ==
-        rocks_db_path: PathBuf,
+        batcher_config: BatcherConfig,
 
         // == plumbing ==
-        block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-        batch_data_sender: Sender<BatchEnvelope<Vec<ReplayRecord>>>,
+        block_receiver: Receiver<(BatchOutput, ReplayRecord, ProverInput)>,
+        batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
-        // todo: will not need storage in the future
-        let storage = batcher_rocks_db_storage::BatcherRocksDBStorage::new(rocks_db_path);
-
-        let prev_batch_info = if batcher_starting_block == 1 {
-            util::genesis_stored_batch_info()
-        } else {
-            storage
-                .get(batcher_starting_block - 1)
-                .expect("cannot access batcher storage")
-                .expect("no prev batch info")
-        };
-
         Self {
+            chain_id,
+            first_block_to_process,
+            last_persisted_block,
+            batcher_config,
             block_receiver,
             batch_data_sender,
             persistent_tree,
-            batcher_starting_block,
-            storage,
-            prev_batch_info,
-            chain_id,
         }
     }
 
     /// Main processing loop for the batcher
-    pub async fn run_loop(self) -> anyhow::Result<()> {
-        ReceiverStream::new(self.block_receiver)
-            .skip_while(move |(_, record)| {
-                let skip = record.block_context.block_number < self.batcher_starting_block;
-                if skip {
-                    tracing::debug!(
-                        "Skipping block {} (batcher starting block is {})",
-                        record.block_context.block_number,
-                        self.batcher_starting_block
-                    );
+    pub async fn run_loop(mut self, prev_batch_info: StoredBatchInfo, mut stop_receiver: watch::Receiver<bool>) -> anyhow::Result<()> {
+        let mut prev_batch_info = prev_batch_info;
+
+        loop {
+            tokio::select! {
+                _ = stop_receiver.changed() => {
+                    tracing::info!("Batcher received stop signal, shutting down.");
+                    break;
                 }
-                ready(skip)
-            })
-            // wait for tree to have processed block
-            .then(|(block_output, replay_record)| {
-                self.persistent_tree
-                    .clone()
-                    .get_at_block(replay_record.block_context.block_number)
-                    .map(|tree| Ok::<_, anyhow::Error>((tree, block_output, replay_record)))
-            })
-            .try_fold(
-                self.prev_batch_info,
-                async |prev_batch_info, (tree, block_output, replay_record)| {
-                    let block_number = replay_record.block_context.block_number;
 
-                    let (root_hash, leaf_count) = tree.root_info().unwrap();
+                batch = self.create_batch(&prev_batch_info) => {
+                    match batch {
+                        Ok(batch_envelope) => {
+                            prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
-                    let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
-                        root_hash,
-                        leaf_count,
-                    };
+                            tracing::info!("Batch created successfully, sending to prover input generator.");
+                            self.batch_data_sender
+                                .send(batch_envelope)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create batch: {}", e);
+                        }
+                    }
+                }
+            }
+        }
 
-                    let tx_count = replay_record.transactions.len();
+        Ok(())
+    }
 
-                    let commit_batch_info = CommitBatchInfo::new(
-                        block_output,
-                        &replay_record.block_context,
-                        &replay_record.transactions,
-                        tree_output,
-                        self.chain_id,
-                    );
+    async fn create_batch(&mut self, prev_batch_info: &StoredBatchInfo) -> anyhow::Result<BatchEnvelope<ProverInput>> {
+        let mut timer = tokio::time::interval(self.batcher_config.polling_interval);
 
-                    let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
+        let batch_number = prev_batch_info.batch_number + 1;
+        let mut blocks: Vec<(BatchOutput, ReplayRecord, zksync_os_merkle_tree::TreeBatchOutput, ProverInput)> = vec![];
 
-                    // Store batch info (todo: will not need storage in the future)
-                    self.storage
-                        .set(commit_batch_info.batch_number, &stored_batch_info)?;
+        loop {
+            tokio::select! {
+                /* ---------- check for timeout ---------- */
+                _ = timer.tick() => {
+                    // no blocks, skip this iteration
+                    if blocks.is_empty() {
+                        continue;
+                    }
 
-                    // Create batch
-                    let batch_envelope: BatchEnvelope<Vec<ReplayRecord>> = BatchEnvelope {
-                        batch: BatchMetadata {
-                            previous_stored_batch_info: prev_batch_info,
-                            commit_batch_info,
-                            first_block_number: block_number,
-                            last_block_number: block_number,
-                            tx_count,
-                        },
-                        data: vec![replay_record],
-                        trace: Trace::default(),
-                    };
+                    // if we haven't batched all the blocks that were stored before the restart - no sealing on timeout
+                    let (_, last_block, _, _) = blocks.last().unwrap();
+                    if last_block.block_context.block_number < self.last_persisted_block {
+                        continue;
+                    }
 
+                    let (_, first_block, _, _) = blocks.first().unwrap();
+                    if self.should_seal_by_timeout(first_block.block_context.timestamp, last_block.block_context.timestamp).await {
+                        tracing::info!(batch_number, "Timeout reached, sealing batch.");
+                        break;
+                    }
+                }
 
-                    tracing::info!(
-                        block_number_from = block_number,
-                        block_number_to = block_number,
-                        batch_number = block_number,
+                /* ---------- receive blocks ---------- */
+                maybe_block = self.block_receiver.recv() => {
+                    match maybe_block {
+                        Some((block_output, replay_record, prover_input)) => {
+                            let block_number = replay_record.block_context.block_number;
+
+                            // skip the blocks from committed batches
+                            if block_number < self.first_block_to_process {
+                                tracing::debug!(
+                                            "Skipping block {} (batcher starting block is {})",
+                                            replay_record.block_context.block_number,
+                                            self.first_block_to_process
+                                        );
+
+                                continue;
+                            }
+
+                            /* ---------- process block ---------- */
+                            let tree = self.persistent_tree
+                                .clone()
+                                .get_at_block(replay_record.block_context.block_number)
+                                .await;
+
+                            let (root_hash, leaf_count) = tree.root_info()?;
+
+                            let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
+                                root_hash,
+                                leaf_count,
+                            };
+
+                            GENERAL_METRICS.block_number[&"batcher"].set(block_number);
+                            blocks.push((
+                                block_output,
+                                replay_record,
+                                tree_output,
+                                prover_input,
+                            ));
+
+                            if self.should_seal_by_content().await {
+                                tracing::info!(batch_number, "Content limit reached, sealing batch.");
+                                break;
+                            }
+                        }
+                        None => {
+                            anyhow::bail!("Batcher's block receiver channel closed unexpectedly");
+                        }
+                    }
+                }
+            }
+        }
+
+        /* ---------- seal the batch ---------- */
+        let block_number_from = blocks.first().unwrap().1.block_context.block_number;
+        let block_number_to = blocks.last().unwrap().1.block_context.block_number;
+
+        let commit_batch_info = CommitBatchInfo::new(
+            blocks.iter().map(|(block_output, replay_record, tree, _)|
+                (
+                    block_output,
+                    replay_record.transactions.as_slice(),
+                    tree
+                )).collect(),
+            self.chain_id,
+            batch_number,
+        );
+
+        let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
+
+        let batch_envelope: BatchEnvelope<ProverInput> = BatchEnvelope {
+            batch: BatchMetadata {
+                previous_stored_batch_info: prev_batch_info.clone(),
+                commit_batch_info,
+                first_block_number: block_number_from,
+                last_block_number: block_number_to,
+                tx_count: blocks.iter().map(|(block_output, _, _, _)| block_output.tx_results.len()).sum(),
+            },
+            data: std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
+                .chain(blocks.iter().flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()))
+                .collect(),
+            trace: Trace::default(),
+        };
+
+        tracing::info!(
+                        block_number_from,
+                        block_number_to,
+                        batch_number,
                         state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                         "Batch produced",
                     );
 
-                    tracing::debug!(
+        tracing::debug!(
                         ?batch_envelope.batch,
                         "Batch details",
                     );
 
-                    GENERAL_METRICS.block_number[&"batcher"].set(block_number);
+        Ok(batch_envelope)
+    }
 
-                    // Send to ProverInputGenerator
-                    self.batch_data_sender
-                        .send(batch_envelope)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
-                    Ok(stored_batch_info)
-                },
-            )
-            .await
-            .map(|_| ())
+    async fn should_seal_by_timeout(&self, first_block_timestamp: u64, last_block_timestamp: u64) -> bool {
+        let time_between_first_and_last = SystemTime::from(UNIX_EPOCH + Duration::from_secs(last_block_timestamp))
+            .duration_since(SystemTime::from(UNIX_EPOCH + Duration::from_secs(first_block_timestamp)))
+            .expect("Current time is before the start timestamp");
+
+        time_between_first_and_last >= self.batcher_config.batch_timeout
+    }
+
+    /// Checks if the batch should be sealed based on the content of the blocks.
+    /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
+    async fn should_seal_by_content(&self) -> bool {
+        false // TODO: add sealing criteria
     }
 }

@@ -17,7 +17,10 @@ pub mod tree_manager;
 mod util;
 
 use crate::api::run_jsonrpsee_server;
-use crate::batcher::Batcher;
+use crate::batcher::{
+    util::genesis_stored_batch_info,
+    Batcher,
+};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
@@ -27,7 +30,7 @@ use crate::execution::{
     block_context_provider::BlockContextProvider, block_executor::execute_block,
 };
 use crate::metrics::GENERAL_METRICS;
-use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
+use crate::model::batches::{BatchEnvelope, BatchMetadata, FriProof, ProverInput};
 use crate::prover_api::fake_provers_pool::FakeProversPool;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
@@ -49,8 +52,11 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::{BatchOutput as BlockOutput, BatchOutput};
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_sender::{L1Sender, L1SenderHandle};
+use zksync_os_l1_sender::{
+    config::L1SenderConfig,
+    L1Sender, L1SenderHandle,
+    commitment::StoredBatchInfo,
+};
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_types::forced_deposit_transaction;
@@ -65,7 +71,7 @@ const REPOSITORY_DB_NAME: &str = "repository";
 pub async fn run_sequencer_actor(
     starting_block: u64,
 
-    batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
+    prover_input_generator_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
     mut command_block_context_provider: BlockContextProvider,
@@ -167,7 +173,7 @@ pub async fn run_sequencer_actor(
         );
         stage_started_at = Instant::now();
 
-        batcher_sink
+        prover_input_generator_sink
             .send((block_output.clone(), replay_record))
             .await?;
         tree_sink.send(block_output).await?;
@@ -212,7 +218,7 @@ fn command_source(
                 block_number + 1,
             ))
         })
-        .boxed();
+            .boxed();
     let stream = replay_wal_stream.chain(produce_stream);
     stream.boxed()
 }
@@ -232,16 +238,16 @@ pub async fn run(
 ) {
     // ======= Boilerplate - Initialize async channels  ===========
 
-    // Channel between `BlockExecutor` and `Batcher`
-    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
+    // Channel between `BlockExecutor` and `ProverInputGenerator`
+    let (blocks_for_prover_input_generator_sender, blocks_for_prover_input_generator_receiver) =
         tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(10);
 
     // Channel between `BlockExecutor` and `TreeManager`
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(10);
 
-    // Channel between `Batcher` and `ProverInputGenerator`
-    let (batch_replay_data_sender, batch_replay_data_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<Vec<ReplayRecord>>>(10);
+    // Channel between `ProverInputGenerator` and `Batcher`
+    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
+        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord, ProverInput)>(10);
 
     // Channel between `ProverInputGenerator` and `ProverAPI`
     let (batch_for_proving_sender, batch_for_prover_receiver) =
@@ -257,8 +263,8 @@ pub async fn run(
             .rocks_db_path
             .join(BLOCK_REPLAY_WAL_DB_NAME),
     )
-    .expect("Failed to open BlockReplayWAL")
-    .with_sync_writes();
+        .expect("Failed to open BlockReplayWAL")
+        .with_sync_writes();
     let block_replay_storage =
         BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
 
@@ -277,7 +283,7 @@ pub async fn run(
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
     )
-    .expect("Failed to open ProofStorageDB");
+        .expect("Failed to open ProofStorageDB");
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(proof_storage_db);
@@ -305,7 +311,7 @@ pub async fn run(
         l1_mempool.clone(),
         genesis_config.chain_id,
     )
-    .await;
+        .await;
     let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -402,11 +408,20 @@ pub async fn run(
         "Failed to initialize L1Sender. Consider disabling batcher subsystem via configuration.",
     );
 
-    // todo: this will not hold when we do proper batching,
-    //  but both number are needed to initialize the batcher
-    //  (it needs to know until what block to skip, and it also needs to know the batch number to start with)
-    //  potential solution: modify batcher persistence to also store block range per batch - and use it to recover that block number
-    let last_committed_block_number = last_committed_batch_number;
+    let last_committed_batch_metadata = proof_storage
+        .get_proof(last_committed_batch_number)
+        .expect("Failed to get last committed block from proof storage")
+        .map(|proof| proof.batch);
+
+    let (last_committed_block_number, prev_batch_info): (u64, StoredBatchInfo) = if let Some(batch_metadata) = last_committed_batch_metadata {
+        (
+            batch_metadata.last_block_number,
+            batch_metadata.commit_batch_info.into(),
+        )
+    } else {
+        (0, genesis_stored_batch_info())
+    };
+
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
     tracing::info!(
@@ -422,31 +437,33 @@ pub async fn run(
         "L1 sender last committed block number is inconsistent with WAL or storage map"
     );
 
-    // ========== Initialize Batcher ===========
-    tracing::info!("Initializing Batcher");
-    let batcher_task = {
-        let batcher = Batcher::new(
-            last_committed_batch_number + 1,
-            genesis_config.chain_id,
-            sequencer_config.rocks_db_path.clone(),
-            blocks_for_batcher_receiver,
-            batch_replay_data_sender,
-            persistent_tree.clone(),
-        );
-        Box::pin(batcher.run_loop())
-    };
-
+    // ========== Initialize ProverInputGenerator ===========
     tracing::info!("Initializing ProverInputGenerator");
     let prover_input_generator_task = {
         let prover_input_generator = ProverInputGenerator::new(
             prover_input_generator_config.logging_enabled,
             prover_input_generator_config.maximum_in_flight_blocks,
-            batch_replay_data_receiver,
-            batch_for_proving_sender,
-            persistent_tree,
+            blocks_for_prover_input_generator_receiver,
+            blocks_for_batcher_sender,
+            persistent_tree.clone(),
             state_handle.clone(),
         );
         Box::pin(prover_input_generator.run_loop())
+    };
+
+    // ========== Initialize Batcher ===========
+    tracing::info!("Initializing Batcher");
+    let batcher_task = {
+        let batcher = Batcher::new(
+            genesis_config.chain_id,
+            last_committed_block_number + 1,
+            repositories_persisted_block,
+            batcher_config,
+            blocks_for_batcher_receiver,
+            batch_for_proving_sender,
+            persistent_tree,
+        );
+        Box::pin(batcher.run_loop(prev_batch_info, stop_receiver.clone()))
     };
 
     // ======= Initialize Prover Api Server========
@@ -466,7 +483,7 @@ pub async fn run(
 
     let prover_server_task = Box::pin(prover_server::run(
         fri_prover_job_manager.clone(),
-        proof_storage,
+        proof_storage.clone(),
         prover_api_config.address,
     ));
 
@@ -503,7 +520,7 @@ pub async fn run(
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
             starting_block,
-            blocks_for_batcher_sender,
+            blocks_for_prover_input_generator_sender,
             tree_sender,
             command_block_context_provider,
             state_handle.clone(),
