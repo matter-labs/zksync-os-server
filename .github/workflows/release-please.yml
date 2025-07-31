@@ -29,4 +29,5 @@ jobs:
       manifest: '.github/release-please/manifest.json'      # Path to the manifest file
       update-cargo-lock: true                               # Update Cargo.lock file in the release PR
       publish-to-crates-io: false                           # Enable publishing to crates.io
+      version-suffix: 'non-semver-compat'                   # Version suffix for the crates.io release
       dependencies: 'clang libclang-dev'                    # Additional Linux dependencies to install
