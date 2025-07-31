@@ -1,0 +1,34 @@
+name: Release-please
+
+# Give permissions to the release-please to open, update PRs
+# and commit to PRs the repository to update Cargo.lock
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
+
+# Run the workflow on push to the main branch or manually
+on:
+  push:
+    branches:
+      - main
+      - setup-release-please # TODO: remove before merge
+  workflow_dispatch:
+
+jobs:
+  # Prepare the release PR with changelog updates and create github releases
+  release-please:
+    uses: matter-labs/zksync-ci-common/.github/workflows/release-please.yaml@3f8620bc332855fd588321f4486ecdbcddee9ec3 # v1
+    secrets:
+      slack_webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}  # Slack webhook for notifications
+      gh_token: ${{ secrets.RELEASE_TOKEN }}                # GitHub token for release-please
+      cargo_registry_token: ${{ secrets.CRATES_IO_TOKEN }}  # Crates.io token for publishing
+    with:
+      config: '.github/release-please/config.json'          # Path to the configuration file
+      manifest: '.github/release-please/manifest.json'      # Path to the manifest file
+      update-cargo-lock: true                               # Update Cargo.lock file in the release PR
+      publish-to-crates-io: true                            # Enable publishing to crates.io
+      upgrade-dependencies: true                            # Upgrade cross-workspace dependencies
+      version-suffix: 'non-semver-compat'                   # Version suffix for the crates.io release
+      dependencies: 'clang libclang-dev'                    # Additional Linux dependencies to install
