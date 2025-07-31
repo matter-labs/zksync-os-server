@@ -2,7 +2,6 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-pub mod api;
 mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
@@ -17,7 +16,6 @@ pub mod reth_state;
 pub mod tree_manager;
 mod util;
 
-use crate::api::run_jsonrpsee_server;
 use crate::batch_sink::BatchSink;
 use crate::batcher::Batcher;
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
@@ -57,6 +55,7 @@ use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
@@ -569,12 +568,12 @@ pub async fn run(
         // todo: only start after the sequencer caught up?
         res = run_jsonrpsee_server(
             rpc_config,
-            genesis_config.clone(),
+            genesis_config.chain_id,
             bridgehub_address,
             repositories.clone(),
+            block_replay_storage.clone(),
             state_handle.clone(),
             l2_mempool,
-            block_replay_storage.clone()
         ) => {
             match res {
                 Ok(_)  => tracing::warn!("JSON-RPC server unexpectedly exited"),
