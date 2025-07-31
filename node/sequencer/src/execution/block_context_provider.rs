@@ -90,6 +90,7 @@ impl BlockContextProvider {
                 // Create stream: L1 transactions first, then L2 transactions
                 let best_txs = best_transactions(&self.l2_mempool, l1_transactions);
                 let gas_limit = 100_000_000;
+                let pubdata_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
@@ -98,9 +99,10 @@ impl BlockContextProvider {
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
-                    gas_limit,
                     coinbase: Default::default(),
                     block_hashes: self.block_hashes_for_next_block,
+                    gas_limit,
+                    pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                 };

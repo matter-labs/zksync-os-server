@@ -310,49 +310,46 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
         // highest, in case we applied a gas cap due to caller allowance above
         highest_gas_limit = tx.gas_limit();
 
-        // fixme: following block is disabled because zksync-os reports gas_used=0 during simulation
-        // // NOTE: this is the gas the transaction used, which is less than the
-        // // transaction requires to succeed.
-        // let mut gas_used = res.gas_used;
-        // // the lowest value is capped by the gas used by the unconstrained transaction
-        // let mut lowest_gas_limit = gas_used.saturating_sub(1);
-        //
-        // // As stated in Geth, there is a good chance that the transaction will pass if we set the
-        // // gas limit to the execution gas used plus the gas refund, so we check this first
-        // // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135
-        // //
-        // // Calculate the optimistic gas limit by adding gas used and gas refund,
-        // // then applying a 64/63 multiplier to account for gas forwarding rules.
-        // let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
-        // if optimistic_gas_limit < highest_gas_limit {
-        //     // Set the transaction's gas limit to the calculated optimistic gas limit.
-        //     let mut optimistic_tx = tx.clone();
-        //     set_gas_limit(&mut optimistic_tx, optimistic_gas_limit);
-        //
-        //     // Re-execute the transaction with the new gas limit and update the result and
-        //     // environment.
-        //     res = execute(optimistic_tx, block_context, storage_view.clone())
-        //         .map_err(EthCallError::ForwardSubsystemError)?
-        //         .map_err(EthCallError::InvalidTransaction)?;
-        //
-        //     // Update the gas used based on the new result.
-        //     gas_used = res.gas_used;
-        //     // Update the gas limit estimates (highest and lowest) based on the execution result.
-        //     update_estimated_gas_range(
-        //         res.execution_result,
-        //         optimistic_gas_limit,
-        //         &mut highest_gas_limit,
-        //         &mut lowest_gas_limit,
-        //     )?;
-        // };
+        // NOTE: this is the gas the transaction used, which is less than the
+        // transaction requires to succeed.
+        let mut gas_used = res.gas_used;
+        // the lowest value is capped by the gas used by the unconstrained transaction
+        let mut lowest_gas_limit = gas_used.saturating_sub(1);
 
-        // // Pick a point that's close to the estimated gas
-        // let mut mid_gas_limit = std::cmp::min(
-        //     gas_used * 3,
-        //     ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64,
-        // );
-        let mut lowest_gas_limit = 21_000;
-        let mut mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
+        // As stated in Geth, there is a good chance that the transaction will pass if we set the
+        // gas limit to the execution gas used plus the gas refund, so we check this first
+        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135
+        //
+        // Calculate the optimistic gas limit by adding gas used and gas refund,
+        // then applying a 64/63 multiplier to account for gas forwarding rules.
+        let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
+        if optimistic_gas_limit < highest_gas_limit {
+            // Set the transaction's gas limit to the calculated optimistic gas limit.
+            let mut optimistic_tx = tx.clone();
+            set_gas_limit(&mut optimistic_tx, optimistic_gas_limit);
+
+            // Re-execute the transaction with the new gas limit and update the result and
+            // environment.
+            res = execute(optimistic_tx, block_context, storage_view.clone())
+                .map_err(EthCallError::ForwardSubsystemError)?
+                .map_err(EthCallError::InvalidTransaction)?;
+
+            // Update the gas used based on the new result.
+            gas_used = res.gas_used;
+            // Update the gas limit estimates (highest and lowest) based on the execution result.
+            update_estimated_gas_range(
+                res.execution_result,
+                optimistic_gas_limit,
+                &mut highest_gas_limit,
+                &mut lowest_gas_limit,
+            )?;
+        };
+
+        // Pick a point that's close to the estimated gas
+        let mut mid_gas_limit = std::cmp::min(
+            gas_used * 3,
+            ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64,
+        );
 
         // Binary search narrows the range to find the minimum gas limit needed for the transaction
         // to succeed.
@@ -406,9 +403,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
             mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
         }
 
-        // todo: simulation undershoots real gas limit so we double the result just in case
-        //       likely because of missing ecrecover or similar discrepancies from real execution
-        Ok(U256::from(highest_gas_limit * 2))
+        Ok(U256::from(highest_gas_limit))
     }
 }
 
