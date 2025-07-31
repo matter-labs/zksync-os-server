@@ -1,8 +1,8 @@
 mod config;
+mod metrics;
 
 pub use crate::config::L1WatcherConfig;
-use zksync_os_mempool::DynL1Pool;
-use zksync_os_types::L1Envelope;
+pub use crate::metrics::L1_METRICS;
 
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
@@ -13,14 +13,17 @@ use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
+use zksync_os_types::L1Envelope;
 
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
-    l1_pool: DynL1Pool,
     zk_chain_address: Address,
     next_l1_block: BlockNumber,
+
+    output: mpsc::Sender<L1Envelope>,
 
     poll_interval: Duration,
     max_blocks_to_process: u64,
@@ -29,8 +32,9 @@ pub struct L1Watcher {
 impl L1Watcher {
     pub async fn new(
         config: L1WatcherConfig,
-        l1_pool: DynL1Pool,
         chain_id: u64,
+        output: mpsc::Sender<L1Envelope>,
+        next_l1_priority_id: u64,
     ) -> anyhow::Result<Self> {
         let provider = DynProvider::new(
             ProviderBuilder::new()
@@ -52,18 +56,14 @@ impl L1Watcher {
         );
         let zk_chain = bridgehub.zk_chain().await?;
         let zk_chain_address = *zk_chain.address();
-        // The first priority transaction to be retrieved here is the earliest one that wasn't
-        // `executed` on-chain yet. The main sequencer stream starts earlier than that, but we will
-        // not have `Produce` commands before this number. We don't validate priority transactions
-        // yet, so it's fine
-        let next_l1_block = find_first_unprocessed_l1_block(zk_chain).await?;
+        let next_l1_block = find_l1_block_by_priority_id(zk_chain, next_l1_priority_id).await?;
         tracing::info!(?zk_chain_address, next_l1_block, "resolved on L1");
 
         Ok(Self {
             provider,
-            l1_pool,
             zk_chain_address,
             next_l1_block,
+            output,
             poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
         })
@@ -97,14 +97,20 @@ impl L1Watcher {
             return Ok(());
         }
         let priority_txs = self.process_l1_blocks(from_block, to_block).await?;
+        L1_METRICS
+            .l1_transactions_loaded
+            .inc_by(priority_txs.len() as u64);
+        L1_METRICS.most_recently_scanned_l1_block.set(to_block);
+
         for tx in priority_txs {
             tracing::debug!(
                 serial_id = tx.nonce(),
                 hash = ?tx.hash(),
                 "adding new priority transaction to mempool",
             );
-            self.l1_pool.add_transaction(tx);
+            self.output.send(tx).await?;
         }
+
         self.next_l1_block = to_block + 1;
         Ok(())
     }
@@ -148,13 +154,12 @@ impl L1Watcher {
     }
 }
 
-async fn find_first_unprocessed_l1_block(
+async fn find_l1_block_by_priority_id(
     zk_chain: ZkChain<DynProvider>,
+    next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     let block_number = zk_chain.provider().get_block_number().await?;
-    let next_l1_priority_id = zk_chain
-        .get_first_unprocessed_priority_tx_at_block(block_number.into())
-        .await?;
+
     // We want to find the first block where `total_l1_priority_txs(block) >= next_l1_priority_id`
     // (not strict equality as multiple L1->L2 transactions can be added in a single L1 block).
     // Invariant is to maintain interval `[low; high)` where:

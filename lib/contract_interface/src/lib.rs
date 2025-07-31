@@ -85,7 +85,6 @@ alloy::sol! {
         function getTotalBatchesCommitted() external view returns (uint256);
         function getTotalBatchesVerified() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
-        function getFirstUnprocessedPriorityTx() external view returns (uint256);
     }
 
     // Taken from `IExecutor.sol`
@@ -269,18 +268,6 @@ impl<P: Provider> ZkChain<P> {
     ) -> alloy::contract::Result<u64> {
         self.instance
             .getTotalPriorityTxs()
-            .block(block_id)
-            .call()
-            .await
-            .map(|n| n.saturating_to())
-    }
-
-    pub async fn get_first_unprocessed_priority_tx_at_block(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<u64> {
-        self.instance
-            .getFirstUnprocessedPriorityTx()
             .block(block_id)
             .call()
             .await

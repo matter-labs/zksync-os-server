@@ -11354,8 +11354,8 @@ dependencies = [
  "smart-config",
  "tokio",
  "tracing",
+ "vise",
  "zksync_os_contract_interface",
- "zksync_os_mempool",
  "zksync_os_types",
  "zksync_storage",
 ]
