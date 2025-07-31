@@ -19,7 +19,7 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // please be mindful when adding new parameters here
 
 pub async fn execute_block(
-    mut command: PreparedBlockCommand,
+    mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
     let ctx = command.block_context;
