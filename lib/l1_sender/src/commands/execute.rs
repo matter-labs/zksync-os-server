@@ -80,11 +80,8 @@ impl ExecuteCommand {
         let priority_ops = self
             .priority_ops
             .iter()
-            .map(|priority_op| IExecutor::PriorityOpsBatchInfo {
-                leftPath: priority_op.left_path.clone(),
-                rightPath: priority_op.right_path.clone(),
-                itemHashes: priority_op.item_hashes.clone(),
-            })
+            .cloned()
+            .map(IExecutor::PriorityOpsBatchInfo::from)
             .collect::<Vec<_>>();
         let encoded_data = (stored_batch_infos, priority_ops).abi_encode_params();
 
