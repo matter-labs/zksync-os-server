@@ -76,7 +76,7 @@ const REPOSITORY_DB_NAME: &str = "repository";
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_sequencer_actor(
-    starting_block: u64,
+    mut block_stream: BoxStream<'_, BlockCommand>,
 
     prover_input_generator_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
@@ -87,13 +87,6 @@ pub async fn run_sequencer_actor(
     repositories: RepositoryManager,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
-    let mut stream = command_source(
-        &wal,
-        starting_block,
-        sequencer_config.block_time,
-        sequencer_config.max_transactions_in_block,
-    );
-
     let mut latency_tracker = ComponentStateLatencyTracker::new(
         "sequencer",
         SequencerState::WaitingForUpstreamCommand,
@@ -102,7 +95,7 @@ pub async fn run_sequencer_actor(
     loop {
         latency_tracker.enter_state(SequencerState::WaitingForUpstreamCommand);
 
-        let Some(cmd) = stream.next().await else {
+        let Some(cmd) = block_stream.next().await else {
             anyhow::bail!("inbound channel closed");
         };
         let block_number = cmd.block_number();
@@ -624,19 +617,32 @@ pub async fn run(
             .map(report_exit("Batcher")),
     );
 
-    tasks.spawn(
-        run_sequencer_actor(
-            starting_block,
-            blocks_for_prover_input_generator_sender,
-            tree_sender,
-            command_block_context_provider,
-            state_handle.clone(),
-            block_replay_storage.clone(),
-            repositories.clone(),
-            sequencer_config,
-        )
-        .map(report_exit("Sequencer server")),
-    );
+    {
+        let state_handle = state_handle.clone();
+        let block_replay_storage = block_replay_storage.clone();
+        let repositories = repositories.clone();
+
+        tasks.spawn(async move {
+            let block_stream = command_source(
+                &block_replay_storage,
+                starting_block,
+                sequencer_config.block_time,
+                sequencer_config.max_transactions_in_block,
+            );
+            run_sequencer_actor(
+                block_stream,
+                blocks_for_prover_input_generator_sender,
+                tree_sender,
+                command_block_context_provider,
+                state_handle,
+                block_replay_storage.clone(),
+                repositories,
+                sequencer_config,
+            )
+            .map(report_exit("Sequencer server"))
+            .await
+        });
+    }
 
     tracing::info!("Initializing ProverInputGenerator");
     let prover_input_generator = ProverInputGenerator::new(
