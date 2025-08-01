@@ -35,6 +35,7 @@ pub struct ReplayRecord {
     pub transactions: Vec<ZkTransaction>,
     /// Version of the node that created this replay record.
     pub node_version: semver::Version,
+    /// Hash of the block output, if available.
     pub block_output_hash: Option<B256>,
 }
 

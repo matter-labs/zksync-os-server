@@ -1,6 +1,9 @@
 use alloy::primitives::{B256, keccak256};
 use zk_os_forward_system::run::BlockOutput;
 
+// Hash of the block output, which is used to identify divergences in block execution.
+// It's incomplete, in a sense that it does not include all the data from the block output.
+// Hash includes the most important pieces of data that are likely to change in case of a divergence.
 pub(crate) fn hash_block_output(block_output: &BlockOutput) -> B256 {
     let mut preimage = Vec::new();
     preimage.extend_from_slice(&block_output.header.hash());

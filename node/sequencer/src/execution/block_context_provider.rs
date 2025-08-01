@@ -160,6 +160,7 @@ impl BlockContextProvider {
             .await
             .context("execute_block")?;
 
+        // Check if the block output matches the expected hash, if provided.
         if let (Some(expected_hash), Some(actual_hash)) = (
             replay_block_output_hash,
             new_replay_record.block_output_hash,
