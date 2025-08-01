@@ -1,4 +1,5 @@
 use crate::execution::block_executor::execute_block;
+use crate::execution::utils::save_dump;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
@@ -8,6 +9,7 @@ use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use ruint::aliases::U256;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -43,6 +45,7 @@ pub struct BlockContextProvider {
     block_hashes_for_next_block: BlockHashes,
     chain_id: u64,
     node_version: semver::Version,
+    dump_path: Option<PathBuf>,
 }
 
 impl BlockContextProvider {
@@ -53,6 +56,7 @@ impl BlockContextProvider {
         block_hashes_for_next_block: BlockHashes,
         chain_id: u64,
         node_version: semver::Version,
+        dump_path: Option<PathBuf>,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -61,6 +65,7 @@ impl BlockContextProvider {
             block_hashes_for_next_block,
             chain_id,
             node_version,
+            dump_path,
         }
     }
 
@@ -158,6 +163,16 @@ impl BlockContextProvider {
 
         let (block_output, new_replay_record, purged_txs) = execute_block(prepared_command, state)
             .await
+            .map_err(|dump| {
+                let error = anyhow::anyhow!("{}", dump.error);
+                if let Some(path) = self.dump_path.clone() {
+                    tracing::info!("Saving dump..");
+                    save_dump(path, dump);
+                } else {
+                    tracing::warn!("Skipped saving dump");
+                }
+                error
+            })
             .context("execute_block")?;
 
         // Check if the block output matches the expected hash, if provided.

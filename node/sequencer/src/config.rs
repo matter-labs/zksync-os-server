@@ -34,6 +34,14 @@ pub struct SequencerConfig {
     /// Max number of transactions in a block.
     #[config(default_t = 1000)]
     pub max_transactions_in_block: usize,
+
+    /// Where to save the block dumps in case of unexpected failures.
+    #[config(default_t = true)]
+    pub block_dump_enabled: bool,
+
+    /// Path to the directory where block dumps for unexpected failures will be saved.
+    #[config(default_t = "./block_dumps".into())]
+    pub block_dump_path: PathBuf,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
