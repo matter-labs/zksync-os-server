@@ -5,6 +5,7 @@
 mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
+mod block_transport;
 pub mod config;
 pub mod execution;
 mod metadata;
@@ -18,6 +19,7 @@ mod util;
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
+use crate::block_transport::{block_receiver, block_server};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig,
@@ -225,6 +227,7 @@ pub async fn run(
     batcher_config: BatcherConfig,
     prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
+    is_external_node: bool,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
     let genesis = Genesis::new(genesis_config.genesis_input_path);
@@ -623,12 +626,18 @@ pub async fn run(
         let repositories = repositories.clone();
 
         tasks.spawn(async move {
-            let block_stream = command_source(
-                &block_replay_storage,
-                starting_block,
-                sequencer_config.block_time,
-                sequencer_config.max_transactions_in_block,
-            );
+            let block_stream = if is_external_node {
+                block_receiver(starting_block).await
+            } else {
+                tokio::spawn(block_server(block_replay_storage.clone()));
+
+                command_source(
+                    &block_replay_storage,
+                    starting_block,
+                    sequencer_config.block_time,
+                    sequencer_config.max_transactions_in_block,
+                )
+            };
             run_sequencer_actor(
                 block_stream,
                 blocks_for_prover_input_generator_sender,

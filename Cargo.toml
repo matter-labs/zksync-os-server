@@ -71,6 +71,7 @@ full_statement_verifier = { package = "full_statement_verifier", git = "https://
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
+tokio-util = { version = "0.7", features = ["codec"], default-features = false }
 ruint = { version = "1.12", default-features = false }
 dashmap = "6.1.0"
 itertools = "0.14.0"
