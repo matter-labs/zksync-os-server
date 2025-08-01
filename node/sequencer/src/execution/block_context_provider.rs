@@ -42,6 +42,7 @@ pub struct BlockContextProvider {
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     chain_id: u64,
+    node_version: semver::Version,
 }
 
 impl BlockContextProvider {
@@ -51,6 +52,7 @@ impl BlockContextProvider {
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         chain_id: u64,
+        node_version: semver::Version,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -58,6 +60,7 @@ impl BlockContextProvider {
             l2_mempool,
             block_hashes_for_next_block,
             chain_id,
+            node_version,
         }
     }
 
@@ -77,7 +80,7 @@ impl BlockContextProvider {
         // todo: validate next_l1_transaction_id by adding it directly to BlockCommand
         //  it's not clear whether we want to add it only to Replay or also in Produce
 
-        let prepared_command = match block_command {
+        let (prepared_command, replay_block_output_hash) = match block_command {
             BlockCommand::Produce(produce_command) => {
                 let starting_l1_priority_id = self.next_l1_priority_id;
 
@@ -102,17 +105,21 @@ impl BlockContextProvider {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                 };
-                PreparedBlockCommand {
-                    block_context,
-                    tx_source: Box::pin(best_txs),
-                    seal_policy: SealPolicy::Decide(
-                        produce_command.block_time,
-                        produce_command.max_transactions_in_block,
-                    ),
-                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
-                    metrics_label: "produce",
-                    starting_l1_priority_id,
-                }
+                (
+                    PreparedBlockCommand {
+                        block_context,
+                        tx_source: Box::pin(best_txs),
+                        seal_policy: SealPolicy::Decide(
+                            produce_command.block_time,
+                            produce_command.max_transactions_in_block,
+                        ),
+                        invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
+                        metrics_label: "produce",
+                        starting_l1_priority_id,
+                        node_version: self.node_version.clone(),
+                    },
+                    None,
+                )
             }
             BlockCommand::Replay(record) => {
                 for tx in &record.transactions {
@@ -126,14 +133,18 @@ impl BlockContextProvider {
                         ZkEnvelope::L2(_) => {} // already consumed l1 transactions in execution},
                     }
                 }
-                PreparedBlockCommand {
-                    block_context: record.block_context,
-                    seal_policy: SealPolicy::UntilExhausted,
-                    invalid_tx_policy: InvalidTxPolicy::Abort,
-                    tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
-                    starting_l1_priority_id: record.starting_l1_priority_id,
-                    metrics_label: "replay",
-                }
+                (
+                    PreparedBlockCommand {
+                        block_context: record.block_context,
+                        seal_policy: SealPolicy::UntilExhausted,
+                        invalid_tx_policy: InvalidTxPolicy::Abort,
+                        tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
+                        starting_l1_priority_id: record.starting_l1_priority_id,
+                        metrics_label: "replay",
+                        node_version: record.node_version,
+                    },
+                    record.block_output_hash,
+                )
             }
         };
 
@@ -145,20 +156,30 @@ impl BlockContextProvider {
         );
         let stage_started_at = Instant::now();
 
-        let (block_output, replay_record, purged_txs) = execute_block(prepared_command, state)
+        let (block_output, new_replay_record, purged_txs) = execute_block(prepared_command, state)
             .await
             .context("execute_block")?;
 
+        if let (Some(expected_hash), Some(actual_hash)) = (
+            replay_block_output_hash,
+            new_replay_record.block_output_hash,
+        ) {
+            anyhow::ensure!(
+                expected_hash == actual_hash,
+                "Block #{block_number} output hash mismatch: expected {expected_hash}, got {actual_hash}"
+            );
+        }
+
         tracing::info!(
             block_number,
-            transactions = replay_record.transactions.len(),
+            transactions = new_replay_record.transactions.len(),
             preimages = block_output.published_preimages.len(),
             storage_writes = block_output.storage_writes.len(),
             "▶ Executed after {:?}. Adding to state...",
             stage_started_at.elapsed()
         );
 
-        Ok((block_output, replay_record, purged_txs))
+        Ok((block_output, new_replay_record, purged_txs))
     }
 
     pub fn remove_txs(&self, tx_hashes: Vec<TxHash>) {

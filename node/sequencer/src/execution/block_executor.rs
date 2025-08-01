@@ -1,4 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::utils::hash_block_output;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
@@ -176,9 +177,16 @@ pub async fn execute_block(
         .observe(output.storage_writes.len() as u64);
     seal_latency_observer.observe();
 
+    let block_hash_output = hash_block_output(&output);
     Ok((
         output,
-        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
+        ReplayRecord::new(
+            ctx,
+            command.starting_l1_priority_id,
+            executed_txs,
+            command.node_version,
+            Some(block_hash_output),
+        ),
         purged_txs,
     ))
 }

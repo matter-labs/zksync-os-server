@@ -33,6 +33,9 @@ pub struct ReplayRecord {
     /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
     pub starting_l1_priority_id: L1TxSerialId,
     pub transactions: Vec<ZkTransaction>,
+    /// Version of the node that created this replay record.
+    pub node_version: semver::Version,
+    pub block_output_hash: Option<B256>,
 }
 
 impl ReplayRecord {
@@ -40,6 +43,8 @@ impl ReplayRecord {
         block_context: BlockContext,
         starting_l1_priority_id: L1TxSerialId,
         transactions: Vec<ZkTransaction>,
+        node_version: semver::Version,
+        block_output_hash: Option<B256>,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
@@ -59,6 +64,8 @@ impl ReplayRecord {
             block_context,
             starting_l1_priority_id,
             transactions,
+            node_version,
+            block_output_hash,
         }
     }
 }
