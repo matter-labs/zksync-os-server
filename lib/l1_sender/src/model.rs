@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::time::SystemTime;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcDateTime};
 use tokio::time::Instant;
 
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
@@ -38,6 +38,17 @@ impl<A> BatchEnvelope<A> {
     pub fn batch_number(&self) -> u64 {
         self.batch.commit_batch_info.batch_number
     }
+    pub fn time_since_first_block(&self) -> anyhow::Result<core::time::Duration> {
+        let first_block_time = SystemTime::from(UtcDateTime::from_unix_timestamp(
+            self.batch.commit_batch_info.first_block_timestamp as i64,
+        )?);
+
+        Ok(SystemTime::now().duration_since(first_block_time)?)
+    }
+    pub fn with_trace_stage(mut self, stage: &'static str) -> Self {
+        self.trace = self.trace.with_stage(stage);
+        self
+    }
 }
 
 /// Trace of the batch processing - has timestamps of each stage the batch went through
@@ -57,6 +68,12 @@ pub enum FriProof {
     // Fake proof for testing purposes
     Fake,
     Real(Vec<u8>),
+}
+
+impl FriProof {
+    pub fn is_fake(&self) -> bool {
+        matches!(self, FriProof::Fake)
+    }
 }
 
 impl Debug for FriProof {

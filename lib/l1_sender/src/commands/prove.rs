@@ -8,7 +8,6 @@ use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
 
-#[allow(dead_code)]
 const OHBENDER_PROOF_TYPE: i32 = 2;
 const FAKE_PROOF_TYPE: i32 = 3;
 const FAKE_PROOF_MAGIC_VALUE: i32 = 13;
@@ -41,6 +40,9 @@ impl L1SenderCommand for ProofCommand {
 
     fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
         self.batches
+            .into_iter()
+            .map(|batch| batch.with_trace_stage("l1_proved"))
+            .collect()
     }
     fn display_vec(input: &[Self]) -> String {
         input
@@ -134,16 +136,40 @@ impl ProofCommand {
 
         tracing::info!(">> public input: {}", public_input);
 
-        let proof: Vec<U256> = vec![
-            // Fake proof type
-            U256::from(FAKE_PROOF_TYPE),
-            // OhBender 'previous hash' - for fake proof, we can always assume that it matches the range perfectly.
-            U256::from(0),
-            // Fake proof magic value (just for sanity)
-            U256::from(FAKE_PROOF_MAGIC_VALUE),
-            // Public input (fake proof **will** verify this against batch data stored in the contract)
-            U256::from_be_bytes(public_input.0),
-        ];
+        let proof: Vec<U256> = match &self.proof {
+            SnarkProof::Fake => {
+                vec![
+                    // Fake proof type
+                    U256::from(FAKE_PROOF_TYPE),
+                    // OhBender 'previous hash' - for fake proof, we can always assume that it matches the range perfectly.
+                    U256::from(0),
+                    // Fake proof magic value (just for sanity)
+                    U256::from(FAKE_PROOF_MAGIC_VALUE),
+                    // Public input (fake proof **will** verify this against batch data stored in the contract)
+                    U256::from_be_bytes(public_input.0),
+                ]
+            }
+            SnarkProof::Real(bytes) => {
+                let proof: Vec<U256> = bytes
+                    .chunks(32)
+                    .map(|chunk| {
+                        let arr: [u8; 32] = chunk
+                            .try_into()
+                            .expect("proof bytes must be a multiple of 32");
+                        U256::from_be_bytes(arr)
+                    })
+                    .collect();
+                vec![
+                    // Fake proof type
+                    U256::from(OHBENDER_PROOF_TYPE),
+                    // we generate SNARK proofs to always match the range perfectly.
+                    U256::from(0),
+                ]
+                .into_iter()
+                .chain(proof)
+                .collect()
+            }
+        };
 
         let proof_payload = proofPayloadCall {
             old: IExecutor::StoredBatchInfo::from(previous_batch_info),
