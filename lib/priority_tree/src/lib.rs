@@ -75,7 +75,9 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         );
 
         loop {
-            let batches = self.take_n(2).await?;
+            // todo(#160): we enforce executing one batch at a time for now as we don't have
+            //             aggregation seal criteria yet
+            let batches = self.take_n(1).await?;
             let mut priority_ops = Vec::new();
             for batch in &batches {
                 let count = batch.batch.commit_batch_info.number_of_layer1_txs as usize;
