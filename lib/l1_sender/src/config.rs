@@ -25,6 +25,12 @@ pub struct L1SenderConfig {
     #[config(default_t = "0xac1e735be8536c6534bb4f17f06f6afc73b2b5ba84ac2cfb12f7461b20c0bbe3".into())]
     pub operator_prove_pk: SecretString,
 
+    /// Private key to use to execute batches on L1
+    /// Can be arbitrary funded address - execute submission is permissionless.
+    // TODO: Pre-configured value, to be removed (pk for 0x0d43eb5b8a47ba8900d84aa36656c92024e9772e)
+    #[config(default_t = "0xd293c684d884d56f8d6abd64fc76757d3664904e309a0645baf8522ab6366d9e".into())]
+    pub operator_execute_pk: SecretString,
+
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed

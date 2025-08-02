@@ -3300,6 +3300,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "envy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f47e0157f2cb54f5ae1bd371b30a2ae4311e1c028f575cd4e81de7353215965"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11191,6 +11200,21 @@ dependencies = [
 
 [[package]]
 name = "zksync_contracts"
+version = "28.1.0-non-semver-compat"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60efe74cb7a9dd7433059f5c1a7e72ec008b1570548c6f1f6318b8ccc901ac49"
+dependencies = [
+ "envy",
+ "hex",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "zksync_basic_types 28.1.0-non-semver-compat",
+ "zksync_utils 28.1.0-non-semver-compat",
+]
+
+[[package]]
+name = "zksync_contracts"
 version = "28.7.0-non-semver-compat"
 source = "git+https://github.com/matter-labs/zksync-era?rev=core-v28.7.0#385c1fcd1cce8e5f29e75f410328f07ce92ce9f5"
 dependencies = [
@@ -11199,7 +11223,7 @@ dependencies = [
  "serde",
  "serde_json",
  "zksync_basic_types 28.7.0-non-semver-compat",
- "zksync_utils",
+ "zksync_utils 28.7.0-non-semver-compat",
 ]
 
 [[package]]
@@ -11275,7 +11299,7 @@ dependencies = [
  "ruint",
  "zk_ee",
  "zksync_os_runner",
- "zksync_types",
+ "zksync_types 28.7.0-non-semver-compat",
 ]
 
 [[package]]
@@ -11406,6 +11430,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_priority_tree"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "tokio",
+ "tracing",
+ "zksync_mini_merkle_tree 28.1.0-non-semver-compat",
+ "zksync_os_contract_interface",
+ "zksync_os_l1_sender",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+ "zksync_types 28.1.0-non-semver-compat",
+]
+
+[[package]]
 name = "zksync_os_rpc"
 version = "0.1.0"
 dependencies = [
@@ -11499,6 +11539,7 @@ dependencies = [
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
+ "zksync_os_priority_tree",
  "zksync_os_rpc",
  "zksync_os_state",
  "zksync_os_storage_api",
@@ -11568,11 +11609,48 @@ dependencies = [
 
 [[package]]
 name = "zksync_system_constants"
+version = "28.1.0-non-semver-compat"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c5909e41b5a2cfc6f12d9de5510e7f40f9d1d7cc0c17a3fe159d180d2f79989"
+dependencies = [
+ "once_cell",
+ "zksync_basic_types 28.1.0-non-semver-compat",
+]
+
+[[package]]
+name = "zksync_system_constants"
 version = "28.7.0-non-semver-compat"
 source = "git+https://github.com/matter-labs/zksync-era?rev=core-v28.7.0#385c1fcd1cce8e5f29e75f410328f07ce92ce9f5"
 dependencies = [
  "once_cell",
  "zksync_basic_types 28.7.0-non-semver-compat",
+]
+
+[[package]]
+name = "zksync_types"
+version = "28.1.0-non-semver-compat"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a076ef1b6a6cac6dd15615355db0ee8d7b5f329b9e0fec0d5b030fa353595dd9"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake2",
+ "chrono",
+ "derive_more 2.0.1",
+ "hex",
+ "num_enum",
+ "once_cell",
+ "rlp",
+ "serde",
+ "serde_json",
+ "serde_with 1.14.0",
+ "thiserror 2.0.12",
+ "tracing",
+ "zksync_basic_types 28.1.0-non-semver-compat",
+ "zksync_contracts 28.1.0-non-semver-compat",
+ "zksync_crypto_primitives 28.1.0-non-semver-compat",
+ "zksync_mini_merkle_tree 28.1.0-non-semver-compat",
+ "zksync_system_constants 28.1.0-non-semver-compat",
 ]
 
 [[package]]
@@ -11595,10 +11673,22 @@ dependencies = [
  "thiserror 2.0.12",
  "tracing",
  "zksync_basic_types 28.7.0-non-semver-compat",
- "zksync_contracts",
+ "zksync_contracts 28.7.0-non-semver-compat",
  "zksync_crypto_primitives 28.7.0-non-semver-compat",
  "zksync_mini_merkle_tree 28.7.0-non-semver-compat",
- "zksync_system_constants",
+ "zksync_system_constants 28.7.0-non-semver-compat",
+]
+
+[[package]]
+name = "zksync_utils"
+version = "28.1.0-non-semver-compat"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5690e30b8f0260dd6472dc7ef2514555aa9a0226229779b0e29de28c64d980"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

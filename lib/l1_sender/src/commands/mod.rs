@@ -3,6 +3,7 @@ use alloy::sol_types::SolCall;
 use std::fmt::Display;
 
 pub mod commit;
+pub mod execute;
 pub mod prove;
 
 pub trait L1SenderCommand: Sized + Display {
