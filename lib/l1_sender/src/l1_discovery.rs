@@ -55,12 +55,19 @@ pub async fn get_l1_state(
         .await?
         .saturating_to::<u64>();
 
+    let last_executed_batch = bridgehub
+        .zk_chain()
+        .await?
+        .get_total_batches_executed()
+        .await?
+        .saturating_to::<u64>();
+
     Ok(L1State {
         bridgehub: config.bridgehub_address,
         diamond_proxy,
         validator_timelock: validator_timelock_address,
         last_committed_batch,
         last_proved_batch,
-        last_executed_batch: 0,
+        last_executed_batch,
     })
 }
