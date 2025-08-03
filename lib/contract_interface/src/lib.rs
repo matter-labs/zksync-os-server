@@ -292,4 +292,15 @@ impl<P: Provider> ZkChain<P> {
             .await
             .map(|n| n.saturating_to())
     }
+
+    /// Returns true iff the contract has non-empty code at `block_id`.
+    pub async fn code_exists_at_block(&self, block_id: BlockId) -> alloy::contract::Result<bool> {
+        let code = self
+            .provider()
+            .get_code_at(*self.address())
+            .block_id(block_id)
+            .await?;
+
+        Ok(!code.0.is_empty())
+    }
 }
