@@ -50,12 +50,14 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
@@ -254,7 +256,15 @@ pub async fn run(
     let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
         tokio::sync::mpsc::channel::<ProofCommand>(10);
 
-    // Channel between `L1ProofSubmitter` and `BatchSink`
+    // Channel between `L1ProofSubmitter` and `PriorityTree`
+    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
+
+    // Channel between `PriorityTree` and `L1Executor`
+    let (batch_for_execute_sender, batch_for_execute_receiver) =
+        tokio::sync::mpsc::channel::<ExecuteCommand>(10);
+
+    // Channel between `L1Executor` and `BatchSink`
     let (fully_processed_batch_sender, fully_processed_batch_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
@@ -525,17 +535,42 @@ pub async fn run(
         .await
         .expect("Failed to reschedule committed batches for SNARK proving");
 
+    reschedule_proved_not_executed_batches(
+        &l1_state,
+        &proof_storage,
+        batch_for_priority_tree_sender.clone(),
+    )
+    .await
+    .expect("Failed to reschedule proved batches for execution");
+
     let snark_job_manager =
         SnarkJobManager::new(batch_for_snark_receiver, batch_for_l1_proving_sender);
 
-    let (l1_committer, l1_proof_submitter) = run_l1_senders(
+    // Resolve last executed **block number** by last executed batch number. This is needed so that
+    // `PriorityTreeManager` can re-build its state by relying on replay blocks.
+    let last_executed_block = proof_storage
+        .get(l1_state.last_executed_batch)
+        .expect("failed to load last executed batch")
+        .map(|batch_envelope| batch_envelope.batch.last_block_number)
+        .unwrap_or(0);
+    let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
         l1_sender_config,
         batch_for_commit_receiver,
         batch_for_snark_sender,
         batch_for_l1_proving_receiver,
+        batch_for_priority_tree_sender,
+        batch_for_execute_receiver,
         fully_processed_batch_sender,
         l1_state,
     );
+
+    let priority_tree_manager = PriorityTreeManager::new(
+        block_replay_storage.clone(),
+        last_executed_block,
+        batch_for_priority_tree_receiver,
+        batch_for_execute_sender,
+    )
+    .unwrap();
 
     let batch_sink = BatchSink::new(fully_processed_batch_receiver);
 
@@ -646,6 +681,20 @@ pub async fn run(
             }
         }
 
+        res = l1_executor => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 executor unexpectedly exited"),
+                Err(e) => tracing::error!("L1 executor failed: {e:#}"),
+            }
+        }
+
+        res = priority_tree_manager.run() => {
+            match res {
+                Ok(_)  => tracing::warn!("Priority tree manager unexpectedly exited"),
+                Err(e) => tracing::error!("Priority tree manager failed: {e:#}"),
+            }
+        }
+
         res = batch_sink.run() => {
             match res {
                 Ok(_)  => tracing::warn!("batch_sink task exited"),
@@ -665,6 +714,7 @@ pub async fn run(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_l1_senders(
     l1_sender_config: L1SenderConfig,
 
@@ -672,12 +722,16 @@ fn run_l1_senders(
     batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
 
     batch_for_l1_proving_receiver: Receiver<ProofCommand>,
+    batch_for_priority_tree_sender: Sender<BatchEnvelope<FriProof>>,
+
+    batch_for_execute_receiver: Receiver<ExecuteCommand>,
     fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
 
     l1_state: L1State,
 ) -> (
-    impl Future<Output=Result<()>>,
-    impl Future<Output=Result<()>>,
+    impl Future<Output = Result<()>>,
+    impl Future<Output = Result<()>>,
+    impl Future<Output = Result<()>>,
 ) {
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
@@ -692,7 +746,7 @@ fn run_l1_senders(
 
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
-        fully_processed_batch_sender,
+        batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
         l1_sender_config.operator_prove_pk.clone(),
         l1_sender_config.l1_api_url.clone(),
@@ -700,7 +754,18 @@ fn run_l1_senders(
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
     );
-    (l1_committer, l1_proof_submitter)
+
+    let l1_executor = run_l1_sender(
+        batch_for_execute_receiver,
+        fully_processed_batch_sender,
+        l1_state.diamond_proxy,
+        l1_sender_config.operator_execute_pk.clone(),
+        l1_sender_config.l1_api_url.clone(),
+        l1_sender_config.max_fee_per_gas(),
+        l1_sender_config.max_priority_fee_per_gas(),
+        l1_sender_config.command_limit,
+    );
+    (l1_committer, l1_proof_submitter, l1_executor)
 }
 
 pub async fn reschedule_committed_not_proved_batches(
@@ -726,6 +791,35 @@ pub async fn reschedule_committed_not_proved_batches(
         );
         for batch in batches_to_reschedule {
             batch_for_snark_sender.send(batch).await?
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn reschedule_proved_not_executed_batches(
+    l1_state: &L1State,
+    proof_storage: &ProofStorage,
+    batch_for_priority_tree_sender: Sender<BatchEnvelope<FriProof>>,
+) -> anyhow::Result<()> {
+    let mut batch_to_execute = l1_state.last_executed_batch + 1;
+    let mut batches_to_reschedule = Vec::new();
+    while batch_to_execute <= l1_state.last_proved_batch {
+        let batch_with_proof = proof_storage
+            .get(batch_to_execute)?
+            .context("Failed to get batch")?;
+        batches_to_reschedule.push(batch_with_proof);
+        batch_to_execute += 1;
+    }
+
+    if !batches_to_reschedule.is_empty() {
+        tracing::info!(
+            "Rescheduling batches {} to {} for execution",
+            batches_to_reschedule.first().unwrap().batch_number(),
+            batches_to_reschedule.last().unwrap().batch_number(),
+        );
+        for batch in batches_to_reschedule {
+            batch_for_priority_tree_sender.send(batch).await?
         }
     }
 

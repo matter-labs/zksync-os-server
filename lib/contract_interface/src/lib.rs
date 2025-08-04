@@ -1,3 +1,5 @@
+pub mod models;
+
 use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, requestL2TransactionDirectCall,
 };
@@ -84,6 +86,7 @@ alloy::sol! {
         function storedBatchHash(uint256 _batchNumber) external view returns (bytes32);
         function getTotalBatchesCommitted() external view returns (uint256);
         function getTotalBatchesVerified() external view returns (uint256);
+        function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
     }
 
@@ -130,6 +133,18 @@ alloy::sol! {
             bytes calldata _proofData
        );
 
+       struct PriorityOpsBatchInfo {
+           bytes32[] leftPath;
+           bytes32[] rightPath;
+           bytes32[] itemHashes;
+       }
+
+       function executeBatchesSharedBridge(
+           uint256, // always zero (used to be chain id)
+           uint256 _processFrom,
+           uint256 _processTo,
+           bytes calldata _executeData
+       );
     }
 }
 
@@ -260,6 +275,10 @@ impl<P: Provider> ZkChain<P> {
 
     pub async fn get_total_batches_proved(&self) -> alloy::contract::Result<U256> {
         self.instance.getTotalBatchesVerified().call().await
+    }
+
+    pub async fn get_total_batches_executed(&self) -> alloy::contract::Result<U256> {
+        self.instance.getTotalBatchesExecuted().call().await
     }
 
     pub async fn get_total_priority_txs_at_block(
