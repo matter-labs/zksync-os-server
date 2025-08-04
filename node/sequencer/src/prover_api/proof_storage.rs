@@ -2,7 +2,7 @@
 //! May be extracted to a separate service later on (aka FRI Cache)
 //!
 
-use crate::model::batches::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
@@ -40,11 +40,19 @@ impl ProofStorage {
     pub fn save_proof(&self, value: &BatchEnvelope<FriProof>) -> anyhow::Result<()> {
         let latest_batch_number = self.latest_stored_batch_number().unwrap_or(0);
         anyhow::ensure!(
-            value.batch_number() == latest_batch_number + 1,
+            value.batch_number() <= latest_batch_number + 1,
             "Attempted to store FRI proofs out of order: previous stored {}, got {}",
             latest_batch_number,
             value.batch_number(),
         );
+
+        if value.batch_number() < latest_batch_number + 1 {
+            tracing::warn!(
+                "Overriding FRI proof for batch {}. Latest stored batch is {}.",
+                value.batch_number(),
+                latest_batch_number,
+            )
+        }
 
         let key = value.batch_number().to_be_bytes();
         let mut batch: WriteBatch<'_, ProofColumnFamily> = self.db.new_write_batch();
@@ -71,7 +79,7 @@ impl ProofStorage {
     }
 
     /// Loads a BatchWithProof for `batch_number`, if present.
-    pub fn get_proof(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
+    pub fn get(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
         let key = batch_number.to_be_bytes();
         let bytes = self.db.get_cf(ProofColumnFamily::Proofs, &key)?;
         let Some(bytes) = bytes else { return Ok(None) };

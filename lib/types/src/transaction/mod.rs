@@ -5,6 +5,7 @@ mod l2;
 pub use encode::*;
 pub use l1::*;
 pub use l2::*;
+use std::fmt;
 
 use alloy::consensus::crypto::RecoveryError;
 use alloy::consensus::transaction::{Recovered, SignerRecoverable};
@@ -110,6 +111,15 @@ impl From<L2Transaction> for ZkTransaction {
         let (tx, signer) = value.into_parts();
         Self {
             inner: Recovered::new_unchecked(ZkEnvelope::L2(tx), signer),
+        }
+    }
+}
+
+impl fmt::Display for ZkTxType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::L2(tx) => tx.fmt(f),
+            Self::L1 => write!(f, "L1"),
         }
     }
 }

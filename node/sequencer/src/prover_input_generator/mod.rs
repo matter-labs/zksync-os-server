@@ -1,6 +1,4 @@
 use crate::metrics::GENERAL_METRICS;
-use crate::model::batches::{BatchEnvelope, ProverInput};
-use crate::model::blocks::ReplayRecord;
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
@@ -9,12 +7,15 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
-use zk_os_forward_system::run::{StorageCommitment, generate_proof_input, BatchOutput};
+use zk_os_forward_system::run::{StorageCommitment, generate_proof_input, BlockOutput};
+use zksync_os_l1_sender::model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::ZksyncOsEncode;
 
 /// This component generates prover input from batch replay data
@@ -25,10 +26,10 @@ pub struct ProverInputGenerator {
 
     // == plumbing ==
     // inbound
-    block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
+    block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
 
     // outbound
-    blocks_for_batcher_sender: Sender<(BatchOutput, ReplayRecord, ProverInput)>,
+    blocks_for_batcher_sender: Sender<(BlockOutput, ReplayRecord, ProverInput)>,
 
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
@@ -43,8 +44,8 @@ impl ProverInputGenerator {
         maximum_in_flight_blocks: usize,
 
         // == plumbing ==
-        block_receiver: Receiver<(BatchOutput, ReplayRecord)>,
-        blocks_for_batcher_sender: Sender<(BatchOutput, ReplayRecord, ProverInput)>,
+        block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
+        blocks_for_batcher_sender: Sender<(BlockOutput, ReplayRecord, ProverInput)>,
 
         // == dependencies ==
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
@@ -82,7 +83,6 @@ impl ProverInputGenerator {
                         .clone()
                         .get_at_block(replay_record.block_context.block_number - 1)
                         .await;
-
                     (block_output, replay_record, tree)
                 }
             })
@@ -97,8 +97,9 @@ impl ProverInputGenerator {
                 );
 
                 let state_handle = self.state_handle.clone();
+
                 tokio::task::spawn_blocking(move || {
-                    let prover_input = compute_prover_input(&replay_record, state_handle, tree, self.bin_path);
+                    let prover_input = compute_prover_input(&replay_record, state_handle, tree, self.bin_path, replay_record.previous_block_timestamp);
                     (
                         block_output,
                         replay_record,
@@ -125,6 +126,7 @@ fn compute_prover_input(
     state_handle: StateHandle,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
     bin_path: &'static str,
+    last_block_timestamp: u64,
 ) -> Vec<u32> {
     let batch_number = replay_record.block_context.block_number;
 
@@ -148,7 +150,10 @@ fn compute_prover_input(
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
         replay_record.block_context,
-        initial_storage_commitment,
+        ProofData {
+            state_root_view: initial_storage_commitment,
+            last_block_timestamp,
+        },
         tree_view,
         state_view,
         list_source,

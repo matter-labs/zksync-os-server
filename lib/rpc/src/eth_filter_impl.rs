@@ -1,10 +1,8 @@
-use crate::api::eth_impl::build_api_log;
-use crate::api::metrics::API_METRICS;
-use crate::api::result::ToRpcResult;
-use crate::api::types::QueryLimits;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
-use crate::reth_state::ZkClient;
+use crate::eth_impl::build_api_log;
+use crate::metrics::API_METRICS;
+use crate::result::ToRpcResult;
+use crate::types::QueryLimits;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::primitives::{B256, BlockNumber, TxHash, U128};
@@ -15,27 +13,29 @@ use alloy::rpc::types::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use jsonrpsee::core::RpcResult;
-use reth_transaction_pool::{EthPooledTransaction, NewSubpoolTransactionStream, TransactionPool};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
-use zksync_os_mempool::RethPool;
+use zksync_os_mempool::{EthPooledTransaction, L2TransactionPool, NewSubpoolTransactionStream};
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, RepositoryError};
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]
-pub(crate) struct EthFilterNamespace<R> {
-    repository: R,
+pub struct EthFilterNamespace<Repository, Mempool> {
+    repository: Repository,
     query_limits: QueryLimits,
     /// Duration since the last filter poll, after which the filter is considered stale
     stale_filter_ttl: Duration,
-    mempool: RethPool<ZkClient>,
+    mempool: Mempool,
     active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
 }
 
-impl<R: ApiRepository + Clone + 'static> EthFilterNamespace<R> {
-    pub fn new(config: RpcConfig, repository: R, mempool: RethPool<ZkClient>) -> Self {
+impl<Repository: ReadRepository + Clone, Mempool: L2TransactionPool>
+    EthFilterNamespace<Repository, Mempool>
+{
+    pub fn new(config: RpcConfig, repository: Repository, mempool: Mempool) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         let this = Self {
@@ -56,7 +56,9 @@ impl<R: ApiRepository + Clone + 'static> EthFilterNamespace<R> {
     }
 }
 
-impl<R: ApiRepository> EthFilterNamespace<R> {
+impl<Repository: ReadRepository, Mempool: L2TransactionPool>
+    EthFilterNamespace<Repository, Mempool>
+{
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
         let last_poll_block_number = self.repository.get_latest_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
@@ -216,7 +218,7 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
                                 logs.push(build_api_log(
                                     *tx.tx.hash(),
                                     inner_log.clone(),
-                                    tx.meta,
+                                    tx.meta.clone(),
                                     log_index_in_block - tx.meta.number_of_logs_before_this_tx,
                                 ));
                                 at_least_one_log_added = true;
@@ -232,15 +234,16 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
 
                     // size check but only if range is multiple blocks, so we always return all
                     // logs of a single block
-                    if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response {
-                        if is_multi_block_range && logs.len() > max_logs_per_response {
-                            let suggested_to = number.saturating_sub(1);
-                            return Err(EthFilterError::QueryExceedsMaxResults {
-                                max_logs: max_logs_per_response,
-                                from_block: from,
-                                to_block: suggested_to,
-                            });
-                        }
+                    if let Some(max_logs_per_response) = self.query_limits.max_logs_per_response
+                        && is_multi_block_range
+                        && logs.len() > max_logs_per_response
+                    {
+                        let suggested_to = number.saturating_sub(1);
+                        return Err(EthFilterError::QueryExceedsMaxResults {
+                            max_logs: max_logs_per_response,
+                            from_block: from,
+                            to_block: suggested_to,
+                        });
                     }
                 } else {
                     negative_scanned_blocks += 1;
@@ -302,7 +305,9 @@ impl<R: ApiRepository> EthFilterNamespace<R> {
 }
 
 #[async_trait]
-impl<R: ApiRepository + 'static> EthFilterApiServer for EthFilterNamespace<R> {
+impl<Repository: ReadRepository, Mempool: L2TransactionPool> EthFilterApiServer
+    for EthFilterNamespace<Repository, Mempool>
+{
     async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Log(Box::new(filter)))
     }
@@ -353,9 +358,9 @@ impl<R: ApiRepository + 'static> EthFilterApiServer for EthFilterNamespace<R> {
     }
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency = API_METRICS.response_time[&"get_logs"].start();
+        let latency_observer = API_METRICS.response_time[&"get_logs"].start();
         let logs = self.logs_impl(filter).to_rpc_result()?;
-        latency.observe();
+        latency_observer.observe();
 
         Ok(logs)
     }

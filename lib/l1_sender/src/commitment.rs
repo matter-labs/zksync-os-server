@@ -4,7 +4,7 @@ use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{BatchOutput};
+use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
@@ -20,6 +20,7 @@ pub struct StoredBatchInfo {
     pub priority_operations_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub commitment: B256,
+    pub last_block_timestamp: u64,
 }
 
 impl StoredBatchInfo {
@@ -53,6 +54,7 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
             priority_operations_hash: value.priority_operations_hash,
             l2_to_l1_logs_root_hash: value.l2_to_l1_logs_root_hash,
             commitment,
+            last_block_timestamp: value.last_block_timestamp,
         }
     }
 }
@@ -98,7 +100,7 @@ pub struct CommitBatchInfo {
 
 impl CommitBatchInfo {
     pub fn new(
-        blocks: Vec<(&BatchOutput, &[ZkTransaction], &zksync_os_merkle_tree::TreeBatchOutput)>,
+        blocks: Vec<(&BlockOutput, &BlockContext, &[ZkTransaction], &zksync_os_merkle_tree::TreeBatchOutput)>,
         chain_id: u64,
         batch_number: u64,
     ) -> Self {
@@ -108,9 +110,9 @@ impl CommitBatchInfo {
         let mut encoded_l2_l1_logs = vec![];
 
         let first_block = blocks.first().unwrap().clone();
-        let last_block = blocks.last().unwrap().clone();
+        let (last_block_output, last_block_context, _, last_block_tree) = blocks.last().unwrap().clone();
 
-        for (block_output, transactions, _) in blocks {
+        for (block_output, _, transactions, _) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());
 
             for tx in transactions {
@@ -134,6 +136,16 @@ impl CommitBatchInfo {
                 );
             }
         }
+
+        let last_256_block_hashes_blake = {
+            let mut blocks_hasher = Blake2s256::new();
+            for block_hash in &last_block_context.block_hashes.0[1..] {
+                blocks_hasher.update(block_hash.to_be_bytes::<32>());
+            }
+            blocks_hasher.update(last_block_output.header.hash());
+
+            blocks_hasher.finalize()
+        };
 
         /* ---------- operator DA input ---------- */
         let mut operator_da_input: Vec<u8> = vec![];
@@ -162,9 +174,11 @@ impl CommitBatchInfo {
 
         /* ---------- new state commitment ---------- */
         let mut hasher = Blake2s256::new();
-        let (last_block_output, _, last_block_tree) = last_block;
         hasher.update(last_block_tree.root_hash.as_slice());
         hasher.update(last_block_tree.leaf_count.to_be_bytes());
+        hasher.update(last_block_output.header.number.to_be_bytes());
+        hasher.update(last_256_block_hashes_blake);
+        hasher.update(last_block_output.header.timestamp.to_be_bytes());
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
         /* ---------- root hash of l2->l1 logs ---------- */

@@ -12,4 +12,4 @@ pub struct ApiMetrics {
     pub get_logs_scanned_blocks: LabeledFamily<&'static str, Histogram<u64>>,
 }
 #[vise::register]
-pub(crate) static API_METRICS: vise::Global<ApiMetrics> = vise::Global::new();
+pub static API_METRICS: vise::Global<ApiMetrics> = vise::Global::new();

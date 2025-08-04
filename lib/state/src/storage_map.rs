@@ -112,7 +112,7 @@ impl StorageMap {
     /// Adds a diff for block `block` (thus providing state for `block + 1`)
     /// Must be contiguous - that is, can only add blocks in order
     pub fn add_diff(&self, block_number: u64, writes: Vec<StorageWrite>) {
-        let started_at = STORAGE_MAP_METRICS.add_diff.start();
+        let total_latency_observer = STORAGE_MAP_METRICS.add_diff.start();
 
         let latest_memory_block = self.latest_block.load(Ordering::Relaxed);
 
@@ -130,10 +130,7 @@ impl StorageMap {
         } else {
             // transaction replay or rollback
             let old_diff = self.diffs.get(&block_number).unwrap_or_else(|| {
-                panic!(
-                    "missing diff for block {} - latest_memory_block is be {}",
-                    block_number, latest_memory_block,
-                )
+                panic!("missing diff for block {block_number} - latest_memory_block is be {latest_memory_block}")
             });
 
             // Temporary:
@@ -156,7 +153,7 @@ impl StorageMap {
             self.diffs.insert(block_number, Arc::new(new_diff));
         }
         self.latest_block.store(block_number, Ordering::Relaxed);
-        started_at.observe();
+        total_latency_observer.observe();
     }
 
     /// Moves elements from `diffs` to the persistence
@@ -199,7 +196,7 @@ impl StorageMap {
             if let Some(_diff) = self.diffs.remove(&block_number) {
                 tracing::debug!("Compacted diff for block {}", block_number);
             } else {
-                panic!("No diff found for block {} while compacting", block_number);
+                panic!("No diff found for block {block_number} while compacting");
             }
         }
     }

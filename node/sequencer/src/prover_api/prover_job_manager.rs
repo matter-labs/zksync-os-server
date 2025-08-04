@@ -12,15 +12,16 @@
 //!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
 //!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
 
-use crate::model::batches::{BatchEnvelope, FriProof, ProverInput};
 use crate::prover_api::metrics::PROVER_METRICS;
 use crate::prover_api::proof_verifier;
 use crate::prover_api::prover_job_map::ProverJobMap;
 use crate::util::peekable_receiver::PeekableReceiver;
+use itertools::MinMaxResult::MinMax;
 use serde::Serialize;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc};
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -41,6 +42,7 @@ pub struct JobState {
 }
 
 /// Thread-safe queue for FRI prover work.
+/// Holds up to `max_assigned_batch_range` batches in `assigned_jobs`.
 #[derive(Debug)]
 pub struct ProverJobManager {
     // == state ==
@@ -50,6 +52,8 @@ pub struct ProverJobManager {
     inbound: Mutex<PeekableReceiver<BatchEnvelope<ProverInput>>>,
     // outbound
     batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+    // == config ==
+    max_assigned_batch_range: usize,
 }
 
 impl ProverJobManager {
@@ -58,12 +62,14 @@ impl ProverJobManager {
         batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
 
         assignment_timeout: Duration,
+        max_assigned_batch_range: usize,
     ) -> Self {
         let jobs = ProverJobMap::new(assignment_timeout);
         Self {
             assigned_jobs: jobs,
             inbound: Mutex::new(PeekableReceiver::new(batches_for_prove_receiver)),
             batches_with_proof_sender,
+            max_assigned_batch_range,
         }
     }
 
@@ -79,6 +85,18 @@ impl ProverJobManager {
             let batch_number = batch_envelope.batch_number();
             let prover_input = batch_envelope.data;
             return Some((batch_number, prover_input));
+        }
+
+        if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
+            && max - min >= self.max_assigned_batch_range as u64
+        {
+            // fresh assignments are not allowed when there are too many assigned jobs
+            tracing::debug!(
+                assigned_jobs_count = self.assigned_jobs.len(),
+                max_assigned_batch_range = self.max_assigned_batch_range,
+                "too many assigned jobs; returning None"
+            );
+            return None;
         }
 
         // 2) Otherwise, consume one item from inbound - if it meets the age gate.

@@ -1,14 +1,16 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, ReplayRecord, SealPolicy};
+use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
-use zk_os_forward_system::run::{BatchOutput, InvalidTransaction};
+use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -17,9 +19,10 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // please be mindful when adding new parameters here
 
 pub async fn execute_block(
-    mut command: PreparedBlockCommand,
+    mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
-) -> Result<(BatchOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
+    previous_block_timestamp: u64,
+) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
@@ -27,7 +30,12 @@ pub async fn execute_block(
     let mut runner = VmWrapper::new(ctx, state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
+    let mut cumulative_gas_used = 0u64;
     let mut purged_txs = Vec::new();
+
+    let tx_can_be_included = |tx: &ZkTransaction, cumulative_gas_used: u64| -> bool {
+        cumulative_gas_used + tx.inner.gas_limit() <= ctx.gas_limit
+    };
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match command.seal_policy {
@@ -38,7 +46,8 @@ pub async fn execute_block(
 
     /* ---------- main loop ------------------------------------------ */
     loop {
-        let wait_for_tx_latency = EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
+        let wait_for_tx_latency_observer =
+            EXECUTION_METRICS.block_execution_stages[&"wait_for_tx"].start();
         tokio::select! {
             /* -------- deadline branch ------------------------------ */
             _ = async {
@@ -58,21 +67,21 @@ pub async fn execute_block(
             maybe_tx = command.tx_source.next() => {
                 match maybe_tx {
                     /* ----- got a transaction ---------------------- */
-                    Some(tx) => {
-                        wait_for_tx_latency.observe();
-                        let latency = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
+                    Some(tx) if tx_can_be_included(&tx, cumulative_gas_used) => {
+                        tracing::info!("Executing tx: {:?}", tx.hash());
+                        wait_for_tx_latency_observer.observe();
+                        let execute_latency_observer = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx.clone().encode()).await {
-                            Ok(_res) => {
-                                latency.observe();
+                            Ok(res) => {
+                                execute_latency_observer.observe();
                                 GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();
 
                                 executed_txs.push(tx);
+                                cumulative_gas_used += res.gas_used;
 
                                 // arm the timer once, after the first successful tx
-                                if deadline.is_none() {
-                                    if let Some(dur) = deadline_dur {
-                                        deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                                    }
+                                if deadline.is_none() && let Some(dur) = deadline_dur {
+                                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
@@ -99,11 +108,16 @@ pub async fn execute_block(
                                             match rejection_method {
                                                 TxRejectionMethod::Purge => {
                                                     purged_txs.push((*tx.hash(), e.clone()));
+                                                    tracing::warn!(block = ctx.block_number, ?e, "invalid tx → purged");
                                                 }
-                                                TxRejectionMethod::Skip => {},
+                                                TxRejectionMethod::Skip => {
+                                                    tracing::warn!(block = ctx.block_number, ?e, "invalid tx → skipped");
+                                                },
+                                                TxRejectionMethod::SealBlock => {
+                                                    tracing::info!(block = ctx.block_number, ?e, "sealing block by criterion");
+                                                    break;
+                                                }
                                             }
-                                            tracing::warn!(block = ctx.block_number, ?e,
-                                                           "invalid tx → skipped");
                                         }
                                         InvalidTxPolicy::Abort => {
                                             return Err(anyhow!("invalid l2 tx: {e:?}"));
@@ -113,7 +127,20 @@ pub async fn execute_block(
                             }
                         }
                     }
+                    /* ----- tx cannot be included -------------------------- */
+                    Some(tx) => {
+                        if matches!(command.seal_policy, SealPolicy::UntilExhausted) {
+                            anyhow::bail!("tx {} cannot be included in block {}: cumulative gas {} exceeds block gas limit {}",
+                                tx.hash(),
+                                ctx.block_number,
+                                cumulative_gas_used + tx.inner.gas_limit(),
+                                ctx.gas_limit
+                            );
+                        }
 
+                        tracing::info!(block = ctx.block_number, "sealing block as next tx cannot be included");
+                        break;
+                    }
                     /* ----- tx stream exhausted  --------------------------- */
                     None => {
                         if executed_txs.is_empty() && matches!(command.seal_policy, SealPolicy::UntilExhausted)
@@ -138,21 +165,21 @@ pub async fn execute_block(
             }
         }
     }
-    let latency = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
+    let seal_latency_observer = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
 
     /* ---------- seal & return ------------------------------------- */
     let output = runner
-        .seal_batch()
+        .seal_block()
         .await
         .map_err(|e| anyhow!("VM seal failed: {e:?}"))?;
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
-    latency.observe();
+    seal_latency_observer.observe();
 
     Ok((
         output,
-        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
+        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs, previous_block_timestamp),
         purged_txs,
     ))
 }
@@ -162,6 +189,8 @@ enum TxRejectionMethod {
     Purge,
     // skip tx and all its descendants for the current block
     Skip,
+    // block is out of some resource, so it should be sealed
+    SealBlock,
 }
 
 fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
@@ -201,5 +230,10 @@ fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
         | InvalidTransaction::NonceTooHigh { .. } => TxRejectionMethod::Skip,
+
+        InvalidTransaction::BlockGasLimitReached
+        | InvalidTransaction::BlockNativeLimitReached
+        | InvalidTransaction::BlockPubdataLimitReached
+        | InvalidTransaction::BlockL2ToL1LogsLimitReached => TxRejectionMethod::SealBlock,
     }
 }

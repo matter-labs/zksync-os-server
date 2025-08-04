@@ -408,10 +408,10 @@ impl<DB: Database> Database for Patched<DB> {
     }
 
     fn try_root(&self, version: u64) -> Result<Option<Root>, DeserializeError> {
-        if let Some(patch) = &self.patch {
-            if patch.is_new_version(version) {
-                return patch.try_root(version);
-            }
+        if let Some(patch) = &self.patch
+            && patch.is_new_version(version)
+        {
+            return patch.try_root(version);
         }
         self.inner.try_root(version)
     }

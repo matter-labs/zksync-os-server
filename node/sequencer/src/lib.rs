@@ -2,7 +2,7 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
-pub mod api;
+mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
@@ -16,51 +16,51 @@ pub mod reth_state;
 pub mod tree_manager;
 mod util;
 
-use crate::api::run_jsonrpsee_server;
+use crate::batch_sink::BatchSink;
 use crate::batcher::{
-    util::genesis_stored_batch_info,
     Batcher,
+    util::genesis_stored_batch_info,
 };
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig,
 };
-use crate::execution::{
-    block_context_provider::BlockContextProvider, block_executor::execute_block,
-};
+use crate::execution::block_context_provider::BlockContextProvider;
 use crate::metrics::GENERAL_METRICS;
-use crate::model::batches::{BatchEnvelope, BatchMetadata, FriProof, ProverInput};
 use crate::prover_api::fake_provers_pool::FakeProversPool;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
+use crate::prover_api::snark_job_manager::SnarkJobManager;
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::repositories::RepositoryManager;
-use crate::repositories::api_interface::ApiRepository;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
-use model::blocks::{BlockCommand, ProduceCommand, ReplayRecord};
+use model::blocks::{BlockCommand, ProduceCommand};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::time::Instant;
-use zk_os_forward_system::run::{BatchOutput as BlockOutput, BatchOutput};
-use zksync_os_l1_sender::{
-    config::L1SenderConfig,
-    L1Sender, L1SenderHandle,
-    commitment::StoredBatchInfo,
-};
+use zk_os_forward_system::run::BlockOutput;
+use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_l1_sender::config::L1SenderConfig;
+use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
+use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
-use zksync_os_types::forced_deposit_transaction;
+use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
+use zksync_os_l1_sender::commitment::StoredBatchInfo;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -87,40 +87,19 @@ pub async fn run_sequencer_actor(
         sequencer_config.max_transactions_in_block,
     );
 
+    let mut previous_block_timestamp: u64 = repositories.get_block_by_number(starting_block - 1)?
+        .map_or(0, |block| block.header.timestamp);
+
     while let Some(cmd) = stream.next().await {
         // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
-        tracing::info!(
-            block_number,
-            cmd = cmd.to_string(),
-            "▶ starting command. Turning into PreparedCommand.."
-        );
-        let mut stage_started_at = Instant::now();
+        let (block_output, replay_record, purged_txs) = command_block_context_provider
+            .execute_block(cmd, state.clone(), previous_block_timestamp)
+            .await?;
+        previous_block_timestamp = block_output.header.timestamp;
 
-        let prepared_cmd = command_block_context_provider.process_command(cmd)?;
-
-        tracing::debug!(
-            block_number,
-            starting_l1_priority_id = prepared_cmd.starting_l1_priority_id,
-            "▶ Prepared command in {:?}. Executing..",
-            stage_started_at.elapsed()
-        );
-        stage_started_at = Instant::now();
-
-        let (block_output, replay_record, purged_txs) = execute_block(prepared_cmd, state.clone())
-            .await
-            .context("execute_block")?;
-
-        tracing::info!(
-            block_number,
-            transactions = replay_record.transactions.len(),
-            preimages = block_output.published_preimages.len(),
-            storage_writes = block_output.storage_writes.len(),
-            "▶ Executed after {:?}. Adding to state...",
-            stage_started_at.elapsed()
-        );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         state.add_block_result(
             block_number,
@@ -136,7 +115,7 @@ pub async fn run_sequencer_actor(
             "▶ Added to state in {:?}. Adding to repos...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         // todo: do not call if api is not enabled.
         repositories
@@ -149,7 +128,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         // TODO: would updating mempool in parallel with state make sense?
         command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
@@ -162,7 +141,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         wal.append_replay(replay_record.clone());
 
@@ -171,7 +150,7 @@ pub async fn run_sequencer_actor(
             "▶ Added to wal and canonized in {:?}. Sending to sinks...",
             stage_started_at.elapsed()
         );
-        stage_started_at = Instant::now();
+        let stage_started_at = Instant::now();
 
         prover_input_generator_sink
             .send((block_output.clone(), replay_record))
@@ -236,24 +215,47 @@ pub async fn run(
     prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
 ) {
+    // todo: decide on an approach to configuration to stop having to set up the same parameters in
+    //       multiple places
+    let bridgehub_address = l1_watcher_config.bridgehub_address;
+
     // ======= Boilerplate - Initialize async channels  ===========
 
     // Channel between `BlockExecutor` and `ProverInputGenerator`
     let (blocks_for_prover_input_generator_sender, blocks_for_prover_input_generator_receiver) =
-        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord)>(10);
+        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
 
     // Channel between `BlockExecutor` and `TreeManager`
-    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BatchOutput>(10);
+    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BlockOutput>(10);
 
     // Channel between `ProverInputGenerator` and `Batcher`
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
-        tokio::sync::mpsc::channel::<(BatchOutput, ReplayRecord, ProverInput)>(10);
+        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord, ProverInput)>(10);
 
     // Channel between `ProverInputGenerator` and `ProverAPI`
     let (batch_for_proving_sender, batch_for_prover_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(10);
 
     let (batch_with_proof_sender, batch_with_proof_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
+
+    // Channel between `L1Watcher` and `BlockContextProvider`
+    let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(10);
+
+    // Channel between `GaplessCommitter` and `L1Committer`
+    let (batch_for_commit_sender, batch_for_commit_receiver) =
+        tokio::sync::mpsc::channel::<CommitCommand>(10);
+
+    // Channel between `L1Committer` and `SnarkJobManager`
+    let (batch_for_snark_sender, batch_for_snark_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
+
+    // Channel between `SnarkJobManager` and `L1ProofSubmitter`
+    let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
+        tokio::sync::mpsc::channel::<ProofCommand>(10);
+
+    // Channel between `L1ProofSubmitter` and `BatchSink`
+    let (fully_processed_batch_sender, fully_processed_batch_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
     // =========== Boilerplate - initialize components that don't need state recovery  ===========
@@ -289,13 +291,12 @@ pub async fn run(
     let proof_storage = ProofStorage::new(proof_storage_db);
 
     tracing::info!("Initializing mempools");
-    let (l1_mempool, l2_mempool) = zksync_os_mempool::in_memory(
+    let l2_mempool = zksync_os_mempool::in_memory(
         ZkClient::new(
             repositories.clone(),
             state_handle.clone(),
             genesis_config.chain_id,
         ),
-        forced_deposit_transaction(),
         mempool_config.max_tx_input_bytes,
     );
 
@@ -304,28 +305,6 @@ pub async fn run(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
     ));
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
-
-    tracing::info!("Initializing L1Watcher");
-    let l1_watcher = L1Watcher::new(
-        l1_watcher_config,
-        l1_mempool.clone(),
-        genesis_config.chain_id,
-    )
-        .await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
-        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
-        Err(err) => {
-            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
-        }
-    };
 
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
 
@@ -359,8 +338,7 @@ pub async fn run(
         "Block numbers are inconsistent on startup!"
     );
 
-    // ========== Initialize BlockContextProvider and its state ===========
-    tracing::info!("Initializing BlockContextProvider");
+    tracing::info!("Initializing L1Watcher");
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
@@ -371,13 +349,39 @@ pub async fn run(
     let next_l1_priority_id = first_replay_record
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
+
+    let l1_watcher = L1Watcher::new(
+        l1_watcher_config,
+        genesis_config.chain_id,
+        l1_transactions_sender,
+        next_l1_priority_id,
+    )
+        .await;
+    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
+        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
+        Err(err) => {
+            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
+            let mut stop_receiver = stop_receiver.clone();
+            Box::pin(async move {
+                // Defer until we receive stop signal, i.e. a task that does nothing
+                stop_receiver
+                    .changed()
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            })
+        }
+    };
+
+    // ========== Initialize BlockContextProvider and its state ===========
+    tracing::info!("Initializing BlockContextProvider");
+
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_default(); // TODO: take into account genesis block hash.
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
-        l1_mempool,
+        l1_transactions,
         l2_mempool.clone(),
         block_hashes_for_next_block,
         genesis_config.chain_id,
@@ -399,17 +403,13 @@ pub async fn run(
     }
     tracing::info!("Initializing batcher subsystem");
     // ========== Initialize L1 sender ===========
-    tracing::info!("Initializing L1 sender");
-    let (l1_sender, l1_sender_handle, last_committed_batch_number): (
-        L1Sender,
-        L1SenderHandle,
-        u64,
-    ) = L1Sender::new(l1_sender_config, genesis_config.chain_id).await.expect(
-        "Failed to initialize L1Sender. Consider disabling batcher subsystem via configuration.",
-    );
+    tracing::info!("reading L1 state");
+    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
+        .await
+        .expect("Failed to read L1 state");
 
     let last_committed_batch_metadata = proof_storage
-        .get_proof(last_committed_batch_number)
+        .get(l1_state.last_committed_batch)
         .expect("Failed to get last committed block from proof storage")
         .map(|proof| proof.batch);
 
@@ -425,7 +425,7 @@ pub async fn run(
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
     tracing::info!(
-        last_committed_batch_number,
+        l1_state.last_committed_batch,
         last_committed_block_number,
         last_stored_batch_with_proof,
         "L1 sender initialized"
@@ -433,7 +433,7 @@ pub async fn run(
     assert!(
         last_committed_block_number <= wal_block
             && last_committed_block_number >= storage_map_compacted_block
-            && last_stored_batch_with_proof >= last_committed_batch_number,
+            && last_stored_batch_with_proof >= l1_state.last_committed_batch,
         "L1 sender last committed block number is inconsistent with WAL or storage map"
     );
 
@@ -472,13 +472,14 @@ pub async fn run(
         batch_for_prover_receiver,
         batch_with_proof_sender,
         prover_api_config.job_timeout,
+        prover_api_config.max_assigned_batch_range,
     ));
 
     let prover_gapless_committer = GaplessCommitter::new(
-        last_committed_batch_number + 1,
+        l1_state.last_committed_batch + 1,
         batch_with_proof_receiver,
         proof_storage.clone(),
-        l1_sender_handle,
+        batch_for_commit_sender,
     );
 
     let prover_server_task = Box::pin(prover_server::run(
@@ -514,6 +515,30 @@ pub async fn run(
             })
         };
 
+    // There may be batches that are Committed but not Proven on L1 yet.
+    // Scheduling them for proving.
+    reschedule_committed_not_proved_batches(
+        &l1_state,
+        &proof_storage,
+        batch_for_snark_sender.clone(),
+    )
+        .await
+        .expect("Failed to reschedule committed batches for SNARK proving");
+
+    let snark_job_manager =
+        SnarkJobManager::new(batch_for_snark_receiver, batch_for_l1_proving_sender);
+
+    let (l1_committer, l1_proof_submitter) = run_l1_senders(
+        l1_sender_config,
+        batch_for_commit_receiver,
+        batch_for_snark_sender,
+        batch_for_l1_proving_receiver,
+        fully_processed_batch_sender,
+        l1_state,
+    );
+
+    let batch_sink = BatchSink::new(fully_processed_batch_receiver);
+
     // ======= Run tasks ===========
 
     tokio::select! {
@@ -537,11 +562,12 @@ pub async fn run(
         // todo: only start after the sequencer caught up?
         res = run_jsonrpsee_server(
             rpc_config,
-            genesis_config.clone(),
+            genesis_config.chain_id,
+            bridgehub_address,
             repositories.clone(),
+            block_replay_storage.clone(),
             state_handle.clone(),
             l2_mempool,
-            block_replay_storage.clone()
         ) => {
             match res {
                 Ok(_)  => tracing::warn!("JSON-RPC server unexpectedly exited"),
@@ -598,10 +624,32 @@ pub async fn run(
             }
         }
 
-        res = l1_sender.run() => {
+
+        res = snark_job_manager.run() => {
             match res {
-                Ok(_)  => tracing::warn!("L1 sender unexpectedly exited"),
-                Err(e) => tracing::error!("L1 sender failed: {e:#}"),
+                Ok(_)  => tracing::warn!("snark_job_manager task exited"),
+                Err(e) => tracing::error!("snark_job_manager task failed: {e:#}"),
+            }
+        }
+
+        res = l1_committer => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 committer unexpectedly exited"),
+                Err(e) => tracing::error!("L1 committer failed: {e:#}"),
+            }
+        }
+
+        res = l1_proof_submitter => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 proof submitter unexpectedly exited"),
+                Err(e) => tracing::error!("L1 proof submitter failed: {e:#}"),
+            }
+        }
+
+        res = batch_sink.run() => {
+            match res {
+                Ok(_)  => tracing::warn!("batch_sink task exited"),
+                Err(e) => tracing::error!("batch_sink task failed: {e:#}"),
             }
         }
 
@@ -615,4 +663,71 @@ pub async fn run(
             tracing::warn!("repositories.run_persist_loop() unexpectedly exited")
         }
     }
+}
+
+fn run_l1_senders(
+    l1_sender_config: L1SenderConfig,
+
+    batch_for_commit_receiver: Receiver<CommitCommand>,
+    batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
+
+    batch_for_l1_proving_receiver: Receiver<ProofCommand>,
+    fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
+
+    l1_state: L1State,
+) -> (
+    impl Future<Output=Result<()>>,
+    impl Future<Output=Result<()>>,
+) {
+    let l1_committer = run_l1_sender(
+        batch_for_commit_receiver,
+        batch_for_snark_sender,
+        l1_state.validator_timelock,
+        l1_sender_config.operator_commit_pk.clone(),
+        l1_sender_config.l1_api_url.clone(),
+        l1_sender_config.max_fee_per_gas(),
+        l1_sender_config.max_priority_fee_per_gas(),
+        l1_sender_config.command_limit,
+    );
+
+    let l1_proof_submitter = run_l1_sender(
+        batch_for_l1_proving_receiver,
+        fully_processed_batch_sender,
+        l1_state.diamond_proxy,
+        l1_sender_config.operator_prove_pk.clone(),
+        l1_sender_config.l1_api_url.clone(),
+        l1_sender_config.max_fee_per_gas(),
+        l1_sender_config.max_priority_fee_per_gas(),
+        l1_sender_config.command_limit,
+    );
+    (l1_committer, l1_proof_submitter)
+}
+
+pub async fn reschedule_committed_not_proved_batches(
+    l1_state: &L1State,
+    proof_storage: &ProofStorage,
+    batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
+) -> anyhow::Result<()> {
+    let mut batch_to_prove = l1_state.last_proved_batch + 1;
+    let mut batches_to_reschedule = Vec::new();
+    while batch_to_prove <= l1_state.last_committed_batch {
+        let batch_with_proof = proof_storage
+            .get(batch_to_prove)?
+            .context("Failed to get batch")?;
+        batches_to_reschedule.push(batch_with_proof);
+        batch_to_prove += 1;
+    }
+
+    if !batches_to_reschedule.is_empty() {
+        tracing::info!(
+            "Rescheduling batches {} to {} for SNARK proving",
+            batches_to_reschedule.first().unwrap().batch_number(),
+            batches_to_reschedule.last().unwrap().batch_number(),
+        );
+        for batch in batches_to_reschedule {
+            batch_for_snark_sender.send(batch).await?
+        }
+    }
+
+    Ok(())
 }

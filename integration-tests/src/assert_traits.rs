@@ -1,4 +1,4 @@
-use alloy::network::Ethereum;
+use alloy::network::{Ethereum, Network, ReceiptResponse};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{EthCall, PendingTransaction, PendingTransactionBuilder};
 use alloy::rpc::json_rpc::RpcRecv;
@@ -17,24 +17,22 @@ impl<Resp: RpcRecv> EthCallAssert for EthCall<Ethereum, Resp> {
     async fn expect_to_fail(self, msg: &str) {
         let err = self
             .await
-            .expect_err(&format!("`eth_call` should fail with error: {}", msg));
+            .expect_err(&format!("`eth_call` should fail with error: {msg}"));
         assert!(
             err.to_string().contains(msg),
-            "expected `eth_call` to fail with error '{}' but got: {}",
-            msg,
-            err
+            "expected `eth_call` to fail with error '{msg}' but got: {err}",
         );
     }
 }
 
 #[allow(async_fn_in_trait)]
-pub trait ReceiptAssert {
-    async fn expect_successful_receipt(self) -> anyhow::Result<TransactionReceipt>;
+pub trait ReceiptAssert<N: Network> {
+    async fn expect_successful_receipt(self) -> anyhow::Result<N::ReceiptResponse>;
     async fn expect_register(self) -> anyhow::Result<PendingTransaction>;
 }
 
-impl ReceiptAssert for PendingTransactionBuilder<Ethereum> {
-    async fn expect_successful_receipt(self) -> anyhow::Result<TransactionReceipt> {
+impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
+    async fn expect_successful_receipt(self) -> anyhow::Result<N::ReceiptResponse> {
         let provider = self.provider().clone();
         let receipt = self
             .with_timeout(Some(DEFAULT_TIMEOUT))
@@ -46,7 +44,7 @@ impl ReceiptAssert for PendingTransactionBuilder<Ethereum> {
             // case for zksync-os node).
             if let Ok(trace) = provider
                 .debug_trace_transaction(
-                    receipt.transaction_hash,
+                    receipt.transaction_hash(),
                     GethDebugTracingOptions::call_tracer(CallConfig::default()),
                 )
                 .await

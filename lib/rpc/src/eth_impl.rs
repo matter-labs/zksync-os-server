@@ -1,12 +1,8 @@
-use crate::api::eth_call_handler::EthCallHandler;
-use crate::api::metrics::API_METRICS;
-use crate::api::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
-use crate::api::tx_handler::TxHandler;
-use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::RpcConfig;
-use crate::repositories::api_interface::{ApiRepository, ApiRepositoryExt, RepositoryError};
-use crate::repositories::transaction_receipt_repository::TxMeta;
-use crate::reth_state::ZkClient;
+use crate::eth_call_handler::EthCallHandler;
+use crate::metrics::API_METRICS;
+use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
+use crate::tx_handler::TxHandler;
 use alloy::consensus::Account;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::dyn_abi::TypedData;
@@ -25,36 +21,42 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
+use std::convert::identity;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_code, get_nonce};
 use zk_os_forward_system::run::ReadStorage;
-use zksync_os_mempool::{RethPool, RethTransactionPool};
+use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_state::StateHandle;
-use zksync_os_types::{L2Envelope, ZkEnvelope};
+use zksync_os_storage_api::{
+    ReadReplay, ReadRepository, ReadRepositoryExt, RepositoryError, TxMeta,
+};
+use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
 
-pub(crate) struct EthNamespace<R> {
-    tx_handler: TxHandler,
-    eth_call_handler: EthCallHandler<R>,
+pub struct EthNamespace<Repository, ReplayStorage, Mempool> {
+    tx_handler: TxHandler<Mempool>,
+    eth_call_handler: EthCallHandler<Repository, ReplayStorage>,
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
     // reconsider approach to API in this regard
-    pub(super) repository: R,
-    mempool: RethPool<ZkClient>,
+    pub repository: Repository,
+    mempool: Mempool,
     state_handle: StateHandle,
 
-    pub(super) chain_id: u64,
+    pub chain_id: u64,
 }
 
-impl<R: ApiRepository + Clone> EthNamespace<R> {
+impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay, Mempool: L2TransactionPool>
+    EthNamespace<Repository, ReplayStorage, Mempool>
+{
     pub fn new(
         config: RpcConfig,
 
-        repository: R,
+        repository: Repository,
+        block_replay_storage: ReplayStorage,
         state_handle: StateHandle,
-        mempool: RethPool<ZkClient>,
-        block_replay_storage: BlockReplayStorage,
+        mempool: Mempool,
         chain_id: u64,
     ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
@@ -62,8 +64,8 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
         let eth_call_handler = EthCallHandler::new(
             config,
             state_handle.clone(),
-            block_replay_storage,
             repository.clone(),
+            block_replay_storage,
             chain_id,
         );
         Self {
@@ -77,7 +79,9 @@ impl<R: ApiRepository + Clone> EthNamespace<R> {
     }
 }
 
-impl<R: ApiRepository> EthNamespace<R> {
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2TransactionPool>
+    EthNamespace<Repository, ReplayStorage, Mempool>
+{
     fn block_number_impl(&self) -> EthResult<U256> {
         Ok(U256::from(self.repository.get_latest_block()))
     }
@@ -125,7 +129,10 @@ impl<R: ApiRepository> EthNamespace<R> {
         Ok(Some(U256::from(block.body.transactions.len())))
     }
 
-    fn block_receipts_impl(&self, block_id: BlockId) -> EthResult<Option<Vec<TransactionReceipt>>> {
+    fn block_receipts_impl(
+        &self,
+        block_id: BlockId,
+    ) -> EthResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
         let Some(block) = self.repository.get_block_by_id(block_id)? else {
             return Ok(None);
         };
@@ -180,19 +187,19 @@ impl<R: ApiRepository> EthNamespace<R> {
                 },
             )));
         }
-        if let Some(tx) = self.repository.get_transaction(hash)? {
-            if let Some(meta) = self.repository.get_transaction_meta(hash)? {
-                return Ok(Some(Transaction::from_transaction(
-                    tx.inner,
-                    TransactionInfo {
-                        hash: Some(hash),
-                        index: Some(meta.tx_index_in_block),
-                        block_hash: Some(meta.block_hash),
-                        block_number: Some(meta.block_number),
-                        base_fee: Some(meta.effective_gas_price as u64),
-                    },
-                )));
-            }
+        if let Some(tx) = self.repository.get_transaction(hash)?
+            && let Some(meta) = self.repository.get_transaction_meta(hash)?
+        {
+            return Ok(Some(Transaction::from_transaction(
+                tx.inner,
+                TransactionInfo {
+                    hash: Some(hash),
+                    index: Some(meta.tx_index_in_block),
+                    block_hash: Some(meta.block_hash),
+                    block_number: Some(meta.block_number),
+                    base_fee: Some(meta.effective_gas_price as u64),
+                },
+            )));
         }
         Ok(None)
     }
@@ -257,16 +264,24 @@ impl<R: ApiRepository> EthNamespace<R> {
         self.transaction_by_hash_impl(tx_hash)
     }
 
-    fn transaction_receipt_impl(&self, tx_hash: B256) -> EthResult<Option<TransactionReceipt>> {
+    fn transaction_receipt_impl(
+        &self,
+        tx_hash: B256,
+    ) -> EthResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
         let Some(stored_tx) = self.repository.get_stored_transaction(tx_hash)? else {
             return Ok(None);
         };
         let mut log_index_in_tx = 0;
-        let inner_receipt = stored_tx.receipt.map_logs(|inner_log| {
-            let log = build_api_log(tx_hash, inner_log, stored_tx.meta, log_index_in_tx);
-            log_index_in_tx += 1;
-            log
-        });
+        let inner_receipt = stored_tx.receipt.map_logs(
+            |inner_log| {
+                let log =
+                    build_api_log(tx_hash, inner_log, stored_tx.meta.clone(), log_index_in_tx);
+                log_index_in_tx += 1;
+                log
+            },
+            // todo: convert L2->L1 logs to RPC variant when we have one
+            identity,
+        );
         Ok(Some(TransactionReceipt {
             inner: inner_receipt,
             transaction_hash: tx_hash,
@@ -367,7 +382,9 @@ impl<R: ApiRepository> EthNamespace<R> {
 }
 
 #[async_trait]
-impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
+impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2TransactionPool> EthApiServer
+    for EthNamespace<Repository, ReplayStorage, Mempool>
+{
     async fn protocol_version(&self) -> RpcResult<String> {
         Ok("zksync_os/0.0.1".to_string())
     }
@@ -445,7 +462,7 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
     async fn block_receipts(
         &self,
         block_id: BlockId,
-    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
+    ) -> RpcResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
         self.block_receipts_impl(block_id).to_rpc_result()
     }
 
@@ -520,7 +537,10 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
             .to_rpc_result()
     }
 
-    async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
+    async fn transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
         self.transaction_receipt_impl(hash).to_rpc_result()
     }
 
@@ -580,12 +600,12 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        let latency = API_METRICS.response_time[&"call"].start();
+        let latency_observer = API_METRICS.response_time[&"call"].start();
         let r = self
             .eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
             .to_rpc_result();
-        latency.observe();
+        latency_observer.observe();
         r
     }
 
@@ -615,12 +635,12 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        let latency = API_METRICS.response_time[&"estimate_gas"].start();
+        let latency_observer = API_METRICS.response_time[&"estimate_gas"].start();
         let result = self
             .eth_call_handler
             .estimate_gas_impl(request, block_number, state_override)
             .to_rpc_result()?;
-        latency.observe();
+        latency_observer.observe();
         Ok(result)
     }
 
@@ -667,14 +687,14 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
     }
 
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        let latency = API_METRICS.response_time[&"send_raw_transaction"].start();
+        let latency_observer = API_METRICS.response_time[&"send_raw_transaction"].start();
 
         let r = self
             .tx_handler
             .send_raw_transaction_impl(bytes)
             .await
             .to_rpc_result();
-        latency.observe();
+        latency_observer.observe();
 
         r
     }
@@ -708,7 +728,7 @@ impl<R: ApiRepository + 'static> EthApiServer for EthNamespace<R> {
     }
 }
 
-pub(super) fn build_api_log(
+pub fn build_api_log(
     tx_hash: TxHash,
     primitive_log: alloy::primitives::Log,
     tx_meta: TxMeta,

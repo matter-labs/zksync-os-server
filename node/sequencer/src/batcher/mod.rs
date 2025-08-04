@@ -1,23 +1,15 @@
 use crate::metrics::GENERAL_METRICS;
-use crate::model::batches::{BatchEnvelope, BatchMetadata, ProverInput, Trace};
-use crate::model::blocks::ReplayRecord;
-use futures::{FutureExt, StreamExt, TryStreamExt};
-use std::future::ready;
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use anyhow::Context;
-use reth_execution_types::BlockExecutionOutput;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
-use tokio_stream::wrappers::ReceiverStream;
 use tracing;
-use zk_os_forward_system::run::{BatchContext, BatchOutput};
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_l1_sender::model::{BatchEnvelope, BatchMetadata, ProverInput, Trace};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
-use zksync_os_types::ZkTransaction;
 use crate::config::BatcherConfig;
+use zksync_os_storage_api::ReplayRecord;
 
-mod batcher_rocks_db_storage;
 pub mod util;
 
 /// This component handles batching logic - receives blocks and prepares batch data
@@ -35,7 +27,7 @@ pub struct Batcher {
 
     // == plumbing ==
     // inbound
-    block_receiver: Receiver<(BatchOutput, ReplayRecord, ProverInput)>,
+    block_receiver: Receiver<(BlockOutput, ReplayRecord, ProverInput)>,
     // outbound
     batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
     // dependencies
@@ -53,7 +45,7 @@ impl Batcher {
         batcher_config: BatcherConfig,
 
         // == plumbing ==
-        block_receiver: Receiver<(BatchOutput, ReplayRecord, ProverInput)>,
+        block_receiver: Receiver<(BlockOutput, ReplayRecord, ProverInput)>,
         batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
@@ -105,7 +97,7 @@ impl Batcher {
         let mut timer = tokio::time::interval(self.batcher_config.polling_interval);
 
         let batch_number = prev_batch_info.batch_number + 1;
-        let mut blocks: Vec<(BatchOutput, ReplayRecord, zksync_os_merkle_tree::TreeBatchOutput, ProverInput)> = vec![];
+        let mut blocks: Vec<(BlockOutput, ReplayRecord, zksync_os_merkle_tree::TreeBatchOutput, ProverInput)> = vec![];
 
         loop {
             tokio::select! {
@@ -188,14 +180,13 @@ impl Batcher {
             blocks.iter().map(|(block_output, replay_record, tree, _)|
                 (
                     block_output,
+                    &replay_record.block_context,
                     replay_record.transactions.as_slice(),
                     tree
                 )).collect(),
             self.chain_id,
             batch_number,
         );
-
-        let stored_batch_info = StoredBatchInfo::from(commit_batch_info.clone());
 
         let batch_envelope: BatchEnvelope<ProverInput> = BatchEnvelope {
             batch: BatchMetadata {

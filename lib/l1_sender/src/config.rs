@@ -5,6 +5,7 @@ use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig};
 
 /// Configuration of L1 sender.
+/// todo: consider renaming to L1Config and using in L1Watcher as well.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct L1SenderConfig {
@@ -12,15 +13,22 @@ pub struct L1SenderConfig {
     #[config(default_t = "ws://localhost:8545".into())]
     pub l1_api_url: String,
 
-    /// Private key of the L2 chain's operator address.
-    // TODO: Pre-configured value, to be removed (pk for 0x5927c313861c01b82a026e35d93cc787e5356c0f)
-    #[config(default_t = "0xc9ee945b2f6d4c462a743f5af3904a4ee78aec0218f1f4f3c53d0bfbf809b520".into())]
-    pub operator_private_key: SecretString,
+    /// Private key to commit batches to L1
+    /// Must be consistent with the operator key set on the contract (permissioned!)
+    // TODO: Pre-configured value, to be removed (pk for 0x1561ac2f6ac6f3073c2180094ec67898b6fea40f)
+    #[config(alias = "operator_private_key", default_t = "0x2338cc241022abdc9f3bcb0999d2336bdc1d7402560a5619d168b4bb88282c52".into())]
+    pub operator_commit_pk: SecretString,
+
+    /// Private key to use to submit proofs to L1
+    /// Can be arbitrary funded address - proof submission is permissionless.
+    // TODO: Pre-configured value, to be removed (pk for 0xa61464658AfeAf65CccaaFD3a512b69A83B77618)
+    #[config(default_t = "0xac1e735be8536c6534bb4f17f06f6afc73b2b5ba84ac2cfb12f7461b20c0bbe3".into())]
+    pub operator_prove_pk: SecretString,
 
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x4b37536b9824c4a4cf3d15362135e346adb7cb9c".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f".parse().unwrap())]
     pub bridgehub_address: Address,
 
     /// Max fee per gas we are willing to spend (in gwei).

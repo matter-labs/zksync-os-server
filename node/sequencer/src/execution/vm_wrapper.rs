@@ -3,10 +3,11 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, channel},
     task::{JoinHandle, spawn_blocking},
 };
+use zk_ee::system::tracer::NopTracer;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
-    BatchContext, BatchOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
+    BlockContext, BlockOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
     run_batch,
 };
 use zksync_os_state::StateView;
@@ -15,14 +16,14 @@ use zksync_os_state::StateView;
 /// (as opposed to pull interface of `run_batch` in zksync-os)
 /// consider changing that interface on zksync-os side, which will make this file redundant
 pub struct VmWrapper {
-    handle: JoinHandle<Result<BatchOutput, ForwardSubsystemError>>,
+    handle: JoinHandle<Result<BlockOutput, ForwardSubsystemError>>,
     tx_sender: Sender<NextTxResponse>,
     tx_result_receiver: Receiver<Result<TxProcessingOutputOwned, InvalidTransaction>>,
 }
 
 impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
-    pub fn new(context: BatchContext, state_view: StateView) -> Self {
+    pub fn new(context: BlockContext, state_view: StateView) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBatch).
         let (tx_sender, tx_receiver) = channel(1);
         // Channel for receiving per‐tx execution results.
@@ -40,6 +41,7 @@ impl VmWrapper {
                 state_view,
                 tx_source,
                 tx_callback,
+                &mut NopTracer::default(),
             )
         });
 
@@ -80,8 +82,8 @@ impl VmWrapper {
         }
     }
 
-    /// Tell the VM to seal the batch and return the final `BatchOutput`.
-    pub async fn seal_batch(self) -> anyhow::Result<BatchOutput> {
+    /// Tell the VM to seal the block and return the final `BlockOutput`.
+    pub async fn seal_block(self) -> anyhow::Result<BlockOutput> {
         // Request batch seal.
         let _ = self.tx_sender.send(NextTxResponse::SealBatch).await;
         // Await the blocking task's result.

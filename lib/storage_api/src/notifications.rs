@@ -1,6 +1,5 @@
-use crate::repositories::transaction_receipt_repository::StoredTxData;
-use alloy::consensus::Header;
-use alloy::primitives::Sealed;
+use crate::{RepositoryBlock, StoredTxData};
+use alloy::primitives::TxHash;
 use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -10,8 +9,8 @@ use tokio_stream::wrappers::BroadcastStream;
 
 #[derive(Debug, Clone)]
 pub struct BlockNotification {
-    pub header: Arc<Sealed<Header>>,
-    pub transactions: Arc<Vec<StoredTxData>>,
+    pub block: Arc<RepositoryBlock>,
+    pub transactions: Vec<(TxHash, Arc<StoredTxData>)>,
 }
 
 /// A type that allows to register block subscriptions.

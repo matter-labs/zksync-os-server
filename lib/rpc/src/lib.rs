@@ -1,38 +1,49 @@
 mod call_fees;
+
+mod config;
+pub use config::RpcConfig;
+
 mod eth_call_handler;
 mod eth_filter_impl;
 mod eth_impl;
 mod eth_pubsub_impl;
 mod metrics;
 mod result;
+mod sandbox;
 mod tx_handler;
 mod types;
+mod zks_impl;
 
-use crate::api::eth_filter_impl::EthFilterNamespace;
-use crate::api::eth_impl::EthNamespace;
-use crate::api::eth_pubsub_impl::EthPubsubNamespace;
-use crate::block_replay_storage::BlockReplayStorage;
-use crate::config::{GenesisConfig, RpcConfig};
-use crate::repositories::RepositoryManager;
-use crate::reth_state::ZkClient;
+use crate::eth_filter_impl::EthFilterNamespace;
+use crate::eth_impl::EthNamespace;
+use crate::eth_pubsub_impl::EthPubsubNamespace;
+use crate::zks_impl::ZksNamespace;
+use alloy::primitives::Address;
 use anyhow::Context;
 use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
-use zksync_os_mempool::RethPool;
+use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
+use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_state::StateHandle;
+use zksync_os_storage_api::notifications::SubscribeToBlocks;
+use zksync_os_storage_api::{ReadReplay, ReadRepository};
 
-// stripped-down version of `api_server/src/web3/mod.rs`
-pub async fn run_jsonrpsee_server(
+pub async fn run_jsonrpsee_server<
+    Repository: ReadRepository + SubscribeToBlocks + Clone,
+    ReplayStorage: ReadReplay,
+    Mempool: L2TransactionPool,
+>(
     config: RpcConfig,
-    genesis_config: GenesisConfig,
+    chain_id: u64,
+    bridgehub_address: Address,
 
-    repository_manager: RepositoryManager,
+    repository_manager: Repository,
+    replay_storage: ReplayStorage,
     state_handle: StateHandle,
-    mempool: RethPool<ZkClient>,
-    block_replay_storage: BlockReplayStorage,
+    mempool: Mempool,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -41,10 +52,10 @@ pub async fn run_jsonrpsee_server(
         EthNamespace::new(
             config.clone(),
             repository_manager.clone(),
+            replay_storage,
             state_handle,
             mempool.clone(),
-            block_replay_storage,
-            genesis_config.chain_id,
+            chain_id,
         )
         .into_rpc(),
     )?;
@@ -53,6 +64,7 @@ pub async fn run_jsonrpsee_server(
             .into_rpc(),
     )?;
     rpc.merge(EthPubsubNamespace::new(repository_manager, mempool).into_rpc())?;
+    rpc.merge(ZksNamespace::new(bridgehub_address).into_rpc())?;
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)

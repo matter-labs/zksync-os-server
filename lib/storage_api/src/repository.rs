@@ -1,16 +1,19 @@
-use crate::repositories::RepositoryManager;
-use crate::repositories::db::DbError;
-use crate::repositories::transaction_receipt_repository::{StoredTxData, TxMeta};
-use alloy::consensus::{Block, ReceiptEnvelope};
-use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag, Encodable2718};
+use crate::model::{StoredTxData, TxMeta};
+use alloy::consensus::Block;
+use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
-use zksync_os_types::ZkTransaction;
+use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
+use zksync_storage::rocksdb;
 
 /// Sealed block (i.e. pre-computed hash) along with transaction hashes included in that block.
 /// This is the structure stored in the repository and hence what is served in its API.
+// todo: to be replaced with a ZKsync OS specific block structure with extra fields
 pub type RepositoryBlock = Sealed<Block<TxHash>>;
 
-pub trait ApiRepository: Send + Sync {
+/// Read-only view on repositories that can fetch data required for RPC but not for VM execution.
+///
+/// This includes auxiliary data such as block headers, raw transactions and transaction receipts.
+pub trait ReadRepository: Send + Sync + 'static {
     /// Get sealed block with transaction hashes by its number.
     fn get_block_by_number(&self, number: BlockNumber)
     -> RepositoryResult<Option<RepositoryBlock>>;
@@ -25,7 +28,7 @@ pub trait ApiRepository: Send + Sync {
     fn get_transaction(&self, hash: TxHash) -> RepositoryResult<Option<ZkTransaction>>;
 
     /// Get transaction's receipt by its hash.
-    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ReceiptEnvelope>>;
+    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ZkReceiptEnvelope>>;
 
     /// Get transaction's metadata (additional fields in the context of a block that contains this
     /// transaction) by its hash.
@@ -45,8 +48,8 @@ pub trait ApiRepository: Send + Sync {
     fn get_latest_block(&self) -> u64;
 }
 
-/// Extension methods for `ApiRepository` implementations.
-pub trait ApiRepositoryExt: ApiRepository {
+/// Extension methods for `ReadRepository` implementations.
+pub trait ReadRepositoryExt: ReadRepository {
     /// Get sealed block with transaction hashes by its hash OR number.
     fn get_block_by_hash_or_number(
         &self,
@@ -104,88 +107,7 @@ pub trait ApiRepositoryExt: ApiRepository {
     }
 }
 
-impl<R: ApiRepository> ApiRepositoryExt for R {}
-
-impl ApiRepository for RepositoryManager {
-    fn get_block_by_number(
-        &self,
-        number: BlockNumber,
-    ) -> RepositoryResult<Option<RepositoryBlock>> {
-        if let Some(block) = self.block_receipt_repository.get_by_number(number) {
-            return Ok(Some(block));
-        }
-
-        Ok(self.db.get_block_by_number(number)?)
-    }
-
-    fn get_block_by_hash(&self, hash: BlockHash) -> RepositoryResult<Option<RepositoryBlock>> {
-        if let Some(block) = self.block_receipt_repository.get_by_hash(hash) {
-            return Ok(Some(block));
-        }
-
-        Ok(self.db.get_block_by_hash(hash)?)
-    }
-
-    fn get_raw_transaction(&self, hash: TxHash) -> RepositoryResult<Option<Vec<u8>>> {
-        // todo: implement efficiently
-        Ok(self
-            .get_stored_transaction(hash)?
-            .map(|stored_tx| stored_tx.tx.into_envelope().encoded_2718()))
-    }
-
-    fn get_transaction(&self, hash: TxHash) -> RepositoryResult<Option<ZkTransaction>> {
-        // todo: implement efficiently
-        Ok(self
-            .get_stored_transaction(hash)?
-            .map(|stored_tx| stored_tx.tx))
-    }
-
-    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ReceiptEnvelope>> {
-        // todo: implement efficiently
-        Ok(self
-            .get_stored_transaction(hash)?
-            .map(|stored_tx| stored_tx.receipt))
-    }
-
-    fn get_transaction_meta(&self, hash: TxHash) -> RepositoryResult<Option<TxMeta>> {
-        // todo: implement efficiently
-        Ok(self
-            .get_stored_transaction(hash)?
-            .map(|stored_tx| stored_tx.meta))
-    }
-
-    fn get_transaction_hash_by_sender_nonce(
-        &self,
-        sender: Address,
-        nonce: TxNonce,
-    ) -> RepositoryResult<Option<TxHash>> {
-        if let Some(tx_hash) = self
-            .transaction_receipt_repository
-            .get_transaction_hash_by_sender_nonce(sender, nonce)
-        {
-            return Ok(Some(tx_hash));
-        }
-
-        Ok(self
-            .db
-            .get_transaction_hash_by_sender_nonce(sender, nonce)?)
-    }
-
-    fn get_stored_transaction(&self, hash: TxHash) -> RepositoryResult<Option<StoredTxData>> {
-        if let Some(res) = self
-            .transaction_receipt_repository
-            .get_stored_tx_by_hash(hash)
-        {
-            return Ok(Some(res));
-        }
-
-        Ok(self.db.get_stored_tx_by_hash(hash)?)
-    }
-
-    fn get_latest_block(&self) -> u64 {
-        *self.latest_block.borrow()
-    }
-}
+impl<R: ReadRepository> ReadRepositoryExt for R {}
 
 /// Repository result type.
 pub type RepositoryResult<Ok> = Result<Ok, RepositoryError>;
@@ -204,5 +126,9 @@ pub enum RepositoryError {
     EarliestBlockNotSupported,
 
     #[error(transparent)]
-    DbError(#[from] DbError),
+    Rocksdb(#[from] rocksdb::Error),
+    #[error(transparent)]
+    Eip2718(#[from] alloy::eips::eip2718::Eip2718Error),
+    #[error(transparent)]
+    Rlp(#[from] alloy::rlp::Error),
 }

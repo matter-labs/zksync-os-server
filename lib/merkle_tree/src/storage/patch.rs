@@ -561,12 +561,12 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             .chain(read_keys.iter().copied())
             .collect();
 
-        let key_lookup_latency = METRICS.load_nodes_latency[&LoadStage::KeyLookup].start();
+        let key_lookup_latency_observer = METRICS.load_nodes_latency[&LoadStage::KeyLookup].start();
         let lookup = self
             .db
             .indices(latest_version, &touched_keys)
             .context("failed loading indices")?;
-        let elapsed = key_lookup_latency.observe();
+        let elapsed = key_lookup_latency_observer.observe();
         tracing::debug!(?elapsed, "loaded lookup info");
 
         // Collect all distinct indices that need to be loaded.
@@ -635,10 +635,10 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             read_operations.push(read_op);
         }
 
-        let tree_nodes_latency = METRICS.load_nodes_latency[&LoadStage::TreeNodes].start();
+        let tree_nodes_latency_observer = METRICS.load_nodes_latency[&LoadStage::TreeNodes].start();
         let mut patch = WorkingPatchSet::new(root);
         patch.load_nodes(&self.db, distinct_indices.iter().copied())?;
-        let elapsed = tree_nodes_latency.observe();
+        let elapsed = tree_nodes_latency_observer.observe();
         tracing::debug!(
             ?elapsed,
             distinct_indices.len = distinct_indices.len(),
@@ -667,20 +667,18 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
                     let mut prev_index = Some(prev_index);
                     if let Some((&local_prev_key, _)) =
                         sorted_new_leaves.range(..entry.key).next_back()
+                        && local_prev_key > prev_key_and_index.0
                     {
-                        if local_prev_key > prev_key_and_index.0 {
-                            prev_index = None;
-                        }
+                        prev_index = None;
                     }
 
                     let mut next_index = next_key_and_index.1;
                     let next_range = (ops::Bound::Excluded(entry.key), ops::Bound::Unbounded);
                     if let Some((&local_next_key, inserted)) =
                         sorted_new_leaves.range(next_range).next()
+                        && local_next_key < next_key_and_index.0
                     {
-                        if local_next_key < next_key_and_index.0 {
-                            next_index = inserted.index;
-                        }
+                        next_index = inserted.index;
                     }
 
                     let leaf = Leaf {
