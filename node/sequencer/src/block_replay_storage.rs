@@ -115,7 +115,7 @@ impl BlockReplayStorage {
             record.starting_l1_priority_id,
             bincode::config::standard(),
         )
-            .expect("Failed to serialize record.last_processed_l1_tx_id");
+        .expect("Failed to serialize record.last_processed_l1_tx_id");
         let txs_2718_encoded = record
             .transactions
             .into_iter()

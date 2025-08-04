@@ -146,9 +146,10 @@ impl BlockContextProvider {
         );
         let stage_started_at = Instant::now();
 
-        let (block_output, replay_record, purged_txs) = execute_block(prepared_command, state, previous_block_timestamp)
-            .await
-            .context("execute_block")?;
+        let (block_output, replay_record, purged_txs) =
+            execute_block(prepared_command, state, previous_block_timestamp)
+                .await
+                .context("execute_block")?;
 
         tracing::info!(
             block_number,

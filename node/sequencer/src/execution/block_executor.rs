@@ -179,7 +179,12 @@ pub async fn execute_block(
 
     Ok((
         output,
-        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs, previous_block_timestamp),
+        ReplayRecord::new(
+            ctx,
+            command.starting_l1_priority_id,
+            executed_txs,
+            previous_block_timestamp,
+        ),
         purged_txs,
     ))
 }

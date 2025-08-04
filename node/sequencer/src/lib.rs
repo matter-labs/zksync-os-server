@@ -17,10 +17,7 @@ pub mod tree_manager;
 mod util;
 
 use crate::batch_sink::BatchSink;
-use crate::batcher::{
-    Batcher,
-    util::genesis_stored_batch_info,
-};
+use crate::batcher::{Batcher, util::genesis_stored_batch_info};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
@@ -52,6 +49,7 @@ use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
@@ -62,7 +60,6 @@ use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
-use zksync_os_l1_sender::commitment::StoredBatchInfo;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -89,7 +86,8 @@ pub async fn run_sequencer_actor(
         sequencer_config.max_transactions_in_block,
     );
 
-    let mut previous_block_timestamp: u64 = repositories.get_block_by_number(starting_block - 1)?
+    let mut previous_block_timestamp: u64 = repositories
+        .get_block_by_number(starting_block - 1)?
         .map_or(0, |block| block.header.timestamp);
 
     while let Some(cmd) = stream.next().await {
@@ -199,7 +197,7 @@ fn command_source(
                 block_number + 1,
             ))
         })
-            .boxed();
+        .boxed();
     let stream = replay_wal_stream.chain(produce_stream);
     stream.boxed()
 }
@@ -275,8 +273,8 @@ pub async fn run(
             .rocks_db_path
             .join(BLOCK_REPLAY_WAL_DB_NAME),
     )
-        .expect("Failed to open BlockReplayWAL")
-        .with_sync_writes();
+    .expect("Failed to open BlockReplayWAL")
+    .with_sync_writes();
     let block_replay_storage =
         BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
 
@@ -295,7 +293,7 @@ pub async fn run(
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
     )
-        .expect("Failed to open ProofStorageDB");
+    .expect("Failed to open ProofStorageDB");
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(proof_storage_db);
@@ -366,7 +364,7 @@ pub async fn run(
         l1_transactions_sender,
         next_l1_priority_id,
     )
-        .await;
+    .await;
     let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -423,14 +421,15 @@ pub async fn run(
         .expect("Failed to get last committed block from proof storage")
         .map(|proof| proof.batch);
 
-    let (last_committed_block_number, prev_batch_info): (u64, StoredBatchInfo) = if let Some(batch_metadata) = last_committed_batch_metadata {
-        (
-            batch_metadata.last_block_number,
-            batch_metadata.commit_batch_info.into(),
-        )
-    } else {
-        (0, genesis_stored_batch_info())
-    };
+    let (last_committed_block_number, prev_batch_info): (u64, StoredBatchInfo) =
+        if let Some(batch_metadata) = last_committed_batch_metadata {
+            (
+                batch_metadata.last_block_number,
+                batch_metadata.commit_batch_info.into(),
+            )
+        } else {
+            (0, genesis_stored_batch_info())
+        };
 
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
@@ -532,8 +531,8 @@ pub async fn run(
         &proof_storage,
         batch_for_snark_sender.clone(),
     )
-        .await
-        .expect("Failed to reschedule committed batches for SNARK proving");
+    .await
+    .expect("Failed to reschedule committed batches for SNARK proving");
 
     reschedule_proved_not_executed_batches(
         &l1_state,

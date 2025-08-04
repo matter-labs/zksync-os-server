@@ -1,3 +1,4 @@
+use crate::config::BatcherConfig;
 use crate::metrics::GENERAL_METRICS;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -7,7 +8,6 @@ use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::model::{BatchEnvelope, BatchMetadata, ProverInput, Trace};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
-use crate::config::BatcherConfig;
 use zksync_os_storage_api::ReplayRecord;
 
 pub mod util;
@@ -61,7 +61,11 @@ impl Batcher {
     }
 
     /// Main processing loop for the batcher
-    pub async fn run_loop(mut self, prev_batch_info: StoredBatchInfo, mut stop_receiver: watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn run_loop(
+        mut self,
+        prev_batch_info: StoredBatchInfo,
+        mut stop_receiver: watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
         let mut prev_batch_info = prev_batch_info;
 
         loop {
@@ -93,11 +97,19 @@ impl Batcher {
         Ok(())
     }
 
-    async fn create_batch(&mut self, prev_batch_info: &StoredBatchInfo) -> anyhow::Result<BatchEnvelope<ProverInput>> {
+    async fn create_batch(
+        &mut self,
+        prev_batch_info: &StoredBatchInfo,
+    ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
         let mut timer = tokio::time::interval(self.batcher_config.polling_interval);
 
         let batch_number = prev_batch_info.batch_number + 1;
-        let mut blocks: Vec<(BlockOutput, ReplayRecord, zksync_os_merkle_tree::TreeBatchOutput, ProverInput)> = vec![];
+        let mut blocks: Vec<(
+            BlockOutput,
+            ReplayRecord,
+            zksync_os_merkle_tree::TreeBatchOutput,
+            ProverInput,
+        )> = vec![];
 
         loop {
             tokio::select! {
@@ -177,13 +189,17 @@ impl Batcher {
         let block_number_to = blocks.last().unwrap().1.block_context.block_number;
 
         let commit_batch_info = CommitBatchInfo::new(
-            blocks.iter().map(|(block_output, replay_record, tree, _)|
-                (
-                    block_output,
-                    &replay_record.block_context,
-                    replay_record.transactions.as_slice(),
-                    tree
-                )).collect(),
+            blocks
+                .iter()
+                .map(|(block_output, replay_record, tree, _)| {
+                    (
+                        block_output,
+                        &replay_record.block_context,
+                        replay_record.transactions.as_slice(),
+                        tree,
+                    )
+                })
+                .collect(),
             self.chain_id,
             batch_number,
         );
@@ -194,34 +210,48 @@ impl Batcher {
                 commit_batch_info,
                 first_block_number: block_number_from,
                 last_block_number: block_number_to,
-                tx_count: blocks.iter().map(|(block_output, _, _, _)| block_output.tx_results.len()).sum(),
+                tx_count: blocks
+                    .iter()
+                    .map(|(block_output, _, _, _)| block_output.tx_results.len())
+                    .sum(),
             },
             data: std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
-                .chain(blocks.iter().flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()))
+                .chain(
+                    blocks
+                        .iter()
+                        .flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()),
+                )
                 .collect(),
             trace: Trace::default(),
         };
 
         tracing::info!(
-                        block_number_from,
-                        block_number_to,
-                        batch_number,
-                        state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
-                        "Batch produced",
-                    );
+            block_number_from,
+            block_number_to,
+            batch_number,
+            state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
+            "Batch produced",
+        );
 
         tracing::debug!(
-                        ?batch_envelope.batch,
-                        "Batch details",
-                    );
+            ?batch_envelope.batch,
+            "Batch details",
+        );
 
         Ok(batch_envelope)
     }
 
-    async fn should_seal_by_timeout(&self, first_block_timestamp: u64, last_block_timestamp: u64) -> bool {
-        let time_between_first_and_last = SystemTime::from(UNIX_EPOCH + Duration::from_secs(last_block_timestamp))
-            .duration_since(SystemTime::from(UNIX_EPOCH + Duration::from_secs(first_block_timestamp)))
-            .expect("Current time is before the start timestamp");
+    async fn should_seal_by_timeout(
+        &self,
+        first_block_timestamp: u64,
+        last_block_timestamp: u64,
+    ) -> bool {
+        let time_between_first_and_last =
+            SystemTime::from(UNIX_EPOCH + Duration::from_secs(last_block_timestamp))
+                .duration_since(SystemTime::from(
+                    UNIX_EPOCH + Duration::from_secs(first_block_timestamp),
+                ))
+                .expect("Current time is before the start timestamp");
 
         time_between_first_and_last >= self.batcher_config.batch_timeout
     }

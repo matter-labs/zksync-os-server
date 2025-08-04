@@ -100,7 +100,12 @@ pub struct CommitBatchInfo {
 
 impl CommitBatchInfo {
     pub fn new(
-        blocks: Vec<(&BlockOutput, &BlockContext, &[ZkTransaction], &zksync_os_merkle_tree::TreeBatchOutput)>,
+        blocks: Vec<(
+            &BlockOutput,
+            &BlockContext,
+            &[ZkTransaction],
+            &zksync_os_merkle_tree::TreeBatchOutput,
+        )>,
         chain_id: u64,
         batch_number: u64,
     ) -> Self {
@@ -110,7 +115,8 @@ impl CommitBatchInfo {
         let mut encoded_l2_l1_logs = vec![];
 
         let first_block = blocks.first().unwrap().clone();
-        let (last_block_output, last_block_context, _, last_block_tree) = blocks.last().unwrap().clone();
+        let (last_block_output, last_block_context, _, last_block_tree) =
+            blocks.last().unwrap().clone();
 
         for (block_output, _, transactions, _) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());

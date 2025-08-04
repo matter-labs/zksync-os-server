@@ -9,7 +9,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
-use zk_os_forward_system::run::{StorageCommitment, generate_proof_input, BlockOutput};
+use zk_os_forward_system::run::{BlockOutput, StorageCommitment, generate_proof_input};
 use zksync_os_l1_sender::model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
@@ -54,8 +54,8 @@ impl ProverInputGenerator {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
             concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../server_app_logging_enabled.bin"
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../server_app_logging_enabled.bin"
             )
         } else {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")
@@ -99,12 +99,14 @@ impl ProverInputGenerator {
                 let state_handle = self.state_handle.clone();
 
                 tokio::task::spawn_blocking(move || {
-                    let prover_input = compute_prover_input(&replay_record, state_handle, tree, self.bin_path, replay_record.previous_block_timestamp);
-                    (
-                        block_output,
-                        replay_record,
-                        prover_input,
-                    )
+                    let prover_input = compute_prover_input(
+                        &replay_record,
+                        state_handle,
+                        tree,
+                        self.bin_path,
+                        replay_record.previous_block_timestamp,
+                    );
+                    (block_output, replay_record, prover_input)
                 })
             })
             .buffered(self.maximum_in_flight_blocks)
@@ -113,7 +115,9 @@ impl ProverInputGenerator {
                 GENERAL_METRICS.block_number[&"prover_input_generator"]
                     .set(block_output.header.number);
 
-                self.blocks_for_batcher_sender.send((block_output, replay_record, prover_input)).await?;
+                self.blocks_for_batcher_sender
+                    .send((block_output, replay_record, prover_input))
+                    .await?;
 
                 Ok(())
             })
@@ -158,7 +162,7 @@ fn compute_prover_input(
         state_view,
         list_source,
     )
-        .expect("proof gen failed");
+    .expect("proof gen failed");
 
     let latency = prover_input_generation_latency.observe();
 
