@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
 
-use crate::prover_api::prover_job_manager::ProverJobManager;
+use crate::prover_api::fri_job_manager::FriJobManager;
 
 const POLL_INTERVAL_MS: u64 = 100;
 const PROVER_LABEL: &str = "fake_prover";
@@ -13,16 +13,16 @@ const PROVER_LABEL: &str = "fake_prover";
 /// - Waits `compute_time` to emulate proving,
 /// - Submits a fake proof via `ProverJobManager::submit_fake_proof`.
 #[derive(Clone, Debug)]
-pub struct FakeProversPool {
-    job_manager: Arc<ProverJobManager>,
+pub struct FakeFriProversPool {
+    job_manager: Arc<FriJobManager>,
     workers: usize,
     compute_time: Duration,
     min_inbound_age: Duration,
 }
 
-impl FakeProversPool {
+impl FakeFriProversPool {
     pub fn new(
-        job_manager: Arc<ProverJobManager>,
+        job_manager: Arc<FriJobManager>,
         workers: usize,
         compute_time: Duration,
         min_inbound_age: Duration,
