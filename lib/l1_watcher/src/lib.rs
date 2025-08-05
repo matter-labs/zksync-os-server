@@ -18,6 +18,9 @@ use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
 use zksync_os_types::L1Envelope;
 
+/// Don't try to process that many block linearly
+const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
+
 pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
     zk_chain_address: Address,
@@ -56,7 +59,26 @@ impl L1Watcher {
         );
         let zk_chain = bridgehub.zk_chain().await?;
         let zk_chain_address = *zk_chain.address();
-        let next_l1_block = find_l1_block_by_priority_id(zk_chain, next_l1_priority_id).await?;
+
+        let current_l1_block = provider.get_block_number().await?;
+        let next_l1_block = find_l1_block_by_priority_id(&zk_chain, next_l1_priority_id)
+            .await
+            .or_else(|err| {
+                // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
+                // We default to `0` in this case - `eth_getLogs` are still supported.
+                // Assert that we don't fallback on longer chains (e.g. Sepolia)
+                if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
+                    anyhow::bail!(
+                        "Binary search failed with {}. Cannot default starting block to zero for a long chain. Current L1 block number: {}. Limit: {}.",
+                        err,
+                        current_l1_block,
+                        MAX_L1_BLOCKS_LOOKBEHIND,
+                    )
+                } else {
+                    Ok(0)
+                }
+            })?;
+
         tracing::info!(?zk_chain_address, next_l1_block, "resolved on L1");
 
         Ok(Self {
@@ -155,34 +177,39 @@ impl L1Watcher {
 }
 
 async fn find_l1_block_by_priority_id(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: &ZkChain<DynProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
-    let block_number = zk_chain.provider().get_block_number().await?;
+    let latest = zk_chain.provider().get_block_number().await?;
 
-    // We want to find the first block where `total_l1_priority_txs(block) >= next_l1_priority_id`
-    // (not strict equality as multiple L1->L2 transactions can be added in a single L1 block).
-    // Invariant is to maintain interval `[low; high)` where:
-    // * `total_l1_priority_txs(low) < next_l1_priority_id`
-    // * `total_l1_priority_txs(high) >= next_l1_priority_id`
-    let mut low = 0;
-    let mut high = block_number + 1;
-    while (high - low) > 1 {
-        let mid = (low + high) / 2;
-        // Assume 0 total L1 transactions when the call fails (presume that ZK chain has not
-        // been deployed yet).
-        let mid_l1_priority_id = zk_chain
-            .get_total_priority_txs_at_block(mid.into())
-            .await
-            .unwrap_or(0);
+    async fn predicate(zk: &ZkChain<DynProvider>, block: u64, target: u64) -> anyhow::Result<bool> {
+        if !zk.code_exists_at_block(block.into()).await? {
+            // return early if contract is not deployed yet - otherwise `get_total_priority_txs_at_block` will fail
+            return Ok(false);
+        }
+        let res = zk.get_total_priority_txs_at_block(block.into()).await?;
+        Ok(res >= target)
+    }
 
-        if mid_l1_priority_id < next_l1_priority_id {
-            low = mid;
+    // Ensure the predicate is true by the upper bound, or bail early.
+    if !predicate(zk_chain, latest, next_l1_priority_id).await? {
+        anyhow::bail!(
+            "Condition not satisfied up to latest block: contract not deployed yet \
+             or target {} not reached.",
+            next_l1_priority_id
+        );
+    }
+
+    // Binary search on [0, latest] for the first block where predicate is true.
+    let (mut lo, mut hi) = (0u64, latest);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if predicate(zk_chain, mid, next_l1_priority_id).await? {
+            hi = mid;
         } else {
-            high = mid;
+            lo = mid + 1;
         }
     }
-    // Resulting range is `[low; low + 1)` meaning next L1 priority transaction was observed in
-    // block `low`
-    Ok(low)
+
+    Ok(lo)
 }

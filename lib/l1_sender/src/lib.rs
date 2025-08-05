@@ -166,6 +166,10 @@ async fn build_provider<Input: L1SenderCommand>(
     );
     let balance = res.get_balance(address).await?;
 
+    if balance.is_zero() {
+        anyhow::bail!("L1 sender's address {} has zero balance", address);
+    }
+
     tracing::info!(
         "{} L1 sender: initialized sender address {} with balance {}",
         Input::NAME,
