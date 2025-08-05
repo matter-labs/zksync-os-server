@@ -1,7 +1,6 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-api/src/otterscan.rs
 
-use alloy::eips::BlockId;
 use alloy::eips::eip1898::LenientBlockNumberOrTag;
 use alloy::primitives::{Address, BlockHash, Bytes, TxHash};
 use alloy::rpc::types::trace::otterscan::{
