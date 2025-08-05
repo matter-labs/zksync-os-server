@@ -6,6 +6,7 @@ members = [
     "lib/l1_watcher",
     "lib/mempool",
     "lib/merkle_tree",
+    "lib/mini_merkle_tree",
     "lib/priority_tree",
     "lib/rpc",
     "lib/rpc_api",
@@ -100,8 +101,6 @@ sha2 = "0.10.9"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
-zksync_mini_merkle_tree = "28.1.0-non-semver-compat"
-zksync_types = "28.1.0-non-semver-compat"
 
 # Reth dependencies
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
@@ -119,6 +118,7 @@ zksync_os_crypto = { path = "lib/crypto" }
 zksync_os_l1_sender = { path = "lib/l1_sender" }
 zksync_os_l1_watcher = { path = "lib/l1_watcher" }
 zksync_os_mempool = { path = "lib/mempool" }
+zksync_os_mini_merkle_tree = { path = "lib/mini_merkle_tree" }
 zksync_os_merkle_tree = { path = "lib/merkle_tree" }
 zksync_os_priority_tree = { path = "lib/priority_tree" }
 zksync_os_rpc = { path = "lib/rpc" }

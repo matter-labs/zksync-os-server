@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use super::*;
 
-fn empty_subtree_root(depth: usize) -> H256 {
+fn empty_subtree_root(depth: usize) -> B256 {
     <KeccakHasher as HashEmptySubtree<[u8; 88]>>::empty_subtree_hash(&KeccakHasher, depth)
 }
 
@@ -58,7 +58,7 @@ fn single_item_tree_snapshot() {
     let tree = MiniMerkleTree::new(iter::once([1_u8; 88]), Some(32));
     let (root_hash, path) = tree.merkle_root_and_path(0);
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x45e2793110bf02d81fc72bc11ed257c79251816f4187fa95f2e4d7cded1efad9"
             .parse()
             .unwrap();
@@ -71,7 +71,7 @@ fn single_item_tree_snapshot() {
         "0x199cc5812543ddceeddd0fc82807646a4899444240db2c0d2f20c3cceb5f51fa",
         "0xe4733f281f18ba3ea8775dd62d2fcd84011c8c938f16ea5790fd29a03bf8db89",
     ]
-    .map(|s| s.parse::<H256>().unwrap());
+    .map(|s| s.parse::<B256>().unwrap());
     assert_eq!(path, expected_path);
 }
 
@@ -81,7 +81,7 @@ fn full_tree_snapshot() {
     let tree = MiniMerkleTree::new(leaves, None);
     let (root_hash, path) = tree.merkle_root_and_path(2);
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x29694afc5d76ad6ee48e9382b1cf724c503c5742aa905700e290845c56d1b488"
             .parse()
             .unwrap();
@@ -94,7 +94,7 @@ fn full_tree_snapshot() {
         "0x7f4f800d9522a26ed963ea2246d34d96eaa0f336272c33d96aaceb2ad8930a48",
         "0x149d20e7d6506f8ce6379b42d4188789564e62127b60f3213d598fb5daeb8f71",
     ]
-    .map(|s| s.parse::<H256>().unwrap());
+    .map(|s| s.parse::<B256>().unwrap());
     assert_eq!(path, expected_path);
 }
 
@@ -104,7 +104,7 @@ fn partial_tree_snapshot() {
     let tree = MiniMerkleTree::new(leaves.clone(), None);
     let (root_hash, path) = tree.merkle_root_and_path(10);
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x2da23c4270b612710106f3e02e9db9fa42663751869f48d952fa7a0eaaa92475"
             .parse()
             .unwrap();
@@ -118,7 +118,7 @@ fn partial_tree_snapshot() {
         "0x149d20e7d6506f8ce6379b42d4188789564e62127b60f3213d598fb5daeb8f71",
         "0xc12232b0d6558a3672bc22d484f29f5584683c002df73c9389e83ec929dfed3a",
     ]
-    .map(|s| s.parse::<H256>().unwrap());
+    .map(|s| s.parse::<B256>().unwrap());
     assert_eq!(path, expected_path);
 
     let tree = MiniMerkleTree::new(leaves, None);
@@ -134,7 +134,7 @@ fn partial_tree_snapshot() {
         "0x6edd774c0492cb4c825e4684330fd1c3259866606d47241ebf2a29af0190b5b1",
         "0x29694afc5d76ad6ee48e9382b1cf724c503c5742aa905700e290845c56d1b488",
     ]
-    .map(|s| s.parse::<H256>().unwrap());
+    .map(|s| s.parse::<B256>().unwrap());
     assert_eq!(path, expected_path);
 }
 
@@ -142,8 +142,8 @@ fn verify_merkle_proof(
     item: &[u8],
     mut index: usize,
     item_count: usize,
-    merkle_path: &[H256],
-    merkle_root: H256,
+    merkle_path: &[B256],
+    merkle_root: B256,
 ) {
     assert!(index < item_count);
     let tree_depth = tree_depth_by_size(item_count.next_power_of_two());
@@ -165,9 +165,9 @@ fn verify_merkle_proof(
 fn verify_range_merkle_proof(
     items: &[[u8; 88]],
     mut start_index: usize,
-    start_path: &[Option<H256>],
-    end_path: &[Option<H256>],
-    merkle_root: H256,
+    start_path: &[Option<B256>],
+    end_path: &[Option<B256>],
+    merkle_root: B256,
 ) {
     assert_eq!(start_path.len(), end_path.len());
 
@@ -310,7 +310,7 @@ fn caching_leaves() {
     let leaves = (1..=50).map(|byte| [byte; 88]);
     let mut tree = MiniMerkleTree::new(leaves.clone(), None);
 
-    let expected_root_hash: H256 =
+    let expected_root_hash: B256 =
         "0x2da23c4270b612710106f3e02e9db9fa42663751869f48d952fa7a0eaaa92475"
             .parse()
             .unwrap();
@@ -323,7 +323,7 @@ fn caching_leaves() {
         "0x6edd774c0492cb4c825e4684330fd1c3259866606d47241ebf2a29af0190b5b1",
         "0x29694afc5d76ad6ee48e9382b1cf724c503c5742aa905700e290845c56d1b488",
     ]
-    .map(|s| s.parse::<H256>().unwrap());
+    .map(|s| s.parse::<B256>().unwrap());
 
     for i in 0..50 {
         let (root_hash, path) = tree.merkle_root_and_path(49 - i);
@@ -353,7 +353,7 @@ fn pushing_new_leaves() {
         "0xe44bb0f3915370e8f432de0830c52d5dc7bbf1a46a21cccb462cefaf3f4cce4d",
         "0x88443c3b1b9206955625b5722c06bca3207d39f6044780af885d5f09f6e615a1",
     ]
-    .map(|s| s.parse::<H256>().unwrap());
+    .map(|s| s.parse::<B256>().unwrap());
 
     for (i, expected_root) in expected_roots.iter().enumerate() {
         let number = i as u8 + 1;

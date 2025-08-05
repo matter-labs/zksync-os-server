@@ -5,13 +5,13 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::must_use_candidate, clippy::similar_names)]
 
+use alloy::primitives::B256;
 use std::{collections::VecDeque, iter, marker::PhantomData, ops::RangeTo};
+use zksync_os_crypto::hasher::Hasher;
+use zksync_os_crypto::hasher::keccak::KeccakHasher;
 
 #[cfg(test)]
 mod tests;
-
-use zksync_basic_types::H256;
-use zksync_crypto_primitives::hasher::{keccak::KeccakHasher, Hasher};
 
 /// Maximum supported depth of the tree. 32 corresponds to `2^32` elements in the tree, which
 /// we unlikely to ever hit.
@@ -35,7 +35,7 @@ const MAX_TREE_DEPTH: usize = 32;
 pub struct MiniMerkleTree<L, H = KeccakHasher> {
     hasher: H,
     /// Stores untrimmed (uncached) leaves of the tree.
-    hashes: VecDeque<H256>,
+    hashes: VecDeque<B256>,
     /// Size of the tree. Always a power of 2.
     /// If it is greater than `self.start_index + self.hashes.len()`, the remaining leaves are empty.
     binary_tree_size: usize,
@@ -47,11 +47,11 @@ pub struct MiniMerkleTree<L, H = KeccakHasher> {
     /// Because only the left subset of the path is used, the cache is not invalidated when new leaves are
     /// pushed into the tree. If all leaves are trimmed, cache is the left subset of the Merkle path to
     /// the next leaf to be inserted, which still has index `self.start_index`.
-    cache: Vec<Option<H256>>,
+    cache: Vec<Option<B256>>,
     /// Leaf type marker
     _leaf: PhantomData<L>,
     /// empty leaf hash
-    empty_leaf_hash: Option<H256>,
+    empty_leaf_hash: Option<B256>,
 }
 
 impl<L: AsRef<[u8]>> MiniMerkleTree<L>
@@ -73,7 +73,7 @@ where
     pub fn new_with_empty_leaf_hash(
         leaves: impl Iterator<Item = L>,
         min_tree_size: Option<usize>,
-        empty_leaf_hash: H256,
+        empty_leaf_hash: B256,
     ) -> Self {
         let mut tree = Self::with_hasher(KeccakHasher, leaves, min_tree_size);
         tree.empty_leaf_hash = Some(empty_leaf_hash);
@@ -131,7 +131,7 @@ where
     /// - The number of leaves is greater than `2^32`.
     pub fn from_hashes(
         hasher: H,
-        hashes: impl Iterator<Item = H256>,
+        hashes: impl Iterator<Item = B256>,
         min_tree_size: Option<usize>,
     ) -> Self {
         let hashes: VecDeque<_> = hashes.collect();
@@ -169,7 +169,7 @@ where
 
     /// Returns the root hash of this tree.
     #[allow(clippy::missing_panics_doc)] // Should never panic, unless there is a bug.
-    pub fn merkle_root(&self) -> H256 {
+    pub fn merkle_root(&self) -> B256 {
         if self.hashes.is_empty() {
             let depth = tree_depth_by_size(self.binary_tree_size);
             if self.start_index == 0 {
@@ -185,7 +185,7 @@ where
     /// `index` is relative to the leftmost uncached leaf.
     /// # Panics
     /// Panics if `index` is >= than the number of uncached leaves in the tree.
-    pub fn merkle_root_and_path(&self, index: usize) -> (H256, Vec<H256>) {
+    pub fn merkle_root_and_path(&self, index: usize) -> (B256, Vec<B256>) {
         assert!(index < self.hashes.len(), "leaf index out of bounds");
         let mut end_path = vec![];
         let root_hash = self.compute_merkle_root_and_path(index, Some(&mut end_path), None);
@@ -199,7 +199,7 @@ where
     /// `index` is an absolute position of the leaf.
     /// # Panics
     /// Panics if leaf at `index` is cached or if `index` is >= than the number of leaves in the tree.
-    pub fn merkle_root_and_path_by_absolute_index(&self, index: usize) -> (H256, Vec<H256>) {
+    pub fn merkle_root_and_path_by_absolute_index(&self, index: usize) -> (B256, Vec<B256>) {
         assert!(index >= self.start_index, "leaf is cached");
         self.merkle_root_and_path(index - self.start_index)
     }
@@ -211,7 +211,7 @@ where
     pub fn merkle_root_and_paths_for_range(
         &self,
         range: RangeTo<usize>,
-    ) -> (H256, Vec<Option<H256>>, Vec<Option<H256>>) {
+    ) -> (B256, Vec<Option<B256>>, Vec<Option<B256>>) {
         assert!(range.end > 0, "empty range");
         assert!(range.end <= self.hashes.len(), "range index out of bounds");
         let mut right_path = vec![];
@@ -226,7 +226,7 @@ where
     /// Adds a raw hash to the tree (replaces leftmost empty leaf).
     /// If the tree is full, its size is doubled.
     /// Note: empty leaves != zero leaves.
-    pub fn push_hash(&mut self, leaf_hash: H256) {
+    pub fn push_hash(&mut self, leaf_hash: B256) {
         self.hashes.push_back(leaf_hash);
         if self.start_index + self.hashes.len() > self.binary_tree_size {
             self.binary_tree_size *= 2;
@@ -237,7 +237,7 @@ where
     }
 
     /// Returns the leftmost `length` untrimmed leaf hashes.
-    pub fn hashes_prefix(&self, length: usize) -> Vec<H256> {
+    pub fn hashes_prefix(&self, length: usize) -> Vec<B256> {
         self.hashes.iter().take(length).copied().collect()
     }
 
@@ -268,9 +268,9 @@ where
     fn compute_merkle_root_and_path(
         &self,
         mut index: usize,
-        mut path: Option<&mut Vec<Option<H256>>>,
+        mut path: Option<&mut Vec<Option<B256>>>,
         side: Option<Side>,
-    ) -> H256 {
+    ) -> B256 {
         let depth = tree_depth_by_size(self.binary_tree_size);
         if let Some(path) = path.as_deref_mut() {
             path.reserve(depth);
@@ -346,32 +346,32 @@ enum Side {
 }
 
 /// Hashing of empty binary Merkle trees.
-pub trait HashEmptySubtree<L>: 'static + Send + Sync + Hasher<Hash = H256> {
+pub trait HashEmptySubtree<L>: 'static + Send + Sync + Hasher<Hash = B256> {
     /// Returns the hash of an empty subtree with the given depth.
     /// Implementations are encouraged to cache the returned values.
-    fn empty_subtree_hash(&self, depth: usize) -> H256 {
+    fn empty_subtree_hash(&self, depth: usize) -> B256 {
         // We do not cache by default since then the cached values would be preserved
         // for all implementations which is not correct for different leaves.
         compute_empty_tree_hashes(self.empty_leaf_hash())[depth]
     }
 
     /// Returns an empty hash
-    fn empty_leaf_hash(&self) -> H256;
+    fn empty_leaf_hash(&self) -> B256;
 }
 
 impl HashEmptySubtree<[u8; 88]> for KeccakHasher {
-    fn empty_leaf_hash(&self) -> H256 {
+    fn empty_leaf_hash(&self) -> B256 {
         self.hash_bytes(&[0_u8; 88])
     }
 }
 
 impl HashEmptySubtree<[u8; 96]> for KeccakHasher {
-    fn empty_leaf_hash(&self) -> H256 {
+    fn empty_leaf_hash(&self) -> B256 {
         self.hash_bytes(&[0_u8; 96])
     }
 }
 
-fn compute_empty_tree_hashes(empty_leaf_hash: H256) -> Vec<H256> {
+fn compute_empty_tree_hashes(empty_leaf_hash: B256) -> Vec<B256> {
     iter::successors(Some(empty_leaf_hash), |hash| {
         Some(KeccakHasher.compress(hash, hash))
     })

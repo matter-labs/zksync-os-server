@@ -11,12 +11,11 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_contract_interface.workspace = true
+zksync_os_crypto.workspace = true
 zksync_os_l1_sender.workspace = true
+zksync_os_mini_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
-
-zksync_mini_merkle_tree.workspace = true
-zksync_types.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false }
