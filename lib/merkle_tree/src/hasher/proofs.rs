@@ -377,7 +377,7 @@ impl BatchTreeProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blake2::Blake2Hasher;
+    use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
     #[test]
     fn insertion_proof_for_empty_tree() {

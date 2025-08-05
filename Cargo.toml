@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "lib/contract_interface",
+    "lib/crypto",
     "lib/l1_sender",
     "lib/l1_watcher",
     "lib/mempool",
@@ -94,6 +95,8 @@ test-log = "0.2.18"
 backon = "1.5.1"
 reqwest = "0.12.22"
 time = "0.3"
+criterion = "0.7.0"
+sha2 = "0.10.9"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
@@ -112,6 +115,7 @@ reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.
 
 # "Local" dependencies
 zksync_os_contract_interface = { path = "lib/contract_interface" }
+zksync_os_crypto = { path = "lib/crypto" }
 zksync_os_l1_sender = { path = "lib/l1_sender" }
 zksync_os_l1_watcher = { path = "lib/l1_watcher" }
 zksync_os_mempool = { path = "lib/mempool" }
