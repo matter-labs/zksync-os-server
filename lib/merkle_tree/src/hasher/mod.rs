@@ -1,8 +1,9 @@
 use std::iter;
+use zksync_os_crypto::hasher::Hasher;
+use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
 pub(crate) use self::nodes::InternalHashes;
 pub use self::proofs::{BatchTreeProof, IntermediateHash, TreeOperation};
-use crate::blake2::{Blake2Hasher, Hasher};
 use crate::types::{Leaf, MAX_TREE_DEPTH};
 use alloy::primitives::B256;
 use once_cell::sync::Lazy;

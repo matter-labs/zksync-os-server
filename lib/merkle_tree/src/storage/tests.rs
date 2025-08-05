@@ -1,11 +1,11 @@
 use super::*;
-use crate::blake2::Blake2Hasher;
 use crate::{
     DefaultTreeParams, MerkleTree, TreeEntry, TreeParams, leaf_nibbles,
     storage::patch::InsertedLeaf,
 };
 use alloy::primitives::U256;
 use std::collections::HashSet;
+use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
 #[test]
 fn creating_min_update_for_empty_tree() {

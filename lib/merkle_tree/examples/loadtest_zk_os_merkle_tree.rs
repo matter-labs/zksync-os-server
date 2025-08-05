@@ -11,7 +11,8 @@ use rand::{
 };
 use tempfile::TempDir;
 use tracing_subscriber::EnvFilter;
-use zksync_os_merkle_tree::blake2::{Blake2Hasher, Hasher};
+use zksync_os_crypto::hasher::Hasher;
+use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 use zksync_os_merkle_tree::{
     Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree, MerkleTreeColumnFamily,
     PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams, unstable,
