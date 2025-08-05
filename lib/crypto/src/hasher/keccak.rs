@@ -15,6 +15,6 @@ impl Hasher for KeccakHasher {
         let mut bytes = [0_u8; 64];
         bytes[..32].copy_from_slice(&lhs.0);
         bytes[32..].copy_from_slice(&rhs.0);
-        keccak256(&bytes)
+        keccak256(bytes)
     }
 }

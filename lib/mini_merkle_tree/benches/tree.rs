@@ -1,6 +1,6 @@
 //! Basic benchmarks for `MiniMerkleTree`.
 
-use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion, Throughput};
+use criterion::{Bencher, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zksync_mini_merkle_tree::MiniMerkleTree;
 
 const TREE_SIZES: &[usize] = &[32, 64, 128, 256, 512, 1_024];
