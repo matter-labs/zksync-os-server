@@ -1,9 +1,9 @@
-pub mod fake_provers_pool;
+pub mod fake_fri_provers_pool;
+pub mod fri_job_manager;
+mod fri_proof_verifier;
 pub mod gapless_committer;
 mod metrics;
 pub mod proof_storage;
-mod proof_verifier;
-pub mod prover_job_manager;
 mod prover_job_map;
 pub mod prover_server;
 pub mod snark_job_manager;

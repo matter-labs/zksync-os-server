@@ -40,6 +40,9 @@ impl L1SenderCommand for ExecuteCommand {
 
     fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
         self.batches
+            .into_iter()
+            .map(|batch| batch.with_trace_stage("l1_executed"))
+            .collect()
     }
 
     fn display_vec(input: &[Self]) -> String {

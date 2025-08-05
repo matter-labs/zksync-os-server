@@ -12,8 +12,8 @@
 //!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
 //!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
 
+use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::PROVER_METRICS;
-use crate::prover_api::proof_verifier;
 use crate::prover_api::prover_job_map::ProverJobMap;
 use crate::util::peekable_receiver::PeekableReceiver;
 use itertools::MinMaxResult::MinMax;
@@ -44,7 +44,7 @@ pub struct JobState {
 /// Thread-safe queue for FRI prover work.
 /// Holds up to `max_assigned_batch_range` batches in `assigned_jobs`.
 #[derive(Debug)]
-pub struct ProverJobManager {
+pub struct FriJobManager {
     // == state ==
     assigned_jobs: ProverJobMap,
     // == plumbing ==
@@ -56,7 +56,7 @@ pub struct ProverJobManager {
     max_assigned_batch_range: usize,
 }
 
-impl ProverJobManager {
+impl FriJobManager {
     pub fn new(
         batches_for_prove_receiver: mpsc::Receiver<BatchEnvelope<ProverInput>>,
         batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
@@ -79,6 +79,9 @@ impl ProverJobManager {
     /// If `min_inbound_age` is provided, will **not** consume a fresh inbound head item
     /// whose trace age is **younger** than this threshold; in that case returns `None`
     /// to let real provers race first.
+    ///
+    /// `min_inbound_age` is used for fake provers to avoid taking fresh items,
+    /// letting real provers race first.
     pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(u64, ProverInput)> {
         // 1) Prefer a timed-out reassignment
         if let Some(batch_envelope) = self.assigned_jobs.pick_timed_out_job() {
@@ -100,6 +103,7 @@ impl ProverJobManager {
         }
 
         // 2) Otherwise, consume one item from inbound - if it meets the age gate.
+        // take a lock on the inbound channel - only one thread can receive messages at a time
         if let Ok(mut rx) = self.inbound.try_lock() {
             let old_enough = rx.peek_with(|env| env.trace.last_stage_age() >= min_inbound_age);
             if old_enough.is_none() || !old_enough.unwrap() {
@@ -125,7 +129,7 @@ impl ProverJobManager {
             }
         } else {
             // in fact, we could wait for mutex to unlock -
-            // but we return early and let prover to poll again
+            // but we return early and let prover poll again
             tracing::debug!("inbound receiver is contended; returning None");
             None
         }
@@ -145,6 +149,23 @@ impl ProverJobManager {
             None => return Err(SubmitError::UnknownJob(batch_number)),
         };
 
+        // Deserialize and verify using metadata from the batch.
+        let program_proof = bincode_v1::deserialize(&proof_bytes).map_err(|err| {
+            tracing::warn!(batch_number, "failed to deserialize proof: {err}");
+            SubmitError::DeserializationFailed(err)
+        })?;
+
+        let batch = &assigned.batch_envelope.batch;
+        if let Err(err) = fri_proof_verifier::verify_fri_proof(
+            batch.previous_stored_batch_info.state_commitment,
+            batch.commit_batch_info.clone().into(),
+            program_proof,
+        ) {
+            tracing::warn!(batch_number, "Proof verification failed: {err}");
+            return Err(SubmitError::VerificationFailed);
+        }
+        // Now we know that the proof is valid.
+
         // Metrics: observe time since the last assignment.
         let prove_time = assigned.assigned_at.elapsed();
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
@@ -152,22 +173,7 @@ impl ProverJobManager {
         PROVER_METRICS.prove_time_per_tx[&label]
             .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
 
-        let program_proof = bincode_v1::deserialize(&proof_bytes).map_err(|err| {
-            tracing::warn!(batch_number, "failed to deserialize proof: {err}");
-            SubmitError::DeserializationFailed(err)
-        })?;
-
-        // Verify using metadata from the batch.
-        let meta = &assigned.batch_envelope.batch;
-        if let Err(err) = proof_verifier::verify_fri_proof(
-            meta.previous_stored_batch_info.state_commitment,
-            meta.commit_batch_info.clone().into(),
-            program_proof,
-        ) {
-            tracing::warn!(batch_number, "Proof verification failed: {err}");
-            return Err(SubmitError::VerificationFailed);
-        }
-
+        // Prepare the envelope and send it downstream.
         let envelope = BatchEnvelope {
             batch: assigned.batch_envelope.batch,
             data: FriProof::Real(proof_bytes),

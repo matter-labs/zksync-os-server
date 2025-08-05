@@ -1,4 +1,4 @@
-use crate::prover_api::prover_job_manager::JobState;
+use crate::prover_api::fri_job_manager::JobState;
 use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
