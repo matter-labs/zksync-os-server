@@ -30,7 +30,7 @@ impl L1SenderCommand for CommitCommand {
     }
 
     fn into_output_envelope(mut self) -> Vec<BatchEnvelope<FriProof>> {
-        self.input.trace = self.input.trace.with_stage("l1 committed");
+        self.input.trace = self.input.trace.with_stage("l1_committed");
         vec![self.input]
     }
 
