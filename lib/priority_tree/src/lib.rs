@@ -1,16 +1,15 @@
-use alloy::primitives::{BlockNumber, TxHash};
+use alloy::primitives::{B256, BlockNumber, TxHash};
 use anyhow::Context;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use zksync_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
+use zksync_os_crypto::hasher::Hasher;
+use zksync_os_crypto::hasher::keccak::KeccakHasher;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
+use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_storage_api::ReadReplay;
 use zksync_os_types::ZkEnvelope;
-use zksync_types::H256;
-use zksync_types::hasher::Hasher;
-use zksync_types::hasher::keccak::KeccakHasher;
 
 pub struct PriorityTreeManager<ReplayStorage> {
     replay_storage: ReplayStorage,
@@ -147,7 +146,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
 struct PriorityOpsLeaf;
 
 impl HashEmptySubtree<PriorityOpsLeaf> for KeccakHasher {
-    fn empty_leaf_hash(&self) -> H256 {
+    fn empty_leaf_hash(&self) -> B256 {
         self.hash_bytes(&[])
     }
 }

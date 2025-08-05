@@ -151,7 +151,7 @@ impl<'a> InternalHashes<'a> {
 mod tests {
     use super::*;
     use crate::DefaultTreeParams;
-    use crate::blake2::Blake2Hasher;
+    use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
     #[test]
     fn constructing_internal_hashes() {

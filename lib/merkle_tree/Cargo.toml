@@ -11,6 +11,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_crypto.workspace = true
+
 zksync_storage.workspace = true
 
 alloy = { workspace = true, default-features = false }

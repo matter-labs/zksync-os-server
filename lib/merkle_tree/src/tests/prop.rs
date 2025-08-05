@@ -8,9 +8,9 @@ use std::{
 
 use alloy::primitives::B256;
 use proptest::{prelude::*, sample::Index};
+use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
 use super::naive_hash_tree;
-use crate::blake2::Blake2Hasher;
 use crate::{
     BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeBatchOutput, TreeEntry,
     TreeOperation, TreeParams, types::Leaf,

@@ -488,9 +488,9 @@ mod tests {
     use alloy::primitives::U256;
     use std::collections::{BTreeMap, HashMap};
     use tempfile::TempDir;
+    use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
     use super::*;
-    use crate::blake2::Blake2Hasher;
     use crate::{
         DefaultTreeParams, MerkleTree, TreeEntry, TreeParams, leaf_nibbles,
         max_nibbles_for_internal_node, max_node_children, storage::PartialPatchSet,
