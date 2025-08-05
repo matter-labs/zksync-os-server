@@ -378,7 +378,7 @@ fn trim_all_and_grow() {
     let mut tree = MiniMerkleTree::new(std::iter::repeat_n([1; 88], 4), None);
     tree.trim_start(4);
     tree.push([1; 88]);
-    let expected_root = "0xfa4c924185122254742622b10b68df8de89d33f685ee579f37a50c552b0d245d"
+    let expected_root: B256 = "0xfa4c924185122254742622b10b68df8de89d33f685ee579f37a50c552b0d245d"
         .parse()
         .unwrap();
     assert_eq!(tree.merkle_root(), expected_root);
