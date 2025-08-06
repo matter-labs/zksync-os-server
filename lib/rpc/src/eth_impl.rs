@@ -4,7 +4,7 @@ use crate::metrics::API_METRICS;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::tx_handler::TxHandler;
 use alloy::consensus::Account;
-use alloy::consensus::transaction::{Recovered, TransactionInfo};
+use alloy::consensus::transaction::Recovered;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
@@ -32,7 +32,7 @@ use zksync_os_state::StateHandle;
 use zksync_os_storage_api::{
     ReadReplay, ReadRepository, ReadRepositoryExt, RepositoryError, TxMeta,
 };
-use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope};
+use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
 pub struct EthNamespace<Repository, ReplayStorage, Mempool> {
     tx_handler: TxHandler<Mempool>,
@@ -173,33 +173,15 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         // Look up in mempool first to avoid race condition
         if let Some(pool_tx) = self.mempool.get(&hash) {
             let envelope = L2Envelope::from(pool_tx.transaction.transaction.inner().clone());
-            return Ok(Some(Transaction::from_transaction(
-                Recovered::new_unchecked(
-                    ZkEnvelope::L2(envelope),
-                    pool_tx.transaction.transaction.signer(),
-                ),
-                TransactionInfo {
-                    hash: None,
-                    index: None,
-                    block_hash: None,
-                    block_number: None,
-                    base_fee: None,
-                },
+            return Ok(Some(build_api_tx(
+                Recovered::new_unchecked(envelope, pool_tx.transaction.transaction.signer()).into(),
+                None,
             )));
         }
         if let Some(tx) = self.repository.get_transaction(hash)?
             && let Some(meta) = self.repository.get_transaction_meta(hash)?
         {
-            return Ok(Some(Transaction::from_transaction(
-                tx.inner,
-                TransactionInfo {
-                    hash: Some(hash),
-                    index: Some(meta.tx_index_in_block),
-                    block_hash: Some(meta.block_hash),
-                    block_number: Some(meta.block_number),
-                    base_fee: Some(meta.effective_gas_price as u64),
-                },
-            )));
+            return Ok(Some(build_api_tx(tx, Some(&meta))));
         }
         Ok(None)
     }
@@ -238,16 +220,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         let Some(meta) = self.repository.get_transaction_meta(*tx_hash)? else {
             return Ok(None);
         };
-        Ok(Some(Transaction::from_transaction(
-            tx.inner,
-            TransactionInfo {
-                hash: Some(*tx_hash),
-                index: Some(meta.tx_index_in_block),
-                block_hash: Some(meta.block_hash),
-                block_number: Some(meta.block_number),
-                base_fee: block.base_fee_per_gas,
-            },
-        )))
+        Ok(Some(build_api_tx(tx, Some(&meta))))
     }
 
     fn transaction_by_sender_and_nonce_impl(
@@ -271,31 +244,12 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         let Some(stored_tx) = self.repository.get_stored_transaction(tx_hash)? else {
             return Ok(None);
         };
-        let mut log_index_in_tx = 0;
-        let inner_receipt = stored_tx.receipt.map_logs(
-            |inner_log| {
-                let log =
-                    build_api_log(tx_hash, inner_log, stored_tx.meta.clone(), log_index_in_tx);
-                log_index_in_tx += 1;
-                log
-            },
-            // todo: convert L2->L1 logs to RPC variant when we have one
-            identity,
-        );
-        Ok(Some(TransactionReceipt {
-            inner: inner_receipt,
-            transaction_hash: tx_hash,
-            transaction_index: Some(stored_tx.meta.tx_index_in_block),
-            block_hash: Some(stored_tx.meta.block_hash),
-            block_number: Some(stored_tx.meta.block_number),
-            gas_used: stored_tx.meta.gas_used,
-            effective_gas_price: stored_tx.meta.effective_gas_price,
-            blob_gas_used: None,
-            blob_gas_price: None,
-            from: stored_tx.tx.signer(),
-            to: stored_tx.tx.to(),
-            contract_address: stored_tx.meta.contract_address,
-        }))
+        Ok(Some(build_api_receipt(
+            tx_hash,
+            stored_tx.receipt,
+            &stored_tx.tx,
+            &stored_tx.meta,
+        )))
     }
 
     fn balance_impl(&self, address: Address, block_id: Option<BlockId>) -> EthResult<U256> {
@@ -743,6 +697,48 @@ pub fn build_api_log(
         transaction_index: Some(tx_meta.tx_index_in_block),
         log_index: Some(tx_meta.number_of_logs_before_this_tx + log_index_in_tx),
         removed: false,
+    }
+}
+
+pub fn build_api_receipt(
+    tx_hash: TxHash,
+    receipt: ZkReceiptEnvelope,
+    tx: &ZkTransaction,
+    meta: &TxMeta,
+) -> TransactionReceipt<ZkReceiptEnvelope<Log>> {
+    let mut log_index_in_tx = 0;
+    let inner = receipt.map_logs(
+        |inner_log| {
+            let log = build_api_log(tx_hash, inner_log, meta.clone(), log_index_in_tx);
+            log_index_in_tx += 1;
+            log
+        },
+        // todo: convert L2->L1 logs to RPC variant when we have one
+        identity,
+    );
+    TransactionReceipt {
+        inner,
+        transaction_hash: tx_hash,
+        transaction_index: Some(meta.tx_index_in_block),
+        block_hash: Some(meta.block_hash),
+        block_number: Some(meta.block_number),
+        gas_used: meta.gas_used,
+        effective_gas_price: meta.effective_gas_price,
+        blob_gas_used: None,
+        blob_gas_price: None,
+        from: tx.signer(),
+        to: tx.to(),
+        contract_address: meta.contract_address,
+    }
+}
+
+pub fn build_api_tx(tx: ZkTransaction, meta: Option<&TxMeta>) -> Transaction<ZkEnvelope> {
+    Transaction {
+        inner: tx.inner,
+        block_hash: meta.map(|meta| meta.block_hash),
+        block_number: meta.map(|meta| meta.block_number),
+        transaction_index: meta.map(|meta| meta.tx_index_in_block),
+        effective_gas_price: meta.map(|meta| meta.effective_gas_price),
     }
 }
 
