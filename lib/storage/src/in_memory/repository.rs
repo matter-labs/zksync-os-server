@@ -1,0 +1,447 @@
+use crate::metrics::REPOSITORIES_METRICS;
+use alloy::consensus::Sealed;
+use alloy::eips::Encodable2718;
+use alloy::primitives::{
+    Address, B64, B256, BlockHash, BlockNumber, Bloom, Log, LogData, TxHash, TxNonce, U256,
+};
+use dashmap::DashMap;
+use std::sync::Arc;
+use tokio::sync::watch;
+use zk_os_forward_system::run::{BlockOutput, ExecutionResult};
+use zksync_os_storage_api::{
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+};
+use zksync_os_types::{L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
+
+/// In-memory repositories that store node data required for RPC but not for VM execution.
+///
+/// This includes auxiliary data such as block and transaction receipts, and account-specific metadata
+/// that are necessary for exposing historical and current information via RPC.
+///
+/// Note:
+/// - This component does **not** manage the canonical `State` (i.e., the data required for VM execution - storage slots and preimages).
+/// - No atomicity guarantees are provided between repository updates.
+#[derive(Clone, Debug)]
+pub struct RepositoryInMemory {
+    block_receipt_repository: BlockReceiptRepository,
+    transaction_receipt_repository: TransactionReceiptRepository,
+    latest_block: watch::Sender<u64>,
+}
+
+impl RepositoryInMemory {
+    pub fn new(latest_block: u64) -> Self {
+        Self {
+            block_receipt_repository: BlockReceiptRepository::new(),
+            transaction_receipt_repository: TransactionReceiptRepository::new(),
+            latest_block: watch::channel(latest_block).0,
+        }
+    }
+
+    /// Waits until the latest block number is at least `block_number`.
+    /// Returns the latest block number once it is reached.
+    pub async fn wait_for_block_number(&self, block_number: u64) -> u64 {
+        *self
+            .latest_block
+            .subscribe()
+            .wait_for(|value| *value >= block_number)
+            .await
+            .unwrap()
+    }
+
+    /// Adds a block's output to all relevant repositories.
+    ///
+    /// This method processes a `BlockOutput` and distributes its contents across the appropriate
+    /// repositories:
+    /// - Stores the block in `BlockReceiptRepository`.
+    /// - Generates transaction receipts and stores them in `TransactionReceiptRepository`.
+    ///
+    /// Notes:
+    /// - No atomicity or ordering guarantees are provided for repository updates.
+    /// - Upon successful return, all repositories are considered up to date at `block_number`.
+    pub fn populate_in_memory(
+        &self,
+        mut block_output: BlockOutput,
+        transactions: Vec<ZkTransaction>,
+    ) -> (Arc<RepositoryBlock>, Vec<(B256, Arc<StoredTxData>)>) {
+        let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let block_number = block_output.header.number;
+        let tx_count = transactions.len();
+        let tx_hashes = transactions
+            .iter()
+            .map(|tx| TxHash::from(tx.hash().0))
+            .collect();
+
+        // Drop rejected transactions from the block output
+        block_output.tx_results.retain(|result| result.is_ok());
+
+        // Add transaction receipts to the transaction receipt repository
+        let mut log_index = 0;
+        let mut block_bloom = Bloom::default();
+        let mut stored_txs = Vec::new();
+        let hash = BlockHash::from(block_output.header.hash());
+        let sealed_block_output = Sealed::new_unchecked(block_output, hash);
+        for (tx_index, tx) in transactions.into_iter().enumerate() {
+            let tx_hash = *tx.hash();
+            let stored_tx = Arc::new(transaction_to_api_data(
+                &sealed_block_output,
+                tx_index,
+                log_index,
+                tx,
+            ));
+            log_index += stored_tx.receipt.logs().len() as u64;
+            block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+            stored_txs.push((tx_hash, stored_tx));
+        }
+        let (mut block_output, hash) = sealed_block_output.into_parts();
+        block_output.header.logs_bloom = block_bloom.into_array();
+        let block = Arc::new(Sealed::new_unchecked(
+            alloy::consensus::Block {
+                header: alloy_header(&block_output.header),
+                body: alloy::consensus::BlockBody {
+                    transactions: tx_hashes,
+                    ommers: vec![],
+                    withdrawals: None,
+                },
+            },
+            hash,
+        ));
+
+        // Add data to repositories.
+        let transaction_receipts_latency_observer =
+            REPOSITORIES_METRICS.insert_block[&"transaction_receipts"].start();
+        self.transaction_receipt_repository.insert(&stored_txs);
+        let transaction_receipts_latency = transaction_receipts_latency_observer.observe();
+
+        let block_receipt_latency_observer =
+            REPOSITORIES_METRICS.insert_block[&"block_receipts"].start();
+        self.block_receipt_repository.insert(block.clone());
+        let block_receipt_latency = block_receipt_latency_observer.observe();
+
+        self.latest_block.send_replace(block_number);
+
+        let latency = total_latency_observer.observe();
+        REPOSITORIES_METRICS
+            .insert_block_per_tx
+            .observe(latency / (tx_count as u32));
+
+        REPOSITORIES_METRICS
+            .in_memory_txs_count
+            .set(self.transaction_receipt_repository.len());
+
+        tracing::debug!(
+            block_number,
+            total_latency = ?latency,
+            ?transaction_receipts_latency,
+            ?block_receipt_latency,
+            "Stored a block in memory with {} transactions",
+            tx_count,
+        );
+
+        (block, stored_txs)
+    }
+
+    pub fn get_block_and_transactions_by_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> Option<(RepositoryBlock, Vec<Arc<StoredTxData>>)> {
+        let block = self.block_receipt_repository.get_by_number(block_number)?;
+        let txs = self
+            .transaction_receipt_repository
+            .get_by_hashes(&block.body.transactions)?;
+        Some((block, txs))
+    }
+
+    pub fn remove_block_and_transactions(&self, block_number: BlockNumber, tx_hashes: &[TxHash]) {
+        self.block_receipt_repository.remove_by_number(block_number);
+        self.transaction_receipt_repository
+            .remove_by_hashes(tx_hashes);
+    }
+}
+
+impl ReadRepository for RepositoryInMemory {
+    fn get_block_by_number(
+        &self,
+        number: BlockNumber,
+    ) -> RepositoryResult<Option<RepositoryBlock>> {
+        Ok(self.block_receipt_repository.get_by_number(number))
+    }
+
+    fn get_block_by_hash(&self, hash: BlockHash) -> RepositoryResult<Option<RepositoryBlock>> {
+        Ok(self.block_receipt_repository.get_by_hash(hash))
+    }
+
+    fn get_raw_transaction(&self, hash: TxHash) -> RepositoryResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_transaction(hash)?
+            .map(|tx| tx.into_envelope().encoded_2718()))
+    }
+
+    fn get_transaction(&self, hash: TxHash) -> RepositoryResult<Option<ZkTransaction>> {
+        Ok(self.transaction_receipt_repository.get_transaction(hash))
+    }
+
+    fn get_transaction_receipt(&self, hash: TxHash) -> RepositoryResult<Option<ZkReceiptEnvelope>> {
+        Ok(self
+            .transaction_receipt_repository
+            .get_transaction_receipt(hash))
+    }
+
+    fn get_transaction_meta(&self, hash: TxHash) -> RepositoryResult<Option<TxMeta>> {
+        Ok(self
+            .transaction_receipt_repository
+            .get_transaction_meta(hash))
+    }
+
+    fn get_transaction_hash_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: TxNonce,
+    ) -> RepositoryResult<Option<TxHash>> {
+        Ok(self
+            .transaction_receipt_repository
+            .get_transaction_hash_by_sender_nonce(sender, nonce))
+    }
+
+    fn get_stored_transaction(&self, hash: TxHash) -> RepositoryResult<Option<StoredTxData>> {
+        Ok(self
+            .transaction_receipt_repository
+            .get_stored_tx_by_hash(hash))
+    }
+
+    fn get_latest_block(&self) -> u64 {
+        *self.latest_block.borrow()
+    }
+}
+
+/// In-memory repository of the most recent N `BlockOutput`s, keyed by block number.
+///
+/// Inserts must happen in strictly ascending order.
+///
+#[derive(Clone, Debug, Default)]
+struct BlockReceiptRepository {
+    /// Map from block number → block hash.
+    hash_index: Arc<DashMap<BlockNumber, BlockHash>>,
+    /// Map from block hash → block.
+    receipts: Arc<DashMap<BlockHash, Arc<Sealed<alloy::consensus::Block<TxHash>>>>>,
+}
+
+impl BlockReceiptRepository {
+    /// Create a new repository.
+    pub fn new() -> Self {
+        BlockReceiptRepository::default()
+    }
+
+    /// Insert the `BlockOutput` for `block`.
+    ///
+    /// Must be called with `block == latest_block() + 1`.
+    pub fn insert(&self, block: Arc<Sealed<alloy::consensus::Block<TxHash>>>) {
+        let number = block.number;
+        let hash = block.hash();
+        self.receipts.insert(hash, block);
+        self.hash_index.insert(number, hash);
+    }
+
+    /// Retrieve the block by its number, if present.
+    pub fn get_by_number(&self, number: BlockNumber) -> Option<RepositoryBlock> {
+        let hash = *self.hash_index.get(&number)?;
+        self.get_by_hash(hash)
+    }
+
+    /// Retrieve the block by its hash, if present.
+    pub fn get_by_hash(&self, hash: BlockHash) -> Option<RepositoryBlock> {
+        self.receipts.get(&hash).map(|r| r.value().as_ref().clone())
+    }
+
+    pub fn remove_by_number(&self, number: BlockNumber) {
+        if let Some((_, hash)) = self.hash_index.remove(&number) {
+            self.receipts.remove(&hash);
+        }
+    }
+}
+
+fn alloy_header(
+    header: &zk_os_forward_system::run::output::BlockHeader,
+) -> alloy::consensus::Header {
+    alloy::consensus::Header {
+        parent_hash: B256::new(header.parent_hash.as_u8_array()),
+        ommers_hash: B256::new(header.ommers_hash.as_u8_array()),
+        beneficiary: Address::new(header.beneficiary.to_be_bytes()),
+        state_root: B256::new(header.state_root.as_u8_array()),
+        transactions_root: B256::new(header.transactions_root.as_u8_array()),
+        receipts_root: B256::new(header.receipts_root.as_u8_array()),
+        logs_bloom: Bloom::new(header.logs_bloom),
+        difficulty: U256::from_be_bytes(header.difficulty.to_be_bytes::<32>()),
+        number: header.number,
+        gas_limit: header.gas_limit,
+        gas_used: header.gas_used,
+        timestamp: header.timestamp,
+        extra_data: header.extra_data.to_vec().into(),
+        mix_hash: B256::new(header.mix_hash.as_u8_array()),
+        nonce: B64::new(header.nonce),
+        base_fee_per_gas: Some(header.base_fee_per_gas),
+        withdrawals_root: None,
+        blob_gas_used: None,
+        excess_blob_gas: None,
+        parent_beacon_block_root: None,
+        requests_hash: None,
+    }
+}
+
+/// Thread-safe in-memory repository of transaction receipts, keyed by transaction hash.
+///
+/// Retains all inserted receipts indefinitely. Internally uses a lock-free
+/// DashMap to allow concurrent inserts and lookups.
+///
+/// todo: unbounded memory use
+#[derive(Clone, Debug)]
+struct TransactionReceiptRepository {
+    /// Map from tx hash → (tx, receipt, meta).
+    tx_data: Arc<DashMap<TxHash, Arc<StoredTxData>>>,
+    /// Map from (sender, nonce) → tx hash.
+    sender_nonce_index: Arc<DashMap<(Address, TxNonce), TxHash>>,
+}
+
+impl TransactionReceiptRepository {
+    /// Creates a new repository.
+    pub fn new() -> Self {
+        TransactionReceiptRepository {
+            tx_data: Arc::new(DashMap::new()),
+            sender_nonce_index: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Inserts data for multiple txs. If a data for the same hash
+    /// already exists, it will be overwritten.
+    pub fn insert(&self, txs: &[(TxHash, Arc<StoredTxData>)]) {
+        for (tx_hash, data) in txs {
+            let sender = data.tx.signer();
+            let nonce = data.tx.nonce();
+            self.tx_data.insert(*tx_hash, data.clone());
+            self.sender_nonce_index.insert((sender, nonce), *tx_hash);
+        }
+    }
+
+    /// Retrieves transaction by its hash, if present.
+    pub fn get_transaction(&self, tx_hash: TxHash) -> Option<ZkTransaction> {
+        self.tx_data.get(&tx_hash).map(|r| r.value().tx.clone())
+    }
+
+    /// Retrieves transaction receipt by its hash, if present.
+    pub fn get_transaction_receipt(&self, tx_hash: TxHash) -> Option<ZkReceiptEnvelope> {
+        self.tx_data
+            .get(&tx_hash)
+            .map(|r| r.value().receipt.clone())
+    }
+
+    /// Retrieves transaction metadata by its hash, if present.
+    pub fn get_transaction_meta(&self, tx_hash: TxHash) -> Option<TxMeta> {
+        self.tx_data.get(&tx_hash).map(|r| r.value().meta.clone())
+    }
+
+    /// Retrieves stored transaction by its hash, if present.
+    pub fn get_stored_tx_by_hash(&self, tx_hash: TxHash) -> Option<StoredTxData> {
+        self.tx_data
+            .get(&tx_hash)
+            .map(|r| r.value().as_ref().clone())
+    }
+
+    /// Retrieves the tx data for `tx_hashes`. Returns error if any is missing.
+    pub fn get_by_hashes(&self, tx_hashes: &[TxHash]) -> Option<Vec<Arc<StoredTxData>>> {
+        let mut result = Vec::new();
+
+        for tx_hash in tx_hashes {
+            if let Some(data) = self.tx_data.get(tx_hash) {
+                result.push(data.value().clone());
+            } else {
+                return None;
+            }
+        }
+
+        Some(result)
+    }
+
+    pub fn get_transaction_hash_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: TxNonce,
+    ) -> Option<TxHash> {
+        self.sender_nonce_index
+            .get(&(sender, nonce))
+            .map(|tx_hash| *tx_hash)
+    }
+
+    pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {
+        for tx_hash in tx_hashes {
+            self.tx_data.remove(tx_hash);
+        }
+    }
+
+    /// Fetches the total number of transactions kept in-memory.
+    pub fn len(&self) -> usize {
+        self.tx_data.len()
+    }
+}
+
+impl Default for TransactionReceiptRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn transaction_to_api_data(
+    block_output: &Sealed<BlockOutput>,
+    index: usize,
+    number_of_logs_before_this_tx: u64,
+    tx: ZkTransaction,
+) -> StoredTxData {
+    let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
+
+    let logs = tx_output
+        .logs
+        .iter()
+        .map(|log| Log {
+            address: Address::from(log.address.to_be_bytes()),
+            data: LogData::new(
+                log.topics
+                    .iter()
+                    .map(|topic| B256::from(topic.as_u8_array()))
+                    .collect(),
+                log.data.clone().into(),
+            )
+            .unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let l2_to_l1_logs = tx_output
+        .l2_to_l1_logs
+        .iter()
+        .map(|l2_to_l1_log| L2ToL1Log {
+            sender: Address::new(l2_to_l1_log.log.sender.to_be_bytes()),
+            key: B256::new(l2_to_l1_log.log.key.as_u8_array()),
+            value: B256::new(l2_to_l1_log.log.value.as_u8_array()),
+        })
+        .collect();
+    let receipt = ZkReceiptEnvelope::from_typed(
+        tx.tx_type(),
+        ZkReceipt {
+            status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
+            // todo
+            cumulative_gas_used: 7777,
+            logs,
+            l2_to_l1_logs,
+        },
+    );
+    let meta = TxMeta {
+        block_hash: B256::from(block_output.hash()),
+        block_number: block_output.header.number,
+        block_timestamp: block_output.header.timestamp,
+        tx_index_in_block: index as u64,
+        effective_gas_price: block_output.header.base_fee_per_gas as u128,
+        number_of_logs_before_this_tx,
+        gas_used: tx_output.gas_used,
+        contract_address: tx_output
+            .contract_address
+            .map(|a| Address::new(a.to_be_bytes())),
+    };
+
+    StoredTxData { tx, receipt, meta }
+}

@@ -1,37 +1,17 @@
-//! Repository module containing extracted storage logic from StateHandle
-//!
-//! This module provides three main repository types:
-//! - AccountPropertyRepository: History-based storage for account properties with compaction
-//! - BlockReceiptRepository: LRU cache for block receipts
-//! - TransactionReceiptRepository: Indefinite storage for transaction receipts
-//!
-//! Additionally, it provides a RepositoryManager that holds all three repositories
-//! and provides unified methods for managing block outputs.
-
-pub mod block_receipt_repository;
-mod db;
-mod metrics;
-pub mod repository_in_memory;
-pub mod transaction_receipt_repository;
-
-use crate::metrics::GENERAL_METRICS;
-use crate::repositories::repository_in_memory::RepositoryInMemory;
-use crate::repositories::{
-    db::{RepositoryCF, RepositoryDb},
-    metrics::REPOSITORIES_METRICS,
-};
+use crate::db::RepositoryDb;
+use crate::in_memory::RepositoryInMemory;
+use crate::metrics::REPOSITORIES_METRICS;
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
-pub use block_receipt_repository::BlockReceiptRepository;
 use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
+use vise::Gauge;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
-use zksync_storage::RocksDB;
 
 /// Size of the broadcast channel used to notify about new blocks.
 const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;
@@ -45,12 +25,16 @@ pub struct RepositoryManager {
     db: RepositoryDb,
     max_blocks_in_memory: u64,
     block_sender: broadcast::Sender<BlockNotification>,
+    persist_block_number: &'static Gauge<BlockNumber>,
 }
 
 impl RepositoryManager {
-    pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
-        let db = RocksDB::<RepositoryCF>::new(&db_path).expect("Failed to open db");
-        let db = RepositoryDb::new(db);
+    pub fn new(
+        blocks_to_retain: usize,
+        db_path: PathBuf,
+        persist_block_number: &'static Gauge<BlockNumber>,
+    ) -> Self {
+        let db = RepositoryDb::new(&db_path);
         let db_block_number = db.get_latest_block();
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
@@ -59,6 +43,7 @@ impl RepositoryManager {
             db,
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
+            persist_block_number,
         }
     }
 
@@ -122,7 +107,7 @@ impl RepositoryManager {
                 "Persisted receipts",
             );
 
-            GENERAL_METRICS.block_number[&"persist"].set(number);
+            self.persist_block_number.set(number);
         }
     }
 }
