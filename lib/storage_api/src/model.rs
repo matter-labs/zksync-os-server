@@ -33,7 +33,7 @@ pub struct ReplayRecord {
     /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
     pub starting_l1_priority_id: L1TxSerialId,
     pub transactions: Vec<ZkTransaction>,
-    /// The field is used to generate the prover input for the block.
+    /// The field is used to generate the prover input for the block in ProverInputGenerator.
     /// Will be moved to the BlockContext at some point
     pub previous_block_timestamp: u64,
 }
