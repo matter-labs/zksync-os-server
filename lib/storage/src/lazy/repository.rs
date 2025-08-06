@@ -84,10 +84,10 @@ impl RepositoryManager {
                 .wait_for_block_number(db_block_number + 1)
                 .await;
 
-            let number = db_block_number + 1;
+            let block_number = db_block_number + 1;
             let (block, txs) = self
                 .in_memory
-                .get_block_and_transactions_by_number(number)
+                .get_block_and_transactions_by_number(block_number)
                 .expect("missing in-memory block and/or transactions");
 
             let persist_latency_observer = REPOSITORIES_METRICS.persist_block.start();
@@ -98,18 +98,21 @@ impl RepositoryManager {
                 .observe(persist_latency.div(txs.len() as u32));
 
             self.in_memory
-                .remove_block_and_transactions(number, &block.body.transactions);
+                .remove_block_and_transactions(block_number, &block.body.transactions);
 
-            let persistence_lag = self.in_memory.get_latest_block().saturating_sub(number) as usize;
+            let persistence_lag = self
+                .in_memory
+                .get_latest_block()
+                .saturating_sub(block_number) as usize;
             REPOSITORIES_METRICS.persistence_lag.set(persistence_lag);
             tracing::info!(
-                block_number = number,
+                block_number,
                 ?persist_latency,
                 persistence_lag,
-                "Persisted receipts",
+                "persisted block",
             );
 
-            self.persist_block_number.set(number);
+            self.persist_block_number.set(block_number);
         }
     }
 }

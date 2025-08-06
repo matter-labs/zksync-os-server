@@ -19,10 +19,6 @@ zk_os_forward_system.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "rlp"] }
 dashmap.workspace = true
-futures.workspace = true
-serde.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tracing.workspace = true
 vise.workspace = true

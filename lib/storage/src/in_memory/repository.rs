@@ -119,10 +119,10 @@ impl RepositoryInMemory {
 
         self.latest_block.send_replace(block_number);
 
-        let latency = total_latency_observer.observe();
+        let total_latency = total_latency_observer.observe();
         REPOSITORIES_METRICS
             .insert_block_per_tx
-            .observe(latency / (tx_count as u32));
+            .observe(total_latency / (tx_count as u32));
 
         REPOSITORIES_METRICS
             .in_memory_txs_count
@@ -130,11 +130,11 @@ impl RepositoryInMemory {
 
         tracing::debug!(
             block_number,
-            total_latency = ?latency,
+            tx_count,
+            ?total_latency,
             ?transaction_receipts_latency,
             ?block_receipt_latency,
-            "Stored a block in memory with {} transactions",
-            tx_count,
+            "stored block in memory",
         );
 
         (block, stored_txs)
