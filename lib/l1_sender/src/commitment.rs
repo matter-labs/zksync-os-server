@@ -5,7 +5,7 @@ use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
-use zksync_mini_merkle_tree::MiniMerkleTree;
+use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{ZkEnvelope, ZkTransaction};
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;

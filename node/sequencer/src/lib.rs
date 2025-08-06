@@ -25,21 +25,23 @@ use crate::config::{
 };
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::metrics::GENERAL_METRICS;
-use crate::prover_api::fake_provers_pool::FakeProversPool;
+use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
+use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
-use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::prover_api::snark_job_manager::SnarkJobManager;
+use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
+use crate::util::peekable_receiver::PeekableReceiver;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -243,7 +245,7 @@ pub async fn run(
 
     // Channel between `L1Committer` and `SnarkJobManager`
     let (batch_for_snark_sender, batch_for_snark_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(50);
 
     // Channel between `SnarkJobManager` and `L1ProofSubmitter`
     let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
@@ -478,11 +480,17 @@ pub async fn run(
 
     // ======= Initialize Prover Api Server========
 
-    let fri_prover_job_manager = Arc::new(ProverJobManager::new(
+    let fri_job_manager = Arc::new(FriJobManager::new(
         batch_for_prover_receiver,
         batch_with_proof_sender,
         prover_api_config.job_timeout,
         prover_api_config.max_assigned_batch_range,
+    ));
+
+    let snark_job_manager = Arc::new(SnarkJobManager::new(
+        PeekableReceiver::new(batch_for_snark_receiver),
+        batch_for_l1_proving_sender,
+        prover_api_config.max_fris_per_snark,
     ));
 
     let prover_gapless_committer = GaplessCommitter::new(
@@ -493,36 +501,44 @@ pub async fn run(
     );
 
     let prover_server_task = Box::pin(prover_server::run(
-        fri_prover_job_manager.clone(),
+        fri_job_manager.clone(),
+        snark_job_manager.clone(),
         proof_storage.clone(),
         prover_api_config.address,
     ));
 
-    let fake_provers_task_optional: BoxFuture<anyhow::Result<()>> =
-        if prover_api_config.fake_provers.enabled {
+    let fake_fri_provers_task_optional: BoxFuture<Result<()>> =
+        if prover_api_config.fake_fri_provers.enabled {
             tracing::info!(
-                workers = prover_api_config.fake_provers.workers,
-                compute_time = ?prover_api_config.fake_provers.compute_time,
-                min_task_age = ?prover_api_config.fake_provers.min_age,
-                "Initializing FakeProversPool"
+                workers = prover_api_config.fake_fri_provers.workers,
+                compute_time = ?prover_api_config.fake_fri_provers.compute_time,
+                min_task_age = ?prover_api_config.fake_fri_provers.min_age,
+                "Initializing fake FRI provers"
             );
-            let fake_provers_pool = FakeProversPool::new(
-                fri_prover_job_manager.clone(),
-                prover_api_config.fake_provers.workers,
-                prover_api_config.fake_provers.compute_time,
-                prover_api_config.fake_provers.min_age,
+            let fake_provers_pool = FakeFriProversPool::new(
+                fri_job_manager.clone(),
+                prover_api_config.fake_fri_provers.workers,
+                prover_api_config.fake_fri_provers.compute_time,
+                prover_api_config.fake_fri_provers.min_age,
             );
             Box::pin(fake_provers_pool.run())
         } else {
-            // noop task
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
+            noop_task(stop_receiver.clone())
+        };
+
+    let fake_snark_provers_task_optional: BoxFuture<Result<()>> =
+        if prover_api_config.fake_snark_provers.enabled {
+            tracing::info!(
+                max_batch_age = ?prover_api_config.fake_snark_provers.max_batch_age,
+                "Initializing fake SNARK prover"
+            );
+            let fake_provers_pool = FakeSnarkProver::new(
+                snark_job_manager.clone(),
+                prover_api_config.fake_snark_provers.max_batch_age,
+            );
+            Box::pin(fake_provers_pool.run())
+        } else {
+            noop_task(stop_receiver)
         };
 
     // There may be batches that are Committed but not Proven on L1 yet.
@@ -543,11 +559,6 @@ pub async fn run(
     .await
     .expect("Failed to reschedule proved batches for execution");
 
-    let snark_job_manager =
-        SnarkJobManager::new(batch_for_snark_receiver, batch_for_l1_proving_sender);
-
-    // Resolve last executed **block number** by last executed batch number. This is needed so that
-    // `PriorityTreeManager` can re-build its state by relying on replay blocks.
     let last_executed_block = proof_storage
         .get(l1_state.last_executed_batch)
         .expect("failed to load last executed batch")
@@ -652,18 +663,17 @@ pub async fn run(
             }
         }
 
-        res = fake_provers_task_optional => {
+        res = fake_fri_provers_task_optional => {
             match res {
                 Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
                 Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
             }
         }
 
-
-        res = snark_job_manager.run() => {
+        res = fake_snark_provers_task_optional => {
             match res {
-                Ok(_)  => tracing::warn!("snark_job_manager task exited"),
-                Err(e) => tracing::error!("snark_job_manager task failed: {e:#}"),
+                Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
+                Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
             }
         }
 
@@ -712,6 +722,18 @@ pub async fn run(
             tracing::warn!("repositories.run_persist_loop() unexpectedly exited")
         }
     }
+}
+
+fn noop_task(stop_receiver: watch::Receiver<bool>) -> Pin<Box<impl Future<Output = Result<()>>>> {
+    // noop task
+    let mut stop_receiver = stop_receiver.clone();
+    Box::pin(async move {
+        // Defer until we receive stop signal, i.e. a task that does nothing
+        stop_receiver
+            .changed()
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -789,6 +811,12 @@ pub async fn reschedule_committed_not_proved_batches(
             batches_to_reschedule.first().unwrap().batch_number(),
             batches_to_reschedule.last().unwrap().batch_number(),
         );
+        if batches_to_reschedule.len() > batch_for_snark_sender.capacity() {
+            tracing::warn!(
+                "SNARK prover capacity is too small to handle {} batches",
+                batches_to_reschedule.len()
+            );
+        }
         for batch in batches_to_reschedule {
             batch_for_snark_sender.send(batch).await?
         }

@@ -68,7 +68,7 @@ pub async fn execute_block(
                 match maybe_tx {
                     /* ----- got a transaction ---------------------- */
                     Some(tx) if tx_can_be_included(&tx, cumulative_gas_used) => {
-                        tracing::info!("Executing tx: {:?}", tx.hash());
+                        tracing::debug!("Executing tx: {:?}", tx.hash());
                         wait_for_tx_latency_observer.observe();
                         let execute_latency_observer = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
                         match runner.execute_next_tx(tx.clone().encode()).await {
