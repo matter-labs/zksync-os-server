@@ -93,13 +93,12 @@ impl Batcher {
             tokio::select! {
                 /* ---------- check for timeout ---------- */
                 _ = timer.tick() => {
-                        // no blocks, skip this iteration
-                        if blocks.is_empty() {
+                         let Some((_, last_block, _, _)) = blocks.last() else {
+                            // no blocks, skip this iteration
                             continue;
-                        }
+                        };
 
                         // if we haven't batched all the blocks that were stored before the restart - no sealing by timeout
-                        let (_, last_block, _, _) = blocks.last().unwrap();
                         if last_block.block_context.block_number < self.last_persisted_block {
                             continue;
                         }
