@@ -93,20 +93,22 @@ impl Batcher {
             tokio::select! {
                 /* ---------- check for timeout ---------- */
                 _ = timer.tick() => {
-                         let Some((_, last_block, _, _)) = blocks.last() else {
-                            // no blocks, skip this iteration
-                            continue;
-                        };
+                    // no blocks, skip this iteration
+                    if blocks.is_empty() {
+                        continue;
+                    }
 
-                        // if we haven't batched all the blocks that were stored before the restart - no sealing by timeout
-                        if last_block.block_context.block_number < self.last_persisted_block {
-                            continue;
-                        }
+                    // if we haven't batched all the blocks that were stored before the restart - no sealing by timeout
+                    let (_, last_block, _, _) = blocks.last().unwrap();
+                    if last_block.block_context.block_number < self.last_persisted_block {
+                        continue;
+                    }
 
-                        if self.should_seal_by_timeout(last_block.block_context.timestamp).await {
-                            tracing::debug!(batch_number, "Timeout reached, sealing batch.");
-                            break;
-                        }
+                    let (_, first_block, _, _) = blocks.first().unwrap();
+                    if self.should_seal_by_timeout(first_block.block_context.timestamp).await {
+                        tracing::debug!(batch_number, "Timeout reached, sealing batch.");
+                        break;
+                    }
                 }
 
                 /* ---------- collect blocks ---------- */
