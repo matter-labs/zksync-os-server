@@ -75,6 +75,8 @@ impl RepositoryManager {
         let _ = self.block_sender.send(notification);
     }
 
+    // fixme: as this loop is not tied to state compacting, it can fall behind and result in
+    //        unrecoverable state on restart
     pub async fn run_persist_loop(&self) {
         loop {
             let db_block_number = self.db.get_latest_block();
