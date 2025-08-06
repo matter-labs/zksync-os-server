@@ -114,9 +114,8 @@ impl CommitBatchInfo {
         let mut total_pubdata = vec![];
         let mut encoded_l2_l1_logs = vec![];
 
-        let first_block = blocks.first().unwrap().clone();
-        let (last_block_output, last_block_context, _, last_block_tree) =
-            blocks.last().unwrap().clone();
+        let (first_block_output, _, _, _) = *blocks.first().unwrap();
+        let (last_block_output, last_block_context, _, last_block_tree) = *blocks.last().unwrap();
 
         for (block_output, _, transactions, _) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());
@@ -204,7 +203,7 @@ impl CommitBatchInfo {
             // TODO: Update once enforced, not sure where to source it from yet
             l2_da_validator: Default::default(),
             da_commitment: operator_da_input_header_hash,
-            first_block_timestamp: first_block.0.header.timestamp,
+            first_block_timestamp: first_block_output.header.timestamp,
             last_block_timestamp: last_block_output.header.timestamp,
             chain_id,
             operator_da_input,

@@ -86,18 +86,13 @@ pub async fn run_sequencer_actor(
         sequencer_config.max_transactions_in_block,
     );
 
-    let mut previous_block_timestamp: u64 = repositories
-        .get_block_by_number(starting_block - 1)?
-        .map_or(0, |block| block.header.timestamp);
-
     while let Some(cmd) = stream.next().await {
         // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
         let (block_output, replay_record, purged_txs) = command_block_context_provider
-            .execute_block(cmd, state.clone(), previous_block_timestamp)
+            .execute_block(cmd, state.clone())
             .await?;
-        previous_block_timestamp = block_output.header.timestamp;
 
         let stage_started_at = Instant::now();
 
@@ -197,7 +192,7 @@ fn command_source(
                 block_number + 1,
             ))
         })
-        .boxed();
+            .boxed();
     let stream = replay_wal_stream.chain(produce_stream);
     stream.boxed()
 }
@@ -273,8 +268,8 @@ pub async fn run(
             .rocks_db_path
             .join(BLOCK_REPLAY_WAL_DB_NAME),
     )
-    .expect("Failed to open BlockReplayWAL")
-    .with_sync_writes();
+        .expect("Failed to open BlockReplayWAL")
+        .with_sync_writes();
     let block_replay_storage =
         BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
 
@@ -293,7 +288,7 @@ pub async fn run(
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
     )
-    .expect("Failed to open ProofStorageDB");
+        .expect("Failed to open ProofStorageDB");
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(proof_storage_db);
@@ -364,7 +359,7 @@ pub async fn run(
         l1_transactions_sender,
         next_l1_priority_id,
     )
-    .await;
+        .await;
     let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
         Ok(l1_watcher) => Box::pin(l1_watcher.run()),
         Err(err) => {
@@ -383,6 +378,11 @@ pub async fn run(
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
+    let previous_block_timestamp: u64 = repositories
+        .get_block_by_number(starting_block - 1)
+        .unwrap_or(None) // if no previous block, assume genesis block
+        .map_or(0, |block| block.header.timestamp);
+
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
         .map(|record| record.block_context.block_hashes)
@@ -392,6 +392,7 @@ pub async fn run(
         l1_transactions,
         l2_mempool.clone(),
         block_hashes_for_next_block,
+        previous_block_timestamp,
         genesis_config.chain_id,
     );
 
@@ -472,7 +473,7 @@ pub async fn run(
             batch_for_proving_sender,
             persistent_tree,
         );
-        Box::pin(batcher.run_loop(prev_batch_info, stop_receiver.clone()))
+        Box::pin(batcher.run_loop(prev_batch_info))
     };
 
     // ======= Initialize Prover Api Server========
@@ -531,16 +532,16 @@ pub async fn run(
         &proof_storage,
         batch_for_snark_sender.clone(),
     )
-    .await
-    .expect("Failed to reschedule committed batches for SNARK proving");
+        .await
+        .expect("Failed to reschedule committed batches for SNARK proving");
 
     reschedule_proved_not_executed_batches(
         &l1_state,
         &proof_storage,
         batch_for_priority_tree_sender.clone(),
     )
-    .await
-    .expect("Failed to reschedule proved batches for execution");
+        .await
+        .expect("Failed to reschedule proved batches for execution");
 
     let snark_job_manager =
         SnarkJobManager::new(batch_for_snark_receiver, batch_for_l1_proving_sender);
@@ -569,7 +570,7 @@ pub async fn run(
         batch_for_priority_tree_receiver,
         batch_for_execute_sender,
     )
-    .unwrap();
+        .unwrap();
 
     let batch_sink = BatchSink::new(fully_processed_batch_receiver);
 
@@ -728,9 +729,9 @@ fn run_l1_senders(
 
     l1_state: L1State,
 ) -> (
-    impl Future<Output = Result<()>>,
-    impl Future<Output = Result<()>>,
-    impl Future<Output = Result<()>>,
+    impl Future<Output=Result<()>>,
+    impl Future<Output=Result<()>>,
+    impl Future<Output=Result<()>>,
 ) {
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,

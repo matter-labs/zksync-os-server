@@ -41,6 +41,7 @@ pub struct BlockContextProvider {
     l1_transactions: mpsc::Receiver<L1Envelope>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
+    previous_block_timestamp: u64,
     chain_id: u64,
 }
 
@@ -50,6 +51,7 @@ impl BlockContextProvider {
         l1_transactions: mpsc::Receiver<L1Envelope>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
+        previous_block_timestamp: u64,
         chain_id: u64,
     ) -> Self {
         Self {
@@ -57,6 +59,7 @@ impl BlockContextProvider {
             l1_transactions,
             l2_mempool,
             block_hashes_for_next_block,
+            previous_block_timestamp,
             chain_id,
         }
     }
@@ -65,7 +68,6 @@ impl BlockContextProvider {
         &mut self,
         block_command: BlockCommand,
         state: StateHandle,
-        previous_block_timestamp: u64,
     ) -> anyhow::Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
         let block_number = block_command.block_number();
         tracing::info!(
@@ -147,7 +149,7 @@ impl BlockContextProvider {
         let stage_started_at = Instant::now();
 
         let (block_output, replay_record, purged_txs) =
-            execute_block(prepared_command, state, previous_block_timestamp)
+            execute_block(prepared_command, state, self.previous_block_timestamp)
                 .await
                 .context("execute_block")?;
 
@@ -197,6 +199,7 @@ impl BlockContextProvider {
                 .try_into()
                 .unwrap(),
         );
+        self.previous_block_timestamp = block_output.header.timestamp;
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
         //       so far it looks like below is sufficient
