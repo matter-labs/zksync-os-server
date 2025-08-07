@@ -4,6 +4,7 @@ use zksync_os_l1_sender::model::{BatchEnvelope, BatchMetadata, ProverInput, Trac
 use zksync_os_storage_api::ReplayRecord;
 
 /// Takes a vector of blocks and produces a batch envelope.
+/// This is a pure function that is meant to be stateless and not contained in the `Batcher` struct.
 pub(crate) fn seal_batch(
     blocks: &[(
         BlockOutput,

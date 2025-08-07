@@ -46,10 +46,6 @@ pub struct BatcherConfig {
     #[config(default_t = true)]
     pub subsystem_enabled: bool,
 
-    /// How long to wait before checking if the batch can be sealed.
-    #[config(default_t = Duration::from_millis(100))]
-    pub polling_interval: Duration,
-
     /// How long to keep a batch open before sealing it.
     #[config(default_t = Duration::from_secs(3))]
     pub batch_timeout: Duration,

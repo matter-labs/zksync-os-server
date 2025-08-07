@@ -1,7 +1,8 @@
 use crate::config::BatcherConfig;
 use crate::metrics::GENERAL_METRICS;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::time::Sleep;
 use tracing;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
@@ -80,7 +81,8 @@ impl Batcher {
         &mut self,
         prev_batch_info: &StoredBatchInfo,
     ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
-        let mut timer = tokio::time::interval(self.batcher_config.polling_interval);
+        // will be set to `Some` when we process the first block that the batch can be sealed after
+        let mut deadline: Option<Pin<Box<Sleep>>> = None;
 
         let batch_number = prev_batch_info.batch_number + 1;
         let mut blocks: Vec<(
@@ -93,24 +95,13 @@ impl Batcher {
         loop {
             tokio::select! {
                 /* ---------- check for timeout ---------- */
-                _ = timer.tick() => {
-                   let (
-                        Some((_, first_block, _, _)),
-                        Some((_, last_block, _, _))
-                    ) = (blocks.first(), blocks.last()) else {
-                        // no blocks, skip this iteration
-                        continue;
-                    };
-
-                    // if we haven't batched all the blocks that were stored before the restart - no sealing by timeout
-                    if last_block.block_context.block_number < self.last_persisted_block {
-                        continue;
+                _ = async {
+                    if let Some(d) = &mut deadline {
+                        d.as_mut().await
                     }
-
-                    if self.should_seal_by_timeout(first_block.block_context.timestamp).await {
-                        tracing::debug!(batch_number, "Timeout reached, sealing batch.");
-                        break;
-                    }
+                }, if deadline.is_some() => {
+                    tracing::debug!(batch_number, "Timeout reached, sealing the batch.");
+                    break;
                 }
 
                 /* ---------- collect blocks ---------- */
@@ -122,10 +113,10 @@ impl Batcher {
                             // skip the blocks from committed batches
                             if block_number < self.first_block_to_process {
                                 tracing::debug!(
-                                            "Skipping block {} (batcher starting block is {})",
-                                            replay_record.block_context.block_number,
-                                            self.first_block_to_process
-                                        );
+                                    "Skipping block {} (batcher starting block is {})",
+                                    replay_record.block_context.block_number,
+                                    self.first_block_to_process
+                                );
 
                                 continue;
                             }
@@ -151,6 +142,12 @@ impl Batcher {
                                 prover_input,
                             ));
 
+                            // arm the timer after we process the block number that's more or equal
+                            // than last persisted one
+                            if deadline.is_none() && block_number >= self.last_persisted_block {
+                                deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
+                            }
+
                             if self.should_seal_by_content().await {
                                 tracing::info!(batch_number, "Content limit reached, sealing batch.");
                                 break;
@@ -171,14 +168,6 @@ impl Batcher {
             batch_number,
             self.chain_id,
         )
-    }
-
-    async fn should_seal_by_timeout(&self, first_block_timestamp: u64) -> bool {
-        let time_between_first_and_last = SystemTime::now()
-            .duration_since(UNIX_EPOCH + Duration::from_secs(first_block_timestamp))
-            .expect("Current time is before the start timestamp");
-
-        time_between_first_and_last >= self.batcher_config.batch_timeout
     }
 
     /// Checks if the batch should be sealed based on the content of the blocks.
