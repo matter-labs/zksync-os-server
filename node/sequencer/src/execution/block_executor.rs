@@ -1,6 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::execution::vm_wrapper::VmWrapper;
-use crate::metrics::GENERAL_METRICS;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
@@ -73,7 +72,7 @@ pub async fn execute_block(
                         match runner.execute_next_tx(tx.clone().encode()).await {
                             Ok(res) => {
                                 execute_latency_observer.observe();
-                                GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();
+                                EXECUTION_METRICS.executed_transactions[&command.metrics_label].inc();
 
                                 executed_txs.push(tx);
                                 cumulative_gas_used += res.gas_used;

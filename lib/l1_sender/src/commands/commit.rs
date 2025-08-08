@@ -1,11 +1,13 @@
+use crate::batcher_metrics::BatchExecutionStage;
+use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::model::{BatchEnvelope, FriProof};
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, OneElement};
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
+
 #[derive(Debug)]
 pub struct CommitCommand {
     input: BatchEnvelope<FriProof>,
@@ -29,8 +31,12 @@ impl L1SenderCommand for CommitCommand {
         ))
     }
 
+    fn l1_tx_sent_hook(&mut self) {
+        self.input.set_stage(BatchExecutionStage::CommitL1TxSent);
+    }
+
     fn into_output_envelope(mut self) -> Vec<BatchEnvelope<FriProof>> {
-        self.input.trace = self.input.trace.with_stage("l1_committed");
+        self.input.set_stage(BatchExecutionStage::CommitL1TxMined);
         vec![self.input]
     }
 

@@ -1,6 +1,7 @@
+use crate::batcher_metrics::BatchExecutionStage;
+use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::model::{BatchEnvelope, FriProof};
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
@@ -38,10 +39,16 @@ impl L1SenderCommand for ExecuteCommand {
         ))
     }
 
+    fn l1_tx_sent_hook(&mut self) {
+        self.batches
+            .iter_mut()
+            .for_each(|batch| batch.set_stage(BatchExecutionStage::ExecuteL1TxSent));
+    }
+
     fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
         self.batches
             .into_iter()
-            .map(|batch| batch.with_trace_stage("l1_executed"))
+            .map(|batch| batch.with_stage(BatchExecutionStage::ExecuteL1TxMined))
             .collect()
     }
 

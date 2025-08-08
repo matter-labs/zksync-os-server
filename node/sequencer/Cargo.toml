@@ -17,6 +17,7 @@ zksync_os_rpc.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_priority_tree.workspace = true
+zksync_os_observability.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true

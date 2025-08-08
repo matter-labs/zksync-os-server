@@ -1,10 +1,12 @@
+pub mod batcher_metrics;
+pub mod batcher_model;
 pub mod commands;
 pub mod commitment;
 pub mod config;
 pub mod l1_discovery;
-pub mod model;
+
+use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::model::{BatchEnvelope, FriProof};
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::{Address, BlockNumber, TxHash};
 use alloy::providers::ext::DebugApi;
@@ -75,7 +77,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         // This holds true because l1 transactions are included in the order of sender nonce.
         // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
         let pending_tx_hashes: HashMap<TxHash, Input> = futures::stream::iter(cmd_buffer.drain(..))
-            .then(|cmd| async {
+            .then(|mut cmd| async {
                 let tx_request = tx_request_with_gas_fields(
                     &provider,
                     max_fee_per_gas,
@@ -85,6 +87,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
                 .with_to(to_address)
                 .with_call(&cmd.solidity_call());
                 let pending_tx_hash = *provider.send_transaction(tx_request).await?.tx_hash();
+                cmd.l1_tx_sent_hook();
                 anyhow::Ok((pending_tx_hash, cmd))
             })
             // We could buffer the stream here to enable sending multiple batches of transactions in parallel,

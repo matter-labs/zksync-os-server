@@ -7,7 +7,6 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
-mod metrics;
 pub mod model;
 pub mod prover_api;
 mod prover_input_generator;
@@ -24,7 +23,7 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
-use crate::metrics::GENERAL_METRICS;
+use crate::execution::metrics::EXECUTION_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
@@ -48,12 +47,12 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -159,7 +158,7 @@ pub async fn run_sequencer_actor(
             stage_started_at.elapsed()
         );
 
-        GENERAL_METRICS.block_number[&"execute"].set(block_number);
+        EXECUTION_METRICS.block_number[&"execute"].set(block_number);
     }
     Ok::<(), anyhow::Error>(())
 }

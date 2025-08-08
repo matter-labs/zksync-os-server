@@ -1,4 +1,4 @@
-use crate::model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{BatchEnvelope, FriProof};
 use alloy::sol_types::SolCall;
 use std::fmt::Display;
 
@@ -9,6 +9,10 @@ pub mod prove;
 pub trait L1SenderCommand: Sized + Display {
     const NAME: &'static str;
     fn solidity_call(&self) -> impl SolCall;
+
+    /// Used to record the batch stage that corresponds to this command
+    /// (e.g. BatchExecutionStage::CommitL1TxSent)
+    fn l1_tx_sent_hook(&mut self);
     fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>>;
 
     /// Only used for logging - as we send commands in batches,

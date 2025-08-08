@@ -14,7 +14,7 @@ mod metrics;
 pub mod repository_in_memory;
 pub mod transaction_receipt_repository;
 
-use crate::metrics::GENERAL_METRICS;
+use crate::execution::metrics::EXECUTION_METRICS;
 use crate::repositories::repository_in_memory::RepositoryInMemory;
 use crate::repositories::{
     db::{RepositoryCF, RepositoryDb},
@@ -122,7 +122,7 @@ impl RepositoryManager {
                 "Persisted receipts",
             );
 
-            GENERAL_METRICS.block_number[&"persist"].set(number);
+            EXECUTION_METRICS.block_number[&"persist"].set(number);
         }
     }
 }

@@ -3,8 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
+use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, SnarkProof};
 
 /// Job manager for SNARK proving.
 ///
@@ -63,22 +64,30 @@ impl SnarkJobManager {
             max_fris_per_snark,
         }
     }
-    pub async fn pick_real_job(&self) -> anyhow::Result<Option<Vec<BatchEnvelope<FriProof>>>> {
+
+    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `real_fri_proof`)
+    pub async fn pick_real_job(&self) -> anyhow::Result<Option<Vec<(u64, FriProof)>>> {
         self.consume_fake_proves_from_head(None).await?;
         // note that here we don't consume the messages from channel -
         // the job will be picked, but there is no guarantee it will be completed
-        let batches_with_real_proofs: Vec<BatchEnvelope<FriProof>> = self
+        let batches_with_real_proofs: Vec<(u64, FriProof)> = self
             .committed_batch_receiver
             .lock()
             .await
-            .peek_until_and_clone(self.max_fris_per_snark, |envelope| !envelope.data.is_fake());
+            .peek_until(self.max_fris_per_snark, |envelope| {
+                if envelope.data.is_fake() {
+                    None
+                } else {
+                    Some((envelope.batch_number(), envelope.data.clone()))
+                }
+            });
         if batches_with_real_proofs.is_empty() {
             return Ok(None);
         }
         tracing::info!(
             "real SNARK proof for batches {}-{} is picked by a prover",
-            batches_with_real_proofs.first().unwrap().batch_number(),
-            batches_with_real_proofs.last().unwrap().batch_number(),
+            batches_with_real_proofs.first().unwrap().0,
+            batches_with_real_proofs.last().unwrap().0,
         );
         Ok(Some(batches_with_real_proofs))
     }
@@ -118,7 +127,13 @@ impl SnarkJobManager {
 
         let batches_proven = receiver
             // we don't apply max_fris_per_snark when accepting complete jobs (maybe it was changed after job was picked)
-            .peek_until_and_clone(usize::MAX, |envelope| envelope.batch_number() <= batch_to);
+            .peek_until(usize::MAX, |envelope| {
+                if envelope.batch_number() <= batch_to {
+                    Some(envelope.data.clone())
+                } else {
+                    None
+                }
+            });
 
         anyhow::ensure!(
             batches_proven.len() == (batch_to - batch_from + 1) as usize,
@@ -157,7 +172,7 @@ impl SnarkJobManager {
         // Observability - add traces
         let consumed_batches_proven = consumed_batches_proven
             .into_iter()
-            .map(|batch| batch.with_trace_stage("real_snark_generated"))
+            .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
 
         self.prove_batches_sender
@@ -207,7 +222,7 @@ impl SnarkJobManager {
             // Observability - add traces
             let batches_with_fake_proofs = batches_with_fake_proofs
                 .into_iter()
-                .map(|batch| batch.with_trace_stage("fake_snark_generated"))
+                .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedFake))
                 .collect();
 
             self.prove_batches_sender

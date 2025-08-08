@@ -1,6 +1,7 @@
+use crate::batcher_metrics::BatchExecutionStage;
+use crate::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::model::{BatchEnvelope, FriProof, SnarkProof};
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
@@ -38,12 +39,19 @@ impl L1SenderCommand for ProofCommand {
         ))
     }
 
+    fn l1_tx_sent_hook(&mut self) {
+        self.batches
+            .iter_mut()
+            .for_each(|batch| batch.set_stage(BatchExecutionStage::ProveL1TxSent));
+    }
+
     fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
         self.batches
             .into_iter()
-            .map(|batch| batch.with_trace_stage("l1_proved"))
+            .map(|batch| batch.with_stage(BatchExecutionStage::ProveL1TxMined))
             .collect()
     }
+
     fn display_vec(input: &[Self]) -> String {
         input
             .iter()
