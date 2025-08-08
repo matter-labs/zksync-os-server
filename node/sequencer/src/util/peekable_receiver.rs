@@ -67,10 +67,9 @@ impl<T> PeekableReceiver<T> {
     /// Stops when `f` returns false, channel is empty, disconnected, or `limit` reached.
     ///
     /// Non-blocking: uses only `try_recv()` to extend the local buffer.
-    pub fn peek_until_and_clone<F>(&mut self, limit: usize, mut f: F) -> Vec<T>
+    pub fn peek_until<F, R>(&mut self, limit: usize, mut f: F) -> Vec<R>
     where
-        T: Clone,
-        F: FnMut(&T) -> bool,
+        F: FnMut(&T) -> Option<R>,
     {
         let mut out = Vec::new();
 
@@ -90,10 +89,9 @@ impl<T> PeekableReceiver<T> {
                 None => break,
             };
 
-            if f(item_ref) {
-                out.push(item_ref.clone());
-            } else {
-                break;
+            match f(item_ref) {
+                None => break,
+                Some(r) => out.push(r),
             }
         }
 

@@ -11421,10 +11421,12 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "vise",
  "zk_ee",
  "zksync_os_contract_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
+ "zksync_os_observability",
  "zksync_os_types",
 ]
 
@@ -11499,6 +11501,15 @@ dependencies = [
  "once_cell",
  "zksync_os_crypto",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_observability"
+version = "0.1.0"
+dependencies = [
+ "itertools 0.14.0",
+ "tracing",
+ "vise",
 ]
 
 [[package]]
@@ -11614,6 +11625,7 @@ dependencies = [
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
+ "zksync_os_observability",
  "zksync_os_priority_tree",
  "zksync_os_rpc",
  "zksync_os_state",
