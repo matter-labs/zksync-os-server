@@ -5,22 +5,28 @@ pub mod l1_discovery;
 pub mod model;
 use crate::commands::L1SenderCommand;
 use crate::model::{BatchEnvelope, FriProof};
+use alloy::eips::BlockNumberOrTag;
 use alloy::network::{EthereumWallet, TransactionBuilder};
-use alloy::primitives::{Address, BlockNumber, TxHash};
+use alloy::primitives::utils::format_ether;
+use alloy::primitives::{Address, BlockNumber, TxHash, U64};
 use alloy::providers::ext::DebugApi;
-use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::rpc::client::{NoParams, PollerBuilder};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{Block, TransactionRequest};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::transports::TransportResult;
+use alloy::transports::http::reqwest::Url;
 use anyhow::Context;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+const HTTP_PROVIDER_POLLING_MS: u64 = 1000;
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
 /// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
@@ -156,13 +162,10 @@ async fn build_provider<Input: L1SenderCommand>(
     );
 
     let address = operator_wallet.default_signer().address();
-
     let res = DynProvider::new(
         ProviderBuilder::new()
             .wallet(operator_wallet)
-            .connect_ws(WsConnect::new(l1_api_url))
-            .await
-            .context("failed to connect to L1 api")?,
+            .connect_http(Url::from_str(&l1_api_url)?),
     );
     let balance = res.get_balance(address).await?;
 
@@ -171,10 +174,10 @@ async fn build_provider<Input: L1SenderCommand>(
     }
 
     tracing::info!(
-        "{} L1 sender: initialized sender address {} with balance {}",
+        balance_eth = format_ether(balance),
+        %address,
+        "{} Initialized L1 sender",
         Input::NAME,
-        address,
-        balance
     );
     Ok(res)
 }
@@ -187,15 +190,13 @@ struct Heartbeat {
 
 impl Heartbeat {
     async fn new(provider: &DynProvider) -> anyhow::Result<Self> {
+        let l1_block_stream = http_block_stream(
+            provider.clone(),
+            Duration::from_millis(HTTP_PROVIDER_POLLING_MS),
+        );
         Ok(Self {
             last_l1_block_number: None,
-            l1_block_stream: Box::pin(
-                provider
-                    .subscribe_full_blocks()
-                    .hashes()
-                    .into_stream()
-                    .await?,
-            ),
+            l1_block_stream,
         })
     }
 
@@ -301,4 +302,43 @@ impl Heartbeat {
             );
         }
     }
+}
+
+/// Builds a boxed stream that emits full blocks (with transactions) using HTTP polling.
+/// Uses PollerBuilder to poll for new block numbers. For each number, it fetches the full block:
+/// - Ok(Some(block)) => yields it downstream
+/// - Ok(None) => logs and closes the stream (shouldn't happen if upstream provided the number)
+/// - Err(e) => logs and closes the stream
+fn http_block_stream(
+    provider: DynProvider,
+    poll_interval: Duration,
+) -> BoxStream<'static, TransportResult<Block>> {
+    let provider_for_map = provider.clone();
+    let stream = PollerBuilder::<NoParams, U64>::new(provider.weak_client(), "eth_blockNumber", [])
+        .with_poll_interval(poll_interval)
+        .into_stream()
+        .map(|n| n.to::<u64>())
+        .then(move |number_u64| {
+            let provider = provider_for_map.clone();
+            async move {
+                match provider
+                    .get_block_by_number(BlockNumberOrTag::Number(number_u64.into()))
+                    .await
+                {
+                    Ok(Some(block)) => Some(Ok(block)),
+                    Ok(None) => {
+                        tracing::error!(number = number_u64, "HTTP block stream: block not found; closing stream");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!(number = number_u64, error = %e, "HTTP block stream: error fetching block; closing stream");
+                        None
+                    }
+                }
+            }
+        })
+        .take_while(|opt| futures::future::ready(opt.is_some()))
+        .map(|opt| opt.expect("stream closed on missing/error block"));
+
+    stream.boxed()
 }
