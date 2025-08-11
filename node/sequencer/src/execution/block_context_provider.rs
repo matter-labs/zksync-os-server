@@ -74,13 +74,8 @@ impl BlockContextProvider {
         );
         let stage_started_at = Instant::now();
 
-        // todo: validate next_l1_transaction_id by adding it directly to BlockCommand
-        //  it's not clear whether we want to add it only to Replay or also in Produce
-
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
-                let starting_l1_priority_id = self.next_l1_priority_id;
-
                 // Create stream: L1 transactions first, then L2 transactions
                 let best_txs = best_transactions(&self.l2_mempool, &mut self.l1_transactions);
                 let gas_limit = 100_000_000;
@@ -109,7 +104,7 @@ impl BlockContextProvider {
                     ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
-                    starting_l1_priority_id,
+                    starting_l1_priority_id: self.next_l1_priority_id,
                 }
             }
             BlockCommand::Replay(record) => {
