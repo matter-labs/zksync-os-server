@@ -7,11 +7,11 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
+mod genesis;
 mod metrics;
 pub mod model;
 pub mod prover_api;
 mod prover_input_generator;
-pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
 mod util;
@@ -24,6 +24,7 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
+use crate::genesis::build_genesis;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -32,7 +33,6 @@ use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorBatchData};
-use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
@@ -59,6 +59,7 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
+use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
 
@@ -238,6 +239,7 @@ pub async fn run(
     let repositories = RepositoryManager::new(
         sequencer_config.blocks_to_retain_in_memory,
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        build_genesis(),
     );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),

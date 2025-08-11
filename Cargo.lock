@@ -11616,6 +11616,7 @@ dependencies = [
  "zksync_os_priority_tree",
  "zksync_os_rpc",
  "zksync_os_state",
+ "zksync_os_storage",
  "zksync_os_storage_api",
  "zksync_os_types",
  "zksync_storage",
@@ -11637,6 +11638,21 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "vise",
  "zk_ee",
+ "zksync_storage",
+]
+
+[[package]]
+name = "zksync_os_storage"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "dashmap",
+ "forward_system",
+ "tokio",
+ "tracing",
+ "vise",
+ "zksync_os_storage_api",
+ "zksync_os_types",
  "zksync_storage",
 ]
 

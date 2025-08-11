@@ -1,10 +1,11 @@
-use crate::repositories::metrics::REPOSITORIES_METRICS;
+use crate::metrics::REPOSITORIES_METRICS;
 use alloy::{
     consensus::{Block, Transaction},
     eips::{Decodable2718, Encodable2718},
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_storage_api::{
@@ -72,7 +73,8 @@ pub struct RepositoryDb {
 }
 
 impl RepositoryDb {
-    pub fn new(db: RocksDB<RepositoryCF>) -> Self {
+    pub fn new(db_path: &Path) -> Self {
+        let db = RocksDB::<RepositoryCF>::new(db_path).expect("Failed to open db");
         let latest_block_number_value = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
