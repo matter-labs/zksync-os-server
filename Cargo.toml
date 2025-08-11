@@ -103,6 +103,7 @@ tower = "0.5.2"
 tower-http = "0.6.6"
 hyper = "1.6.0"
 semver = "1"
+async-stream = "0.3.6"
 
 zksync_vlog = "28.1.0-non-semver-compat"
 zksync_storage = "28.1.0-non-semver-compat"
