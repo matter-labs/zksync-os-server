@@ -11,6 +11,7 @@ members = [
     "lib/rpc",
     "lib/rpc_api",
     "lib/state",
+    "lib/storage",
     "lib/storage_api",
     "lib/types",
     "node/sequencer",
@@ -127,6 +128,7 @@ zksync_os_priority_tree = { path = "lib/priority_tree" }
 zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
 zksync_os_state = { path = "lib/state" }
+zksync_os_storage = { path = "lib/storage" }
 zksync_os_storage_api = { path = "lib/storage_api" }
 zksync_os_types = { path = "lib/types" }
 
