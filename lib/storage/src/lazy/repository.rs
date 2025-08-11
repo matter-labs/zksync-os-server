@@ -5,7 +5,6 @@ use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
-use vise::Gauge;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
@@ -25,15 +24,10 @@ pub struct RepositoryManager {
     db: RepositoryDb,
     max_blocks_in_memory: u64,
     block_sender: broadcast::Sender<BlockNotification>,
-    persist_block_number: &'static Gauge<BlockNumber>,
 }
 
 impl RepositoryManager {
-    pub fn new(
-        blocks_to_retain: usize,
-        db_path: PathBuf,
-        persist_block_number: &'static Gauge<BlockNumber>,
-    ) -> Self {
+    pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
         let db = RepositoryDb::new(&db_path);
         let db_block_number = db.get_latest_block();
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
@@ -43,7 +37,6 @@ impl RepositoryManager {
             db,
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
-            persist_block_number,
         }
     }
 
@@ -112,7 +105,7 @@ impl RepositoryManager {
                 "persisted block",
             );
 
-            self.persist_block_number.set(block_number);
+            REPOSITORIES_METRICS.persist_block_number.set(block_number);
         }
     }
 }

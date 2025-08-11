@@ -284,7 +284,6 @@ pub async fn run(
     let repositories = RepositoryManager::new(
         sequencer_config.blocks_to_retain_in_memory,
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
-        &GENERAL_METRICS.block_number[&"persist"],
     );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
