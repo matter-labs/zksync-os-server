@@ -424,15 +424,19 @@ pub async fn run(
         .expect("Failed to get last committed block from proof storage")
         .map(|proof| proof.batch);
 
-    let (last_committed_block_number, prev_batch_info): (u64, StoredBatchInfo) =
-        if let Some(batch_metadata) = last_committed_batch_metadata {
-            (
-                batch_metadata.last_block_number,
-                batch_metadata.commit_batch_info.into(),
-            )
-        } else {
-            (0, genesis_stored_batch_info())
-        };
+    let (last_committed_block_number, prev_batch_info) = if l1_state.last_committed_batch == 0 {
+        (0, genesis_stored_batch_info())
+    } else {
+        let batch_metadata = proof_storage
+            .get(l1_state.last_committed_batch)
+            .expect("Failed to get last committed block from proof storage")
+            .map(|proof| proof.batch)
+            .expect("Committed batch is not present in proof storage");
+        (
+            batch_metadata.last_block_number,
+            batch_metadata.commit_batch_info.into(),
+        )
+    };
 
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 

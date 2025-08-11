@@ -132,7 +132,7 @@ fn compute_prover_input(
     bin_path: &'static str,
     last_block_timestamp: u64,
 ) -> Vec<u32> {
-    let batch_number = replay_record.block_context.block_number;
+    let block_number = replay_record.block_context.block_number;
 
     let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let initial_storage_commitment = StorageCommitment {
@@ -140,7 +140,7 @@ fn compute_prover_input(
         next_free_slot: leaf_count,
     };
 
-    let state_view = state_handle.state_view_at_block(batch_number - 1).unwrap();
+    let state_view = state_handle.state_view_at_block(block_number - 1).unwrap();
 
     let transactions = replay_record
         .transactions
@@ -167,7 +167,7 @@ fn compute_prover_input(
     let latency = prover_input_generation_latency.observe();
 
     tracing::info!(
-        batch_number,
+        block_number,
         "Completed prover input computation in {:?}.",
         latency
     );
