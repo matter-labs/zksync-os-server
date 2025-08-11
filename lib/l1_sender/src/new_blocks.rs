@@ -2,7 +2,7 @@ use alloy::primitives::{BlockNumber, U64};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::client::{NoParams, PollerBuilder};
 use alloy::rpc::types::Block;
-use alloy::transports::TransportResult;
+use alloy::transports::{RpcError, TransportErrorKind, TransportResult};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
 use std::time::Duration;
@@ -49,33 +49,51 @@ impl NewBlocks {
                 continue 'task;
             }
 
-            let mut retries = MAX_RETRIES;
             for number in self.next_yield..=block_number {
                 tracing::debug!(number, "fetching block");
-                let block = match self.provider.get_block_by_number(number.into()).await {
-                    Ok(Some(block)) => block,
-                    Ok(None) if retries > 0 => {
-                        tracing::debug!(number, "failed to fetch block, retrying");
-                        retries -= 1;
-                        continue;
+                match retry_get_block(&self.provider, number).await {
+                    Ok(block) => {
+                        tracing::debug!(number=self.next_yield, "yielding block");
+                        self.next_yield += 1;
+                        yield Ok(block);
                     }
                     Err(err) => {
-                        tracing::error!(number, %err, "failed to fetch block");
                         yield Err(err);
                         break;
                     }
-                    Ok(None) => {
-                        tracing::error!(number, "failed to fetch block (doesn't exist)");
-                        break;
-                    }
-                };
-                tracing::debug!(number=self.next_yield, "yielding block");
-                self.next_yield += 1;
-                yield Ok(block);
+                }
             }
         }
         };
 
         stream
+    }
+}
+
+async fn retry_get_block(provider: &DynProvider, number: BlockNumber) -> TransportResult<Block> {
+    let mut retries = MAX_RETRIES;
+    loop {
+        let block = match provider.get_block_by_number(number.into()).await {
+            Ok(Some(block)) => block,
+            Err(RpcError::Transport(err)) if retries > 0 => {
+                tracing::debug!(number, %err, "failed to fetch block, retrying");
+                retries -= 1;
+                continue;
+            }
+            Ok(None) if retries > 0 => {
+                tracing::debug!(number, "failed to fetch block (doesn't exist), retrying");
+                retries -= 1;
+                continue;
+            }
+            Err(err) => {
+                tracing::error!(number, %err, "failed to fetch block");
+                return Err(err);
+            }
+            Ok(None) => {
+                tracing::error!(number, "failed to fetch block (doesn't exist)");
+                return Err(TransportErrorKind::custom_str("block does not exist"));
+            }
+        };
+        return Ok(block);
     }
 }
