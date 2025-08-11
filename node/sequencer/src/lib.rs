@@ -8,6 +8,7 @@ pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
 mod genesis;
+mod metadata;
 mod metrics;
 pub mod model;
 pub mod prover_api;
@@ -26,6 +27,7 @@ use crate::config::{
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
 use crate::genesis::build_genesis;
+use crate::metadata::NODE_VERSION;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -244,6 +246,8 @@ pub async fn run(
     //       multiple places
     let bridgehub_address = l1_watcher_config.bridgehub_address;
 
+    let node_version: semver::Version = NODE_VERSION.parse().unwrap();
+
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
@@ -253,8 +257,11 @@ pub async fn run(
     )
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
-    let block_replay_storage =
-        BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
+    let block_replay_storage = BlockReplayStorage::new(
+        block_replay_storage_rocks_db,
+        genesis_config.chain_id,
+        node_version.clone(),
+    );
 
     tracing::info!("Initializing StateHandle");
     let state_handle = StateHandle::new(StateConfig {
@@ -445,6 +452,7 @@ pub async fn run(
         l2_mempool.clone(),
         block_hashes_for_next_block,
         genesis_config.chain_id,
+        node_version,
     );
 
     if !batcher_config.subsystem_enabled {

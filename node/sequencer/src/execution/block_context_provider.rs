@@ -38,6 +38,7 @@ pub struct BlockContextProvider {
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     chain_id: u64,
+    node_version: semver::Version,
 }
 
 impl BlockContextProvider {
@@ -47,6 +48,7 @@ impl BlockContextProvider {
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         chain_id: u64,
+        node_version: semver::Version,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -54,6 +56,7 @@ impl BlockContextProvider {
             l2_mempool,
             block_hashes_for_next_block,
             chain_id,
+            node_version,
         }
     }
 
@@ -92,6 +95,8 @@ impl BlockContextProvider {
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
                     starting_l1_priority_id: self.next_l1_priority_id,
+                    node_version: self.node_version.clone(),
+                    expected_block_output_hash: None,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -113,6 +118,8 @@ impl BlockContextProvider {
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
+                    node_version: record.node_version,
+                    expected_block_output_hash: Some(record.block_output_hash),
                 }
             }
         };

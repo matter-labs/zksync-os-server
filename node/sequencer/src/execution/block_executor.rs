@@ -1,4 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::utils::hash_block_output;
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
@@ -176,9 +177,26 @@ pub async fn execute_block(
         .observe(output.storage_writes.len() as u64);
     seal_latency_observer.observe();
 
+    let block_hash_output = hash_block_output(&output);
+
+    // Check if the block output matches the expected hash.
+    if let Some(expected_hash) = command.expected_block_output_hash {
+        anyhow::ensure!(
+            expected_hash == block_hash_output,
+            "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
+            ctx.block_number,
+        );
+    }
+
     Ok((
         output,
-        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
+        ReplayRecord::new(
+            ctx,
+            command.starting_l1_priority_id,
+            executed_txs,
+            command.node_version,
+            block_hash_output,
+        ),
         purged_txs,
     ))
 }
