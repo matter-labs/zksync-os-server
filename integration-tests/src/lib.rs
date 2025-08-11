@@ -100,7 +100,7 @@ impl TesterBuilder {
         .await?;
 
         let l2_locked_port = LockedPort::acquire_unused().await?;
-        let l2_address = format!("http://localhost:{}", l2_locked_port.port);
+        let l2_address = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
