@@ -25,6 +25,7 @@ pub struct L1Watcher {
     provider: DynProvider<Ethereum>,
     zk_chain_address: Address,
     next_l1_block: BlockNumber,
+    next_l1_priority_id: u64,
 
     output: mpsc::Sender<L1Envelope>,
 
@@ -79,12 +80,18 @@ impl L1Watcher {
                 }
             })?;
 
-        tracing::info!(?zk_chain_address, next_l1_block, "resolved on L1");
+        tracing::info!(
+            ?zk_chain_address,
+            next_l1_block,
+            next_l1_priority_id,
+            "resolved on L1"
+        );
 
         Ok(Self {
             provider,
             zk_chain_address,
             next_l1_block,
+            next_l1_priority_id,
             output,
             poll_interval: config.poll_interval,
             max_blocks_to_process: config.max_blocks_to_process,
@@ -125,12 +132,21 @@ impl L1Watcher {
         METRICS.most_recently_scanned_l1_block.set(to_block);
 
         for tx in priority_txs {
-            tracing::debug!(
-                serial_id = tx.nonce(),
-                hash = ?tx.hash(),
-                "adding new priority transaction to mempool",
-            );
-            self.output.send(tx).await?;
+            if tx.priority_id() < self.next_l1_priority_id {
+                tracing::debug!(
+                    priority_id = tx.priority_id(),
+                    hash = ?tx.hash(),
+                    "skipping already processed priority transaction",
+                )
+            } else {
+                self.next_l1_priority_id = tx.nonce() + 1;
+                tracing::debug!(
+                    priority_id = tx.priority_id(),
+                    hash = ?tx.hash(),
+                    "sending new priority transaction for processing",
+                );
+                self.output.send(tx).await?;
+            }
         }
 
         self.next_l1_block = to_block + 1;
