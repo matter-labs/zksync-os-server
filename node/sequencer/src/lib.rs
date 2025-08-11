@@ -24,6 +24,7 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
+use crate::execution::block_executor::execute_block;
 use crate::genesis::build_genesis;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
@@ -92,9 +93,36 @@ pub async fn run_sequencer_actor(
         // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
-        let (block_output, replay_record, purged_txs) = command_block_context_provider
-            .execute_block(cmd, state.clone())
-            .await?;
+        tracing::info!(
+            block_number,
+            cmd = cmd.to_string(),
+            "▶ starting command. Turning into PreparedCommand.."
+        );
+        let stage_started_at = Instant::now();
+
+        let prepared_command = command_block_context_provider.prepare_command(cmd).await?;
+
+        tracing::debug!(
+            block_number,
+            starting_l1_priority_id = prepared_command.starting_l1_priority_id,
+            "▶ Prepared command in {:?}. Executing..",
+            stage_started_at.elapsed()
+        );
+        let stage_started_at = Instant::now();
+
+        let (block_output, replay_record, purged_txs) =
+            execute_block(prepared_command, state.clone())
+                .await
+                .context("execute_block")?;
+
+        tracing::info!(
+            block_number,
+            transactions = replay_record.transactions.len(),
+            preimages = block_output.published_preimages.len(),
+            storage_writes = block_output.storage_writes.len(),
+            "▶ Executed after {:?}. Adding to state...",
+            stage_started_at.elapsed()
+        );
 
         let stage_started_at = Instant::now();
 
