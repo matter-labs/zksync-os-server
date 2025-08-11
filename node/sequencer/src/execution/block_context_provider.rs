@@ -81,8 +81,6 @@ impl BlockContextProvider {
             BlockCommand::Produce(produce_command) => {
                 let starting_l1_priority_id = self.next_l1_priority_id;
 
-                // TODO: should drop the l1 tx that come before starting_l1_priority_id
-
                 // Create stream: L1 transactions first, then L2 transactions
                 let best_txs = best_transactions(&self.l2_mempool, &mut self.l1_transactions);
                 let gas_limit = 100_000_000;
@@ -123,7 +121,7 @@ impl BlockContextProvider {
                                 l1_tx.priority_id()
                             );
                         }
-                        ZkEnvelope::L2(_) => {} // already consumed l1 transactions in execution},
+                        ZkEnvelope::L2(_) => {}
                     }
                 }
                 PreparedBlockCommand {
