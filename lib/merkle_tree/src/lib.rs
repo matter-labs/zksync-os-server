@@ -3,6 +3,7 @@
 use alloy::primitives::B256;
 use anyhow::Context as _;
 use std::fmt;
+use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
 pub use self::{
     errors::DeserializeError,
@@ -11,15 +12,12 @@ pub use self::{
     types::{TreeBatchOutput, TreeEntry},
     with_version::{MerkleTreeForReading, MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
-use crate::blake2::Blake2Hasher;
 use crate::{
     metrics::{BatchProofStage, LoadStage, METRICS, MerkleTreeInfo},
     storage::{AsEntry, TreeUpdate, WorkingPatchSet},
     types::{Leaf, MAX_TREE_DEPTH},
 };
 
-// TODO: Move to a separate crate
-pub mod blake2;
 mod consistency;
 mod errors;
 mod hasher;

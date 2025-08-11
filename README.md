@@ -6,22 +6,25 @@ New sequencer implementation for zksync-os with focus on high throughput, low la
 
 ### Local
 
-`cargo run --release` (`release` makes a significant difference for performance)
-
-Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (
-`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
-
-To enable local L1 - in other tab (see "L1 State" below for more info)
-
+To run node locally, first launch `anvil`:
 ```
 anvil --load-state zkos-l1-state.json --port 8545
 ```
+then launch the server:
+```
+cargo run
+```
+Note that by default, fake (dummy) proofs are used both for FRI and SNARK proofs.
+
+Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
 
 See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g.:
 
 ```
-batcher_component_enabled=false sequencer_blocks_to_retain_in_memory=256 cargo run --release
+prover_api_fake_provers_enabled=false cargo run --release
 ```
+
+
 
 ### Docker
 
@@ -59,6 +62,17 @@ Erase the local DB and re-run anvil:
 rm -rf db/node1/*
 anvil --load-state zkos-l1-state.json --port 8545
 ```
+
+### Otterscan
+
+Server supports `ots_` namespace and hence can be used in combination with [Otterscan](https://github.com/otterscan/otterscan)
+block explorer. To run a local instance as a Docker container (bound to `http://localhost:5100`):
+
+```
+docker run --rm -p 5100:80 --name otterscan -d --env ERIGON_URL="http://127.0.0.1:3050" otterscan/otterscan
+```
+
+See Otterscan's [docs](https://docs.otterscan.io/intro/) for other running options.
 
 ## Design
 

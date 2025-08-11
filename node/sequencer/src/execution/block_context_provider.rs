@@ -85,7 +85,7 @@ impl BlockContextProvider {
         // todo: validate next_l1_transaction_id by adding it directly to BlockCommand
         //  it's not clear whether we want to add it only to Replay or also in Produce
 
-        let (prepared_command, replay_block_output_hash) = match block_command {
+        let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 let starting_l1_priority_id = self.next_l1_priority_id;
 
@@ -110,21 +110,19 @@ impl BlockContextProvider {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                 };
-                (
-                    PreparedBlockCommand {
-                        block_context,
-                        tx_source: Box::pin(best_txs),
-                        seal_policy: SealPolicy::Decide(
-                            produce_command.block_time,
-                            produce_command.max_transactions_in_block,
-                        ),
-                        invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
-                        metrics_label: "produce",
-                        starting_l1_priority_id,
-                        node_version: self.node_version.clone(),
-                    },
-                    None,
-                )
+                PreparedBlockCommand {
+                    block_context,
+                    tx_source: Box::pin(best_txs),
+                    seal_policy: SealPolicy::Decide(
+                        produce_command.block_time,
+                        produce_command.max_transactions_in_block,
+                    ),
+                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
+                    metrics_label: "produce",
+                    starting_l1_priority_id,
+                    node_version: self.node_version.clone(),
+                    expected_block_output_hash: None,
+                }
             }
             BlockCommand::Replay(record) => {
                 for tx in &record.transactions {
@@ -138,18 +136,16 @@ impl BlockContextProvider {
                         ZkEnvelope::L2(_) => {} // already consumed l1 transactions in execution},
                     }
                 }
-                (
-                    PreparedBlockCommand {
-                        block_context: record.block_context,
-                        seal_policy: SealPolicy::UntilExhausted,
-                        invalid_tx_policy: InvalidTxPolicy::Abort,
-                        tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
-                        starting_l1_priority_id: record.starting_l1_priority_id,
-                        metrics_label: "replay",
-                        node_version: record.node_version,
-                    },
-                    record.block_output_hash,
-                )
+                PreparedBlockCommand {
+                    block_context: record.block_context,
+                    seal_policy: SealPolicy::UntilExhausted,
+                    invalid_tx_policy: InvalidTxPolicy::Abort,
+                    tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
+                    starting_l1_priority_id: record.starting_l1_priority_id,
+                    metrics_label: "replay",
+                    node_version: record.node_version,
+                    expected_block_output_hash: Some(record.block_output_hash),
+                }
             }
         };
 
@@ -174,17 +170,6 @@ impl BlockContextProvider {
                 error
             })
             .context("execute_block")?;
-
-        // Check if the block output matches the expected hash, if provided.
-        if let (Some(expected_hash), Some(actual_hash)) = (
-            replay_block_output_hash,
-            new_replay_record.block_output_hash,
-        ) {
-            anyhow::ensure!(
-                expected_hash == actual_hash,
-                "Block #{block_number} output hash mismatch: expected {expected_hash}, got {actual_hash}"
-            );
-        }
 
         tracing::info!(
             block_number,
