@@ -2,7 +2,7 @@ mod config;
 mod metrics;
 
 pub use crate::config::L1WatcherConfig;
-pub use crate::metrics::L1_METRICS;
+pub use crate::metrics::METRICS;
 
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
@@ -126,10 +126,10 @@ impl L1Watcher {
             return Ok(());
         }
         let priority_txs = self.process_l1_blocks(from_block, to_block).await?;
-        L1_METRICS
+        METRICS
             .l1_transactions_loaded
             .inc_by(priority_txs.len() as u64);
-        L1_METRICS.most_recently_scanned_l1_block.set(to_block);
+        METRICS.most_recently_scanned_l1_block.set(to_block);
 
         for tx in priority_txs {
             if tx.priority_id() < self.next_l1_priority_id {
