@@ -7,11 +7,11 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
+mod genesis;
 mod metrics;
 pub mod model;
 pub mod prover_api;
 mod prover_input_generator;
-pub mod repositories;
 pub mod reth_state;
 pub mod tree_manager;
 mod util;
@@ -24,6 +24,7 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
+use crate::genesis::build_genesis;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -32,7 +33,6 @@ use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorBatchData};
-use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
@@ -59,6 +59,7 @@ use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
+use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
 
@@ -215,7 +216,55 @@ pub async fn run(
     //       multiple places
     let bridgehub_address = l1_watcher_config.bridgehub_address;
 
-    // ======= Boilerplate - Initialize async channels  ===========
+    // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
+    tracing::info!("Initializing BlockReplayStorage");
+    let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
+        &sequencer_config
+            .rocks_db_path
+            .join(BLOCK_REPLAY_WAL_DB_NAME),
+    )
+    .expect("Failed to open BlockReplayWAL")
+    .with_sync_writes();
+    let block_replay_storage =
+        BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
+
+    tracing::info!("Initializing StateHandle");
+    let state_handle = StateHandle::new(StateConfig {
+        erase_storage_on_start: false,
+        blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
+        rocks_db_path: sequencer_config.rocks_db_path.clone(),
+    });
+
+    tracing::info!("Initializing RepositoryManager");
+    let repositories = RepositoryManager::new(
+        sequencer_config.blocks_to_retain_in_memory,
+        sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        build_genesis(),
+    );
+    let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
+        &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
+    )
+    .expect("Failed to open ProofStorageDB");
+
+    tracing::info!("Initializing ProofStorage");
+    let proof_storage = ProofStorage::new(proof_storage_db);
+
+    tracing::info!("Initializing mempools");
+    let l2_mempool = zksync_os_mempool::in_memory(
+        ZkClient::new(
+            repositories.clone(),
+            state_handle.clone(),
+            genesis_config.chain_id,
+        ),
+        mempool_config.max_tx_input_bytes,
+    );
+
+    tracing::info!("reading L1 state");
+    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
+        .await
+        .expect("Failed to read L1 state");
+
+    // ======= Initialize async channels  ===========
 
     // Channel between `BlockExecutor` and `Batcher`
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
@@ -242,17 +291,9 @@ pub async fn run(
     let (batch_for_commit_sender, batch_for_commit_receiver) =
         tokio::sync::mpsc::channel::<CommitCommand>(10);
 
-    // Channel between `L1Committer` and `SnarkJobManager`
-    let (batch_for_snark_sender, batch_for_snark_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(50);
-
     // Channel between `SnarkJobManager` and `L1ProofSubmitter`
     let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
         tokio::sync::mpsc::channel::<ProofCommand>(10);
-
-    // Channel between `L1ProofSubmitter` and `PriorityTree`
-    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
     // Channel between `PriorityTree` and `L1Executor`
     let (batch_for_execute_sender, batch_for_execute_receiver) =
@@ -262,48 +303,48 @@ pub async fn run(
     let (fully_processed_batch_sender, fully_processed_batch_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
-    // =========== Boilerplate - initialize components that don't need state recovery  ===========
-    tracing::info!("Initializing BlockReplayStorage");
-    let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
-        &sequencer_config
-            .rocks_db_path
-            .join(BLOCK_REPLAY_WAL_DB_NAME),
+    // There may be batches that are Committed but not Proven on L1 yet, or Proven but not Executed yet.
+    // We will reschedule them by loading `BatchEnvelope`s from ProofStorage
+    // and sending them to the corresponding channels.
+    // Target components don't differentiate whether a batch was rescheduled or loaded during normal operations
+
+    let committed_not_proven_batches = get_committed_not_proven_batches(&l1_state, &proof_storage)
+        .await
+        .expect("Cannot get committed not proven batches");
+
+    let proven_not_executed_batches = get_proven_not_executed_batches(&l1_state, &proof_storage)
+        .await
+        .expect("Cannot get proven not executed batches");
+
+    // We need to adopt capacity in accordance to the number of batches that we need to reschedule.
+    // Otherwise it's possible that not all rescheduled batches fit into the channel.
+    // todo: This may theoretical grow every time node restarts.
+    //  Alternatively, we can start processing messages from these channels in parallel with rescheduling -
+    //  but then we should defer launching real senders before all pending are processed
+
+    // Channel between `L1Committer` and `SnarkJobManager`
+    let (batch_for_snark_sender, batch_for_snark_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+            committed_not_proven_batches.len().max(10),
+        );
+
+    // Channel between `L1ProofSubmitter` and `PriorityTree`
+    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+            proven_not_executed_batches.len().max(10),
+        );
+
+    reschedule_committed_not_proved_batches(committed_not_proven_batches, &batch_for_snark_sender)
+        .await
+        .expect("reschedule not proven batches");
+    reschedule_proven_not_executed_batches(
+        proven_not_executed_batches,
+        &batch_for_priority_tree_sender,
     )
-    .expect("Failed to open BlockReplayWAL")
-    .with_sync_writes();
-    let block_replay_storage =
-        BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
+    .await
+    .expect("reschedule not executed batches");
 
-    tracing::info!("Initializing StateHandle");
-    let state_handle = StateHandle::new(StateConfig {
-        erase_storage_on_start: false,
-        blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
-        rocks_db_path: sequencer_config.rocks_db_path.clone(),
-    });
-
-    tracing::info!("Initializing RepositoryManager");
-    let repositories = RepositoryManager::new(
-        sequencer_config.blocks_to_retain_in_memory,
-        sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
-    );
-    let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
-        &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
-    )
-    .expect("Failed to open ProofStorageDB");
-
-    tracing::info!("Initializing ProofStorage");
-    let proof_storage = ProofStorage::new(proof_storage_db);
-
-    tracing::info!("Initializing mempools");
-    let l2_mempool = zksync_os_mempool::in_memory(
-        ZkClient::new(
-            repositories.clone(),
-            state_handle.clone(),
-            genesis_config.chain_id,
-        ),
-        mempool_config.max_tx_input_bytes,
-    );
-
+    // =========== Initialize TreeManager ========
     tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
@@ -407,10 +448,6 @@ pub async fn run(
     }
     tracing::info!("Initializing batcher subsystem");
     // ========== Initialize L1 sender ===========
-    tracing::info!("reading L1 state");
-    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
-        .await
-        .expect("Failed to read L1 state");
 
     // todo: this will not hold when we do proper batching,
     //  but both number are needed to initialize the batcher
@@ -521,24 +558,6 @@ pub async fn run(
         } else {
             noop_task(stop_receiver)
         };
-
-    // There may be batches that are Committed but not Proven on L1 yet.
-    // Scheduling them for proving.
-    reschedule_committed_not_proved_batches(
-        &l1_state,
-        &proof_storage,
-        batch_for_snark_sender.clone(),
-    )
-    .await
-    .expect("Failed to reschedule committed batches for SNARK proving");
-
-    reschedule_proved_not_executed_batches(
-        &l1_state,
-        &proof_storage,
-        batch_for_priority_tree_sender.clone(),
-    )
-    .await
-    .expect("Failed to reschedule proved batches for execution");
 
     let last_executed_block = proof_storage
         .get(l1_state.last_executed_batch)
@@ -771,11 +790,10 @@ fn run_l1_senders(
     (l1_committer, l1_proof_submitter, l1_executor)
 }
 
-pub async fn reschedule_committed_not_proved_batches(
+async fn get_committed_not_proven_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-    batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<BatchEnvelope<FriProof>>> {
     let mut batch_to_prove = l1_state.last_proved_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_prove <= l1_state.last_committed_batch {
@@ -785,7 +803,13 @@ pub async fn reschedule_committed_not_proved_batches(
         batches_to_reschedule.push(batch_with_proof);
         batch_to_prove += 1;
     }
+    Ok(batches_to_reschedule)
+}
 
+pub async fn reschedule_committed_not_proved_batches(
+    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
+    batch_for_snark_sender: &Sender<BatchEnvelope<FriProof>>,
+) -> Result<()> {
     if !batches_to_reschedule.is_empty() {
         tracing::info!(
             "Rescheduling batches {} to {} for SNARK proving",
@@ -806,11 +830,10 @@ pub async fn reschedule_committed_not_proved_batches(
     Ok(())
 }
 
-pub async fn reschedule_proved_not_executed_batches(
+async fn get_proven_not_executed_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-    batch_for_priority_tree_sender: Sender<BatchEnvelope<FriProof>>,
-) -> anyhow::Result<()> {
+) -> Result<Vec<BatchEnvelope<FriProof>>> {
     let mut batch_to_execute = l1_state.last_executed_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_execute <= l1_state.last_proved_batch {
@@ -820,7 +843,13 @@ pub async fn reschedule_proved_not_executed_batches(
         batches_to_reschedule.push(batch_with_proof);
         batch_to_execute += 1;
     }
+    Ok(batches_to_reschedule)
+}
 
+pub async fn reschedule_proven_not_executed_batches(
+    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
+    batch_for_priority_tree_sender: &Sender<BatchEnvelope<FriProof>>,
+) -> anyhow::Result<()> {
     if !batches_to_reschedule.is_empty() {
         tracing::info!(
             "Rescheduling batches {} to {} for execution",

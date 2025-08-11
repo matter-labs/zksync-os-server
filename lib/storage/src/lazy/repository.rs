@@ -1,27 +1,7 @@
-//! Repository module containing extracted storage logic from StateHandle
-//!
-//! This module provides three main repository types:
-//! - AccountPropertyRepository: History-based storage for account properties with compaction
-//! - BlockReceiptRepository: LRU cache for block receipts
-//! - TransactionReceiptRepository: Indefinite storage for transaction receipts
-//!
-//! Additionally, it provides a RepositoryManager that holds all three repositories
-//! and provides unified methods for managing block outputs.
-
-pub mod block_receipt_repository;
-mod db;
-mod metrics;
-pub mod repository_in_memory;
-pub mod transaction_receipt_repository;
-
-use crate::metrics::GENERAL_METRICS;
-use crate::repositories::repository_in_memory::RepositoryInMemory;
-use crate::repositories::{
-    db::{RepositoryCF, RepositoryDb},
-    metrics::REPOSITORIES_METRICS,
-};
+use crate::db::RepositoryDb;
+use crate::in_memory::RepositoryInMemory;
+use crate::metrics::REPOSITORIES_METRICS;
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
-pub use block_receipt_repository::BlockReceiptRepository;
 use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
@@ -31,7 +11,6 @@ use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
-use zksync_storage::RocksDB;
 
 /// Size of the broadcast channel used to notify about new blocks.
 const BLOCK_NOTIFICATION_CHANNEL_SIZE: usize = 256;
@@ -48,14 +27,13 @@ pub struct RepositoryManager {
 }
 
 impl RepositoryManager {
-    pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
-        let db = RocksDB::<RepositoryCF>::new(&db_path).expect("Failed to open db");
-        let db = RepositoryDb::new(db);
-        let db_block_number = db.get_latest_block();
+    pub fn new(blocks_to_retain: usize, db_path: PathBuf, genesis: RepositoryBlock) -> Self {
+        let db = RepositoryDb::new(&db_path);
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
         RepositoryManager {
-            in_memory: RepositoryInMemory::new(db_block_number),
+            // Initializes in-memory repository with genesis block. It is never pruned from cache.
+            in_memory: RepositoryInMemory::new(genesis),
             db,
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
@@ -90,6 +68,8 @@ impl RepositoryManager {
         let _ = self.block_sender.send(notification);
     }
 
+    // fixme: as this loop is not tied to state compacting, it can fall behind and result in
+    //        unrecoverable state on restart
     pub async fn run_persist_loop(&self) {
         loop {
             let db_block_number = self.db.get_latest_block();
@@ -97,10 +77,10 @@ impl RepositoryManager {
                 .wait_for_block_number(db_block_number + 1)
                 .await;
 
-            let number = db_block_number + 1;
+            let block_number = db_block_number + 1;
             let (block, txs) = self
                 .in_memory
-                .get_block_and_transactions_by_number(number)
+                .get_block_and_transactions_by_number(block_number)
                 .expect("missing in-memory block and/or transactions");
 
             let persist_latency_observer = REPOSITORIES_METRICS.persist_block.start();
@@ -111,18 +91,21 @@ impl RepositoryManager {
                 .observe(persist_latency.div(txs.len() as u32));
 
             self.in_memory
-                .remove_block_and_transactions(number, &block.body.transactions);
+                .remove_block_and_transactions(block_number, &block.body.transactions);
 
-            let persistence_lag = self.in_memory.get_latest_block().saturating_sub(number) as usize;
+            let persistence_lag = self
+                .in_memory
+                .get_latest_block()
+                .saturating_sub(block_number) as usize;
             REPOSITORIES_METRICS.persistence_lag.set(persistence_lag);
             tracing::info!(
-                block_number = number,
+                block_number,
                 ?persist_latency,
                 persistence_lag,
-                "Persisted receipts",
+                "persisted block",
             );
 
-            GENERAL_METRICS.block_number[&"persist"].set(number);
+            REPOSITORIES_METRICS.persist_block_number.set(block_number);
         }
     }
 }
