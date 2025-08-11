@@ -9,4 +9,4 @@ pub struct L1Metrics {
 }
 
 #[vise::register]
-pub static L1_METRICS: vise::Global<L1Metrics> = vise::Global::new();
+pub static METRICS: vise::Global<L1Metrics> = vise::Global::new();
