@@ -11,6 +11,8 @@
 //! * When any proof is submitted (real or fake):
 //!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
 //!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
+//! 
+//! `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
 
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::PROVER_METRICS;
@@ -23,6 +25,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -55,6 +58,8 @@ pub struct FriJobManager {
     batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
     // == config ==
     max_assigned_batch_range: usize,
+    // == metrics ==
+    latency_tracker: ComponentStateLatencyTracker,
 }
 
 impl FriJobManager {
@@ -66,11 +71,18 @@ impl FriJobManager {
         max_assigned_batch_range: usize,
     ) -> Self {
         let jobs = ProverJobMap::new(assignment_timeout);
+        let latency_tracker = ComponentStateLatencyTracker::new(
+            "fri_job_manager",
+            GenericComponentState::Processing,
+            None,
+        );
+        latency_tracker.spawn_flusher();
         Self {
             assigned_jobs: jobs,
             inbound: Mutex::new(PeekableReceiver::new(batches_for_prove_receiver)),
             batches_with_proof_sender,
             max_assigned_batch_range,
+            latency_tracker
         }
     }
 
@@ -189,12 +201,14 @@ impl FriJobManager {
             .with_data(FriProof::Real(proof_bytes))
             .with_stage(BatchExecutionStage::FriProvedReal);
 
+        self.latency_tracker.set_state(GenericComponentState::WaitingSend);
         // We don't try to recover from errors in `send()` - we already removed value from `assigned_jobs` so it won't be retried.
         // Note that this error may only happen when channel is closing (system shutdown)
         self.batches_with_proof_sender
             .send(envelope)
             .await
             .expect("Failed to send proof to batches_with_proof_sender");
+        self.latency_tracker.set_state(GenericComponentState::Processing);
 
         Ok(())
     }
@@ -227,10 +241,12 @@ impl FriJobManager {
             .with_data(FriProof::Fake)
             .with_stage(BatchExecutionStage::FriProvedFake);
 
+        self.latency_tracker.set_state(GenericComponentState::WaitingSend);
         self.batches_with_proof_sender
             .send(envelope)
             .await
             .expect("Failed to send proof to batches_with_proof_sender");
+        self.latency_tracker.set_state(GenericComponentState::Processing);
 
         tracing::info!(batch_number, "Fake proof accepted");
         Ok(())

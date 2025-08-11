@@ -13,3 +13,5 @@ categories.workspace = true
 vise.workspace = true
 itertools.workspace = true
 tracing.workspace = true
+tokio.workspace = true
+parking_lot = "0.12.4"

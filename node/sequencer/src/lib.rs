@@ -23,7 +23,7 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
-use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
@@ -45,7 +45,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
-use tokio::time::Instant;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -53,8 +52,10 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
+use zksync_os_l1_sender::metrics::{L1_SENDER_METRICS, L1SenderState};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_observability::{ComponentStateLatencyTracker, LatencyDistributionTracker};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
@@ -86,15 +87,22 @@ pub async fn run_sequencer_actor(
         sequencer_config.max_transactions_in_block,
     );
 
+    let latency_tracker = ComponentStateLatencyTracker::new(
+        "sequencer",
+        SequencerState::WaitingForUpstreamCommand,
+        Some(&EXECUTION_METRICS.block_execution_stages),
+    );
+    latency_tracker.spawn_flusher();
+
     while let Some(cmd) = stream.next().await {
-        // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
         let (block_output, replay_record, purged_txs) = command_block_context_provider
-            .execute_block(cmd, state.clone())
+            .execute_block(cmd, state.clone(), latency_tracker.clone())
             .await?;
 
-        let stage_started_at = Instant::now();
+        tracing::debug!(block_number, "Executed. Adding to state...",);
+        latency_tracker.set_state(SequencerState::AddingToState);
 
         state.add_block_result(
             block_number,
@@ -105,60 +113,44 @@ pub async fn run_sequencer_actor(
                 .map(|(k, v, _)| (*k, v)),
         )?;
 
-        tracing::debug!(
-            block_number,
-            "▶ Added to state in {:?}. Adding to repos...",
-            stage_started_at.elapsed()
-        );
-        let stage_started_at = Instant::now();
+        tracing::debug!(block_number, "Added to state. Adding to repos...");
+        latency_tracker.set_state(SequencerState::AddingToRepos);
 
         // todo: do not call if api is not enabled.
         repositories
             .populate_in_memory_blocking(block_output.clone(), replay_record.transactions.clone())
             .await;
 
-        tracing::debug!(
-            block_number,
-            "▶ Added to repos in {:?}. Reporting back to block_transaction_provider (mempools)...",
-            stage_started_at.elapsed()
-        );
-
-        let stage_started_at = Instant::now();
+        tracing::debug!(block_number, "Added to repos. Updating mempools...",);
+        latency_tracker.set_state(SequencerState::UpdatingMempool);
 
         // TODO: would updating mempool in parallel with state make sense?
         command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
         let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
         command_block_context_provider.remove_txs(purged_txs_hashes);
 
-        tracing::debug!(
-            block_number,
-            "▶ Reported to block_transaction_provider in {:?}. Adding to wal...",
-            stage_started_at.elapsed()
-        );
-
-        let stage_started_at = Instant::now();
+        tracing::debug!(block_number, "Reported to mempools. Adding to wal...");
+        latency_tracker.set_state(SequencerState::AddingToWal);
 
         wal.append_replay(replay_record.clone());
 
-        tracing::debug!(
-            block_number,
-            "▶ Added to wal and canonized in {:?}. Sending to sinks...",
-            stage_started_at.elapsed()
-        );
-        let stage_started_at = Instant::now();
+        tracing::debug!(block_number, "Added to wal. Sending to batcher...");
+        latency_tracker.set_state(SequencerState::SendingToBatcher);
 
         batcher_sink
             .send((block_output.clone(), replay_record))
             .await?;
+
+        tracing::debug!(block_number, "Sent to batcher. Sending to tree...");
+        latency_tracker.set_state(SequencerState::SendingToTree);
+
         tree_sink.send(block_output).await?;
 
-        tracing::info!(
-            block_number,
-            "✔ sent to sinks in {:?}",
-            stage_started_at.elapsed()
-        );
-
         EXECUTION_METRICS.block_number[&"execute"].set(block_number);
+
+        tracing::info!(block_number, "Block fully processed");
+
+        latency_tracker.set_state(SequencerState::WaitingForUpstreamCommand);
     }
     Ok::<(), anyhow::Error>(())
 }
@@ -445,6 +437,8 @@ pub async fn run(
     }
     tracing::info!("Initializing batcher subsystem");
     // ========== Initialize L1 sender ===========
+
+    tracing::info!(?l1_state, "L1 state read");
 
     // todo: this will not hold when we do proper batching,
     //  but both number are needed to initialize the batcher
@@ -752,6 +746,13 @@ fn run_l1_senders(
     impl Future<Output = Result<()>>,
     impl Future<Output = Result<()>>,
 ) {
+    let l1_committer_latency_tracker = ComponentStateLatencyTracker::new(
+        "l1_committer",
+        L1SenderState::WaitingRecv,
+        Some(&L1_SENDER_METRICS.commit_state),
+    );
+    l1_committer_latency_tracker.spawn_flusher();
+
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
         batch_for_snark_sender,
@@ -761,8 +762,15 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_committer_latency_tracker,
     );
 
+    let l1_proof_latency_tracker = ComponentStateLatencyTracker::new(
+        "l1_prover",
+        L1SenderState::WaitingRecv,
+        Some(&L1_SENDER_METRICS.prove_state),
+    );
+    l1_proof_latency_tracker.spawn_flusher();
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
         batch_for_priority_tree_sender,
@@ -772,8 +780,15 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_proof_latency_tracker,
     );
 
+    let l1_execute_latency_tracker = ComponentStateLatencyTracker::new(
+        "l1_execute",
+        L1SenderState::WaitingRecv,
+        Some(&L1_SENDER_METRICS.execute_state),
+    );
+    l1_execute_latency_tracker.spawn_flusher();
     let l1_executor = run_l1_sender(
         batch_for_execute_receiver,
         fully_processed_batch_sender,
@@ -783,6 +798,7 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_execute_latency_tracker,
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }

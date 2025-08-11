@@ -1,4 +1,5 @@
 use crate::execution::block_executor::execute_block;
+use crate::execution::metrics::SequencerState;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
@@ -8,9 +9,9 @@ use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use ruint::aliases::U256;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -22,6 +23,7 @@ use zksync_os_mempool::{
     CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
     RethTransactionPoolExt, best_transactions,
 };
+use zksync_os_observability::{ComponentStateLatencyTracker, LatencyDistributionTracker};
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
@@ -65,14 +67,15 @@ impl BlockContextProvider {
         &mut self,
         block_command: BlockCommand,
         state: StateHandle,
+        latency_tracker: ComponentStateLatencyTracker<SequencerState>,
     ) -> anyhow::Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
+        latency_tracker.set_state(SequencerState::PreparingBlockCommand);
         let block_number = block_command.block_number();
-        tracing::info!(
+        tracing::debug!(
             block_number,
             cmd = block_command.to_string(),
             "▶ starting command. Turning into PreparedCommand.."
         );
-        let stage_started_at = Instant::now();
 
         // todo: validate next_l1_transaction_id by adding it directly to BlockCommand
         //  it's not clear whether we want to add it only to Replay or also in Produce
@@ -140,23 +143,14 @@ impl BlockContextProvider {
         tracing::debug!(
             block_number,
             starting_l1_priority_id = prepared_command.starting_l1_priority_id,
-            "▶ Prepared command in {:?}. Executing..",
-            stage_started_at.elapsed()
+            "Prepared command. Executing...",
         );
-        let stage_started_at = Instant::now();
+        latency_tracker.set_state(SequencerState::PreparingBlockCommand);
 
-        let (block_output, replay_record, purged_txs) = execute_block(prepared_command, state)
-            .await
-            .context("execute_block")?;
-
-        tracing::info!(
-            block_number,
-            transactions = replay_record.transactions.len(),
-            preimages = block_output.published_preimages.len(),
-            storage_writes = block_output.storage_writes.len(),
-            "▶ Executed after {:?}. Adding to state...",
-            stage_started_at.elapsed()
-        );
+        let (block_output, replay_record, purged_txs) =
+            execute_block(prepared_command, state, latency_tracker.clone())
+                .await
+                .context("execute_block")?;
 
         Ok((block_output, replay_record, purged_txs))
     }

@@ -6,6 +6,7 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 
 /// Job manager for SNARK proving.
 ///
@@ -35,7 +36,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 ///     * real FRI proofs are not discarded (by faking SNARKs)
 ///     * fake SNARKs aim include maximum number of FRIs possible
 ///
-///
+/// `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
 pub struct SnarkJobManager {
     // == plumbing ==
     // inbound
@@ -45,6 +46,8 @@ pub struct SnarkJobManager {
 
     // config
     max_fris_per_snark: usize,
+    // metrics
+    latency_tracker: ComponentStateLatencyTracker,
 }
 
 impl SnarkJobManager {
@@ -57,11 +60,18 @@ impl SnarkJobManager {
         // config
         max_fris_per_snark: usize,
     ) -> Self {
+        let latency_tracker = ComponentStateLatencyTracker::new(
+            "snark_job_manager",
+            GenericComponentState::Processing,
+            None,
+        );
+        latency_tracker.spawn_flusher();
         let committed_batch_receiver = Mutex::new(committed_batch_receiver);
         Self {
             committed_batch_receiver,
             prove_batches_sender,
             max_fris_per_snark,
+            latency_tracker,
         }
     }
 
@@ -175,12 +185,16 @@ impl SnarkJobManager {
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
 
+        self.latency_tracker
+            .set_state(GenericComponentState::WaitingSend);
         self.prove_batches_sender
             .send(ProofCommand::new(
                 consumed_batches_proven,
                 SnarkProof::Real(payload),
             ))
             .await?;
+        self.latency_tracker
+            .set_state(GenericComponentState::Processing);
         Ok(())
     }
 
@@ -225,12 +239,16 @@ impl SnarkJobManager {
                 .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedFake))
                 .collect();
 
+            self.latency_tracker
+                .set_state(GenericComponentState::WaitingSend);
             self.prove_batches_sender
                 .send(ProofCommand::new(
                     batches_with_fake_proofs,
                     SnarkProof::Fake,
                 ))
                 .await?;
+            self.latency_tracker
+                .set_state(GenericComponentState::Processing);
         }
         Ok(())
     }
