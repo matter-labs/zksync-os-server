@@ -55,7 +55,7 @@ impl VmWrapper {
     /// Send one transaction to the VM and await its execution result.
     ///
     /// Returns Ok(output) on success, or Err(InvalidTransaction) if the VM
-    /// rejected it. In case of an error, you can then call `seal_batch()`
+    /// rejected it. In case of an error, you can then call `seal_block()`
     /// to finish the block.
     pub async fn execute_next_tx(
         &mut self,
