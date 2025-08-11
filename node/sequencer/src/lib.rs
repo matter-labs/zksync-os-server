@@ -377,7 +377,21 @@ pub async fn run(
 
     let mut tasks = JoinSet::new();
 
-    // =========== Initialize TreeManager ========
+    // =========== Start JSON RPC ========
+    tasks.spawn(
+        run_jsonrpsee_server(
+            rpc_config,
+            genesis_config.chain_id,
+            l1_state.bridgehub,
+            repositories.clone(),
+            block_replay_storage.clone(),
+            state_handle.clone(),
+            l2_mempool.clone(),
+        )
+        .map(report_exit("JSON-RPC server")),
+    );
+
+    // =========== Start TreeManager ========
     tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
@@ -416,6 +430,8 @@ pub async fn run(
         "Block numbers are inconsistent on startup!"
     );
 
+    tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
+
     tracing::info!("Initializing L1Watcher");
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
@@ -428,25 +444,29 @@ pub async fn run(
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
 
-    let l1_tx_watcher = L1TxWatcher::new(
-        l1_watcher_config.clone(),
-        l1_provider.clone(),
-        l1_state.diamond_proxy,
-        l1_transactions_sender,
-        next_l1_priority_id,
-    )
-    .await;
-    let l1_tx_watcher_task = l1_tx_watcher
+    tasks.spawn(
+        L1TxWatcher::new(
+            l1_watcher_config.clone(),
+            l1_provider.clone(),
+            l1_state.diamond_proxy,
+            l1_transactions_sender,
+            next_l1_priority_id,
+        )
+        .await
         .expect("failed to start L1 transaction watcher")
-        .run();
+        .run()
+        .map(report_exit("L1 transaction watcher")),
+    );
 
-    let l1_commit_watcher =
-        L1CommitWatcher::new(l1_watcher_config, l1_provider, l1_state.diamond_proxy, 1).await;
-    let l1_commit_watcher_task = l1_commit_watcher
-        .expect("failed to start L1 commit watcher")
-        .run();
+    tasks.spawn(
+        L1CommitWatcher::new(l1_watcher_config, l1_provider, l1_state.diamond_proxy, 1)
+            .await
+            .expect("failed to start L1 commit watcher")
+            .run()
+            .map(report_exit("L1 commit watcher")),
+    );
 
-    // ========== Initialize BlockContextProvider and its state ===========
+    // ========== Start BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
     let previous_block_timestamp: u64 = first_replay_record
@@ -460,7 +480,7 @@ pub async fn run(
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions,
-        l2_mempool.clone(),
+        l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
         genesis_config.chain_id,
@@ -482,7 +502,7 @@ pub async fn run(
         // .boxed()
     }
     tracing::info!("Initializing batcher subsystem");
-    // ========== Initialize L1 sender ===========
+    // ========== Start L1 sender ===========
 
     let (last_committed_block_number, prev_batch_info) = if l1_state.last_committed_batch == 0 {
         (0, genesis_stored_batch_info())
@@ -513,36 +533,54 @@ pub async fn run(
         "L1 sender last committed block number is inconsistent with WAL or storage map"
     );
 
-    // ========== Initialize ProverInputGenerator ===========
-    tracing::info!("Initializing ProverInputGenerator");
-    let prover_input_generator_task = {
-        let prover_input_generator = ProverInputGenerator::new(
-            prover_input_generator_config.logging_enabled,
-            prover_input_generator_config.maximum_in_flight_blocks,
-            blocks_for_prover_input_generator_receiver,
-            blocks_for_batcher_sender,
-            persistent_tree.clone(),
-            state_handle.clone(),
-        );
-        Box::pin(prover_input_generator.run_loop())
-    };
+    // ========== Start Sequencer ===========
 
-    // ========== Initialize Batcher ===========
     tracing::info!("Initializing Batcher");
-    let batcher_task = {
-        let batcher = Batcher::new(
-            genesis_config.chain_id,
-            last_committed_block_number + 1,
-            repositories_persisted_block,
-            batcher_config,
-            blocks_for_batcher_receiver,
-            batch_for_proving_sender,
-            persistent_tree,
-        );
-        Box::pin(batcher.run_loop(prev_batch_info))
-    };
+    let batcher = Batcher::new(
+        genesis_config.chain_id,
+        last_committed_block_number + 1,
+        repositories_persisted_block,
+        batcher_config,
+        blocks_for_batcher_receiver,
+        batch_for_proving_sender,
+        persistent_tree.clone(),
+    );
+    tasks.spawn(
+        batcher
+            .run_loop(prev_batch_info)
+            .map(report_exit("Batcher")),
+    );
 
-    // ======= Initialize Prover Api Server========
+    tasks.spawn(
+        run_sequencer_actor(
+            starting_block,
+            blocks_for_prover_input_generator_sender,
+            tree_sender,
+            command_block_context_provider,
+            state_handle.clone(),
+            block_replay_storage.clone(),
+            repositories.clone(),
+            sequencer_config,
+        )
+        .map(report_exit("Sequencer server")),
+    );
+
+    tracing::info!("Initializing ProverInputGenerator");
+    let prover_input_generator = ProverInputGenerator::new(
+        prover_input_generator_config.logging_enabled,
+        prover_input_generator_config.maximum_in_flight_blocks,
+        blocks_for_prover_input_generator_receiver,
+        blocks_for_batcher_sender,
+        persistent_tree,
+        state_handle.clone(),
+    );
+    tasks.spawn(
+        prover_input_generator
+            .run_loop()
+            .map(report_exit("ProverInputGenerator")),
+    );
+
+    // ======= Start Prover Api Server========
 
     let fri_job_manager = Arc::new(FriJobManager::new(
         batch_for_prover_receiver,
@@ -564,12 +602,21 @@ pub async fn run(
         batch_for_commit_sender,
     );
 
-    let prover_server_task = Box::pin(prover_server::run(
-        fri_job_manager.clone(),
-        snark_job_manager.clone(),
-        proof_storage.clone(),
-        prover_api_config.address,
-    ));
+    tasks.spawn(
+        prover_gapless_committer
+            .run()
+            .map(report_exit("prover_gapless_committer")),
+    );
+
+    tasks.spawn(
+        prover_server::run(
+            fri_job_manager.clone(),
+            snark_job_manager.clone(),
+            proof_storage.clone(),
+            prover_api_config.address,
+        )
+        .map(report_exit("prover_server_job")),
+    );
 
     if prover_api_config.fake_fri_provers.enabled {
         tracing::info!(
@@ -622,66 +669,27 @@ pub async fn run(
         fully_processed_batch_sender,
         &l1_state,
     );
-
-    let priority_tree_manager = PriorityTreeManager::new(
-        block_replay_storage.clone(),
-        last_executed_block,
-        batch_for_priority_tree_receiver,
-        batch_for_execute_sender,
-    )
-    .unwrap();
-
-    let batch_sink = BatchSink::new(fully_processed_batch_receiver);
-
-    // ======= Run tasks ===========
-
-    tasks.spawn(
-        run_sequencer_actor(
-            starting_block,
-            blocks_for_prover_input_generator_sender,
-            tree_sender,
-            command_block_context_provider,
-            state_handle.clone(),
-            block_replay_storage.clone(),
-            repositories.clone(),
-            sequencer_config,
-        )
-        .map(report_exit("Sequencer server")),
-    );
-
-    tasks.spawn(
-        run_jsonrpsee_server(
-            rpc_config,
-            genesis_config.chain_id,
-            l1_state.bridgehub,
-            repositories.clone(),
-            block_replay_storage.clone(),
-            state_handle.clone(),
-            l2_mempool,
-        )
-        .map(report_exit("JSON-RPC server")),
-    );
-
-    tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
-    tasks.spawn(l1_tx_watcher_task.map(report_exit("L1 transaction watcher")));
-    tasks.spawn(l1_commit_watcher_task.map(report_exit("L1 commit watcher")));
-    tasks.spawn(batcher_task.map(report_exit("Batcher")));
-    tasks.spawn(prover_input_generator_task.map(report_exit("ProverInputGenerator")));
-    tasks.spawn(prover_server_task.map(report_exit("prover_server_job")));
-    tasks.spawn(
-        prover_gapless_committer
-            .run()
-            .map(report_exit("prover_gapless_committer")),
-    );
     tasks.spawn(l1_committer.map(report_exit("L1 committer")));
     tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
     tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+
     tasks.spawn(
-        priority_tree_manager
-            .run()
-            .map(report_exit("Priority tree manager")),
+        PriorityTreeManager::new(
+            block_replay_storage.clone(),
+            last_executed_block,
+            batch_for_priority_tree_receiver,
+            batch_for_execute_sender,
+        )
+        .unwrap()
+        .run()
+        .map(report_exit("Priority tree manager")),
     );
-    tasks.spawn(batch_sink.run().map(report_exit("batch_sink")));
+
+    tasks.spawn(
+        BatchSink::new(fully_processed_batch_receiver)
+            .run()
+            .map(report_exit("batch_sink")),
+    );
 
     let state_handle_clone = state_handle.clone();
     tasks.spawn(async move {
