@@ -1,4 +1,4 @@
-use crate::prover_api::prover_job_manager::SubmitError;
+use crate::prover_api::fri_job_manager::SubmitError;
 use air_compiler_cli::prover_utils::{
     generate_oracle_data_from_metadata_and_proof_list, proof_list_and_metadata_from_program_proof,
 };

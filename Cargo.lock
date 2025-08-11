@@ -960,6 +960,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anes"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
+
+[[package]]
 name = "anstream"
 version = "0.6.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2259,6 +2265,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cast"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
 name = "cc"
 version = "1.2.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2301,6 +2313,33 @@ dependencies = [
  "num-traits",
  "serde",
  "windows-link",
+]
+
+[[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
 ]
 
 [[package]]
@@ -2681,6 +2720,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "criterion"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c047a62b0cc3e145fa84415a3191f628e980b194c2755aa12300a4e6cbd928"
+dependencies = [
+ "anes",
+ "cast",
+ "ciborium",
+ "clap",
+ "criterion-plot",
+ "itertools 0.13.0",
+ "num-traits",
+ "oorandom",
+ "plotters",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "tinytemplate",
+ "walkdir",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b1bcc0dc7dfae599d84ad0b1a55f80cde8af3725da8313b528da95ef783e338"
+dependencies = [
+ "cast",
+ "itertools 0.13.0",
 ]
 
 [[package]]
@@ -4301,6 +4373,16 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "half"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "459196ed295495a68f7d7fe1d84f6c4b7ff0e21fe3017b2f283c6fac3ad803c9"
+dependencies = [
+ "cfg-if",
+ "crunchy",
 ]
 
 [[package]]
@@ -5953,6 +6035,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
+name = "oorandom"
+version = "11.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
 name = "op-alloy-consensus"
 version = "0.18.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6493,6 +6581,34 @@ dependencies = [
  "quick-xml 0.38.0",
  "serde",
  "time",
+]
+
+[[package]]
+name = "plotters"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
+dependencies = [
+ "num-traits",
+ "plotters-backend",
+ "plotters-svg",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "plotters-backend"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df42e13c12958a16b3f7f4386b9ab1f3e7933914ecea48da7139435263a4172a"
+
+[[package]]
+name = "plotters-svg"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
+dependencies = [
+ "plotters-backend",
 ]
 
 [[package]]
@@ -9516,6 +9632,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinytemplate"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "tinyvec"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11145,29 +11271,6 @@ dependencies = [
 
 [[package]]
 name = "zksync_basic_types"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "749648e47cf1b146ae5ac0715f8a7b74f12eabc1fdb91fdf431f6615b8de8138"
-dependencies = [
- "anyhow",
- "chrono",
- "const-decoder",
- "ethabi",
- "hex",
- "num_enum",
- "secrecy",
- "serde",
- "serde_json",
- "serde_with 1.14.0",
- "sha2 0.10.9",
- "strum 0.26.3",
- "thiserror 2.0.12",
- "tiny-keccak",
- "url",
-]
-
-[[package]]
-name = "zksync_basic_types"
 version = "28.7.0-non-semver-compat"
 source = "git+https://github.com/matter-labs/zksync-era?rev=core-v28.7.0#385c1fcd1cce8e5f29e75f410328f07ce92ce9f5"
 dependencies = [
@@ -11198,30 +11301,12 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "zksync_basic_types 28.7.0-non-semver-compat",
+ "zksync_basic_types",
  "zksync_utils",
 ]
 
 [[package]]
 name = "zksync_crypto_primitives"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1322b79827f1366d6031c057bb315df7ac37dd6b61674fb415266c0a9027e122"
-dependencies = [
- "anyhow",
- "blake2",
- "hex",
- "rand 0.8.5",
- "secp256k1 0.27.0",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.12",
- "zksync_basic_types 28.1.0-non-semver-compat",
-]
-
-[[package]]
-name = "zksync_crypto_primitives"
 version = "28.7.0-non-semver-compat"
 source = "git+https://github.com/matter-labs/zksync-era?rev=core-v28.7.0#385c1fcd1cce8e5f29e75f410328f07ce92ce9f5"
 dependencies = [
@@ -11234,18 +11319,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.12",
- "zksync_basic_types 28.7.0-non-semver-compat",
-]
-
-[[package]]
-name = "zksync_mini_merkle_tree"
-version = "28.1.0-non-semver-compat"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef6f2f5da95a8e17e240dc92a9dc339f1f99b721755c903ad6e634b933e59893"
-dependencies = [
- "once_cell",
- "zksync_basic_types 28.1.0-non-semver-compat",
- "zksync_crypto_primitives 28.1.0-non-semver-compat",
+ "zksync_basic_types",
 ]
 
 [[package]]
@@ -11254,8 +11328,8 @@ version = "28.7.0-non-semver-compat"
 source = "git+https://github.com/matter-labs/zksync-era?rev=core-v28.7.0#385c1fcd1cce8e5f29e75f410328f07ce92ce9f5"
 dependencies = [
  "once_cell",
- "zksync_basic_types 28.7.0-non-semver-compat",
- "zksync_crypto_primitives 28.7.0-non-semver-compat",
+ "zksync_basic_types",
+ "zksync_crypto_primitives",
 ]
 
 [[package]]
@@ -11283,6 +11357,15 @@ name = "zksync_os_contract_interface"
 version = "0.1.0"
 dependencies = [
  "alloy",
+]
+
+[[package]]
+name = "zksync_os_crypto"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "blake2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -11338,9 +11421,9 @@ dependencies = [
  "tokio",
  "tracing",
  "zk_ee",
- "zksync_mini_merkle_tree 28.1.0-non-semver-compat",
  "zksync_os_contract_interface",
  "zksync_os_merkle_tree",
+ "zksync_os_mini_merkle_tree",
  "zksync_os_types",
 ]
 
@@ -11402,7 +11485,35 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "vise",
  "zk_ee",
+ "zksync_os_crypto",
  "zksync_storage",
+]
+
+[[package]]
+name = "zksync_os_mini_merkle_tree"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "criterion",
+ "once_cell",
+ "zksync_os_crypto",
+ "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_priority_tree"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "tokio",
+ "tracing",
+ "zksync_os_contract_interface",
+ "zksync_os_crypto",
+ "zksync_os_l1_sender",
+ "zksync_os_mini_merkle_tree",
+ "zksync_os_storage_api",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -11415,6 +11526,7 @@ dependencies = [
  "dashmap",
  "forward_system",
  "futures",
+ "hyper 1.6.0",
  "jsonrpsee",
  "ruint",
  "serde",
@@ -11422,6 +11534,8 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
+ "tower 0.5.2",
+ "tower-http",
  "tracing",
  "vise",
  "zk_ee",
@@ -11499,6 +11613,7 @@ dependencies = [
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
+ "zksync_os_priority_tree",
  "zksync_os_rpc",
  "zksync_os_state",
  "zksync_os_storage_api",
@@ -11573,7 +11688,7 @@ version = "28.7.0-non-semver-compat"
 source = "git+https://github.com/matter-labs/zksync-era?rev=core-v28.7.0#385c1fcd1cce8e5f29e75f410328f07ce92ce9f5"
 dependencies = [
  "once_cell",
- "zksync_basic_types 28.7.0-non-semver-compat",
+ "zksync_basic_types",
 ]
 
 [[package]]
@@ -11595,10 +11710,10 @@ dependencies = [
  "serde_with 1.14.0",
  "thiserror 2.0.12",
  "tracing",
- "zksync_basic_types 28.7.0-non-semver-compat",
+ "zksync_basic_types",
  "zksync_contracts",
- "zksync_crypto_primitives 28.7.0-non-semver-compat",
- "zksync_mini_merkle_tree 28.7.0-non-semver-compat",
+ "zksync_crypto_primitives",
+ "zksync_mini_merkle_tree",
  "zksync_system_constants",
 ]
 

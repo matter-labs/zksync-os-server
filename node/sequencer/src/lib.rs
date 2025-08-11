@@ -27,21 +27,23 @@ use crate::config::{
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::metadata::NODE_VERSION;
 use crate::metrics::GENERAL_METRICS;
-use crate::prover_api::fake_provers_pool::FakeProversPool;
+use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
+use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
-use crate::prover_api::prover_job_manager::ProverJobManager;
 use crate::prover_api::prover_server;
-use crate::prover_api::snark_job_manager::SnarkJobManager;
+use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorBatchData};
 use crate::repositories::RepositoryManager;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
+use crate::util::peekable_receiver::PeekableReceiver;
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -49,12 +51,14 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
@@ -213,48 +217,9 @@ pub async fn run(
     //       multiple places
     let bridgehub_address = l1_watcher_config.bridgehub_address;
 
-    // ======= Boilerplate - Initialize async channels  ===========
-
-    // Channel between `BlockExecutor` and `Batcher`
-    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
-        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
-
-    // Channel between `BlockExecutor` and `TreeManager`
-    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BlockOutput>(10);
-
-    // Channel between `Batcher` and `ProverInputGenerator`
-    let (batch_replay_data_sender, batch_replay_data_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInputGeneratorBatchData>>(10);
-
-    // Channel between `ProverInputGenerator` and `ProverAPI`
-    let (batch_for_proving_sender, batch_for_prover_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(10);
-
-    let (batch_with_proof_sender, batch_with_proof_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
-
-    // Channel between `L1Watcher` and `BlockContextProvider`
-    let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(10);
-
-    // Channel between `GaplessCommitter` and `L1Committer`
-    let (batch_for_commit_sender, batch_for_commit_receiver) =
-        tokio::sync::mpsc::channel::<CommitCommand>(10);
-
-    // Channel between `L1Committer` and `SnarkJobManager`
-    let (batch_for_snark_sender, batch_for_snark_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
-
-    // Channel between `SnarkJobManager` and `L1ProofSubmitter`
-    let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
-        tokio::sync::mpsc::channel::<ProofCommand>(10);
-
-    // Channel between `L1ProofSubmitter` and `BatchSink`
-    let (fully_processed_batch_sender, fully_processed_batch_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
-
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
 
-    // =========== Boilerplate - initialize components that don't need state recovery  ===========
+    // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
         &sequencer_config
@@ -299,6 +264,92 @@ pub async fn run(
         mempool_config.max_tx_input_bytes,
     );
 
+    tracing::info!("reading L1 state");
+    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
+        .await
+        .expect("Failed to read L1 state");
+
+    // ======= Initialize async channels  ===========
+
+    // Channel between `BlockExecutor` and `Batcher`
+    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
+        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
+
+    // Channel between `BlockExecutor` and `TreeManager`
+    let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BlockOutput>(10);
+
+    // Channel between `Batcher` and `ProverInputGenerator`
+    let (batch_replay_data_sender, batch_replay_data_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInputGeneratorBatchData>>(10);
+
+    // Channel between `ProverInputGenerator` and `ProverAPI`
+    let (batch_for_proving_sender, batch_for_prover_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(10);
+
+    let (batch_with_proof_sender, batch_with_proof_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
+
+    // Channel between `L1Watcher` and `BlockContextProvider`
+    let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(10);
+
+    // Channel between `GaplessCommitter` and `L1Committer`
+    let (batch_for_commit_sender, batch_for_commit_receiver) =
+        tokio::sync::mpsc::channel::<CommitCommand>(10);
+
+    // Channel between `SnarkJobManager` and `L1ProofSubmitter`
+    let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
+        tokio::sync::mpsc::channel::<ProofCommand>(10);
+
+    // Channel between `PriorityTree` and `L1Executor`
+    let (batch_for_execute_sender, batch_for_execute_receiver) =
+        tokio::sync::mpsc::channel::<ExecuteCommand>(10);
+
+    // Channel between `L1Executor` and `BatchSink`
+    let (fully_processed_batch_sender, fully_processed_batch_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
+
+    // There may be batches that are Committed but not Proven on L1 yet, or Proven but not Executed yet.
+    // We will reschedule them by loading `BatchEnvelope`s from ProofStorage
+    // and sending them to the corresponding channels.
+    // Target components don't differentiate whether a batch was rescheduled or loaded during normal operations
+
+    let committed_not_proven_batches = get_committed_not_proven_batches(&l1_state, &proof_storage)
+        .await
+        .expect("Cannot get committed not proven batches");
+
+    let proven_not_executed_batches = get_proven_not_executed_batches(&l1_state, &proof_storage)
+        .await
+        .expect("Cannot get proven not executed batches");
+
+    // We need to adopt capacity in accordance to the number of batches that we need to reschedule.
+    // Otherwise it's possible that not all rescheduled batches fit into the channel.
+    // todo: This may theoretical grow every time node restarts.
+    //  Alternatively, we can start processing messages from these channels in parallel with rescheduling -
+    //  but then we should defer launching real senders before all pending are processed
+
+    // Channel between `L1Committer` and `SnarkJobManager`
+    let (batch_for_snark_sender, batch_for_snark_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+            committed_not_proven_batches.len().max(10),
+        );
+
+    // Channel between `L1ProofSubmitter` and `PriorityTree`
+    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
+        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+            proven_not_executed_batches.len().max(10),
+        );
+
+    reschedule_committed_not_proved_batches(committed_not_proven_batches, &batch_for_snark_sender)
+        .await
+        .expect("reschedule not proven batches");
+    reschedule_proven_not_executed_batches(
+        proven_not_executed_batches,
+        &batch_for_priority_tree_sender,
+    )
+    .await
+    .expect("reschedule not executed batches");
+
+    // =========== Initialize TreeManager ========
     tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
         &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
@@ -403,10 +454,6 @@ pub async fn run(
     }
     tracing::info!("Initializing batcher subsystem");
     // ========== Initialize L1 sender ===========
-    tracing::info!("reading L1 state");
-    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
-        .await
-        .expect("Failed to read L1 state");
 
     // todo: this will not hold when we do proper batching,
     //  but both number are needed to initialize the batcher
@@ -457,11 +504,17 @@ pub async fn run(
 
     // ======= Initialize Prover Api Server========
 
-    let fri_prover_job_manager = Arc::new(ProverJobManager::new(
+    let fri_job_manager = Arc::new(FriJobManager::new(
         batch_for_prover_receiver,
         batch_with_proof_sender,
         prover_api_config.job_timeout,
         prover_api_config.max_assigned_batch_range,
+    ));
+
+    let snark_job_manager = Arc::new(SnarkJobManager::new(
+        PeekableReceiver::new(batch_for_snark_receiver),
+        batch_for_l1_proving_sender,
+        prover_api_config.max_fris_per_snark,
     ));
 
     let prover_gapless_committer = GaplessCommitter::new(
@@ -472,59 +525,69 @@ pub async fn run(
     );
 
     let prover_server_task = Box::pin(prover_server::run(
-        fri_prover_job_manager.clone(),
+        fri_job_manager.clone(),
+        snark_job_manager.clone(),
         proof_storage.clone(),
         prover_api_config.address,
     ));
 
-    let fake_provers_task_optional: BoxFuture<anyhow::Result<()>> =
-        if prover_api_config.fake_provers.enabled {
+    let fake_fri_provers_task_optional: BoxFuture<Result<()>> =
+        if prover_api_config.fake_fri_provers.enabled {
             tracing::info!(
-                workers = prover_api_config.fake_provers.workers,
-                compute_time = ?prover_api_config.fake_provers.compute_time,
-                min_task_age = ?prover_api_config.fake_provers.min_age,
-                "Initializing FakeProversPool"
+                workers = prover_api_config.fake_fri_provers.workers,
+                compute_time = ?prover_api_config.fake_fri_provers.compute_time,
+                min_task_age = ?prover_api_config.fake_fri_provers.min_age,
+                "Initializing fake FRI provers"
             );
-            let fake_provers_pool = FakeProversPool::new(
-                fri_prover_job_manager.clone(),
-                prover_api_config.fake_provers.workers,
-                prover_api_config.fake_provers.compute_time,
-                prover_api_config.fake_provers.min_age,
+            let fake_provers_pool = FakeFriProversPool::new(
+                fri_job_manager.clone(),
+                prover_api_config.fake_fri_provers.workers,
+                prover_api_config.fake_fri_provers.compute_time,
+                prover_api_config.fake_fri_provers.min_age,
             );
             Box::pin(fake_provers_pool.run())
         } else {
-            // noop task
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
+            noop_task(stop_receiver.clone())
         };
 
-    // There may be batches that are Committed but not Proven on L1 yet.
-    // Scheduling them for proving.
-    reschedule_committed_not_proved_batches(
-        &l1_state,
-        &proof_storage,
-        batch_for_snark_sender.clone(),
-    )
-    .await
-    .expect("Failed to reschedule committed batches for SNARK proving");
+    let fake_snark_provers_task_optional: BoxFuture<Result<()>> =
+        if prover_api_config.fake_snark_provers.enabled {
+            tracing::info!(
+                max_batch_age = ?prover_api_config.fake_snark_provers.max_batch_age,
+                "Initializing fake SNARK prover"
+            );
+            let fake_provers_pool = FakeSnarkProver::new(
+                snark_job_manager.clone(),
+                prover_api_config.fake_snark_provers.max_batch_age,
+            );
+            Box::pin(fake_provers_pool.run())
+        } else {
+            noop_task(stop_receiver)
+        };
 
-    let snark_job_manager =
-        SnarkJobManager::new(batch_for_snark_receiver, batch_for_l1_proving_sender);
-
-    let (l1_committer, l1_proof_submitter) = run_l1_senders(
+    let last_executed_block = proof_storage
+        .get(l1_state.last_executed_batch)
+        .expect("failed to load last executed batch")
+        .map(|batch_envelope| batch_envelope.batch.last_block_number)
+        .unwrap_or(0);
+    let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
         l1_sender_config,
         batch_for_commit_receiver,
         batch_for_snark_sender,
         batch_for_l1_proving_receiver,
+        batch_for_priority_tree_sender,
+        batch_for_execute_receiver,
         fully_processed_batch_sender,
         l1_state,
     );
+
+    let priority_tree_manager = PriorityTreeManager::new(
+        block_replay_storage.clone(),
+        last_executed_block,
+        batch_for_priority_tree_receiver,
+        batch_for_execute_sender,
+    )
+    .unwrap();
 
     let batch_sink = BatchSink::new(fully_processed_batch_receiver);
 
@@ -606,18 +669,17 @@ pub async fn run(
             }
         }
 
-        res = fake_provers_task_optional => {
+        res = fake_fri_provers_task_optional => {
             match res {
                 Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
                 Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
             }
         }
 
-
-        res = snark_job_manager.run() => {
+        res = fake_snark_provers_task_optional => {
             match res {
-                Ok(_)  => tracing::warn!("snark_job_manager task exited"),
-                Err(e) => tracing::error!("snark_job_manager task failed: {e:#}"),
+                Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
+                Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
             }
         }
 
@@ -632,6 +694,20 @@ pub async fn run(
             match res {
                 Ok(_)  => tracing::warn!("L1 proof submitter unexpectedly exited"),
                 Err(e) => tracing::error!("L1 proof submitter failed: {e:#}"),
+            }
+        }
+
+        res = l1_executor => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 executor unexpectedly exited"),
+                Err(e) => tracing::error!("L1 executor failed: {e:#}"),
+            }
+        }
+
+        res = priority_tree_manager.run() => {
+            match res {
+                Ok(_)  => tracing::warn!("Priority tree manager unexpectedly exited"),
+                Err(e) => tracing::error!("Priority tree manager failed: {e:#}"),
             }
         }
 
@@ -654,6 +730,19 @@ pub async fn run(
     }
 }
 
+fn noop_task(stop_receiver: watch::Receiver<bool>) -> Pin<Box<impl Future<Output = Result<()>>>> {
+    // noop task
+    let mut stop_receiver = stop_receiver.clone();
+    Box::pin(async move {
+        // Defer until we receive stop signal, i.e. a task that does nothing
+        stop_receiver
+            .changed()
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_l1_senders(
     l1_sender_config: L1SenderConfig,
 
@@ -661,10 +750,14 @@ fn run_l1_senders(
     batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
 
     batch_for_l1_proving_receiver: Receiver<ProofCommand>,
+    batch_for_priority_tree_sender: Sender<BatchEnvelope<FriProof>>,
+
+    batch_for_execute_receiver: Receiver<ExecuteCommand>,
     fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
 
     l1_state: L1State,
 ) -> (
+    impl Future<Output = Result<()>>,
     impl Future<Output = Result<()>>,
     impl Future<Output = Result<()>>,
 ) {
@@ -681,7 +774,7 @@ fn run_l1_senders(
 
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
-        fully_processed_batch_sender,
+        batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
         l1_sender_config.operator_prove_pk.clone(),
         l1_sender_config.l1_api_url.clone(),
@@ -689,14 +782,24 @@ fn run_l1_senders(
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
     );
-    (l1_committer, l1_proof_submitter)
+
+    let l1_executor = run_l1_sender(
+        batch_for_execute_receiver,
+        fully_processed_batch_sender,
+        l1_state.diamond_proxy,
+        l1_sender_config.operator_execute_pk.clone(),
+        l1_sender_config.l1_api_url.clone(),
+        l1_sender_config.max_fee_per_gas(),
+        l1_sender_config.max_priority_fee_per_gas(),
+        l1_sender_config.command_limit,
+    );
+    (l1_committer, l1_proof_submitter, l1_executor)
 }
 
-pub async fn reschedule_committed_not_proved_batches(
+async fn get_committed_not_proven_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-    batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<BatchEnvelope<FriProof>>> {
     let mut batch_to_prove = l1_state.last_proved_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_prove <= l1_state.last_committed_batch {
@@ -706,15 +809,61 @@ pub async fn reschedule_committed_not_proved_batches(
         batches_to_reschedule.push(batch_with_proof);
         batch_to_prove += 1;
     }
+    Ok(batches_to_reschedule)
+}
 
+pub async fn reschedule_committed_not_proved_batches(
+    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
+    batch_for_snark_sender: &Sender<BatchEnvelope<FriProof>>,
+) -> Result<()> {
     if !batches_to_reschedule.is_empty() {
         tracing::info!(
             "Rescheduling batches {} to {} for SNARK proving",
             batches_to_reschedule.first().unwrap().batch_number(),
             batches_to_reschedule.last().unwrap().batch_number(),
         );
+        if batches_to_reschedule.len() > batch_for_snark_sender.capacity() {
+            tracing::warn!(
+                "SNARK prover capacity is too small to handle {} batches",
+                batches_to_reschedule.len()
+            );
+        }
         for batch in batches_to_reschedule {
             batch_for_snark_sender.send(batch).await?
+        }
+    }
+
+    Ok(())
+}
+
+async fn get_proven_not_executed_batches(
+    l1_state: &L1State,
+    proof_storage: &ProofStorage,
+) -> Result<Vec<BatchEnvelope<FriProof>>> {
+    let mut batch_to_execute = l1_state.last_executed_batch + 1;
+    let mut batches_to_reschedule = Vec::new();
+    while batch_to_execute <= l1_state.last_proved_batch {
+        let batch_with_proof = proof_storage
+            .get(batch_to_execute)?
+            .context("Failed to get batch")?;
+        batches_to_reschedule.push(batch_with_proof);
+        batch_to_execute += 1;
+    }
+    Ok(batches_to_reschedule)
+}
+
+pub async fn reschedule_proven_not_executed_batches(
+    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
+    batch_for_priority_tree_sender: &Sender<BatchEnvelope<FriProof>>,
+) -> anyhow::Result<()> {
+    if !batches_to_reschedule.is_empty() {
+        tracing::info!(
+            "Rescheduling batches {} to {} for execution",
+            batches_to_reschedule.first().unwrap().batch_number(),
+            batches_to_reschedule.last().unwrap().batch_number(),
+        );
+        for batch in batches_to_reschedule {
+            batch_for_priority_tree_sender.send(batch).await?
         }
     }
 

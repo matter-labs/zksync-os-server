@@ -2,8 +2,8 @@ use std::{fmt, str::FromStr};
 
 use alloy::primitives::B256;
 use anyhow::Context;
+use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 
-use crate::blake2::Blake2Hasher;
 use crate::{DefaultTreeParams, HashTree, TreeParams};
 
 /// Maximum supported tree depth (to fit indexes into `u64`).

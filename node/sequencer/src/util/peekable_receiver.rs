@@ -1,42 +1,47 @@
+use std::collections::VecDeque;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
-/// A wrapper around `tokio::sync::mpsc::Receiver<T>` that adds a non‑consuming
-/// `peek_with` while preserving the original `recv()` / `try_recv()` semantics.
+/// A wrapper around `tokio::sync::mpsc::Receiver<T>` that adds non-consuming
+/// peeks while preserving the original `recv()` / `try_recv()` semantics.
 ///
 /// Semantics:
-/// - `recv().await` / `try_recv()` will first drain the internal head buffer (if present),
+/// - `recv().await` / `try_recv()` will first drain the internal buffer (if present),
 ///   otherwise delegate to the inner receiver.
 /// - `peek_with()` exposes a reference to the current head without consuming it:
-///     * If no head is buffered, it performs a **non‑blocking** `try_recv()` to pull one
-///       from the channel and stores it in the head buffer.
+///     * If no item is buffered, it performs a **non-blocking** `try_recv()` to pull one
+///       from the channel and stores it in the buffer.
 ///     * If the channel is empty, returns `None`.
-/// - `consume_head()` consumes the **buffered head only** (never pulls a fresh item).
+/// - Multi-peek helpers load additional items into the local buffer using **non-blocking**
+///   `try_recv()` calls only; they never await.
 #[derive(Debug)]
 pub struct PeekableReceiver<T> {
     rx: mpsc::Receiver<T>,
-    head: Option<T>,
+    buf: VecDeque<T>, // local, non-consuming buffer of peeked items
 }
 
 #[allow(dead_code)]
 impl<T> PeekableReceiver<T> {
     pub fn new(rx: mpsc::Receiver<T>) -> Self {
-        Self { rx, head: None }
+        Self {
+            rx,
+            buf: VecDeque::new(),
+        }
     }
 
     /// Receive the next item, awaiting if necessary.
-    /// If a head item exists, it is returned first.
+    /// If a buffered item exists, it is returned first.
     pub async fn recv(&mut self) -> Option<T> {
-        if self.head.is_some() {
-            return self.head.take();
+        if let Some(v) = self.buf.pop_front() {
+            return Some(v);
         }
         self.rx.recv().await
     }
 
     /// Try to receive the next item without waiting.
-    /// If a head item exists, it is returned first.
+    /// If a buffered item exists, it is returned first.
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        if let Some(v) = self.head.take() {
+        if let Some(v) = self.buf.pop_front() {
             return Ok(v);
         }
         self.rx.try_recv()
@@ -48,23 +53,100 @@ impl<T> PeekableReceiver<T> {
     where
         F: FnOnce(&T) -> R,
     {
-        if self.head.is_none() {
-            if let Ok(v) = self.rx.try_recv() {
-                self.head = Some(v);
-            } else {
-                return None;
+        if self.buf.is_empty() {
+            match self.rx.try_recv() {
+                Ok(v) => self.buf.push_back(v),
+                Err(_) => return None, // Empty or Disconnected with no items
             }
         }
-        self.head.as_ref().map(f)
+        self.buf.front().map(f)
     }
 
-    /// Consume the **buffered head** if present (never pulls from the channel).
-    pub fn consume_head(&mut self) -> Option<T> {
-        self.head.take()
+    /// Peek at items **without consuming them**, applying `f` to each reference.
+    /// Returns clones of all items for which `f` returns true.
+    /// Stops when `f` returns false, channel is empty, disconnected, or `limit` reached.
+    ///
+    /// Non-blocking: uses only `try_recv()` to extend the local buffer.
+    pub fn peek_until_and_clone<F>(&mut self, limit: usize, mut f: F) -> Vec<T>
+    where
+        T: Clone,
+        F: FnMut(&T) -> bool,
+    {
+        let mut out = Vec::new();
+
+        // Examine up to `limit` items, filling the local buffer as needed.
+        for i in 0..limit {
+            // Ensure we have at least (i + 1) items buffered; try to pull one if needed.
+            if self.buf.len() <= i {
+                match self.rx.try_recv() {
+                    Ok(v) => self.buf.push_back(v),
+                    Err(_) => break, // channel empty or disconnected; nothing more to peek
+                }
+            }
+
+            // Safe: we either had it buffered or just pushed it.
+            let item_ref = match self.buf.get(i) {
+                Some(r) => r,
+                None => break,
+            };
+
+            if f(item_ref) {
+                out.push(item_ref.clone());
+            } else {
+                break;
+            }
+        }
+
+        out
+    }
+
+    /// Consumes items and returns those for which `f` returns true.
+    /// Stops when `f` returns false, channel is empty, disconnected, or `limit` reached.
+    ///
+    /// Non-blocking: uses only `try_recv()`.
+    pub fn try_recv_while<F>(&mut self, limit: usize, mut f: F) -> Vec<T>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let mut out = Vec::new();
+
+        while out.len() < limit {
+            // Prefer consuming from local buffer first.
+            if let Some(front_ref) = self.buf.front() {
+                if f(front_ref) {
+                    // Predicate passed; consume from buffer.
+                    if let Some(v) = self.buf.pop_front() {
+                        out.push(v);
+                        continue;
+                    }
+                } else {
+                    // Predicate failed; stop without consuming the failing item.
+                    break;
+                }
+            }
+
+            // Buffer is empty; try to pull directly from the channel.
+            match self.rx.try_recv() {
+                Ok(v) => {
+                    if f(&v) {
+                        // Consumed because predicate passed.
+                        out.push(v);
+                    } else {
+                        // Predicate failed: put it back at the *front* so it's still next.
+                        self.buf.push_front(v);
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
+        out
     }
 
     /// Returns `true` if the channel is closed and no further messages will arrive.
-    /// Note: There still may be a head item buffered locally.
+    /// Note: There still may be buffered items locally.
     pub fn is_closed(&self) -> bool {
         self.rx.is_closed()
     }
@@ -74,13 +156,23 @@ impl<T> PeekableReceiver<T> {
         self.rx.close();
     }
 
-    /// Returns the approximate number of messages in the channel **excluding** the head buffer.
-    pub fn len(&self) -> usize {
+    /// Returns the approximate number of messages in the channel **excluding** the local buffer.
+    pub fn len_channel(&self) -> usize {
         self.rx.len()
     }
 
-    /// Returns `true` if the channel is currently empty **and** there is no head item buffered.
+    /// Returns the number of items in the local buffer.
+    pub fn len_buffer(&self) -> usize {
+        self.rx.len()
+    }
+
+    /// Returns the number of items in the channel **including** the local buffer.
+    pub fn len(&self) -> usize {
+        self.buf.len() + self.rx.len()
+    }
+
+    /// Returns `true` if the channel is currently empty **and** there is no item buffered locally.
     pub fn is_empty(&self) -> bool {
-        self.head.is_none() && self.rx.is_empty()
+        self.buf.is_empty() && self.rx.is_empty()
     }
 }
