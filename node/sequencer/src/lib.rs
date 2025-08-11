@@ -603,26 +603,11 @@ pub async fn run(
 
     // ========== Start Sequencer ===========
 
-    tracing::info!("Initializing Batcher");
-    let batcher = Batcher::new(
-        genesis_config.chain_id,
-        last_committed_block + 1,
-        repositories_persisted_block,
-        batcher_config,
-        blocks_for_batcher_receiver,
-        batch_for_proving_sender,
-        persistent_tree.clone(),
-    );
-    tasks.spawn(
-        batcher
-            .run_loop(last_committed_batch_info)
-            .map(report_exit("Batcher")),
-    );
-
     {
         let state_handle = state_handle.clone();
         let block_replay_storage = block_replay_storage.clone();
         let repositories = repositories.clone();
+        let sequencer_config = sequencer_config.clone();
 
         tasks.spawn(async move {
             let block_stream = if sequencer_config.is_external_node {
@@ -652,120 +637,143 @@ pub async fn run(
         });
     }
 
-    tracing::info!("Initializing ProverInputGenerator");
-    let prover_input_generator = ProverInputGenerator::new(
-        prover_input_generator_config.logging_enabled,
-        prover_input_generator_config.maximum_in_flight_blocks,
-        blocks_for_prover_input_generator_receiver,
-        blocks_for_batcher_sender,
-        persistent_tree,
-        state_handle.clone(),
+    tracing::info!("Initializing Batcher");
+    let batcher = Batcher::new(
+        genesis_config.chain_id,
+        last_committed_block + 1,
+        repositories_persisted_block,
+        batcher_config,
+        blocks_for_batcher_receiver,
+        batch_for_proving_sender,
+        persistent_tree.clone(),
     );
     tasks.spawn(
-        prover_input_generator
-            .run_loop()
-            .map(report_exit("ProverInputGenerator")),
+        batcher
+            .run_loop(last_committed_batch_info)
+            .map(report_exit("Batcher")),
     );
 
-    // ======= Start Prover Api Server========
+    // ======= Prover Api Server========
 
-    let fri_job_manager = Arc::new(FriJobManager::new(
-        batch_for_prover_receiver,
-        batch_with_proof_sender,
-        prover_api_config.job_timeout,
-        prover_api_config.max_assigned_batch_range,
-    ));
+    if !sequencer_config.is_external_node {
+        tracing::info!("Initializing ProverInputGenerator");
+        let prover_input_generator = ProverInputGenerator::new(
+            prover_input_generator_config.logging_enabled,
+            prover_input_generator_config.maximum_in_flight_blocks,
+            blocks_for_prover_input_generator_receiver,
+            blocks_for_batcher_sender,
+            persistent_tree,
+            state_handle.clone(),
+        );
+        tasks.spawn(
+            prover_input_generator
+                .run_loop()
+                .map(report_exit("ProverInputGenerator")),
+        );
 
-    let snark_job_manager = Arc::new(SnarkJobManager::new(
-        PeekableReceiver::new(batch_for_snark_receiver),
-        batch_for_l1_proving_sender,
-        prover_api_config.max_fris_per_snark,
-    ));
+        let fri_job_manager = Arc::new(FriJobManager::new(
+            batch_for_prover_receiver,
+            batch_with_proof_sender,
+            prover_api_config.job_timeout,
+            prover_api_config.max_assigned_batch_range,
+        ));
 
-    let prover_gapless_committer = GaplessCommitter::new(
-        l1_state.last_committed_batch + 1,
-        batch_with_proof_receiver,
-        proof_storage.clone(),
-        batch_for_commit_sender,
-    );
+        let snark_job_manager = Arc::new(SnarkJobManager::new(
+            PeekableReceiver::new(batch_for_snark_receiver),
+            batch_for_l1_proving_sender,
+            prover_api_config.max_fris_per_snark,
+        ));
 
-    tasks.spawn(
-        prover_gapless_committer
-            .run()
-            .map(report_exit("prover_gapless_committer")),
-    );
-
-    tasks.spawn(
-        prover_server::run(
-            fri_job_manager.clone(),
-            snark_job_manager.clone(),
+        let prover_gapless_committer = GaplessCommitter::new(
+            l1_state.last_committed_batch + 1,
+            batch_with_proof_receiver,
             proof_storage.clone(),
-            prover_api_config.address,
-        )
-        .map(report_exit("prover_server_job")),
-    );
+            batch_for_commit_sender,
+        );
 
-    if prover_api_config.fake_fri_provers.enabled {
-        tracing::info!(
-            workers = prover_api_config.fake_fri_provers.workers,
-            compute_time = ?prover_api_config.fake_fri_provers.compute_time,
-            min_task_age = ?prover_api_config.fake_fri_provers.min_age,
-            "Initializing fake FRI provers"
-        );
-        let fake_provers_pool = FakeFriProversPool::new(
-            fri_job_manager.clone(),
-            prover_api_config.fake_fri_provers.workers,
-            prover_api_config.fake_fri_provers.compute_time,
-            prover_api_config.fake_fri_provers.min_age,
-        );
         tasks.spawn(
-            fake_provers_pool
+            prover_gapless_committer
                 .run()
-                .map(report_exit("fake_fri_provers_task_optional")),
+                .map(report_exit("prover_gapless_committer")),
+        );
+
+        tasks.spawn(
+            prover_server::run(
+                fri_job_manager.clone(),
+                snark_job_manager.clone(),
+                proof_storage.clone(),
+                prover_api_config.address,
+            )
+            .map(report_exit("prover_server_job")),
+        );
+
+        if prover_api_config.fake_fri_provers.enabled {
+            tracing::info!(
+                workers = prover_api_config.fake_fri_provers.workers,
+                compute_time = ?prover_api_config.fake_fri_provers.compute_time,
+                min_task_age = ?prover_api_config.fake_fri_provers.min_age,
+                "Initializing fake FRI provers"
+            );
+            let fake_provers_pool = FakeFriProversPool::new(
+                fri_job_manager.clone(),
+                prover_api_config.fake_fri_provers.workers,
+                prover_api_config.fake_fri_provers.compute_time,
+                prover_api_config.fake_fri_provers.min_age,
+            );
+            tasks.spawn(
+                fake_provers_pool
+                    .run()
+                    .map(report_exit("fake_fri_provers_task_optional")),
+            );
+        }
+
+        if prover_api_config.fake_snark_provers.enabled {
+            tracing::info!(
+                max_batch_age = ?prover_api_config.fake_snark_provers.max_batch_age,
+                "Initializing fake SNARK prover"
+            );
+            let fake_provers_pool = FakeSnarkProver::new(
+                snark_job_manager.clone(),
+                prover_api_config.fake_snark_provers.max_batch_age,
+            );
+            tasks.spawn(
+                fake_provers_pool
+                    .run()
+                    .map(report_exit("fake_snark_provers_task_optional")),
+            );
+        }
+
+        let last_executed_block = proof_storage
+            .get(l1_state.last_executed_batch)
+            .expect("failed to load last executed batch")
+            .map(|batch_envelope| batch_envelope.batch.last_block_number)
+            .unwrap_or(0);
+        let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
+            l1_sender_config,
+            batch_for_commit_receiver,
+            batch_for_snark_sender,
+            batch_for_l1_proving_receiver,
+            batch_for_priority_tree_sender,
+            batch_for_execute_receiver,
+            fully_processed_batch_sender,
+            &l1_state,
+        );
+        tasks.spawn(l1_committer.map(report_exit("L1 committer")));
+        tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
+        tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+
+        tasks.spawn(
+            PriorityTreeManager::new(
+                block_replay_storage.clone(),
+                last_executed_block,
+                batch_for_priority_tree_receiver,
+                batch_for_execute_sender,
+            )
+            .unwrap()
+            .run()
+            .map(report_exit("Priority tree manager")),
         );
     }
-
-    if prover_api_config.fake_snark_provers.enabled {
-        tracing::info!(
-            max_batch_age = ?prover_api_config.fake_snark_provers.max_batch_age,
-            "Initializing fake SNARK prover"
-        );
-        let fake_provers_pool = FakeSnarkProver::new(
-            snark_job_manager.clone(),
-            prover_api_config.fake_snark_provers.max_batch_age,
-        );
-        tasks.spawn(
-            fake_provers_pool
-                .run()
-                .map(report_exit("fake_snark_provers_task_optional")),
-        );
-    }
-
-    let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
-        l1_sender_config,
-        batch_for_commit_receiver,
-        batch_for_snark_sender,
-        batch_for_l1_proving_receiver,
-        batch_for_priority_tree_sender,
-        batch_for_execute_receiver,
-        fully_processed_batch_sender,
-        &l1_state,
-    );
-    tasks.spawn(l1_committer.map(report_exit("L1 committer")));
-    tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
-    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
-
-    tasks.spawn(
-        PriorityTreeManager::new(
-            block_replay_storage.clone(),
-            last_executed_block,
-            batch_for_priority_tree_receiver,
-            batch_for_execute_sender,
-        )
-        .unwrap()
-        .run()
-        .map(report_exit("Priority tree manager")),
-    );
 
     tasks.spawn(
         BatchSink::new(fully_processed_batch_receiver)
