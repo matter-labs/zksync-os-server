@@ -227,7 +227,6 @@ pub async fn run(
     batcher_config: BatcherConfig,
     prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
-    is_external_node: bool,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
     let genesis = Genesis::new(genesis_config.genesis_input_path);
@@ -626,7 +625,7 @@ pub async fn run(
         let repositories = repositories.clone();
 
         tasks.spawn(async move {
-            let block_stream = if is_external_node {
+            let block_stream = if sequencer_config.is_external_node {
                 block_receiver(starting_block).await
             } else {
                 tokio::spawn(block_server(block_replay_storage.clone()));

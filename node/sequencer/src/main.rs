@@ -42,8 +42,6 @@ pub async fn main() {
     // todo: implement interruption handling in other tasks
     let (_stop_sender, stop_receiver) = watch::channel(false);
 
-    let is_external_node = false;
-
     // ======= Run tasks ===========
     tokio::select! {
         // ── Main task ───────────────────────────────────────────────
@@ -58,7 +56,6 @@ pub async fn main() {
             batcher_config,
             prover_input_generator_config,
             prover_api_config,
-            is_external_node,
         ) => {}
 
         // ── Prometheus task ─────────────────────────────────────────

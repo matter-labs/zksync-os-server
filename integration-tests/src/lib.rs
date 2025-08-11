@@ -152,7 +152,6 @@ impl TesterBuilder {
                     ..Default::default()
                 },
                 prover_api_config,
-                false,
             )
             .await;
         });

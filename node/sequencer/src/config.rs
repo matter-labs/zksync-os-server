@@ -50,6 +50,9 @@ pub struct SequencerConfig {
     /// Prometheus address to listen on.
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
+
+    #[config(default_t = false)]
+    pub is_external_node: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
