@@ -1,3 +1,4 @@
+use alloy::primitives::B256;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::time::Duration;
@@ -72,6 +73,8 @@ pub struct PreparedBlockCommand<'a> {
     pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
     pub node_version: semver::Version,
+    /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
+    pub expected_block_output_hash: Option<B256>,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

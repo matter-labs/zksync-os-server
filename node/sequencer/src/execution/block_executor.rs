@@ -178,6 +178,16 @@ pub async fn execute_block(
     seal_latency_observer.observe();
 
     let block_hash_output = hash_block_output(&output);
+
+    // Check if the block output matches the expected hash.
+    if let Some(expected_hash) = command.expected_block_output_hash {
+        anyhow::ensure!(
+            expected_hash == block_hash_output,
+            "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
+            ctx.block_number,
+        );
+    }
+
     Ok((
         output,
         ReplayRecord::new(
@@ -185,7 +195,7 @@ pub async fn execute_block(
             command.starting_l1_priority_id,
             executed_txs,
             command.node_version,
-            Some(block_hash_output),
+            block_hash_output,
         ),
         purged_txs,
     ))

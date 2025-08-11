@@ -35,8 +35,8 @@ pub struct ReplayRecord {
     pub transactions: Vec<ZkTransaction>,
     /// Version of the node that created this replay record.
     pub node_version: semver::Version,
-    /// Hash of the block output, if available.
-    pub block_output_hash: Option<B256>,
+    /// Hash of the block output.
+    pub block_output_hash: B256,
 }
 
 impl ReplayRecord {
@@ -45,7 +45,7 @@ impl ReplayRecord {
         starting_l1_priority_id: L1TxSerialId,
         transactions: Vec<ZkTransaction>,
         node_version: semver::Version,
-        block_output_hash: Option<B256>,
+        block_output_hash: B256,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),

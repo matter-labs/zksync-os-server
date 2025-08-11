@@ -92,7 +92,7 @@ impl BlockReplayStorage {
                 starting_l1_priority_id: 0,
                 transactions: vec![],
                 node_version,
-                block_output_hash: None,
+                block_output_hash: B256::ZERO,
             })
         }
         this
@@ -157,13 +157,11 @@ impl BlockReplayStorage {
             &block_num,
             &node_version_value,
         );
-        if let Some(block_output_hash) = record.block_output_hash {
-            batch.put_cf(
-                BlockReplayColumnFamily::BlockOutputHash,
-                &block_num,
-                &block_output_hash.0,
-            );
-        }
+        batch.put_cf(
+            BlockReplayColumnFamily::BlockOutputHash,
+            &block_num,
+            &record.block_output_hash.0,
+        );
 
         self.db.write(batch).expect("Failed to write to WAL");
     }
@@ -232,48 +230,55 @@ impl ReadReplay for BlockReplayStorage {
             .get_cf(BlockReplayColumnFamily::BlockOutputHash, &key)
             .expect("Failed to read from BlockOutputHash CF");
 
-        match (context_result, last_processed_l1_tx_result, txs_result) {
-            (Some(bytes_context), Some(bytes_starting_l1_tx), Some(bytes_txs)) => {
-                Some(ReplayRecord {
-                    block_context: bincode::serde::decode_from_slice(
-                        &bytes_context,
-                        bincode::config::standard(),
-                    )
-                    .expect("Failed to deserialize context")
-                    .0,
-                    starting_l1_priority_id: bincode::serde::decode_from_slice(
-                        &bytes_starting_l1_tx,
-                        bincode::config::standard(),
-                    )
-                    .expect("Failed to deserialize context")
-                    .0,
-                    transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
-                        &bytes_txs,
-                        bincode::config::standard(),
-                    )
-                    .expect("Failed to deserialize transactions")
-                    .0
-                    .into_iter()
-                    .map(|bytes| {
-                        ZkEnvelope::decode_2718(&mut bytes.as_slice())
-                            .expect("Failed to decode 2718 transaction")
-                            .try_into_recovered()
-                            .expect("Failed to recover transaction's signer")
-                    })
-                    .collect(),
-                    node_version: node_version_result
-                        .map(|bytes| {
-                            String::from_utf8(bytes)
-                                .expect("Failed to deserialize node version")
-                                .parse()
-                                .expect("Failed to parse node version")
-                        })
-                        .unwrap_or_else(|| semver::Version::new(0, 1, 0)),
-                    block_output_hash: block_output_hash_result
-                        .map(|bytes| B256::from_slice(&bytes)),
+        match (
+            context_result,
+            last_processed_l1_tx_result,
+            txs_result,
+            block_output_hash_result,
+        ) {
+            (
+                Some(bytes_context),
+                Some(bytes_starting_l1_tx),
+                Some(bytes_txs),
+                Some(bytes_block_output_hash),
+            ) => Some(ReplayRecord {
+                block_context: bincode::serde::decode_from_slice(
+                    &bytes_context,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                starting_l1_priority_id: bincode::serde::decode_from_slice(
+                    &bytes_starting_l1_tx,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
+                    &bytes_txs,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize transactions")
+                .0
+                .into_iter()
+                .map(|bytes| {
+                    ZkEnvelope::decode_2718(&mut bytes.as_slice())
+                        .expect("Failed to decode 2718 transaction")
+                        .try_into_recovered()
+                        .expect("Failed to recover transaction's signer")
                 })
-            }
-            (None, None, None) => None,
+                .collect(),
+                node_version: node_version_result
+                    .map(|bytes| {
+                        String::from_utf8(bytes)
+                            .expect("Failed to deserialize node version")
+                            .parse()
+                            .expect("Failed to parse node version")
+                    })
+                    .unwrap_or_else(|| semver::Version::new(0, 1, 0)),
+                block_output_hash: B256::from_slice(&bytes_block_output_hash),
+            }),
+            (None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
     }
