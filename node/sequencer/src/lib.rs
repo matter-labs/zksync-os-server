@@ -41,6 +41,7 @@ use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::providers::{DynProvider, ProviderBuilder};
 use anyhow::{Context, Result};
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
@@ -50,6 +51,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -631,9 +633,10 @@ pub async fn run(
 
     // ======= Run tasks ===========
 
-    tokio::select! {
-        // ── Sequencer task ───────────────────────────────────────────────
-        res = run_sequencer_actor(
+    let mut tasks = JoinSet::new();
+
+    tasks.spawn(
+        run_sequencer_actor(
             starting_block,
             blocks_for_prover_input_generator_sender,
             tree_sender,
@@ -641,16 +644,13 @@ pub async fn run(
             state_handle.clone(),
             block_replay_storage.clone(),
             repositories.clone(),
-            sequencer_config
-        ) => {
-            match res {
-                Ok(_)  => tracing::warn!("Sequencer server unexpectedly exited"),
-                Err(e) => tracing::error!("Sequencer server failed: {e:#}"),
-            }
-        }
+            sequencer_config,
+        )
+        .map(report_exit("Sequencer server")),
+    );
 
-        // todo: only start after the sequencer caught up?
-        res = run_jsonrpsee_server(
+    tasks.spawn(
+        run_jsonrpsee_server(
             rpc_config,
             genesis_config.chain_id,
             l1_state.bridgehub,
@@ -658,120 +658,62 @@ pub async fn run(
             block_replay_storage.clone(),
             state_handle.clone(),
             l2_mempool,
-        ) => {
-            match res {
-                Ok(_)  => tracing::warn!("JSON-RPC server unexpectedly exited"),
-                Err(e) => tracing::error!("JSON-RPC server failed: {e:#}"),
-            }
-        }
+        )
+        .map(report_exit("JSON-RPC server")),
+    );
 
-        res = tree_manager.run_loop() => {
-            match res {
-                Ok(_)  => tracing::warn!("TREE server unexpectedly exited"),
-                Err(e) => tracing::error!("TREE server failed: {e:#}"),
-            }
-        }
+    tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
+    tasks.spawn(l1_tx_watcher_task.map(report_exit("L1 transaction watcher")));
+    tasks.spawn(l1_commit_watcher_task.map(report_exit("L1 commit watcher")));
+    tasks.spawn(batcher_task.map(report_exit("Batcher")));
+    tasks.spawn(prover_input_generator_task.map(report_exit("ProverInputGenerator")));
+    tasks.spawn(prover_server_task.map(report_exit("prover_server_job")));
+    tasks.spawn(
+        prover_gapless_committer
+            .run()
+            .map(report_exit("prover_gapless_committer")),
+    );
+    tasks.spawn(fake_fri_provers_task_optional.map(report_exit("fake_fri_provers_task_optional")));
+    tasks.spawn(
+        fake_snark_provers_task_optional.map(report_exit("fake_snark_provers_task_optional")),
+    );
+    tasks.spawn(l1_committer.map(report_exit("L1 committer")));
+    tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
+    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    tasks.spawn(
+        priority_tree_manager
+            .run()
+            .map(report_exit("Priority tree manager")),
+    );
+    tasks.spawn(batch_sink.run().map(report_exit("batch_sink")));
 
-        res = l1_tx_watcher_task => {
-            match res {
-                Ok(_)  => tracing::warn!("L1 transaction watcher unexpectedly exited"),
-                Err(e) => tracing::error!("L1 transaction watcher failed: {e:#}"),
-            }
-        }
+    let state_handle_clone = state_handle.clone();
+    tasks.spawn(async move {
+        state_handle_clone
+            .collect_state_metrics(Duration::from_secs(2))
+            .map(|_| tracing::warn!("collect_state_metrics unexpectedly exited"))
+            .await
+    });
+    tasks.spawn(async move {
+        state_handle
+            .compact_periodically(Duration::from_millis(100))
+            .map(|_| tracing::warn!("compact_periodically unexpectedly exited"))
+            .await
+    });
+    tasks.spawn(async move {
+        repositories
+            .run_persist_loop()
+            .map(|_| tracing::warn!("repositories.run_persist_loop() unexpectedly exited"))
+            .await
+    });
 
-        res = l1_commit_watcher_task => {
-            match res {
-                Ok(_)  => tracing::warn!("L1 commit watcher unexpectedly exited"),
-                Err(e) => tracing::error!("L1 commit watcher failed: {e:#}"),
-            }
-        }
+    tasks.join_all().await;
+}
 
-        // == batcher tasks ==
-        res = batcher_task => {
-            match res {
-                Ok(_)  => tracing::warn!("Batcher task exited"),
-                Err(e) => tracing::error!("Batcher task failed: {e:#}"),
-            }
-        }
-        res = prover_input_generator_task => {
-            match res {
-                Ok(_)  => tracing::warn!("ProverInputGenerator task exited"),
-                Err(e) => tracing::error!("ProverInputGenerator task failed: {e:#}"),
-            }
-        }
-
-        res = prover_server_task => {
-            match res {
-                Ok(_)  => tracing::warn!("prover_server_job task exited"),
-                Err(e) => tracing::error!("prover_server_job task failed: {e:#}"),
-            }
-        }
-
-        res = prover_gapless_committer.run() => {
-            match res {
-                Ok(_)  => tracing::warn!("prover_gapless_committer task exited"),
-                Err(e) => tracing::error!("prover_gapless_committer task failed: {e:#}"),
-            }
-        }
-
-        res = fake_fri_provers_task_optional => {
-            match res {
-                Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
-                Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
-            }
-        }
-
-        res = fake_snark_provers_task_optional => {
-            match res {
-                Ok(_)  => tracing::warn!("fake_provers_task_optional task exited"),
-                Err(e) => tracing::error!("fake_provers_task_optional task failed: {e:#}"),
-            }
-        }
-
-        res = l1_committer => {
-            match res {
-                Ok(_)  => tracing::warn!("L1 committer unexpectedly exited"),
-                Err(e) => tracing::error!("L1 committer failed: {e:#}"),
-            }
-        }
-
-        res = l1_proof_submitter => {
-            match res {
-                Ok(_)  => tracing::warn!("L1 proof submitter unexpectedly exited"),
-                Err(e) => tracing::error!("L1 proof submitter failed: {e:#}"),
-            }
-        }
-
-        res = l1_executor => {
-            match res {
-                Ok(_)  => tracing::warn!("L1 executor unexpectedly exited"),
-                Err(e) => tracing::error!("L1 executor failed: {e:#}"),
-            }
-        }
-
-        res = priority_tree_manager.run() => {
-            match res {
-                Ok(_)  => tracing::warn!("Priority tree manager unexpectedly exited"),
-                Err(e) => tracing::error!("Priority tree manager failed: {e:#}"),
-            }
-        }
-
-        res = batch_sink.run() => {
-            match res {
-                Ok(_)  => tracing::warn!("batch_sink task exited"),
-                Err(e) => tracing::error!("batch_sink task failed: {e:#}"),
-            }
-        }
-
-        _ = state_handle.collect_state_metrics(Duration::from_secs(2)) => {
-            tracing::warn!("collect_state_metrics unexpectedly exited")
-        }
-        _ = state_handle.compact_periodically(Duration::from_millis(100)) => {
-            tracing::warn!("compact_periodically unexpectedly exited")
-        }
-        _ = repositories.run_persist_loop() => {
-            tracing::warn!("repositories.run_persist_loop() unexpectedly exited")
-        }
+fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T, E>) {
+    move |result| match result {
+        Ok(_) => tracing::warn!("{name} unexpectedly exited"),
+        Err(e) => tracing::error!("{name} failed: {e:#}"),
     }
 }
 
@@ -802,9 +744,9 @@ fn run_l1_senders(
 
     l1_state: &L1State,
 ) -> (
-    impl Future<Output = Result<()>>,
-    impl Future<Output = Result<()>>,
-    impl Future<Output = Result<()>>,
+    impl Future<Output = Result<()>> + 'static,
+    impl Future<Output = Result<()>> + 'static,
+    impl Future<Output = Result<()>> + 'static,
 ) {
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
