@@ -3,16 +3,21 @@ pub mod commitment;
 pub mod config;
 pub mod l1_discovery;
 pub mod model;
+mod new_blocks;
+
 use crate::commands::L1SenderCommand;
 use crate::model::{BatchEnvelope, FriProof};
+use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::primitives::utils::format_ether;
 use alloy::primitives::{Address, BlockNumber, TxHash};
 use alloy::providers::ext::DebugApi;
-use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{Block, TransactionRequest};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::transports::TransportResult;
+use alloy::transports::http::reqwest::Url;
 use anyhow::Context;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -56,7 +61,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     command_limit: usize,
 ) -> anyhow::Result<()> {
     let provider = build_provider::<Input>(from_address_pk, l1_api_url).await?;
-    let mut heartbeat = Heartbeat::new(&provider).await?;
+    let mut heartbeat = Heartbeat::new(provider.clone()).await?;
     let mut cmd_buffer = Vec::with_capacity(command_limit);
 
     // This sleeps until **at least one** command is received from the channel. Additionally,
@@ -156,13 +161,10 @@ async fn build_provider<Input: L1SenderCommand>(
     );
 
     let address = operator_wallet.default_signer().address();
-
     let res = DynProvider::new(
         ProviderBuilder::new()
             .wallet(operator_wallet)
-            .connect_ws(WsConnect::new(l1_api_url))
-            .await
-            .context("failed to connect to L1 api")?,
+            .connect_http(Url::from_str(&l1_api_url)?),
     );
     let balance = res.get_balance(address).await?;
 
@@ -171,10 +173,10 @@ async fn build_provider<Input: L1SenderCommand>(
     }
 
     tracing::info!(
-        "{} L1 sender: initialized sender address {} with balance {}",
+        balance_eth = format_ether(balance),
+        %address,
+        "{} Initialized L1 sender",
         Input::NAME,
-        address,
-        balance
     );
     Ok(res)
 }
@@ -186,16 +188,13 @@ struct Heartbeat {
 }
 
 impl Heartbeat {
-    async fn new(provider: &DynProvider) -> anyhow::Result<Self> {
+    async fn new(provider: DynProvider) -> anyhow::Result<Self> {
+        let current_block = provider.get_block_number().await?;
+        let new_blocks = NewBlocks::new(provider, current_block + 1);
+        let l1_block_stream = new_blocks.into_block_stream().boxed();
         Ok(Self {
             last_l1_block_number: None,
-            l1_block_stream: Box::pin(
-                provider
-                    .subscribe_full_blocks()
-                    .hashes()
-                    .into_stream()
-                    .await?,
-            ),
+            l1_block_stream,
         })
     }
 

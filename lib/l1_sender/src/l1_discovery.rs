@@ -1,6 +1,6 @@
 use crate::config::L1SenderConfig;
 use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, ProviderBuilder, WsConnect};
+use alloy::providers::{DynProvider, ProviderBuilder};
 use anyhow::Context;
 use zksync_os_contract_interface::Bridgehub;
 
@@ -21,7 +21,7 @@ pub async fn get_l1_state(
 ) -> anyhow::Result<L1State> {
     let provider = DynProvider::new(
         ProviderBuilder::new()
-            .connect_ws(WsConnect::new(&config.l1_api_url))
+            .connect(&config.l1_api_url)
             .await
             .context("failed to connect to L1 api")?,
     );

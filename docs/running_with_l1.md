@@ -30,8 +30,6 @@ The high level steps are:
 ### Start L1
 Start local L1 -- by running `anvil`.
 
-WARNING in current setup, we're heavily depending on websockets, so if you use something else (like reth) - make sure that websockets are enabled.
-
 ### Setup ecosystem and chain configs
 
 Use `zksync-os-integration` branch from`zksync-era`.
