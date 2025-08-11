@@ -25,15 +25,20 @@ use zksync_os_types::{L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 pub struct RepositoryInMemory {
     block_receipt_repository: BlockReceiptRepository,
     transaction_receipt_repository: TransactionReceiptRepository,
+    /// Latest block number that's guaranteed to be present in all the repositories
     latest_block: watch::Sender<u64>,
 }
 
 impl RepositoryInMemory {
-    pub fn new(latest_block: u64) -> Self {
+    /// Initialize with genesis
+    pub fn new(genesis: RepositoryBlock) -> Self {
+        assert_eq!(genesis.number, 0);
+        let block_receipt_repository = BlockReceiptRepository::new();
+        block_receipt_repository.insert(Arc::new(genesis));
         Self {
-            block_receipt_repository: BlockReceiptRepository::new(),
+            block_receipt_repository,
             transaction_receipt_repository: TransactionReceiptRepository::new(),
-            latest_block: watch::channel(latest_block).0,
+            latest_block: watch::channel(0).0,
         }
     }
 

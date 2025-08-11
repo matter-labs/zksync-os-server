@@ -7,6 +7,7 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
+mod genesis;
 mod metrics;
 pub mod model;
 pub mod prover_api;
@@ -23,6 +24,7 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
+use crate::genesis::build_genesis;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -284,6 +286,7 @@ pub async fn run(
     let repositories = RepositoryManager::new(
         sequencer_config.blocks_to_retain_in_memory,
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        build_genesis(),
     );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
