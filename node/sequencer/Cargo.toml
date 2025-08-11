@@ -59,7 +59,6 @@ serde_json.workspace = true
 jsonrpsee.workspace = true
 
 bincode.workspace = true
-bincode_v1.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }
 
 zksync_os_state.workspace = true
