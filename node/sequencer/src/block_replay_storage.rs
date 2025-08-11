@@ -1,7 +1,7 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::blocks::BlockCommand;
 use alloy::eips::{Decodable2718, Encodable2718};
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{B256, BlockNumber};
 use futures::stream::{self, BoxStream, StreamExt};
 use ruint::aliases::U256;
 use std::convert::TryInto;
@@ -31,6 +31,8 @@ pub enum BlockReplayColumnFamily {
     Context,
     StartingL1SerialId,
     Txs,
+    NodeVersion,
+    BlockOutputHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
 }
@@ -41,6 +43,8 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::Context,
         BlockReplayColumnFamily::StartingL1SerialId,
         BlockReplayColumnFamily::Txs,
+        BlockReplayColumnFamily::NodeVersion,
+        BlockReplayColumnFamily::BlockOutputHash,
         BlockReplayColumnFamily::Latest,
     ];
 
@@ -49,6 +53,8 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::Context => "context",
             BlockReplayColumnFamily::StartingL1SerialId => "last_processed_l1_tx_id",
             BlockReplayColumnFamily::Txs => "txs",
+            BlockReplayColumnFamily::NodeVersion => "node_version",
+            BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
             BlockReplayColumnFamily::Latest => "latest",
         }
     }
@@ -58,7 +64,11 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub fn new(db: RocksDB<BlockReplayColumnFamily>, chain_id: u64) -> Self {
+    pub fn new(
+        db: RocksDB<BlockReplayColumnFamily>,
+        chain_id: u64,
+        node_version: semver::Version,
+    ) -> Self {
         let this = Self { db };
         if this.latest_block().is_none() {
             tracing::info!(
@@ -82,10 +92,13 @@ impl BlockReplayStorage {
                 starting_l1_priority_id: 0,
                 transactions: vec![],
                 previous_block_timestamp: 0,
+                node_version,
+                block_output_hash: B256::ZERO,
             })
         }
         this
     }
+
     /// Appends a replay command (context + raw transactions) to the WAL.
     /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
     pub fn append_replay(&self, record: ReplayRecord) {
@@ -124,6 +137,7 @@ impl BlockReplayStorage {
         let txs_value =
             bincode::serde::encode_to_vec(&txs_2718_encoded, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
+        let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
         // Batch both writes: replay entry and latest pointer
         let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
@@ -139,6 +153,16 @@ impl BlockReplayStorage {
             &starting_l1_tx_id_value,
         );
         batch.put_cf(BlockReplayColumnFamily::Txs, &block_num, &txs_value);
+        batch.put_cf(
+            BlockReplayColumnFamily::NodeVersion,
+            &block_num,
+            &node_version_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::BlockOutputHash,
+            &block_num,
+            &record.block_output_hash.0,
+        );
 
         self.db.write(batch).expect("Failed to write to WAL");
     }
@@ -203,39 +227,65 @@ impl ReadReplay for BlockReplayStorage {
             .map(|context| context.timestamp)
             .unwrap_or(0);
 
-        match (context_result, last_processed_l1_tx_result, txs_result) {
-            (Some(bytes_context), Some(bytes_starting_l1_tx), Some(bytes_txs)) => {
-                Some(ReplayRecord {
-                    block_context: bincode::serde::decode_from_slice(
-                        &bytes_context,
-                        bincode::config::standard(),
-                    )
-                    .expect("Failed to deserialize context")
-                    .0,
-                    starting_l1_priority_id: bincode::serde::decode_from_slice(
-                        &bytes_starting_l1_tx,
-                        bincode::config::standard(),
-                    )
-                    .expect("Failed to deserialize context")
-                    .0,
-                    transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
-                        &bytes_txs,
-                        bincode::config::standard(),
-                    )
-                    .expect("Failed to deserialize transactions")
-                    .0
-                    .into_iter()
-                    .map(|bytes| {
-                        ZkEnvelope::decode_2718(&mut bytes.as_slice())
-                            .expect("Failed to decode 2718 transaction")
-                            .try_into_recovered()
-                            .expect("Failed to recover transaction's signer")
-                    })
-                    .collect(),
-                    previous_block_timestamp,
+        let node_version_result = self
+            .db
+            .get_cf(BlockReplayColumnFamily::NodeVersion, &key)
+            .expect("Failed to read from NodeVersion CF");
+        let block_output_hash_result = self
+            .db
+            .get_cf(BlockReplayColumnFamily::BlockOutputHash, &key)
+            .expect("Failed to read from BlockOutputHash CF");
+
+        match (
+            context_result,
+            last_processed_l1_tx_result,
+            txs_result,
+            block_output_hash_result,
+        ) {
+            (
+                Some(bytes_context),
+                Some(bytes_starting_l1_tx),
+                Some(bytes_txs),
+                Some(bytes_block_output_hash),
+            ) => Some(ReplayRecord {
+                block_context: bincode::serde::decode_from_slice(
+                    &bytes_context,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                starting_l1_priority_id: bincode::serde::decode_from_slice(
+                    &bytes_starting_l1_tx,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize context")
+                .0,
+                transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
+                    &bytes_txs,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to deserialize transactions")
+                .0
+                .into_iter()
+                .map(|bytes| {
+                    ZkEnvelope::decode_2718(&mut bytes.as_slice())
+                        .expect("Failed to decode 2718 transaction")
+                        .try_into_recovered()
+                        .expect("Failed to recover transaction's signer")
                 })
-            }
-            (None, None, None) => None,
+                .collect(),
+                previous_block_timestamp,
+                node_version: node_version_result
+                    .map(|bytes| {
+                        String::from_utf8(bytes)
+                            .expect("Failed to deserialize node version")
+                            .parse()
+                            .expect("Failed to parse node version")
+                    })
+                    .unwrap_or_else(|| semver::Version::new(0, 1, 0)),
+                block_output_hash: B256::from_slice(&bytes_block_output_hash),
+            }),
+            (None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
     }

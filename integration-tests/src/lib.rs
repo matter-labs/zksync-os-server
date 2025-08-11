@@ -69,7 +69,7 @@ impl TesterBuilder {
 
     pub async fn build(self) -> anyhow::Result<Tester> {
         let l1_locked_port = LockedPort::acquire_unused().await?;
-        let l1_address = format!("ws://localhost:{}", l1_locked_port.port);
+        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
         let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             let anvil = if std::env::var("CI").is_ok() {
                 // This is where `anvil` gets installed to in our CI. For some reason it does not

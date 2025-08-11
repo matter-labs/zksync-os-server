@@ -1,4 +1,3 @@
-use crate::repositories::RepositoryManager;
 use alloy::eips::{BlockNumHash, BlockNumberOrTag};
 use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue};
 use reth_chainspec::{Chain, ChainInfo, ChainSpec, ChainSpecBuilder, ChainSpecProvider};
@@ -21,6 +20,7 @@ use std::sync::Arc;
 use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_state::StateHandle;
+use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::ReadRepository;
 
 #[derive(Debug)]

@@ -1,3 +1,4 @@
+use alloy::primitives::BlockNumber;
 use std::time::Duration;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
@@ -22,6 +23,7 @@ pub struct RepositoriesMetrics {
     #[metrics(unit = Unit::Bytes, buckets = BLOCK_DATA_SIZES)]
     pub block_data_size_per_tx: Histogram<usize>,
     pub in_memory_txs_count: Gauge<usize>,
+    pub persist_block_number: Gauge<BlockNumber>,
 }
 
 #[vise::register]

@@ -11409,6 +11409,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-stream",
  "basic_system",
  "blake2",
  "forward_system",
@@ -11588,7 +11589,6 @@ dependencies = [
  "futures",
  "http 1.3.1",
  "itertools 0.14.0",
- "jsonrpsee",
  "reth-chainspec",
  "reth-execution-types",
  "reth-primitives",
@@ -11597,6 +11597,7 @@ dependencies = [
  "reth-storage-api",
  "reth-trie-common",
  "ruint",
+ "semver 1.0.26",
  "serde",
  "serde_json",
  "smart-config",
@@ -11616,6 +11617,7 @@ dependencies = [
  "zksync_os_priority_tree",
  "zksync_os_rpc",
  "zksync_os_state",
+ "zksync_os_storage",
  "zksync_os_storage_api",
  "zksync_os_types",
  "zksync_storage",
@@ -11641,6 +11643,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_storage"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "dashmap",
+ "forward_system",
+ "tokio",
+ "tracing",
+ "vise",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+ "zksync_storage",
+]
+
+[[package]]
 name = "zksync_os_storage_api"
 version = "0.1.0"
 dependencies = [
@@ -11648,6 +11665,7 @@ dependencies = [
  "alloy-rlp",
  "forward_system",
  "futures",
+ "semver 1.0.26",
  "serde",
  "thiserror 2.0.12",
  "tokio",

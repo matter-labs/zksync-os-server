@@ -36,6 +36,10 @@ pub struct ReplayRecord {
     /// The field is used to generate the prover input for the block in ProverInputGenerator.
     /// Will be moved to the BlockContext at some point
     pub previous_block_timestamp: u64,
+    /// Version of the node that created this replay record.
+    pub node_version: semver::Version,
+    /// Hash of the block output.
+    pub block_output_hash: B256,
 }
 
 impl ReplayRecord {
@@ -44,6 +48,8 @@ impl ReplayRecord {
         starting_l1_priority_id: L1TxSerialId,
         transactions: Vec<ZkTransaction>,
         previous_block_timestamp: u64,
+        node_version: semver::Version,
+        block_output_hash: B256,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
@@ -64,6 +70,8 @@ impl ReplayRecord {
             starting_l1_priority_id,
             transactions,
             previous_block_timestamp,
+            node_version,
+            block_output_hash,
         }
     }
 }

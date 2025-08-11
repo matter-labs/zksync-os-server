@@ -9,7 +9,7 @@ use std::time::Duration;
 #[config(derive(Default))]
 pub struct L1WatcherConfig {
     /// L1's JSON RPC API.
-    #[config(default_t = "ws://localhost:8545".into())]
+    #[config(default_t = "http://localhost:8545".into())]
     pub l1_api_url: String,
 
     /// Max number of L1 blocks to be processed at a time.

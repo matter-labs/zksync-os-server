@@ -10,7 +10,7 @@ use smart_config::{DescribeConfig, DeserializeConfig};
 #[config(derive(Default))]
 pub struct L1SenderConfig {
     /// L1's JSON RPC API.
-    #[config(default_t = "ws://localhost:8545".into())]
+    #[config(default_t = "http://localhost:8545".into())]
     pub l1_api_url: String,
 
     /// Private key to commit batches to L1

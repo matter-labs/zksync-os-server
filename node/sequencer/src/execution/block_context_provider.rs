@@ -1,28 +1,24 @@
-use crate::execution::block_executor::execute_block;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
-use anyhow::Context;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 use zk_ee::common_structs::PreimageType;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
-use zk_os_forward_system::run::{BlockContext, BlockOutput, InvalidTransaction};
-use zksync_os_l1_watcher::L1_METRICS;
+use zk_os_forward_system::run::{BlockContext, BlockOutput};
+use zksync_os_l1_watcher::METRICS;
 use zksync_os_mempool::{
     CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
     RethTransactionPoolExt, best_transactions,
 };
-use zksync_os_state::StateHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 
@@ -43,6 +39,7 @@ pub struct BlockContextProvider {
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
     chain_id: u64,
+    node_version: semver::Version,
 }
 
 impl BlockContextProvider {
@@ -53,6 +50,7 @@ impl BlockContextProvider {
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
         chain_id: u64,
+        node_version: semver::Version,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -61,31 +59,16 @@ impl BlockContextProvider {
             block_hashes_for_next_block,
             previous_block_timestamp,
             chain_id,
+            node_version,
         }
     }
 
-    pub async fn execute_block(
+    pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,
-        state: StateHandle,
-    ) -> anyhow::Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
-        let block_number = block_command.block_number();
-        tracing::info!(
-            block_number,
-            cmd = block_command.to_string(),
-            "▶ starting command. Turning into PreparedCommand.."
-        );
-        let stage_started_at = Instant::now();
-
-        // todo: validate next_l1_transaction_id by adding it directly to BlockCommand
-        //  it's not clear whether we want to add it only to Replay or also in Produce
-
+    ) -> anyhow::Result<(PreparedBlockCommand, u64)> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
-                let starting_l1_priority_id = self.next_l1_priority_id;
-
-                // TODO: should drop the l1 tx that come before starting_l1_priority_id
-
                 // Create stream: L1 transactions first, then L2 transactions
                 let best_txs = best_transactions(&self.l2_mempool, &mut self.l1_transactions);
                 let gas_limit = 100_000_000;
@@ -114,7 +97,9 @@ impl BlockContextProvider {
                     ),
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
-                    starting_l1_priority_id,
+                    starting_l1_priority_id: self.next_l1_priority_id,
+                    node_version: self.node_version.clone(),
+                    expected_block_output_hash: None,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -126,7 +111,7 @@ impl BlockContextProvider {
                                 l1_tx.priority_id()
                             );
                         }
-                        ZkEnvelope::L2(_) => {} // already consumed l1 transactions in execution},
+                        ZkEnvelope::L2(_) => {}
                     }
                 }
                 PreparedBlockCommand {
@@ -136,33 +121,13 @@ impl BlockContextProvider {
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
+                    node_version: record.node_version,
+                    expected_block_output_hash: Some(record.block_output_hash),
                 }
             }
         };
 
-        tracing::debug!(
-            block_number,
-            starting_l1_priority_id = prepared_command.starting_l1_priority_id,
-            "▶ Prepared command in {:?}. Executing..",
-            stage_started_at.elapsed()
-        );
-        let stage_started_at = Instant::now();
-
-        let (block_output, replay_record, purged_txs) =
-            execute_block(prepared_command, state, self.previous_block_timestamp)
-                .await
-                .context("execute_block")?;
-
-        tracing::info!(
-            block_number,
-            transactions = replay_record.transactions.len(),
-            preimages = block_output.published_preimages.len(),
-            storage_writes = block_output.storage_writes.len(),
-            "▶ Executed after {:?}. Adding to state...",
-            stage_started_at.elapsed()
-        );
-
-        Ok((block_output, replay_record, purged_txs))
+        Ok((prepared_command, self.previous_block_timestamp))
     }
 
     pub fn remove_txs(&self, tx_hashes: Vec<TxHash>) {
@@ -185,7 +150,7 @@ impl BlockContextProvider {
                 }
             }
         }
-        L1_METRICS.next_l1_priority_id.set(self.next_l1_priority_id);
+        METRICS.next_l1_priority_id.set(self.next_l1_priority_id);
 
         // Advance `block_hashes_for_next_block`.
         let last_block_hash = block_output.header.hash();
@@ -224,6 +189,10 @@ impl BlockContextProvider {
                 mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
+    }
+
+    pub fn get_previous_block_timestamp(&self) -> u64 {
+        self.previous_block_timestamp
     }
 }
 
