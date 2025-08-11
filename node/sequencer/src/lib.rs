@@ -26,6 +26,7 @@ use crate::config::{
 };
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
+use crate::execution::utils::save_dump;
 use crate::genesis::build_genesis;
 use crate::metadata::NODE_VERSION;
 use crate::metrics::GENERAL_METRICS;
@@ -115,6 +116,14 @@ pub async fn run_sequencer_actor(
         let (block_output, replay_record, purged_txs) =
             execute_block(prepared_command, state.clone())
                 .await
+                .map_err(|dump| {
+                    let error = anyhow::anyhow!("{}", dump.error);
+                    tracing::info!("Saving dump..");
+                    if let Err(err) = save_dump(sequencer_config.block_dump_path.clone(), dump) {
+                        tracing::error!("Failed to write dump: {err}");
+                    }
+                    error
+                })
                 .context("execute_block")?;
 
         tracing::info!(
