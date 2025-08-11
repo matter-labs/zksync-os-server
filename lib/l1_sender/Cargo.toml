@@ -19,7 +19,7 @@ zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["reqwest", "kzg", "provider-debug-api", "signer-local", "pubsub", "provider-ws"] }
+alloy = { workspace = true, default-features = false, features = ["reqwest", "kzg", "provider-debug-api", "signer-local"] }
 anyhow.workspace = true
 blake2.workspace = true
 futures.workspace = true
@@ -30,3 +30,4 @@ tokio.workspace = true
 tracing.workspace = true
 time.workspace = true
 itertools.workspace = true
+async-stream.workspace = true
