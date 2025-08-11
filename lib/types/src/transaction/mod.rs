@@ -54,10 +54,32 @@ impl ZkEnvelope {
 /// ZKsync OS transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth
 /// we mostly operate on this type as ZKsync OS expects signer to be provided externally (e.g., from
 /// the sequencer). This could change in the future.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ZkTransaction {
-    #[serde(flatten)]
     pub inner: Recovered<ZkEnvelope>,
+}
+
+impl Serialize for ZkTransaction {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inner.encoded_2718().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ZkTransaction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(
+            ZkEnvelope::decode_2718(&mut Vec::<u8>::deserialize(deserializer)?.as_slice())
+                .expect("Failed to decode 2718 transaction")
+                .try_into_recovered()
+                .expect("Failed to recover transaction's signer"),
+        )
+    }
 }
 
 impl ZkTransaction {

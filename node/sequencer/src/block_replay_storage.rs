@@ -1,6 +1,5 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::blocks::BlockCommand;
-use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::{B256, BlockNumber};
 use futures::Stream;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -12,7 +11,6 @@ use zk_os_forward_system::run::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
-use zksync_os_types::ZkEnvelope;
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:
@@ -131,13 +129,8 @@ impl BlockReplayStorage {
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.last_processed_l1_tx_id");
-        let txs_2718_encoded = record
-            .transactions
-            .into_iter()
-            .map(|tx| tx.inner.encoded_2718())
-            .collect::<Vec<_>>();
         let txs_value =
-            bincode::serde::encode_to_vec(&txs_2718_encoded, bincode::config::standard())
+            bincode::serde::encode_to_vec(&record.transactions, bincode::config::standard())
                 .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
@@ -291,20 +284,12 @@ impl ReadReplay for BlockReplayStorage {
                 )
                 .expect("Failed to deserialize context")
                 .0,
-                transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
+                transactions: bincode::serde::decode_from_slice(
                     &bytes_txs,
                     bincode::config::standard(),
                 )
                 .expect("Failed to deserialize transactions")
-                .0
-                .into_iter()
-                .map(|bytes| {
-                    ZkEnvelope::decode_2718(&mut bytes.as_slice())
-                        .expect("Failed to decode 2718 transaction")
-                        .try_into_recovered()
-                        .expect("Failed to recover transaction's signer")
-                })
-                .collect(),
+                .0,
                 previous_block_timestamp,
                 node_version: node_version_result
                     .map(|bytes| {
