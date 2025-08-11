@@ -8,6 +8,7 @@ pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
 mod genesis;
+mod metadata;
 mod metrics;
 pub mod model;
 pub mod prover_api;
@@ -24,7 +25,10 @@ use crate::config::{
     RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
+use crate::execution::block_executor::execute_block;
+use crate::execution::utils::save_dump;
 use crate::genesis::build_genesis;
+use crate::metadata::NODE_VERSION;
 use crate::metrics::GENERAL_METRICS;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -92,9 +96,44 @@ pub async fn run_sequencer_actor(
         // todo: also report full latency between command invocations
         let block_number = cmd.block_number();
 
-        let (block_output, replay_record, purged_txs) = command_block_context_provider
-            .execute_block(cmd, state.clone())
-            .await?;
+        tracing::info!(
+            block_number,
+            cmd = cmd.to_string(),
+            "▶ starting command. Turning into PreparedCommand.."
+        );
+        let stage_started_at = Instant::now();
+
+        let prepared_command = command_block_context_provider.prepare_command(cmd).await?;
+
+        tracing::debug!(
+            block_number,
+            starting_l1_priority_id = prepared_command.starting_l1_priority_id,
+            "▶ Prepared command in {:?}. Executing..",
+            stage_started_at.elapsed()
+        );
+        let stage_started_at = Instant::now();
+
+        let (block_output, replay_record, purged_txs) =
+            execute_block(prepared_command, state.clone())
+                .await
+                .map_err(|dump| {
+                    let error = anyhow::anyhow!("{}", dump.error);
+                    tracing::info!("Saving dump..");
+                    if let Err(err) = save_dump(sequencer_config.block_dump_path.clone(), dump) {
+                        tracing::error!("Failed to write dump: {err}");
+                    }
+                    error
+                })
+                .context("execute_block")?;
+
+        tracing::info!(
+            block_number,
+            transactions = replay_record.transactions.len(),
+            preimages = block_output.published_preimages.len(),
+            storage_writes = block_output.storage_writes.len(),
+            "▶ Executed after {:?}. Adding to state...",
+            stage_started_at.elapsed()
+        );
 
         let stage_started_at = Instant::now();
 
@@ -216,6 +255,8 @@ pub async fn run(
     //       multiple places
     let bridgehub_address = l1_watcher_config.bridgehub_address;
 
+    let node_version: semver::Version = NODE_VERSION.parse().unwrap();
+
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
@@ -225,8 +266,11 @@ pub async fn run(
     )
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
-    let block_replay_storage =
-        BlockReplayStorage::new(block_replay_storage_rocks_db, genesis_config.chain_id);
+    let block_replay_storage = BlockReplayStorage::new(
+        block_replay_storage_rocks_db,
+        genesis_config.chain_id,
+        node_version.clone(),
+    );
 
     tracing::info!("Initializing StateHandle");
     let state_handle = StateHandle::new(StateConfig {
@@ -402,20 +446,7 @@ pub async fn run(
         next_l1_priority_id,
     )
     .await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
-        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
-        Err(err) => {
-            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
-        }
-    };
+    let l1_watcher_task = l1_watcher.expect("failed to start L1 watcher").run();
 
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
@@ -430,6 +461,7 @@ pub async fn run(
         l2_mempool.clone(),
         block_hashes_for_next_block,
         genesis_config.chain_id,
+        node_version,
     );
 
     if !batcher_config.subsystem_enabled {

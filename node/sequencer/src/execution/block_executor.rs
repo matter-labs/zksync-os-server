@@ -1,10 +1,10 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::metrics::GENERAL_METRICS;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
-use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
@@ -21,16 +21,24 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
-) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>)> {
+) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
-    let state_view = state.state_view_at_block(ctx.block_number - 1)?;
+    let state_view = state
+        .state_view_at_block(ctx.block_number - 1)
+        .map_err(|e| BlockDump {
+            ctx,
+            txs: Vec::new(),
+            error: e.to_string(),
+        })?;
     let mut runner = VmWrapper::new(ctx, state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
     let mut purged_txs = Vec::new();
+
+    let mut all_processed_txs = Vec::new();
 
     let tx_can_be_included = |tx: &ZkTransaction, cumulative_gas_used: u64| -> bool {
         cumulative_gas_used + tx.inner.gas_limit() <= ctx.gas_limit
@@ -67,10 +75,19 @@ pub async fn execute_block(
                 match maybe_tx {
                     /* ----- got a transaction ---------------------- */
                     Some(tx) if tx_can_be_included(&tx, cumulative_gas_used) => {
-                        tracing::debug!("Executing tx: {:?}", tx.hash());
+                        tracing::trace!("Executing tx: {:?}", tx.hash());
                         wait_for_tx_latency_observer.observe();
+                        all_processed_txs.push(tx.clone());
                         let execute_latency_observer = EXECUTION_METRICS.block_execution_stages[&"execute"].start();
-                        match runner.execute_next_tx(tx.clone().encode()).await {
+                        match runner.execute_next_tx(tx.clone().encode())
+                            .await
+                            .map_err(|e| {
+                                BlockDump {
+                                    ctx,
+                                    txs: all_processed_txs.clone(),
+                                    error: e.to_string(),
+                                }
+                            })? {
                             Ok(res) => {
                                 execute_latency_observer.observe();
                                 GENERAL_METRICS.executed_transactions[&command.metrics_label].inc();
@@ -95,7 +112,13 @@ pub async fn execute_block(
                             Err(e) => {
                                 let is_l1 = tx.tx_type() == ZkTxType::L1;
                                 if is_l1 {
-                                    return Err(anyhow!("invalid l1 tx: {e:?}"));
+                                    return Err(
+                                        BlockDump {
+                                            ctx,
+                                            txs: all_processed_txs.clone(),
+                                            error: format!("invalid l1 tx: {e:?}"),
+                                        }
+                                    )
                                 } else {
                                     match command.invalid_tx_policy {
                                         InvalidTxPolicy::RejectAndContinue => {
@@ -119,7 +142,13 @@ pub async fn execute_block(
                                             }
                                         }
                                         InvalidTxPolicy::Abort => {
-                                            return Err(anyhow!("invalid l2 tx: {e:?}"));
+                                            return Err(
+                                                BlockDump {
+                                                    ctx,
+                                                    txs: all_processed_txs.clone(),
+                                                    error: format!("invalid l2 tx: {e:?}"),
+                                                }
+                                            )
                                         }
                                     }
                                 }
@@ -129,12 +158,20 @@ pub async fn execute_block(
                     /* ----- tx cannot be included -------------------------- */
                     Some(tx) => {
                         if matches!(command.seal_policy, SealPolicy::UntilExhausted) {
-                            anyhow::bail!("tx {} cannot be included in block {}: cumulative gas {} exceeds block gas limit {}",
+                            let error = format!(
+                                "tx {} cannot be included in block {}: cumulative gas {} exceeds block gas limit {}",
                                 tx.hash(),
                                 ctx.block_number,
                                 cumulative_gas_used + tx.inner.gas_limit(),
                                 ctx.gas_limit
                             );
+                            return Err(
+                                BlockDump {
+                                    ctx,
+                                    txs: all_processed_txs.clone(),
+                                    error,
+                                }
+                            )
                         }
 
                         tracing::info!(block = ctx.block_number, "sealing block as next tx cannot be included");
@@ -147,10 +184,13 @@ pub async fn execute_block(
                             // Replay path requires at least one tx.
 
                             // todo: maybe put this check to `ReplayRecord` instead - and just assert here? Or not even assert.
-                            return Err(anyhow!(
-                                "empty replay for block {}",
-                                ctx.block_number
-                            ));
+                            return Err(
+                                BlockDump {
+                                    ctx,
+                                    txs: all_processed_txs.clone(),
+                                    error: format!("empty replay for block {}", ctx.block_number),
+                                }
+                            )
                         }
 
                         tracing::info!(
@@ -167,18 +207,42 @@ pub async fn execute_block(
     let seal_latency_observer = EXECUTION_METRICS.block_execution_stages[&"seal"].start();
 
     /* ---------- seal & return ------------------------------------- */
-    let output = runner
-        .seal_block()
-        .await
-        .map_err(|e| anyhow!("VM seal failed: {e:?}"))?;
+    let output = runner.seal_block().await.map_err(|e| BlockDump {
+        ctx,
+        txs: all_processed_txs.clone(),
+        error: e.context("seal_block()").to_string(),
+    })?;
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
     seal_latency_observer.observe();
 
+    let block_hash_output = hash_block_output(&output);
+
+    // Check if the block output matches the expected hash.
+    if let Some(expected_hash) = command.expected_block_output_hash
+        && expected_hash != block_hash_output
+    {
+        let error = format!(
+            "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
+            ctx.block_number,
+        );
+        return Err(BlockDump {
+            ctx,
+            txs: all_processed_txs.clone(),
+            error,
+        });
+    }
+
     Ok((
         output,
-        ReplayRecord::new(ctx, command.starting_l1_priority_id, executed_txs),
+        ReplayRecord::new(
+            ctx,
+            command.starting_l1_priority_id,
+            executed_txs,
+            command.node_version,
+            block_hash_output,
+        ),
         purged_txs,
     ))
 }
