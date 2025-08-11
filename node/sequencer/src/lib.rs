@@ -42,11 +42,9 @@ use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::providers::{DynProvider, ProviderBuilder};
 use anyhow::{Context, Result};
 use futures::FutureExt;
-use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -222,7 +220,7 @@ fn command_source(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
-    stop_receiver: watch::Receiver<bool>,
+    _stop_receiver: watch::Receiver<bool>,
     genesis_config: GenesisConfig,
     rpc_config: RpcConfig,
     mempool_config: MempoolConfig,
@@ -376,6 +374,8 @@ pub async fn run(
     )
     .await
     .expect("reschedule not executed batches");
+
+    let mut tasks = JoinSet::new();
 
     // =========== Initialize TreeManager ========
     tracing::info!("Initializing TreeManager");
@@ -571,39 +571,41 @@ pub async fn run(
         prover_api_config.address,
     ));
 
-    let fake_fri_provers_task_optional: BoxFuture<Result<()>> =
-        if prover_api_config.fake_fri_provers.enabled {
-            tracing::info!(
-                workers = prover_api_config.fake_fri_provers.workers,
-                compute_time = ?prover_api_config.fake_fri_provers.compute_time,
-                min_task_age = ?prover_api_config.fake_fri_provers.min_age,
-                "Initializing fake FRI provers"
-            );
-            let fake_provers_pool = FakeFriProversPool::new(
-                fri_job_manager.clone(),
-                prover_api_config.fake_fri_provers.workers,
-                prover_api_config.fake_fri_provers.compute_time,
-                prover_api_config.fake_fri_provers.min_age,
-            );
-            Box::pin(fake_provers_pool.run())
-        } else {
-            noop_task(stop_receiver.clone())
-        };
+    if prover_api_config.fake_fri_provers.enabled {
+        tracing::info!(
+            workers = prover_api_config.fake_fri_provers.workers,
+            compute_time = ?prover_api_config.fake_fri_provers.compute_time,
+            min_task_age = ?prover_api_config.fake_fri_provers.min_age,
+            "Initializing fake FRI provers"
+        );
+        let fake_provers_pool = FakeFriProversPool::new(
+            fri_job_manager.clone(),
+            prover_api_config.fake_fri_provers.workers,
+            prover_api_config.fake_fri_provers.compute_time,
+            prover_api_config.fake_fri_provers.min_age,
+        );
+        tasks.spawn(
+            fake_provers_pool
+                .run()
+                .map(report_exit("fake_fri_provers_task_optional")),
+        );
+    }
 
-    let fake_snark_provers_task_optional: BoxFuture<Result<()>> =
-        if prover_api_config.fake_snark_provers.enabled {
-            tracing::info!(
-                max_batch_age = ?prover_api_config.fake_snark_provers.max_batch_age,
-                "Initializing fake SNARK prover"
-            );
-            let fake_provers_pool = FakeSnarkProver::new(
-                snark_job_manager.clone(),
-                prover_api_config.fake_snark_provers.max_batch_age,
-            );
-            Box::pin(fake_provers_pool.run())
-        } else {
-            noop_task(stop_receiver)
-        };
+    if prover_api_config.fake_snark_provers.enabled {
+        tracing::info!(
+            max_batch_age = ?prover_api_config.fake_snark_provers.max_batch_age,
+            "Initializing fake SNARK prover"
+        );
+        let fake_provers_pool = FakeSnarkProver::new(
+            snark_job_manager.clone(),
+            prover_api_config.fake_snark_provers.max_batch_age,
+        );
+        tasks.spawn(
+            fake_provers_pool
+                .run()
+                .map(report_exit("fake_snark_provers_task_optional")),
+        );
+    }
 
     let last_executed_block = proof_storage
         .get(l1_state.last_executed_batch)
@@ -632,8 +634,6 @@ pub async fn run(
     let batch_sink = BatchSink::new(fully_processed_batch_receiver);
 
     // ======= Run tasks ===========
-
-    let mut tasks = JoinSet::new();
 
     tasks.spawn(
         run_sequencer_actor(
@@ -673,10 +673,6 @@ pub async fn run(
             .run()
             .map(report_exit("prover_gapless_committer")),
     );
-    tasks.spawn(fake_fri_provers_task_optional.map(report_exit("fake_fri_provers_task_optional")));
-    tasks.spawn(
-        fake_snark_provers_task_optional.map(report_exit("fake_snark_provers_task_optional")),
-    );
     tasks.spawn(l1_committer.map(report_exit("L1 committer")));
     tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
     tasks.spawn(l1_executor.map(report_exit("L1 executor")));
@@ -715,18 +711,6 @@ fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T,
         Ok(_) => tracing::warn!("{name} unexpectedly exited"),
         Err(e) => tracing::error!("{name} failed: {e:#}"),
     }
-}
-
-fn noop_task(stop_receiver: watch::Receiver<bool>) -> Pin<Box<impl Future<Output = Result<()>>>> {
-    // noop task
-    let mut stop_receiver = stop_receiver.clone();
-    Box::pin(async move {
-        // Defer until we receive stop signal, i.e. a task that does nothing
-        stop_receiver
-            .changed()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
