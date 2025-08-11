@@ -45,7 +45,7 @@ pub struct BlockContextProvider {
     block_hashes_for_next_block: BlockHashes,
     chain_id: u64,
     node_version: semver::Version,
-    dump_path: Option<PathBuf>,
+    dump_path: PathBuf,
 }
 
 impl BlockContextProvider {
@@ -56,7 +56,7 @@ impl BlockContextProvider {
         block_hashes_for_next_block: BlockHashes,
         chain_id: u64,
         node_version: semver::Version,
-        dump_path: Option<PathBuf>,
+        dump_path: PathBuf,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -161,11 +161,9 @@ impl BlockContextProvider {
             .await
             .map_err(|dump| {
                 let error = anyhow::anyhow!("{}", dump.error);
-                if let Some(path) = self.dump_path.clone() {
-                    tracing::info!("Saving dump..");
-                    save_dump(path, dump);
-                } else {
-                    tracing::warn!("Skipped saving dump");
+                tracing::info!("Saving dump..");
+                if let Err(err) = save_dump(self.dump_path.clone(), dump) {
+                    tracing::error!("Failed to write dump: {err}");
                 }
                 error
             })

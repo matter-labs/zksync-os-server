@@ -438,9 +438,7 @@ pub async fn run(
         block_hashes_for_next_block,
         genesis_config.chain_id,
         node_version,
-        sequencer_config
-            .block_dump_enabled
-            .then(|| sequencer_config.block_dump_path.clone()),
+        sequencer_config.block_dump_path.clone(),
     );
 
     if !batcher_config.subsystem_enabled {
