@@ -402,20 +402,7 @@ pub async fn run(
         next_l1_priority_id,
     )
     .await;
-    let l1_watcher_task: BoxFuture<anyhow::Result<()>> = match l1_watcher {
-        Ok(l1_watcher) => Box::pin(l1_watcher.run()),
-        Err(err) => {
-            tracing::error!(?err, "failed to start L1 watcher; proceeding without it");
-            let mut stop_receiver = stop_receiver.clone();
-            Box::pin(async move {
-                // Defer until we receive stop signal, i.e. a task that does nothing
-                stop_receiver
-                    .changed()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            })
-        }
-    };
+    let l1_watcher_task = l1_watcher.expect("failed to start L1 watcher").run();
 
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
