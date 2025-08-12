@@ -20,7 +20,7 @@ use zksync_os_mempool::{
     RethTransactionPoolExt, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -34,7 +34,7 @@ use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider {
     next_l1_priority_id: u64,
-    l1_transactions: mpsc::Receiver<L1Envelope>,
+    l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -45,7 +45,7 @@ pub struct BlockContextProvider {
 impl BlockContextProvider {
     pub fn new(
         next_l1_priority_id: u64,
-        l1_transactions: mpsc::Receiver<L1Envelope>,
+        l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,

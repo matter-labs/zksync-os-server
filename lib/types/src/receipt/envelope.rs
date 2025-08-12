@@ -1,5 +1,5 @@
 use crate::receipt::ZkReceipt;
-use crate::transaction::FAKE_L1_PRIORITY_TX_TYPE_ID;
+use crate::transaction::{L1PriorityTxType, L1TxType};
 use crate::{L2ToL1Log, ZkTxType};
 use alloy::consensus::{Eip658Value, ReceiptWithBloom, TxReceipt, TxType};
 use alloy::eips::Typed2718;
@@ -287,7 +287,7 @@ impl Typed2718 for ZkReceiptEnvelope {
             Self::Eip1559(_) => EIP1559_TX_TYPE_ID,
             Self::Eip4844(_) => EIP4844_TX_TYPE_ID,
             Self::Eip7702(_) => EIP7702_TX_TYPE_ID,
-            Self::L1(_) => FAKE_L1_PRIORITY_TX_TYPE_ID,
+            Self::L1(_) => L1PriorityTxType::FAKE_TX_TYPE,
         }
     }
 }

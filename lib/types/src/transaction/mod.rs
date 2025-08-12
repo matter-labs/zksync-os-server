@@ -25,8 +25,10 @@ use alloy::rlp as alloy_rlp;
 #[derive(Clone, Debug, TransactionEnvelope)]
 #[envelope(alloy_consensus = alloy::consensus, tx_type_name = ZkTxType)]
 pub enum ZkEnvelope {
+    // #[envelope(ty = 41)]
+    // Upgrade(L1Envelope<UpgradeTxType>),
     #[envelope(ty = 42)]
-    L1(L1Envelope),
+    L1(L1PriorityEnvelope),
     #[envelope(flatten)]
     L2(L2Envelope),
 }
@@ -97,8 +99,8 @@ impl ZkTransaction {
     }
 }
 
-impl From<L1Envelope> for ZkTransaction {
-    fn from(value: L1Envelope) -> Self {
+impl From<L1PriorityEnvelope> for ZkTransaction {
+    fn from(value: L1PriorityEnvelope) -> Self {
         let signer = value.inner.tx().from;
         Self {
             inner: Recovered::new_unchecked(ZkEnvelope::L1(value), signer),

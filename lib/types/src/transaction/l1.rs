@@ -10,28 +10,53 @@ use alloy::primitives::{
 use alloy::rlp::{BufMut, Decodable, Encodable};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use std::hash::Hash;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::L2CanonicalTransaction;
 
-// L1 transactions are not encodable when we use type id 255 so we pretend like they have type 42
-// for all external means. VM and L1->L2 communication still uses 255.
-pub const FAKE_L1_PRIORITY_TX_TYPE_ID: u8 = 42;
-pub const REAL_L1_PRIORITY_TX_TYPE_ID: u8 = 255;
-
 pub type L1TxSerialId = u64;
+pub type L1PriorityTx = L1Tx<L1PriorityTxType>;
+pub type L1PriorityEnvelope = L1Envelope<L1PriorityTxType>;
 
-/// An L1->L2 priority transaction.
+pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
+pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
+
+pub trait L1TxType: Clone + Send + Sync + Debug + 'static {
+    // L1 transactions are not encodable when we use type that is not in [0; 0x7f] as specified in EIP-2718.
+    // However, some L1 transactions have type greater than 0x7f for historical reasons.
+    // Real tx type can be any u8 number and it is used for VM and L1->L2 communication still uses 255.
+    // Fake tx type is used for rlp encoding in alloy trait implementations.
+    const REAL_TX_TYPE: u8;
+    const FAKE_TX_TYPE: u8;
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct L1PriorityTxType;
+
+impl L1TxType for L1PriorityTxType {
+    const REAL_TX_TYPE: u8 = 255;
+    const FAKE_TX_TYPE: u8 = 42;
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct UpgradeTxType;
+
+impl L1TxType for UpgradeTxType {
+    const REAL_TX_TYPE: u8 = 254;
+    const FAKE_TX_TYPE: u8 = 41;
+}
+
+/// An L1->L2 transaction.
 ///
 /// Specific to ZKsync OS and hence has a custom transaction type.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TxL1Priority {
+pub struct L1Tx<T: L1TxType> {
     pub hash: TxHash,
     /// The 160-bit address of the initiator on L1.
     pub from: Address,
-    /// The 160-bit address of the message call’s recipient. Cannot be missing as L1->L2 priority
-    /// transaction cannot be `Create`.
+    /// The 160-bit address of the message call’s recipient. Cannot be missing as L1->L2 transaction cannot be `Create`.
     pub to: Address,
     /// A scalar value equal to the maximum amount of L2 gas that should be used in executing this
     /// transaction on L2. This is paid up-front before any computation is done and may not be
@@ -43,18 +68,18 @@ pub struct TxL1Priority {
     #[serde(with = "alloy::serde::quantity")]
     pub gas_per_pubdata_byte_limit: u64,
     /// The absolute maximum sender is willing to pay per unit of L2 gas to get the transaction
-    /// included in a block. Analog to the EIP-1559 `maxFeePerGas` for L1->L2 priority transactions.
+    /// included in a block. Analog to the EIP-1559 `maxFeePerGas` for L1->L2 transactions.
     #[serde(with = "alloy::serde::quantity")]
     pub max_fee_per_gas: u128,
     /// The additional fee that is paid directly to the validator to incentivize them to include the
-    /// transaction in a block. Analog to the EIP-1559 `maxPriorityFeePerGas` for L1->L2 priority
-    /// transactions.
+    /// transaction in a block. Analog to the EIP-1559 `maxPriorityFeePerGas` for L1->L2 transactions.
     #[serde(with = "alloy::serde::quantity")]
     pub max_priority_fee_per_gas: u128,
-    /// Priority operation id that is sequential for the entire chain. Presented as nonce of the
-    /// transaction.
+    /// Nonce of the transaction, its meaning depends on the transaction type.
+    /// For priority transactions it's an operation id that is sequential for the entire chain.
+    /// For genesis/upgrade transactions it's a protocol version.
     #[serde(with = "alloy::serde::quantity")]
-    pub nonce: L1TxSerialId,
+    pub nonce: u64,
     /// A scalar value equal to the number of Wei to be transferred to the message call’s recipient.
     pub value: U256,
     /// The amount of base token that should be minted on L2 as the result of this transaction.
@@ -66,15 +91,17 @@ pub struct TxL1Priority {
     pub input: Bytes,
     /// The set of L2 bytecode hashes whose preimages were shown on L1.
     pub factory_deps: Vec<B256>,
+
+    _marker: std::marker::PhantomData<T>,
 }
 
-impl Typed2718 for TxL1Priority {
+impl<T: L1TxType> Typed2718 for L1Tx<T> {
     fn ty(&self) -> u8 {
-        FAKE_L1_PRIORITY_TX_TYPE_ID
+        T::FAKE_TX_TYPE
     }
 }
 
-impl RlpEcdsaEncodableTx for TxL1Priority {
+impl<T: L1TxType> RlpEcdsaEncodableTx for L1Tx<T> {
     fn rlp_encoded_fields_length(&self) -> usize {
         self.hash.length()
             + self.from.length()
@@ -112,8 +139,8 @@ impl RlpEcdsaEncodableTx for TxL1Priority {
     }
 }
 
-impl RlpEcdsaDecodableTx for TxL1Priority {
-    const DEFAULT_TX_TYPE: u8 = FAKE_L1_PRIORITY_TX_TYPE_ID;
+impl<T: L1TxType> RlpEcdsaDecodableTx for L1Tx<T> {
+    const DEFAULT_TX_TYPE: u8 = T::FAKE_TX_TYPE;
 
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
         Ok(Self {
@@ -130,11 +157,12 @@ impl RlpEcdsaDecodableTx for TxL1Priority {
             refund_recipient: Decodable::decode(buf)?,
             input: Decodable::decode(buf)?,
             factory_deps: Decodable::decode(buf)?,
+            _marker: std::marker::PhantomData,
         })
     }
 }
 
-impl Encodable for TxL1Priority {
+impl<T: L1TxType> Encodable for L1Tx<T> {
     fn encode(&self, out: &mut dyn BufMut) {
         self.rlp_encode(out);
     }
@@ -144,13 +172,13 @@ impl Encodable for TxL1Priority {
     }
 }
 
-impl Decodable for TxL1Priority {
+impl<T: L1TxType> Decodable for L1Tx<T> {
     fn decode(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
         Self::rlp_decode(buf)
     }
 }
 
-impl Transaction for TxL1Priority {
+impl<T: L1TxType> Transaction for L1Tx<T> {
     fn chain_id(&self) -> Option<ChainId> {
         None
     }
@@ -230,14 +258,13 @@ impl Transaction for TxL1Priority {
     }
 }
 
-/// Transaction envelope for L1->L2 priority transactions. Mostly needed as an intermediary level for
-/// `ZkEnvelope`.
+/// Transaction envelope for L1->L2 transactions. Mostly needed as an intermediary level for `ZkEnvelope`.
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
-pub struct L1Envelope {
-    pub inner: Signed<TxL1Priority>,
+pub struct L1Envelope<T: L1TxType> {
+    pub inner: Signed<L1Tx<T>>,
 }
 
-impl L1Envelope {
+impl<T: L1TxType> L1Envelope<T> {
     pub fn hash(&self) -> &B256 {
         self.inner.hash()
     }
@@ -247,7 +274,7 @@ impl L1Envelope {
     }
 }
 
-impl Transaction for L1Envelope {
+impl<T: L1TxType> Transaction for L1Envelope<T> {
     fn chain_id(&self) -> Option<ChainId> {
         self.inner.chain_id()
     }
@@ -317,16 +344,16 @@ impl Transaction for L1Envelope {
     }
 }
 
-impl Typed2718 for L1Envelope {
+impl<T: L1TxType> Typed2718 for L1Envelope<T> {
     fn ty(&self) -> u8 {
         self.inner.ty()
     }
 }
 
-impl Decodable2718 for L1Envelope {
+impl<T: L1TxType> Decodable2718 for L1Envelope<T> {
     fn typed_decode(ty: u8, buf: &mut &[u8]) -> Eip2718Result<Self> {
         Ok(Self {
-            inner: Signed::<TxL1Priority>::typed_decode(ty, buf)?,
+            inner: Signed::<L1Tx<T>>::typed_decode(ty, buf)?,
         })
     }
 
@@ -336,7 +363,7 @@ impl Decodable2718 for L1Envelope {
     }
 }
 
-impl Encodable2718 for L1Envelope {
+impl<T: L1TxType> Encodable2718 for L1Envelope<T> {
     fn encode_2718_len(&self) -> usize {
         self.inner.encode_2718_len()
     }
@@ -346,25 +373,25 @@ impl Encodable2718 for L1Envelope {
     }
 }
 
-impl Decodable for L1Envelope {
+impl<T: L1TxType> Decodable for L1Envelope<T> {
     fn decode(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
-        let inner = Signed::<TxL1Priority>::decode_2718(buf)?;
+        let inner = Signed::<L1Tx<T>>::decode_2718(buf)?;
         Ok(L1Envelope { inner })
     }
 }
 
-impl Encodable for L1Envelope {
+impl<T: L1TxType> Encodable for L1Envelope<T> {
     fn encode(&self, out: &mut dyn BufMut) {
         self.inner.tx().encode(out)
     }
 }
 
-impl TryFrom<L2CanonicalTransaction> for L1Envelope {
+impl<T: L1TxType> TryFrom<L2CanonicalTransaction> for L1Envelope<T> {
     type Error = L1EnvelopeError;
 
     fn try_from(tx: L2CanonicalTransaction) -> Result<Self, Self::Error> {
         let tx_type = tx.txType.saturating_to();
-        if tx_type != REAL_L1_PRIORITY_TX_TYPE_ID {
+        if tx_type != T::REAL_TX_TYPE {
             return Err(L1EnvelopeError::IncorrectTransactionType(tx_type));
         }
         if !tx.maxPriorityFeePerGas.is_zero() {
@@ -397,7 +424,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
         }
 
         let hash = keccak256(tx.abi_encode());
-        let tx = TxL1Priority {
+        let tx = L1Tx {
             hash,
             from: Address::from_slice(&tx.from.to_be_bytes::<32>()[12..]),
             to: Address::from_slice(&tx.to.to_be_bytes::<32>()[12..]),
@@ -411,6 +438,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
             refund_recipient: Address::from_slice(&tx.reserved[1].to_be_bytes::<32>()[12..]),
             input: tx.data,
             factory_deps: tx.factoryDeps.into_iter().map(B256::from).collect(),
+            _marker: std::marker::PhantomData,
         };
         Ok(L1Envelope {
             inner: Signed::new_unchecked(
@@ -423,7 +451,7 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
     }
 }
 
-impl TryFrom<NewPriorityRequest> for L1Envelope {
+impl TryFrom<NewPriorityRequest> for L1Envelope<L1PriorityTxType> {
     type Error = L1EnvelopeError;
 
     fn try_from(value: NewPriorityRequest) -> Result<Self, Self::Error> {

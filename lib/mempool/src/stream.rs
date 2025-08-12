@@ -14,14 +14,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use zksync_os_types::{L1Envelope, L2Envelope, ZkTransaction};
+use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkTransaction};
 
 pub trait TxStream: Stream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
 }
 
 pub struct BestTransactionsStream<'a> {
-    l1_transactions: &'a mut mpsc::Receiver<L1Envelope>,
+    l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<EthPooledTransaction>>>>,
@@ -33,7 +33,7 @@ pub fn best_transactions<
     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
 >(
     l2_mempool: &RethPool<Client>,
-    l1_transactions: &mut mpsc::Receiver<L1Envelope>,
+    l1_transactions: &mut mpsc::Receiver<L1PriorityEnvelope>,
 ) -> impl TxStream<Item = ZkTransaction> + Send {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
