@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -134,20 +134,18 @@ async fn pick_snark_job(State(state): State<AppState>) -> Response {
     match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
-            let from = batches.first().unwrap().batch_number();
-            let to = batches.last().unwrap().batch_number();
+            let from = batches.first().unwrap().0;
+            let to = batches.last().unwrap().0;
 
             let fri_proofs = batches
                 .into_iter()
-                .filter_map(|b| match &b.data {
+                .filter_map(|(batch_number, proof)| match proof {
                     FriProof::Real(bytes) => Some(general_purpose::STANDARD.encode(bytes)),
                     FriProof::Fake => {
                         // Should never happen; defensive guard
                         error!(
                             "SNARK pick returned fake FRI at batch {} (range {}-{})",
-                            b.batch_number(),
-                            from,
-                            to
+                            batch_number, from, to
                         );
                         None
                     }

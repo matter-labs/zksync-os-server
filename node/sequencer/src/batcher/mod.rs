@@ -1,4 +1,3 @@
-use crate::metrics::GENERAL_METRICS;
 use crate::prover_input_generator::ProverInputGeneratorBatchData;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use std::future::ready;
@@ -7,8 +6,9 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata};
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
-use zksync_os_l1_sender::model::{BatchEnvelope, BatchMetadata, Trace};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_storage_api::ReplayRecord;
 
@@ -125,20 +125,19 @@ impl Batcher {
                         .set(commit_batch_info.batch_number, &stored_batch_info)?;
 
                     // Create batch
-                    let batch_envelope = BatchEnvelope {
-                        batch: BatchMetadata {
+                    let batch_envelope = BatchEnvelope::new(
+                        BatchMetadata {
                             previous_stored_batch_info: prev_batch_info.clone(),
                             commit_batch_info,
                             first_block_number: block_number,
                             last_block_number: block_number,
                             tx_count,
                         },
-                        data: ProverInputGeneratorBatchData {
+                        ProverInputGeneratorBatchData {
                             previous_block_timestamp: prev_batch_info.last_block_timestamp,
                             replay_records: vec![replay_record]
-                        },
-                        trace: Trace::default(),
-                    };
+                        }
+                    ).with_stage(BatchExecutionStage::Sealed);
 
                     tracing::info!(
                         block_number_from = block_number,
@@ -153,9 +152,7 @@ impl Batcher {
                         "Batch details",
                     );
 
-                    GENERAL_METRICS.block_number[&"batcher"].set(block_number);
-
-                    // Send to ProverInputGenerator
+                    // Send to `ProverInputGenerator`
                     self.batch_data_sender
                         .send(batch_envelope)
                         .await

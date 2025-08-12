@@ -6,7 +6,7 @@
 //! * Provers request work via [`pick_next_job`]:
 //!     * If there is an already assigned job that has timed out, it is reassigned.
 //!     * Otherwise, the next job from inbound is assigned and inserted into `ProverJobMap`.
-//! * Fake provers can call [`pick_next_job_with_min_age`] to avoid taking fresh items,
+//! * Fake provers call [`pick_next_job`] with a `min_age` param to avoid taking fresh items,
 //!   letting real provers race first.
 //! * When any proof is submitted (real or fake):
 //!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
@@ -21,7 +21,8 @@ use serde::Serialize;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc};
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -84,9 +85,7 @@ impl FriJobManager {
     /// letting real provers race first.
     pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(u64, ProverInput)> {
         // 1) Prefer a timed-out reassignment
-        if let Some(batch_envelope) = self.assigned_jobs.pick_timed_out_job() {
-            let batch_number = batch_envelope.batch_number();
-            let prover_input = batch_envelope.data;
+        if let Some((batch_number, prover_input)) = self.assigned_jobs.pick_timed_out_job() {
             return Some((batch_number, prover_input));
         }
 
@@ -105,22 +104,23 @@ impl FriJobManager {
         // 2) Otherwise, consume one item from inbound - if it meets the age gate.
         // take a lock on the inbound channel - only one thread can receive messages at a time
         if let Ok(mut rx) = self.inbound.try_lock() {
-            let old_enough = rx.peek_with(|env| env.trace.last_stage_age() >= min_inbound_age);
-            if old_enough.is_none() || !old_enough.unwrap() {
+            let old_enough =
+                rx.peek_with(|env| env.latency_tracker.current_stage_age() >= min_inbound_age);
+            if old_enough != Some(true) {
                 // no element in Inbound or it's not old enough
                 return None;
             }
 
             match rx.try_recv() {
                 Ok(env) => {
+                    let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let batch_number = env.batch_number();
                     let prover_input = env.data.clone();
                     tracing::info!(
                         batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),
-                        last_stage_age = ?env.trace.last_stage_age(),
                         ?min_inbound_age,
-                        "received new job from inbound"
+                        "Assigned a new job from inbound channel"
                     );
                     self.assigned_jobs.insert(env);
                     Some((batch_number, prover_input))
@@ -144,7 +144,7 @@ impl FriJobManager {
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
-        let assigned = match self.assigned_jobs.get(batch_number) {
+        let (assigned_at, batch_metadata) = match self.assigned_jobs.get(batch_number) {
             Some(e) => e,
             None => return Err(SubmitError::UnknownJob(batch_number)),
         };
@@ -155,10 +155,9 @@ impl FriJobManager {
             SubmitError::DeserializationFailed(err)
         })?;
 
-        let batch = &assigned.batch_envelope.batch;
         if let Err(err) = fri_proof_verifier::verify_fri_proof(
-            batch.previous_stored_batch_info.state_commitment,
-            batch.commit_batch_info.clone().into(),
+            batch_metadata.previous_stored_batch_info.state_commitment,
+            batch_metadata.commit_batch_info.clone().into(),
             program_proof,
         ) {
             tracing::warn!(batch_number, "Proof verification failed: {err}");
@@ -167,45 +166,49 @@ impl FriJobManager {
         // Now we know that the proof is valid.
 
         // Metrics: observe time since the last assignment.
-        let prove_time = assigned.assigned_at.elapsed();
+        let prove_time = assigned_at.elapsed();
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
         PROVER_METRICS.prove_time[&label].observe(prove_time);
         PROVER_METRICS.prove_time_per_tx[&label]
-            .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
-
-        // Prepare the envelope and send it downstream.
-        let envelope = BatchEnvelope {
-            batch: assigned.batch_envelope.batch,
-            data: FriProof::Real(proof_bytes),
-            trace: assigned.batch_envelope.trace.with_stage("proof_generated"),
-        };
-        self.batches_with_proof_sender
-            .send(envelope)
-            .await
-            .map_err(|err| SubmitError::Other(err.to_string()))?;
+            .observe(prove_time / batch_metadata.tx_count as u32);
 
         // Remove the job from the assigned map. If already removed due to a race
         // (another submit won), we treat it as success to keep the API idempotent.
-        if self.assigned_jobs.remove(batch_number).is_none() {
+        let Some(removed_job) = self.assigned_jobs.remove(batch_number) else {
             tracing::warn!(
                 batch_number,
                 "Proof persisted; job already removed (racing submit)"
             );
-        } else {
-            tracing::info!(batch_number, "Real proof accepted");
-        }
+            return Ok(());
+        };
+        tracing::info!(batch_number, "Real proof accepted");
+
+        // Prepare the envelope and send it downstream.
+        let envelope = removed_job
+            .batch_envelope
+            .with_data(FriProof::Real(proof_bytes))
+            .with_stage(BatchExecutionStage::FriProvedReal);
+
+        // We don't try to recover from errors in `send()` - we already removed value from `assigned_jobs` so it won't be retried.
+        // Note that this error may only happen when channel is closing (system shutdown)
+        self.batches_with_proof_sender
+            .send(envelope)
+            .await
+            .expect("Failed to send proof to batches_with_proof_sender");
+
         Ok(())
     }
 
     /// Submit a **fake** proof on behalf of a fake prover worker.
-    /// On success the entry is removed from the assigned map.
+    /// Entry is removed from the assigned map.
     pub async fn submit_fake_proof(
         &self,
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        // Snapshot the assigned job entry (if any).
-        let assigned = match self.assigned_jobs.get(batch_number) {
+        // We are removing the job from `assigned_jobs` right away -
+        // fake proofs are always valid, so there is no chance that we want to reschedule it
+        let assigned = match self.assigned_jobs.remove(batch_number) {
             Some(e) => e,
             None => return Err(SubmitError::UnknownJob(batch_number)),
         };
@@ -218,22 +221,17 @@ impl FriJobManager {
             .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
 
         // No verification / deserialization — we emit a fake proof.
-        let envelope = BatchEnvelope {
-            batch: assigned.batch_envelope.batch,
-            data: FriProof::Fake,
-            trace: assigned
-                .batch_envelope
-                .trace
-                .with_stage("fake_proof_generated"),
-        };
 
-        // Enqueue first, then remove from map.
+        let envelope = assigned
+            .batch_envelope
+            .with_data(FriProof::Fake)
+            .with_stage(BatchExecutionStage::FriProvedFake);
+
         self.batches_with_proof_sender
             .send(envelope)
             .await
-            .map_err(|err| SubmitError::Other(err.to_string()))?;
+            .expect("Failed to send proof to batches_with_proof_sender");
 
-        let _ = self.assigned_jobs.remove(batch_number);
         tracing::info!(batch_number, "Fake proof accepted");
         Ok(())
     }

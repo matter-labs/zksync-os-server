@@ -1,8 +1,9 @@
 use crate::prover_api::proof_storage::ProofStorage;
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
+use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
 
 /// Receives Batches with proofs - potentially out of order;
 /// Fixes the order (by filling in the `buffer` field);  
@@ -71,8 +72,8 @@ impl GaplessCommitter {
             ready[0].batch_number(),
             ready.last().unwrap().batch_number()
         );
-        for mut batch in ready {
-            batch.trace = batch.trace.with_stage("gapless_committer");
+        for batch in ready {
+            let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
             self.proof_storage.save_proof(&batch)?;
             self.commit_batch_sender
                 .send(CommitCommand::new(batch))

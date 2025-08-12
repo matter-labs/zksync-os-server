@@ -1,5 +1,5 @@
 use tokio::sync::mpsc::Receiver;
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 
 /// Final destination for all processed batches
 /// Only used for metrics, logging and analytics.
@@ -22,7 +22,7 @@ impl BatchSink {
         while let Some(envelope) = self.committed_batch_receiver.recv().await {
             tracing::info!(
                 batch_number = envelope.batch_number(),
-                trace = %envelope.trace,
+                latency_tracker = %envelope.latency_tracker,
                 tx_count = envelope.batch.tx_count,
                 block_from = envelope.batch.first_block_number,
                 block_to = envelope.batch.last_block_number,

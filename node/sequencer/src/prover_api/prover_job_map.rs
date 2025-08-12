@@ -2,9 +2,9 @@ use crate::prover_api::fri_job_manager::JobState;
 use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
-use zksync_os_l1_sender::model::{BatchEnvelope, ProverInput};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AssignedJobEntry {
     pub batch_envelope: BatchEnvelope<ProverInput>,
     pub assigned_at: Instant,
@@ -12,7 +12,7 @@ pub struct AssignedJobEntry {
 
 /// Concurrent map of jobs that are currently assigned to provers.
 /// Keys are batch numbers.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProverJobMap {
     // == state ==
     jobs: DashMap<u64, AssignedJobEntry>,
@@ -48,7 +48,7 @@ impl ProverJobMap {
     ///   Races are possible if multiple threads call this at the same time.
     ///   Some calls may return `None` even if others observe a timed‑out job.
     ///   This is acceptable; callers will simply poll again.
-    pub fn pick_timed_out_job(&self) -> Option<BatchEnvelope<ProverInput>> {
+    pub fn pick_timed_out_job(&self) -> Option<(u64, ProverInput)> {
         let now = Instant::now();
 
         // Single scan to locate the minimal eligible key.
@@ -74,14 +74,20 @@ impl ProverJobMap {
             );
             // Refresh assignment time to avoid immediate re-pick.
             entry.assigned_at = now;
-            return Some(entry.batch_envelope.clone());
+            return Some((
+                entry.batch_envelope.batch_number(),
+                entry.batch_envelope.data.clone(),
+            ));
         }
         None
     }
 
-    /// Returns a cloned snapshot of the assigned job entry, if present.
-    pub fn get(&self, batch_number: u64) -> Option<AssignedJobEntry> {
-        self.jobs.get(&batch_number).map(|r| r.value().clone())
+    /// If a job is present for given batch_number, returns
+    /// (assigned_at, batch_metadata)
+    pub fn get(&self, batch_number: u64) -> Option<(Instant, BatchMetadata)> {
+        self.jobs
+            .get(&batch_number)
+            .map(|entry| (entry.assigned_at, entry.batch_envelope.batch.clone()))
     }
 
     /// Removes and returns the assigned job entry, if present.
