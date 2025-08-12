@@ -37,14 +37,22 @@ pub(crate) fn seal_batch(
     );
 
     // batch prover input is a concatenation of all blocks' prover inputs with the prepended block count
-    let batch_prover_input: ProverInput =
-        std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
-            .chain(
-                blocks
-                    .iter()
-                    .flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()),
-            )
-            .collect();
+    // TODO: uncomment the code below the the multiblock proving program is ready
+    // let batch_prover_input: ProverInput =
+    //     std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
+    //         .chain(
+    //             blocks
+    //                 .iter()
+    //                 .flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()),
+    //         )
+    //         .collect();
+
+    // TODO: remove the code below when the multiblock proving program is ready
+    assert_eq!(blocks.len(), 1);
+    let batch_prover_input: ProverInput = blocks.first()
+        .expect("blocks should not be empty")
+        .3
+        .clone();
 
     let batch_envelope: BatchEnvelope<ProverInput> = BatchEnvelope::new(
         BatchMetadata {

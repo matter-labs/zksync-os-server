@@ -158,7 +158,7 @@ impl TesterBuilder {
             tokio::task::spawn(zkos_prover::run(zkos_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
-                app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),
+                app_bin_path: Some("../server_app_logging_enabled.bin".parse().unwrap()),
             }));
         }
 
