@@ -21,7 +21,6 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
-    previous_block_timestamp: u64,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     let ctx = command.block_context;
 
@@ -241,7 +240,7 @@ pub async fn execute_block(
             ctx,
             command.starting_l1_priority_id,
             executed_txs,
-            previous_block_timestamp,
+            command.previous_block_timestamp,
             command.node_version,
             block_hash_output,
         ),

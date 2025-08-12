@@ -103,7 +103,7 @@ pub async fn run_sequencer_actor(
         );
         let stage_started_at = Instant::now();
 
-        let (prepared_command, prev_block_timestamp) =
+        let prepared_command =
             command_block_context_provider.prepare_command(cmd).await?;
 
         tracing::debug!(
@@ -115,7 +115,7 @@ pub async fn run_sequencer_actor(
         let stage_started_at = Instant::now();
 
         let (block_output, replay_record, purged_txs) =
-            execute_block(prepared_command, state.clone(), prev_block_timestamp)
+            execute_block(prepared_command, state.clone())
                 .await
                 .map_err(|dump| {
                     let error = anyhow::anyhow!("{}", dump.error);
@@ -452,10 +452,9 @@ pub async fn run(
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
-    let previous_block_timestamp: u64 = repositories
-        .get_block_by_number(starting_block - 1)
-        .unwrap_or(None) // if no previous block, assume genesis block
-        .map_or(0, |block| block.header.timestamp);
+    let previous_block_timestamp: u64 = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
 
     let block_hashes_for_next_block = first_replay_record
         .as_ref()

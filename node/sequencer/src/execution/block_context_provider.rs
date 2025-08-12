@@ -66,7 +66,7 @@ impl BlockContextProvider {
     pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,
-    ) -> anyhow::Result<(PreparedBlockCommand, u64)> {
+    ) -> anyhow::Result<PreparedBlockCommand> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 // Create stream: L1 transactions first, then L2 transactions
@@ -100,6 +100,7 @@ impl BlockContextProvider {
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
                     expected_block_output_hash: None,
+                    previous_block_timestamp: self.previous_block_timestamp,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -123,11 +124,12 @@ impl BlockContextProvider {
                     metrics_label: "replay",
                     node_version: record.node_version,
                     expected_block_output_hash: Some(record.block_output_hash),
+                    previous_block_timestamp: self.previous_block_timestamp,
                 }
             }
         };
 
-        Ok((prepared_command, self.previous_block_timestamp))
+        Ok(prepared_command)
     }
 
     pub fn remove_txs(&self, tx_hashes: Vec<TxHash>) {
@@ -189,10 +191,6 @@ impl BlockContextProvider {
                 mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
-    }
-
-    pub fn get_previous_block_timestamp(&self) -> u64 {
-        self.previous_block_timestamp
     }
 }
 
