@@ -58,7 +58,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
-use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_l1_watcher::{L1TxWatcher, L1WatcherConfig};
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
@@ -438,14 +438,16 @@ pub async fn run(
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
 
-    let l1_watcher = L1Watcher::new(
+    let l1_tx_watcher = L1TxWatcher::new(
         l1_watcher_config,
         genesis_config.chain_id,
         l1_transactions_sender,
         next_l1_priority_id,
     )
     .await;
-    let l1_watcher_task = l1_watcher.expect("failed to start L1 watcher").run();
+    let l1_tx_watcher_task = l1_tx_watcher
+        .expect("failed to start L1 transaction watcher")
+        .run();
 
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
@@ -659,10 +661,10 @@ pub async fn run(
             }
         }
 
-        res = l1_watcher_task => {
+        res = l1_tx_watcher_task => {
             match res {
-                Ok(_)  => tracing::warn!("L1 watcher unexpectedly exited"),
-                Err(e) => tracing::error!("L1 watcher failed: {e:#}"),
+                Ok(_)  => tracing::warn!("L1 transaction watcher unexpectedly exited"),
+                Err(e) => tracing::error!("L1 transaction watcher failed: {e:#}"),
             }
         }
 

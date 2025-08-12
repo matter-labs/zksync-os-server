@@ -1,39 +1,32 @@
 mod config;
 mod metrics;
+mod watcher;
 
 pub use crate::config::L1WatcherConfig;
 pub use crate::metrics::METRICS;
 
+use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
 use alloy::consensus::Transaction;
-use alloy::eips::BlockId;
-use alloy::network::Ethereum;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use alloy::rpc::types::Filter;
-use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::{Bridgehub, ZkChain};
-use zksync_os_types::L1Envelope;
+use zksync_os_types::{L1Envelope, L1EnvelopeError};
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-pub struct L1Watcher {
-    provider: DynProvider<Ethereum>,
-    zk_chain_address: Address,
-    next_l1_block: BlockNumber,
+pub struct L1TxWatcher {
+    l1_watcher: L1Watcher<L1Envelope>,
     next_l1_priority_id: u64,
-
-    output: mpsc::Sender<L1Envelope>,
-
     poll_interval: Duration,
-    max_blocks_to_process: u64,
+    output: mpsc::Sender<L1Envelope>,
 }
 
-impl L1Watcher {
+impl L1TxWatcher {
     pub async fn new(
         config: L1WatcherConfig,
         chain_id: u64,
@@ -87,18 +80,22 @@ impl L1Watcher {
             "resolved on L1"
         );
 
-        Ok(Self {
+        let l1_watcher = L1Watcher::new(
             provider,
             zk_chain_address,
             next_l1_block,
+            config.max_blocks_to_process,
+        );
+
+        Ok(Self {
+            l1_watcher,
             next_l1_priority_id,
             output,
             poll_interval: config.poll_interval,
-            max_blocks_to_process: config.max_blocks_to_process,
         })
     }
 
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> L1TxWatcherResult<()> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
@@ -107,30 +104,9 @@ impl L1Watcher {
     }
 }
 
-impl L1Watcher {
-    /// Processes up to `self.max_blocks_to_process` new L1 blocks for priority requests and adds
-    /// them to mempool as L1 transactions.
-    async fn poll(&mut self) -> anyhow::Result<()> {
-        let latest_block = self
-            .provider
-            .get_block(BlockId::latest())
-            .await?
-            .context("L1 does not have any blocks")?;
-        let from_block = self.next_l1_block;
-        // Inspect up to `self.max_blocks_to_process` blocks at a time
-        let to_block = latest_block
-            .header
-            .number
-            .min(from_block + self.max_blocks_to_process - 1);
-        if from_block > to_block {
-            return Ok(());
-        }
-        let priority_txs = self.process_l1_blocks(from_block, to_block).await?;
-        METRICS
-            .l1_transactions_loaded
-            .inc_by(priority_txs.len() as u64);
-        METRICS.most_recently_scanned_l1_block.set(to_block);
-
+impl L1TxWatcher {
+    async fn poll(&mut self) -> L1TxWatcherResult<()> {
+        let priority_txs = self.l1_watcher.poll().await?;
         for tx in priority_txs {
             if tx.priority_id() < self.next_l1_priority_id {
                 tracing::debug!(
@@ -145,50 +121,14 @@ impl L1Watcher {
                     hash = ?tx.hash(),
                     "sending new priority transaction for processing",
                 );
-                self.output.send(tx).await?;
+                self.output
+                    .send(tx)
+                    .await
+                    .map_err(|_| L1TxWatcherError::OutputClosed)?;
             }
         }
 
-        self.next_l1_block = to_block + 1;
         Ok(())
-    }
-
-    /// Processes a range of L1 blocks for new priority requests.
-    ///
-    /// Returns a list of priority transactions extracted from the L1 blocks.
-    async fn process_l1_blocks(
-        &self,
-        from: BlockNumber,
-        to: BlockNumber,
-    ) -> anyhow::Result<Vec<L1Envelope>> {
-        let filter = Filter::new()
-            .from_block(from)
-            .to_block(to)
-            .event_signature(NewPriorityRequest::SIGNATURE_HASH)
-            .address(self.zk_chain_address);
-        let priority_logs = self.provider.get_logs(&filter).await?;
-        let priority_txs = priority_logs
-            .into_iter()
-            .map(|log| {
-                let priority_request = NewPriorityRequest::decode_log(&log.inner)?;
-                anyhow::Ok(L1Envelope::try_from(priority_request.data.transaction)?)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        if priority_txs.is_empty() {
-            tracing::trace!("no new priority txs");
-        } else {
-            // unwraps are safe because the vec is not empty
-            let first = priority_txs.first().unwrap();
-            let last = priority_txs.last().unwrap();
-            tracing::info!(
-                first_serial_id = %first.nonce(),
-                last_serial_id = %last.nonce(),
-                "received priority transactions",
-            );
-        }
-
-        Ok(priority_txs)
     }
 }
 
@@ -229,3 +169,12 @@ async fn find_l1_block_by_priority_id(
 
     Ok(lo)
 }
+
+impl WatchedEvent for L1Envelope {
+    const NAME: &'static str = "priority_tx";
+
+    type SolEvent = NewPriorityRequest;
+}
+
+pub type L1TxWatcherResult<T> = Result<T, L1TxWatcherError>;
+pub type L1TxWatcherError = L1WatcherError<L1EnvelopeError>;
