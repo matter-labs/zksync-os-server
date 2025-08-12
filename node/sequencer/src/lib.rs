@@ -711,7 +711,7 @@ pub async fn run(
             .await
     });
 
-    tasks.join_all().await;
+    tasks.join_next().await;
 }
 
 fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T, E>) {
