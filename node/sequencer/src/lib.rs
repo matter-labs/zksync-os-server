@@ -102,8 +102,7 @@ pub async fn run_sequencer_actor(
         );
         let stage_started_at = Instant::now();
 
-        let prepared_command =
-            command_block_context_provider.prepare_command(cmd).await?;
+        let prepared_command = command_block_context_provider.prepare_command(cmd).await?;
 
         tracing::debug!(
             block_number,

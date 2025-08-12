@@ -1,7 +1,7 @@
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
+use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_storage_api::ReplayRecord;
 
 /// Takes a vector of blocks and produces a batch envelope.
@@ -58,7 +58,8 @@ pub(crate) fn seal_batch(
                 .sum(),
         },
         batch_prover_input,
-    ).with_stage(BatchExecutionStage::Sealed);
+    )
+    .with_stage(BatchExecutionStage::Sealed);
 
     tracing::info!(
         block_number_from,
