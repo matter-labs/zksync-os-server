@@ -91,6 +91,7 @@ impl BlockReplayStorage {
                 },
                 starting_l1_priority_id: 0,
                 transactions: vec![],
+                previous_block_timestamp: 0,
                 node_version,
                 block_output_hash: B256::ZERO,
             })
@@ -221,6 +222,11 @@ impl ReadReplay for BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::Txs, &key)
             .expect("Failed to read from Txs CF");
+        let previous_block_timestamp = self
+            .get_context(block_number)
+            .map(|context| context.timestamp)
+            .unwrap_or(0);
+
         let node_version_result = self
             .db
             .get_cf(BlockReplayColumnFamily::NodeVersion, &key)
@@ -268,6 +274,7 @@ impl ReadReplay for BlockReplayStorage {
                         .expect("Failed to recover transaction's signer")
                 })
                 .collect(),
+                previous_block_timestamp,
                 node_version: node_version_result
                     .map(|bytes| {
                         String::from_utf8(bytes)

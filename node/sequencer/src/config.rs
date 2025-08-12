@@ -49,6 +49,10 @@ pub struct BatcherConfig {
     /// Whether to run the batcher subsystem or not
     #[config(default_t = true)]
     pub subsystem_enabled: bool,
+
+    /// How long to keep a batch open before sealing it.
+    #[config(default_t = Duration::from_secs(3))]
+    pub batch_timeout: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
