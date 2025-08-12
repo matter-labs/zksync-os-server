@@ -2,40 +2,37 @@ use crate::L1WatcherConfig;
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
+use std::convert::Infallible;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_types::{L1Envelope, L1EnvelopeError};
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-pub struct L1TxWatcher {
-    l1_watcher: L1Watcher<L1Envelope>,
-    next_l1_priority_id: u64,
+pub struct L1CommitWatcher {
+    l1_watcher: L1Watcher<BlockCommit>,
+    next_batch_number: u64,
     poll_interval: Duration,
-    output: mpsc::Sender<L1Envelope>,
 }
 
-impl L1TxWatcher {
+impl L1CommitWatcher {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
         zk_chain_address: Address,
-        output: mpsc::Sender<L1Envelope>,
-        next_l1_priority_id: u64,
+        next_batch_number: u64,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
             ?zk_chain_address,
-            "initializing L1 transaction watcher"
+            "initializing L1 commit watcher"
         );
         let zk_chain = ZkChain::new(zk_chain_address, &provider);
 
         let current_l1_block = provider.get_block_number().await?;
-        let next_l1_block = find_l1_block_by_priority_id(&zk_chain, next_l1_priority_id)
+        let next_l1_block = find_l1_commit_block_by_batch_number(&zk_chain, next_batch_number)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -64,13 +61,12 @@ impl L1TxWatcher {
 
         Ok(Self {
             l1_watcher,
-            next_l1_priority_id,
-            output,
+            next_batch_number,
             poll_interval: config.poll_interval,
         })
     }
 
-    pub async fn run(mut self) -> L1TxWatcherResult<()> {
+    pub async fn run(mut self) -> L1CommitWatcherResult<()> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
@@ -79,27 +75,27 @@ impl L1TxWatcher {
     }
 }
 
-impl L1TxWatcher {
-    async fn poll(&mut self) -> L1TxWatcherResult<()> {
-        let priority_txs = self.l1_watcher.poll().await?;
-        for tx in priority_txs {
-            if tx.priority_id() < self.next_l1_priority_id {
+impl L1CommitWatcher {
+    async fn poll(&mut self) -> L1CommitWatcherResult<()> {
+        let batch_commits = self.l1_watcher.poll().await?;
+        for batch_commit in batch_commits {
+            let batch_number = batch_commit.batchNumber.to::<u64>();
+            let batch_hash = batch_commit.batchHash;
+            let batch_commitment = batch_commit.commitment;
+            if batch_number < self.next_batch_number {
                 tracing::debug!(
-                    priority_id = tx.priority_id(),
-                    hash = ?tx.hash(),
-                    "skipping already processed priority transaction",
-                )
-            } else {
-                self.next_l1_priority_id = tx.priority_id() + 1;
-                tracing::debug!(
-                    priority_id = tx.priority_id(),
-                    hash = ?tx.hash(),
-                    "sending new priority transaction for processing",
+                    batch_number,
+                    ?batch_hash,
+                    ?batch_commitment,
+                    "skipping already processed committed batch",
                 );
-                self.output
-                    .send(tx)
-                    .await
-                    .map_err(|_| L1TxWatcherError::OutputClosed)?;
+            } else {
+                tracing::info!(
+                    batch_number,
+                    ?batch_hash,
+                    ?batch_commitment,
+                    "discovered committed batch"
+                );
             }
         }
 
@@ -107,9 +103,9 @@ impl L1TxWatcher {
     }
 }
 
-async fn find_l1_block_by_priority_id(
+async fn find_l1_commit_block_by_batch_number(
     zk_chain: &ZkChain<&DynProvider>,
-    next_l1_priority_id: u64,
+    next_batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
     let latest = zk_chain.provider().get_block_number().await?;
 
@@ -122,16 +118,16 @@ async fn find_l1_block_by_priority_id(
             // return early if contract is not deployed yet - otherwise `get_total_priority_txs_at_block` will fail
             return Ok(false);
         }
-        let res = zk.get_total_priority_txs_at_block(block.into()).await?;
+        let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= target)
     }
 
     // Ensure the predicate is true by the upper bound, or bail early.
-    if !predicate(zk_chain, latest, next_l1_priority_id).await? {
+    if !predicate(zk_chain, latest, next_batch_number).await? {
         anyhow::bail!(
             "Condition not satisfied up to latest block: contract not deployed yet \
              or target {} not reached.",
-            next_l1_priority_id
+            next_batch_number
         );
     }
 
@@ -139,7 +135,7 @@ async fn find_l1_block_by_priority_id(
     let (mut lo, mut hi) = (0u64, latest);
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if predicate(zk_chain, mid, next_l1_priority_id).await? {
+        if predicate(zk_chain, mid, next_batch_number).await? {
             hi = mid;
         } else {
             lo = mid + 1;
@@ -149,11 +145,11 @@ async fn find_l1_block_by_priority_id(
     Ok(lo)
 }
 
-impl WatchedEvent for L1Envelope {
-    const NAME: &'static str = "priority_tx";
+impl WatchedEvent for BlockCommit {
+    const NAME: &'static str = "block_commit";
 
-    type SolEvent = NewPriorityRequest;
+    type SolEvent = BlockCommit;
 }
 
-pub type L1TxWatcherResult<T> = Result<T, L1TxWatcherError>;
-pub type L1TxWatcherError = L1WatcherError<L1EnvelopeError>;
+pub type L1CommitWatcherResult<T> = Result<T, L1CommitWatcherError>;
+pub type L1CommitWatcherError = L1WatcherError<Infallible>;

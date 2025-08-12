@@ -1,4 +1,5 @@
 use crate::config::L1SenderConfig;
+use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::DynProvider;
 use zksync_os_contract_interface::Bridgehub;
@@ -33,9 +34,8 @@ pub async fn get_l1_state(
     let last_committed_batch = bridgehub
         .zk_chain()
         .await?
-        .get_total_batches_committed()
-        .await?
-        .saturating_to::<u64>();
+        .get_total_batches_committed(BlockId::latest())
+        .await?;
 
     let last_proved_batch = bridgehub
         .zk_chain()
