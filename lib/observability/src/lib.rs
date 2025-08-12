@@ -1,2 +1,7 @@
 mod latency_distribution_tracker;
 pub use latency_distribution_tracker::LatencyDistributionTracker;
+mod component_state_latency_tracker;
+pub use component_state_latency_tracker::ComponentStateLatencyTracker;
+pub use component_state_latency_tracker::GenericComponentState;
+
+mod metrics;

@@ -11508,6 +11508,7 @@ name = "zksync_os_observability"
 version = "0.1.0"
 dependencies = [
  "itertools 0.14.0",
+ "tokio",
  "tracing",
  "vise",
 ]
@@ -11524,6 +11525,7 @@ dependencies = [
  "zksync_os_crypto",
  "zksync_os_l1_sender",
  "zksync_os_mini_merkle_tree",
+ "zksync_os_observability",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]

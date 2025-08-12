@@ -16,6 +16,7 @@ zksync_os_l1_sender.workspace = true
 zksync_os_mini_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
+zksync_os_observability.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false }

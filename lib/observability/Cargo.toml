@@ -13,3 +13,4 @@ categories.workspace = true
 vise.workspace = true
 itertools.workspace = true
 tracing.workspace = true
+tokio.workspace = true

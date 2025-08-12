@@ -4,10 +4,12 @@ pub mod commands;
 pub mod commitment;
 pub mod config;
 pub mod l1_discovery;
+pub mod metrics;
 
 use crate::batcher_model::{BatchEnvelope, FriProof};
 mod new_blocks;
 use crate::commands::L1SenderCommand;
+use crate::metrics::L1SenderState;
 use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
@@ -26,6 +28,7 @@ use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use tokio::sync::mpsc::{Receiver, Sender};
+use zksync_os_observability::ComponentStateLatencyTracker;
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -60,6 +63,8 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     command_limit: usize,
+    // == metrics
+    mut latency_tracker: ComponentStateLatencyTracker<L1SenderState>,
 ) -> anyhow::Result<()> {
     let provider = build_provider::<Input>(from_address_pk, l1_api_url).await?;
     let mut heartbeat = Heartbeat::new(provider.clone()).await?;
@@ -73,6 +78,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     // This method only returns `0` if the channel has been closed and there are no more items
     // in the queue.
     while inbound.recv_many(&mut cmd_buffer, command_limit).await != 0 {
+        latency_tracker.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&cmd_buffer); // Only for logging
         let command_name = Input::NAME;
         tracing::info!(command_name, range, "Sending l1 transactions...");
@@ -101,6 +107,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
             .try_collect::<HashMap<TxHash, Input>>()
             .await?;
         tracing::info!(command_name, range, "Sent to L1. Waiting for inclusion...");
+        latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
         let mined_envelopes = heartbeat
             .wait_for_pending_txs(&provider, pending_tx_hashes)
             .await?;
@@ -109,12 +116,14 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
             range,
             "All transactions included. Sending downstream.",
         );
+        latency_tracker.enter_state(L1SenderState::WaitingSend);
         for command in mined_envelopes {
             for mut output_envelope in command.into() {
                 output_envelope.set_stage(Input::MINED_STAGE);
                 outbound.send(output_envelope).await?;
             }
         }
+        latency_tracker.enter_state(L1SenderState::WaitingRecv);
     }
     anyhow::bail!("inbound channel closed");
 }
