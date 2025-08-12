@@ -1,4 +1,4 @@
-use crate::METRICS;
+use crate::metrics::METRICS;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, BlockNumber};
