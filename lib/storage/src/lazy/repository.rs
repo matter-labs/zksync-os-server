@@ -108,6 +108,10 @@ impl RepositoryManager {
             REPOSITORIES_METRICS.persist_block_number.set(block_number);
         }
     }
+
+    pub fn get_latest_persisted_block(&self) -> u64 {
+        self.db.get_latest_block()
+    }
 }
 
 impl ReadRepository for RepositoryManager {
