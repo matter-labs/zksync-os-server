@@ -1,6 +1,7 @@
+use crate::batcher_metrics::BatchExecutionStage;
+use crate::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::model::{BatchEnvelope, FriProof, SnarkProof};
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
@@ -27,6 +28,8 @@ impl ProofCommand {
 
 impl L1SenderCommand for ProofCommand {
     const NAME: &'static str = "prove";
+    const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
+    const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
 
     fn solidity_call(&self) -> impl SolCall {
         assert!(matches!(self.proof, SnarkProof::Fake));
@@ -37,25 +40,23 @@ impl L1SenderCommand for ProofCommand {
             self.to_calldata_suffix().into(),
         ))
     }
+}
 
-    fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
-        self.batches
-            .into_iter()
-            .map(|batch| batch.with_trace_stage("l1_proved"))
-            .collect()
+impl AsRef<[BatchEnvelope<FriProof>]> for ProofCommand {
+    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+        self.batches.as_slice()
     }
-    fn display_vec(input: &[Self]) -> String {
-        input
-            .iter()
-            .map(|x| {
-                format!(
-                    "{}-{}",
-                    x.batches.first().unwrap().batch_number(),
-                    x.batches.last().unwrap().batch_number()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+}
+
+impl AsMut<[BatchEnvelope<FriProof>]> for ProofCommand {
+    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+        self.batches.as_mut_slice()
+    }
+}
+
+impl From<ProofCommand> for Vec<BatchEnvelope<FriProof>> {
+    fn from(value: ProofCommand) -> Self {
+        value.batches
     }
 }
 

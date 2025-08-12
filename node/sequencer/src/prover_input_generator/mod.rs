@@ -1,4 +1,3 @@
-use crate::metrics::GENERAL_METRICS;
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
@@ -10,7 +9,8 @@ use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
 use zk_os_forward_system::run::{StorageCommitment, generate_proof_input};
-use zksync_os_l1_sender::model::{BatchEnvelope, ProverInput};
+use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
@@ -92,7 +92,8 @@ impl ProverInputGenerator {
                     // since this batch was already processed by batcher that also needs/waits for the tree
                     let mut previous_block_timestamp =
                         batch_replay_data.data.previous_block_timestamp;
-                    for replay_record in batch_replay_data.data.replay_records {
+                    // temporary: cloning is inefficient here, but this logic is removed in "real bathcing" PR
+                    for replay_record in batch_replay_data.data.replay_records.clone() {
                         let tree = tree
                             .clone()
                             .get_at_block(replay_record.block_context.block_number - 1)
@@ -102,15 +103,11 @@ impl ProverInputGenerator {
                         previous_block_timestamp = current_block_timestamp;
                     }
 
-                    (
-                        batch_replay_data.batch,
-                        batch_replay_data.trace,
-                        processed_replays,
-                    )
+                    (batch_replay_data, processed_replays)
                 }
             })
             // generate prover input. Use up to `Self::maximum_in_flight_blocks` threads
-            .map(|(batch_metadata, trace, processed_replays)| {
+            .map(|(batch_envelope, processed_replays)| {
                 // For now, we only have one block per batch
                 assert_eq!(processed_replays.len(), 1);
                 let (tree, previous_block_timestamp, replay_record) =
@@ -122,12 +119,12 @@ impl ProverInputGenerator {
                     block_number,
                     replay_record.transactions.len(),
                 );
-
+                let batch_envelope =
+                    batch_envelope.with_stage(BatchExecutionStage::ProverInputStarted);
                 let state_handle = self.state_handle.clone();
                 tokio::task::spawn_blocking(move || {
                     (
-                        batch_metadata,
-                        trace,
+                        batch_envelope,
                         compute_prover_input(
                             &replay_record,
                             state_handle,
@@ -144,18 +141,12 @@ impl ProverInputGenerator {
             // still, we should be able to add cross-batch parallelism later on
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
-            .try_for_each(|(batch_metadata, trace, prover_input)| async {
-                GENERAL_METRICS.block_number[&"prover_input_generator"]
-                    .set(batch_metadata.commit_batch_info.batch_number);
-
-                let output_envelope = BatchEnvelope {
-                    batch: batch_metadata,
-                    data: prover_input,
-                    trace: trace.with_stage("prover_input_generated"),
-                };
+            .try_for_each(|(batch_envelope, prover_input)| async {
+                let output_envelope = batch_envelope
+                    .with_stage(BatchExecutionStage::ProverInputGenerated)
+                    .with_data(prover_input);
 
                 self.batch_for_proving_sender.send(output_envelope).await?;
-
                 Ok(())
             })
             .await

@@ -1,6 +1,7 @@
+use crate::batcher_metrics::BatchExecutionStage;
+use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::model::{BatchEnvelope, FriProof};
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
@@ -28,6 +29,8 @@ impl ExecuteCommand {
 
 impl L1SenderCommand for ExecuteCommand {
     const NAME: &'static str = "execute";
+    const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxSent;
+    const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
 
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::executeBatchesSharedBridgeCall::new((
@@ -37,26 +40,23 @@ impl L1SenderCommand for ExecuteCommand {
             self.to_calldata_suffix().into(),
         ))
     }
+}
 
-    fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
-        self.batches
-            .into_iter()
-            .map(|batch| batch.with_trace_stage("l1_executed"))
-            .collect()
+impl AsRef<[BatchEnvelope<FriProof>]> for ExecuteCommand {
+    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+        self.batches.as_slice()
     }
+}
 
-    fn display_vec(input: &[Self]) -> String {
-        input
-            .iter()
-            .map(|x| {
-                format!(
-                    "{}-{}",
-                    x.batches.first().unwrap().batch_number(),
-                    x.batches.last().unwrap().batch_number()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+impl AsMut<[BatchEnvelope<FriProof>]> for ExecuteCommand {
+    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+        self.batches.as_mut_slice()
+    }
+}
+
+impl From<ExecuteCommand> for Vec<BatchEnvelope<FriProof>> {
+    fn from(value: ExecuteCommand) -> Self {
+        value.batches
     }
 }
 

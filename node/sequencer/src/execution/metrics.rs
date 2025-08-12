@@ -1,11 +1,18 @@
 use std::time::Duration;
-use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 const STORAGE_WRITES: Buckets = Buckets::exponential(1.0..=1000.0, 1.7);
 
 #[derive(Debug, Metrics)]
+#[metrics(prefix = "execution")]
 pub struct ExecutionMetrics {
+    #[metrics(labels = ["stage"])]
+    pub block_number: LabeledFamily<&'static str, Gauge<u64>>,
+
+    #[metrics(labels = ["command"])]
+    pub executed_transactions: LabeledFamily<&'static str, Counter>,
+
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
     pub block_execution_stages: LabeledFamily<&'static str, Histogram<Duration>>,
 
