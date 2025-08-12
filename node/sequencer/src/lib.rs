@@ -603,6 +603,10 @@ pub async fn run(
 
     // ========== Start Sequencer ===========
 
+    if !sequencer_config.is_external_node {
+        tasks.spawn(block_server(block_replay_storage.clone()).map(report_exit("block server")));
+    }
+
     {
         let state_handle = state_handle.clone();
         let block_replay_storage = block_replay_storage.clone();
@@ -613,8 +617,6 @@ pub async fn run(
             let block_stream = if sequencer_config.is_external_node {
                 block_receiver(starting_block).await
             } else {
-                tokio::spawn(block_server(block_replay_storage.clone()));
-
                 command_source(
                     &block_replay_storage,
                     starting_block,

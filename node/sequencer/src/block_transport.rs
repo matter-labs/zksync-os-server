@@ -21,13 +21,11 @@ pub async fn block_server(block_replays: BlockReplayStorage) -> anyhow::Result<(
         let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
 
         let block_replays = block_replays.clone();
-        tokio::spawn({
-            async move {
-                let mut stream = block_replays.replay_commands_forever(starting_block);
-                loop {
-                    let replay = stream.next().await.unwrap();
-                    replay_sender.send(replay).await.unwrap();
-                }
+        tokio::spawn(async move {
+            let mut stream = block_replays.replay_commands_forever(starting_block);
+            loop {
+                let replay = stream.next().await.unwrap();
+                replay_sender.send(replay).await.unwrap();
             }
         });
     }
