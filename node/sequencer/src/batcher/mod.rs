@@ -150,7 +150,7 @@ impl Batcher {
                             ));
 
                             // arm the timer after we process the block number that's more or equal
-                            // than last persisted one
+                            // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
                             if deadline.is_none() && block_number >= self.last_persisted_block {
                                 deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
                             }
