@@ -39,6 +39,7 @@ use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorBa
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
+use alloy::providers::{DynProvider, ProviderBuilder};
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
@@ -250,10 +251,6 @@ pub async fn run(
     prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
 ) {
-    // todo: decide on an approach to configuration to stop having to set up the same parameters in
-    //       multiple places
-    let bridgehub_address = l1_watcher_config.bridgehub_address;
-
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
 
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
@@ -303,9 +300,19 @@ pub async fn run(
     );
 
     tracing::info!("reading L1 state");
-    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
-        .await
-        .expect("Failed to read L1 state");
+    let l1_provider = DynProvider::new(
+        ProviderBuilder::new()
+            .connect(&l1_sender_config.l1_api_url)
+            .await
+            .expect("failed to connect to L1 api"),
+    );
+    let l1_state = get_l1_state(
+        &l1_provider,
+        l1_sender_config.clone(),
+        genesis_config.chain_id,
+    )
+    .await
+    .expect("Failed to read L1 state");
 
     // ======= Initialize async channels  ===========
 
@@ -440,7 +447,8 @@ pub async fn run(
 
     let l1_tx_watcher = L1TxWatcher::new(
         l1_watcher_config,
-        genesis_config.chain_id,
+        l1_provider,
+        l1_state.diamond_proxy,
         l1_transactions_sender,
         next_l1_priority_id,
     )
@@ -605,7 +613,7 @@ pub async fn run(
         batch_for_priority_tree_sender,
         batch_for_execute_receiver,
         fully_processed_batch_sender,
-        l1_state,
+        &l1_state,
     );
 
     let priority_tree_manager = PriorityTreeManager::new(
@@ -642,7 +650,7 @@ pub async fn run(
         res = run_jsonrpsee_server(
             rpc_config,
             genesis_config.chain_id,
-            bridgehub_address,
+            l1_state.bridgehub,
             repositories.clone(),
             block_replay_storage.clone(),
             state_handle.clone(),
@@ -782,7 +790,7 @@ fn run_l1_senders(
     batch_for_execute_receiver: Receiver<ExecuteCommand>,
     fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
 
-    l1_state: L1State,
+    l1_state: &L1State,
 ) -> (
     impl Future<Output = Result<()>>,
     impl Future<Output = Result<()>>,

@@ -1,7 +1,6 @@
 use crate::config::L1SenderConfig;
 use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, ProviderBuilder};
-use anyhow::Context;
+use alloy::providers::DynProvider;
 use zksync_os_contract_interface::Bridgehub;
 
 #[derive(Debug, Clone)]
@@ -15,22 +14,12 @@ pub struct L1State {
 }
 
 pub async fn get_l1_state(
+    provider: &DynProvider,
     config: L1SenderConfig,
     // todo: consider getting rid of GenesisConfig and putting this inside L1Config
     chain_id: u64,
 ) -> anyhow::Result<L1State> {
-    let provider = DynProvider::new(
-        ProviderBuilder::new()
-            .connect(&config.l1_api_url)
-            .await
-            .context("failed to connect to L1 api")?,
-    );
-
-    let bridgehub = Bridgehub::new(
-        config.bridgehub_address.0.into(),
-        provider.clone(),
-        chain_id,
-    );
+    let bridgehub = Bridgehub::new(config.bridgehub_address.0.into(), provider, chain_id);
     let all_chain_ids = bridgehub.get_all_zk_chain_chain_ids().await?;
     anyhow::ensure!(
         all_chain_ids.contains(&U256::from(chain_id)),

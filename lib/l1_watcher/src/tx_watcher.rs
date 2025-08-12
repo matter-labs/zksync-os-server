@@ -1,12 +1,11 @@
 use crate::L1WatcherConfig;
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
-use alloy::primitives::BlockNumber;
-use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use anyhow::Context;
+use alloy::primitives::{Address, BlockNumber};
+use alloy::providers::{DynProvider, Provider};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_contract_interface::{Bridgehub, ZkChain};
+use zksync_os_contract_interface::ZkChain;
 use zksync_os_types::{L1Envelope, L1EnvelopeError};
 
 /// Don't try to process that many block linearly
@@ -22,30 +21,18 @@ pub struct L1TxWatcher {
 impl L1TxWatcher {
     pub async fn new(
         config: L1WatcherConfig,
-        chain_id: u64,
+        provider: DynProvider,
+        zk_chain_address: Address,
         output: mpsc::Sender<L1Envelope>,
         next_l1_priority_id: u64,
     ) -> anyhow::Result<Self> {
-        let provider = DynProvider::new(
-            ProviderBuilder::new()
-                .connect(&config.l1_api_url)
-                .await
-                .context("failed to connect to L1 api")?,
-        );
         tracing::info!(
-            chain_id,
             config.max_blocks_to_process,
             ?config.poll_interval,
-            ?config.bridgehub_address,
+            ?zk_chain_address,
             "initializing L1 watcher"
         );
-        let bridgehub = Bridgehub::new(
-            config.bridgehub_address.0.into(),
-            provider.clone(),
-            chain_id,
-        );
-        let zk_chain = bridgehub.zk_chain().await?;
-        let zk_chain_address = *zk_chain.address();
+        let zk_chain = ZkChain::new(zk_chain_address, &provider);
 
         let current_l1_block = provider.get_block_number().await?;
         let next_l1_block = find_l1_block_by_priority_id(&zk_chain, next_l1_priority_id)
@@ -126,12 +113,16 @@ impl L1TxWatcher {
 }
 
 async fn find_l1_block_by_priority_id(
-    zk_chain: &ZkChain<DynProvider>,
+    zk_chain: &ZkChain<&DynProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     let latest = zk_chain.provider().get_block_number().await?;
 
-    async fn predicate(zk: &ZkChain<DynProvider>, block: u64, target: u64) -> anyhow::Result<bool> {
+    async fn predicate(
+        zk: &ZkChain<&DynProvider>,
+        block: u64,
+        target: u64,
+    ) -> anyhow::Result<bool> {
         if !zk.code_exists_at_block(block.into()).await? {
             // return early if contract is not deployed yet - otherwise `get_total_priority_txs_at_block` will fail
             return Ok(false);
