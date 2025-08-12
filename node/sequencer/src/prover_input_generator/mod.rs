@@ -1,4 +1,3 @@
-use crate::metrics::GENERAL_METRICS;
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
@@ -10,7 +9,7 @@ use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
 use zk_os_forward_system::run::{BlockOutput, StorageCommitment, generate_proof_input};
-use zksync_os_l1_sender::model::ProverInput;
+use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
@@ -95,7 +94,6 @@ impl ProverInputGenerator {
                     block_number,
                     replay_record.transactions.len(),
                 );
-
                 let state_handle = self.state_handle.clone();
 
                 tokio::task::spawn_blocking(move || {
@@ -112,9 +110,6 @@ impl ProverInputGenerator {
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(|(block_output, replay_record, prover_input)| async {
-                GENERAL_METRICS.block_number[&"prover_input_generator"]
-                    .set(block_output.header.number);
-
                 self.blocks_for_batcher_sender
                     .send((block_output, replay_record, prover_input))
                     .await?;

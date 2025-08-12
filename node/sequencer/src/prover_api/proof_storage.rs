@@ -2,7 +2,7 @@
 //! May be extracted to a separate service later on (aka FRI Cache)
 //!
 
-use zksync_os_l1_sender::model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_storage::RocksDB;
 use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 

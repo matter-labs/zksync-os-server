@@ -1,12 +1,11 @@
 use crate::config::BatcherConfig;
-use crate::metrics::GENERAL_METRICS;
 use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Sleep;
 use tracing;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
-use zksync_os_l1_sender::model::{BatchEnvelope, ProverInput};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_storage_api::ReplayRecord;
 
@@ -134,7 +133,6 @@ impl Batcher {
                                 leaf_count,
                             };
 
-                            GENERAL_METRICS.block_number[&"batcher"].set(block_number);
                             blocks.push((
                                 block_output,
                                 replay_record,

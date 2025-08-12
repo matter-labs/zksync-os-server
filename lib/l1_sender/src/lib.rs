@@ -1,12 +1,13 @@
+pub mod batcher_metrics;
+pub mod batcher_model;
 pub mod commands;
 pub mod commitment;
 pub mod config;
 pub mod l1_discovery;
-pub mod model;
-mod new_blocks;
 
+use crate::batcher_model::{BatchEnvelope, FriProof};
+mod new_blocks;
 use crate::commands::L1SenderCommand;
-use crate::model::{BatchEnvelope, FriProof};
 use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
@@ -72,15 +73,15 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     // This method only returns `0` if the channel has been closed and there are no more items
     // in the queue.
     while inbound.recv_many(&mut cmd_buffer, command_limit).await != 0 {
-        let batch_descr = Input::display_vec(&cmd_buffer); // Only for logging
+        let range = Input::display_range(&cmd_buffer); // Only for logging
         let command_name = Input::NAME;
-        tracing::info!(command_name, batch_descr, "Sending l1 transactions...");
+        tracing::info!(command_name, range, "Sending l1 transactions...");
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
         // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
         let pending_tx_hashes: HashMap<TxHash, Input> = futures::stream::iter(cmd_buffer.drain(..))
-            .then(|cmd| async {
+            .then(|mut cmd| async {
                 let tx_request = tx_request_with_gas_fields(
                     &provider,
                     max_fee_per_gas,
@@ -90,27 +91,27 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
                 .with_to(to_address)
                 .with_call(&cmd.solidity_call());
                 let pending_tx_hash = *provider.send_transaction(tx_request).await?.tx_hash();
+                cmd.as_mut()
+                    .iter_mut()
+                    .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
                 anyhow::Ok((pending_tx_hash, cmd))
             })
             // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
             // but this is not necessary for now - we wait for them to be included in parallel
             .try_collect::<HashMap<TxHash, Input>>()
             .await?;
-        tracing::info!(
-            command_name,
-            batch_descr,
-            "Sent to L1. Waiting for inclusion..."
-        );
+        tracing::info!(command_name, range, "Sent to L1. Waiting for inclusion...");
         let mined_envelopes = heartbeat
             .wait_for_pending_txs(&provider, pending_tx_hashes)
             .await?;
         tracing::info!(
             command_name,
-            batch_descr,
+            range,
             "All transactions included. Sending downstream.",
         );
         for command in mined_envelopes {
-            for output_envelope in command.into_output_envelope() {
+            for mut output_envelope in command.into() {
+                output_envelope.set_stage(Input::MINED_STAGE);
                 outbound.send(output_envelope).await?;
             }
         }
