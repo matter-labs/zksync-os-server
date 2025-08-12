@@ -69,7 +69,14 @@ impl Batcher {
             let batch_envelope = self.create_batch(&prev_batch_info).await?;
             prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
-            tracing::info!("Batch created successfully, sending to prover input generator.");
+            tracing::info!(
+                number = batch_envelope.batch_number(),
+                block_from = batch_envelope.batch.first_block_number,
+                block_to = batch_envelope.batch.last_block_number,
+                tx_count = batch_envelope.batch.tx_count,
+                new_state_commitment = batch_envelope.batch.commit_batch_info.new_state_commitment,
+                "Batch created"
+            );
             self.batch_data_sender
                 .send(batch_envelope)
                 .await
