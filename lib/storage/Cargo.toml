@@ -10,10 +10,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_rocksdb.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
-
-zksync_storage.workspace = true
 
 zk_os_forward_system.workspace = true
 

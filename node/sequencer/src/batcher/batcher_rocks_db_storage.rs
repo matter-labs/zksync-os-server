@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
-use zksync_storage::RocksDB;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 
 #[derive(Clone, Copy, Debug)]
 enum BatcherColumnFamily {
