@@ -73,9 +73,9 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     // This method only returns `0` if the channel has been closed and there are no more items
     // in the queue.
     while inbound.recv_many(&mut cmd_buffer, command_limit).await != 0 {
-        let batch_descr = Input::display_vec(&cmd_buffer); // Only for logging
+        let range = Input::display_range(&cmd_buffer); // Only for logging
         let command_name = Input::NAME;
-        tracing::info!(command_name, batch_descr, "Sending l1 transactions...");
+        tracing::info!(command_name, range, "Sending l1 transactions...");
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
@@ -91,28 +91,27 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
                 .with_to(to_address)
                 .with_call(&cmd.solidity_call());
                 let pending_tx_hash = *provider.send_transaction(tx_request).await?.tx_hash();
-                cmd.l1_tx_sent_hook();
+                cmd.as_mut()
+                    .iter_mut()
+                    .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
                 anyhow::Ok((pending_tx_hash, cmd))
             })
             // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
             // but this is not necessary for now - we wait for them to be included in parallel
             .try_collect::<HashMap<TxHash, Input>>()
             .await?;
-        tracing::info!(
-            command_name,
-            batch_descr,
-            "Sent to L1. Waiting for inclusion..."
-        );
+        tracing::info!(command_name, range, "Sent to L1. Waiting for inclusion...");
         let mined_envelopes = heartbeat
             .wait_for_pending_txs(&provider, pending_tx_hashes)
             .await?;
         tracing::info!(
             command_name,
-            batch_descr,
+            range,
             "All transactions included. Sending downstream.",
         );
         for command in mined_envelopes {
-            for output_envelope in command.into_output_envelope() {
+            for mut output_envelope in command.into() {
+                output_envelope.set_stage(Input::MINED_STAGE);
                 outbound.send(output_envelope).await?;
             }
         }

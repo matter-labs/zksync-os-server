@@ -28,6 +28,8 @@ impl ProofCommand {
 
 impl L1SenderCommand for ProofCommand {
     const NAME: &'static str = "prove";
+    const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
+    const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
 
     fn solidity_call(&self) -> impl SolCall {
         assert!(matches!(self.proof, SnarkProof::Fake));
@@ -38,32 +40,23 @@ impl L1SenderCommand for ProofCommand {
             self.to_calldata_suffix().into(),
         ))
     }
+}
 
-    fn l1_tx_sent_hook(&mut self) {
-        self.batches
-            .iter_mut()
-            .for_each(|batch| batch.set_stage(BatchExecutionStage::ProveL1TxSent));
+impl AsRef<[BatchEnvelope<FriProof>]> for ProofCommand {
+    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+        self.batches.as_slice()
     }
+}
 
-    fn into_output_envelope(self) -> Vec<BatchEnvelope<FriProof>> {
-        self.batches
-            .into_iter()
-            .map(|batch| batch.with_stage(BatchExecutionStage::ProveL1TxMined))
-            .collect()
+impl AsMut<[BatchEnvelope<FriProof>]> for ProofCommand {
+    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+        self.batches.as_mut_slice()
     }
+}
 
-    fn display_vec(input: &[Self]) -> String {
-        input
-            .iter()
-            .map(|x| {
-                format!(
-                    "{}-{}",
-                    x.batches.first().unwrap().batch_number(),
-                    x.batches.last().unwrap().batch_number()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+impl From<ProofCommand> for Vec<BatchEnvelope<FriProof>> {
+    fn from(value: ProofCommand) -> Self {
+        value.batches
     }
 }
 

@@ -3,8 +3,6 @@ use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
-use itertools::Itertools;
-use itertools::MinMaxResult::{MinMax, OneElement};
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 
@@ -21,6 +19,8 @@ impl CommitCommand {
 
 impl L1SenderCommand for CommitCommand {
     const NAME: &'static str = "commit";
+    const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxSent;
+    const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
 
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::commitBatchesSharedBridgeCall::new((
@@ -30,23 +30,23 @@ impl L1SenderCommand for CommitCommand {
             self.to_calldata_suffix().into(),
         ))
     }
+}
 
-    fn l1_tx_sent_hook(&mut self) {
-        self.input.set_stage(BatchExecutionStage::CommitL1TxSent);
+impl AsRef<[BatchEnvelope<FriProof>]> for CommitCommand {
+    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+        std::slice::from_ref(&self.input)
     }
+}
 
-    fn into_output_envelope(mut self) -> Vec<BatchEnvelope<FriProof>> {
-        self.input.set_stage(BatchExecutionStage::CommitL1TxMined);
-        vec![self.input]
+impl AsMut<[BatchEnvelope<FriProof>]> for CommitCommand {
+    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+        std::slice::from_mut(&mut self.input)
     }
+}
 
-    fn display_vec(input: &[Self]) -> String {
-        let minmax = input.iter().map(|cmd| cmd.input.batch_number()).minmax();
-        match minmax {
-            OneElement(elem) => format!("{elem}"),
-            MinMax(f, t) => format!("{f}-{t}"),
-            _ => "".into(),
-        }
+impl From<CommitCommand> for Vec<BatchEnvelope<FriProof>> {
+    fn from(value: CommitCommand) -> Self {
+        vec![value.input]
     }
 }
 
