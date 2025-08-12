@@ -117,7 +117,7 @@ impl Batcher {
                         Some((block_output, replay_record, prover_input)) => {
                             let block_number = replay_record.block_context.block_number;
 
-                            // skip the blocks from committed batches
+                            // skip the blocks from already committed batches (on server restart we replay some historical blocks - they are already batched and committed, so no action is needed here)
                             if block_number < self.first_block_to_process {
                                 tracing::debug!(
                                     "Skipping block {} (batcher starting block is {})",
