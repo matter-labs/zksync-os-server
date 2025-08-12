@@ -49,8 +49,7 @@ pub(crate) fn seal_batch(
 
     // TODO: remove the code below when the multiblock proving program is ready
     assert_eq!(blocks.len(), 1);
-    let batch_prover_input: ProverInput = blocks
-        .first()
+    let batch_prover_input: ProverInput = blocks.first()
         .expect("blocks should not be empty")
         .3
         .clone();
