@@ -17,7 +17,7 @@ pub mod tree_manager;
 mod util;
 
 use crate::batch_sink::BatchSink;
-use crate::batcher::Batcher;
+use crate::batcher::{Batcher, util::genesis_stored_batch_info};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
@@ -35,7 +35,7 @@ use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
-use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorBatchData};
+use crate::prover_input_generator::ProverInputGenerator;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
@@ -75,7 +75,7 @@ const REPOSITORY_DB_NAME: &str = "repository";
 pub async fn run_sequencer_actor(
     starting_block: u64,
 
-    batcher_sink: Sender<(BlockOutput, ReplayRecord)>,
+    prover_input_generator_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
     mut command_block_context_provider: BlockContextProvider,
@@ -187,7 +187,7 @@ pub async fn run_sequencer_actor(
         );
         let stage_started_at = Instant::now();
 
-        batcher_sink
+        prover_input_generator_sink
             .send((block_output.clone(), replay_record))
             .await?;
         tree_sink.send(block_output).await?;
@@ -309,18 +309,18 @@ pub async fn run(
 
     // ======= Initialize async channels  ===========
 
-    // Channel between `BlockExecutor` and `Batcher`
-    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
+    // Channel between `BlockExecutor` and `ProverInputGenerator`
+    let (blocks_for_prover_input_generator_sender, blocks_for_prover_input_generator_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
 
     // Channel between `BlockExecutor` and `TreeManager`
     let (tree_sender, tree_receiver) = tokio::sync::mpsc::channel::<BlockOutput>(10);
 
-    // Channel between `Batcher` and `ProverInputGenerator`
-    let (batch_replay_data_sender, batch_replay_data_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInputGeneratorBatchData>>(10);
+    // Channel between `ProverInputGenerator` and `Batcher`
+    let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
+        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord, ProverInput)>(10);
 
-    // Channel between `ProverInputGenerator` and `ProverAPI`
+    // Channel between `Batcher` and `ProverAPI`
     let (batch_for_proving_sender, batch_for_prover_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(10);
 
@@ -450,6 +450,10 @@ pub async fn run(
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
+    let previous_block_timestamp: u64 = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
+
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
         .map(|record| record.block_context.block_hashes)
@@ -459,6 +463,7 @@ pub async fn run(
         l1_transactions,
         l2_mempool.clone(),
         block_hashes_for_next_block,
+        previous_block_timestamp,
         genesis_config.chain_id,
         node_version,
     );
@@ -480,11 +485,20 @@ pub async fn run(
     tracing::info!("Initializing batcher subsystem");
     // ========== Initialize L1 sender ===========
 
-    // todo: this will not hold when we do proper batching,
-    //  but both number are needed to initialize the batcher
-    //  (it needs to know until what block to skip, and it also needs to know the batch number to start with)
-    //  potential solution: modify batcher persistence to also store block range per batch - and use it to recover that block number
-    let last_committed_block_number = l1_state.last_committed_batch;
+    let (last_committed_block_number, prev_batch_info) = if l1_state.last_committed_batch == 0 {
+        (0, genesis_stored_batch_info())
+    } else {
+        let batch_metadata = proof_storage
+            .get(l1_state.last_committed_batch)
+            .expect("Failed to get last committed block from proof storage")
+            .map(|proof| proof.batch)
+            .expect("Committed batch is not present in proof storage");
+        (
+            batch_metadata.last_block_number,
+            batch_metadata.commit_batch_info.into(),
+        )
+    };
+
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
     tracing::info!(
@@ -500,31 +514,33 @@ pub async fn run(
         "L1 sender last committed block number is inconsistent with WAL or storage map"
     );
 
-    // ========== Initialize Batcher ===========
-    tracing::info!("Initializing Batcher");
-    let batcher_task = {
-        let batcher = Batcher::new(
-            l1_state.last_committed_batch + 1,
-            genesis_config.chain_id,
-            sequencer_config.rocks_db_path.clone(),
-            blocks_for_batcher_receiver,
-            batch_replay_data_sender,
-            persistent_tree.clone(),
-        );
-        Box::pin(batcher.run_loop())
-    };
-
+    // ========== Initialize ProverInputGenerator ===========
     tracing::info!("Initializing ProverInputGenerator");
     let prover_input_generator_task = {
         let prover_input_generator = ProverInputGenerator::new(
             prover_input_generator_config.logging_enabled,
             prover_input_generator_config.maximum_in_flight_blocks,
-            batch_replay_data_receiver,
-            batch_for_proving_sender,
-            persistent_tree,
+            blocks_for_prover_input_generator_receiver,
+            blocks_for_batcher_sender,
+            persistent_tree.clone(),
             state_handle.clone(),
         );
         Box::pin(prover_input_generator.run_loop())
+    };
+
+    // ========== Initialize Batcher ===========
+    tracing::info!("Initializing Batcher");
+    let batcher_task = {
+        let batcher = Batcher::new(
+            genesis_config.chain_id,
+            last_committed_block_number + 1,
+            repositories_persisted_block,
+            batcher_config,
+            blocks_for_batcher_receiver,
+            batch_for_proving_sender,
+            persistent_tree,
+        );
+        Box::pin(batcher.run_loop(prev_batch_info))
     };
 
     // ======= Initialize Prover Api Server========
@@ -622,7 +638,7 @@ pub async fn run(
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
             starting_block,
-            blocks_for_batcher_sender,
+            blocks_for_prover_input_generator_sender,
             tree_sender,
             command_block_context_provider,
             state_handle.clone(),
