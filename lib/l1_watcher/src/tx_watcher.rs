@@ -1,7 +1,8 @@
-use crate::L1WatcherConfig;
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::{L1WatcherConfig, util};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
@@ -32,10 +33,10 @@ impl L1TxWatcher {
             ?zk_chain_address,
             "initializing L1 transaction watcher"
         );
-        let zk_chain = ZkChain::new(zk_chain_address, &provider);
+        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
 
         let current_l1_block = provider.get_block_number().await?;
-        let next_l1_block = find_l1_block_by_priority_id(&zk_chain, next_l1_priority_id)
+        let next_l1_block = find_l1_block_by_priority_id(zk_chain, next_l1_priority_id)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -108,45 +109,14 @@ impl L1TxWatcher {
 }
 
 async fn find_l1_block_by_priority_id(
-    zk_chain: &ZkChain<&DynProvider>,
+    zk_chain: ZkChain<DynProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
-    let latest = zk_chain.provider().get_block_number().await?;
-
-    async fn predicate(
-        zk: &ZkChain<&DynProvider>,
-        block: u64,
-        target: u64,
-    ) -> anyhow::Result<bool> {
-        if !zk.code_exists_at_block(block.into()).await? {
-            // return early if contract is not deployed yet - otherwise `get_total_priority_txs_at_block` will fail
-            return Ok(false);
-        }
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
         let res = zk.get_total_priority_txs_at_block(block.into()).await?;
-        Ok(res >= target)
-    }
-
-    // Ensure the predicate is true by the upper bound, or bail early.
-    if !predicate(zk_chain, latest, next_l1_priority_id).await? {
-        anyhow::bail!(
-            "Condition not satisfied up to latest block: contract not deployed yet \
-             or target {} not reached.",
-            next_l1_priority_id
-        );
-    }
-
-    // Binary search on [0, latest] for the first block where predicate is true.
-    let (mut lo, mut hi) = (0u64, latest);
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if predicate(zk_chain, mid, next_l1_priority_id).await? {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-
-    Ok(lo)
+        Ok(res >= next_l1_priority_id)
+    })
+    .await
 }
 
 impl WatchedEvent for L1Envelope {

@@ -1,8 +1,9 @@
-use crate::L1WatcherConfig;
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::{L1WatcherConfig, util};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::ZkChain;
@@ -29,10 +30,10 @@ impl L1CommitWatcher {
             ?zk_chain_address,
             "initializing L1 commit watcher"
         );
-        let zk_chain = ZkChain::new(zk_chain_address, &provider);
+        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
 
         let current_l1_block = provider.get_block_number().await?;
-        let next_l1_block = find_l1_commit_block_by_batch_number(&zk_chain, next_batch_number)
+        let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -104,45 +105,14 @@ impl L1CommitWatcher {
 }
 
 async fn find_l1_commit_block_by_batch_number(
-    zk_chain: &ZkChain<&DynProvider>,
+    zk_chain: ZkChain<DynProvider>,
     next_batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
-    let latest = zk_chain.provider().get_block_number().await?;
-
-    async fn predicate(
-        zk: &ZkChain<&DynProvider>,
-        block: u64,
-        target: u64,
-    ) -> anyhow::Result<bool> {
-        if !zk.code_exists_at_block(block.into()).await? {
-            // return early if contract is not deployed yet - otherwise `get_total_priority_txs_at_block` will fail
-            return Ok(false);
-        }
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
-        Ok(res >= target)
-    }
-
-    // Ensure the predicate is true by the upper bound, or bail early.
-    if !predicate(zk_chain, latest, next_batch_number).await? {
-        anyhow::bail!(
-            "Condition not satisfied up to latest block: contract not deployed yet \
-             or target {} not reached.",
-            next_batch_number
-        );
-    }
-
-    // Binary search on [0, latest] for the first block where predicate is true.
-    let (mut lo, mut hi) = (0u64, latest);
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if predicate(zk_chain, mid, next_batch_number).await? {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-
-    Ok(lo)
+        Ok(res >= next_batch_number)
+    })
+    .await
 }
 
 impl WatchedEvent for BlockCommit {
