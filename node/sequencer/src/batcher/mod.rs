@@ -6,7 +6,7 @@ use tracing;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
-use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
@@ -91,12 +91,7 @@ impl Batcher {
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
 
         let batch_number = prev_batch_info.batch_number + 1;
-        let mut blocks: Vec<(
-            BlockOutput,
-            ReplayRecord,
-            zksync_os_merkle_tree::TreeBatchOutput,
-            ProverInput,
-        )> = vec![];
+        let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
 
         loop {
             tokio::select! {
@@ -153,7 +148,7 @@ impl Batcher {
                                 deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
                             }
 
-                            if self.should_seal_by_content().await {
+                            if self.should_seal_by_content(&blocks).await {
                                 tracing::info!(batch_number, "Content limit reached, sealing batch.");
                                 break;
                             }
@@ -177,7 +172,10 @@ impl Batcher {
 
     /// Checks if the batch should be sealed based on the content of the blocks.
     /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
-    async fn should_seal_by_content(&self) -> bool {
-        false // TODO: add sealing criteria
+    async fn should_seal_by_content(
+        &self,
+        blocks: &[(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)],
+    ) -> bool {
+        blocks.len() >= self.batcher_config.blocks_per_batch_limit
     }
 }
