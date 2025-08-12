@@ -68,7 +68,14 @@ impl Batcher {
             let batch_envelope = self.create_batch(&prev_batch_info).await?;
             prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
-            tracing::info!("Batch created successfully, sending to prover input generator.");
+            tracing::info!(
+                number = batch_envelope.batch_number(),
+                block_from = batch_envelope.batch.first_block_number,
+                block_to = batch_envelope.batch.last_block_number,
+                tx_count = batch_envelope.batch.tx_count,
+                new_state_commitment = batch_envelope.batch.commit_batch_info.new_state_commitment,
+                "Batch created"
+            );
             self.batch_data_sender
                 .send(batch_envelope)
                 .await
@@ -109,7 +116,7 @@ impl Batcher {
                         Some((block_output, replay_record, prover_input)) => {
                             let block_number = replay_record.block_context.block_number;
 
-                            // skip the blocks from committed batches
+                            // skip the blocks from already committed batches (on server restart we replay some historical blocks - they are already batched and committed, so no action is needed here)
                             if block_number < self.first_block_to_process {
                                 tracing::debug!(
                                     "Skipping block {} (batcher starting block is {})",
@@ -141,7 +148,7 @@ impl Batcher {
                             ));
 
                             // arm the timer after we process the block number that's more or equal
-                            // than last persisted one
+                            // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
                             if deadline.is_none() && block_number >= self.last_persisted_block {
                                 deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
                             }
