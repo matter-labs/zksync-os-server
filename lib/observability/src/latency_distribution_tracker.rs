@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 /// Can potentially be used for Block stages (eg with consensus), but:
 /// * currently there is no pipelining within block production, so there is little value
 /// * block stages are not linear - we alternate between WaitingForTxs and VmExecuting.
-
 #[derive(Debug)]
 pub struct LatencyDistributionTracker<S> {
     last_stage_started_at: Instant,
@@ -50,7 +49,7 @@ impl<S: Debug> Display for LatencyDistributionTracker<S> {
             .sorted_by_key(|(_, v)| *v)
             .for_each(|(stage, duration)| {
                 let percentage = duration.div_duration_f32(total) * 100f32;
-                write!(f, "{stage:?}: {duration:?} ({percentage}%); ").unwrap()
+                write!(f, "{stage:?}: {duration:?} ({percentage:.2}%); ").unwrap()
             });
         write!(f, ")")?;
         Ok(())
