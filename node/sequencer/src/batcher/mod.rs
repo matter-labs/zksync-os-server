@@ -73,7 +73,7 @@ impl Batcher {
                 block_from = batch_envelope.batch.first_block_number,
                 block_to = batch_envelope.batch.last_block_number,
                 tx_count = batch_envelope.batch.tx_count,
-                new_state_commitment = batch_envelope.batch.commit_batch_info.new_state_commitment,
+                new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                 "Batch created"
             );
             self.batch_data_sender
