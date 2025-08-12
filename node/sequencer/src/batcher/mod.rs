@@ -178,7 +178,6 @@ impl Batcher {
     /// Checks if the batch should be sealed based on the content of the blocks.
     /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
     async fn should_seal_by_content(&self) -> bool {
-        // note: this enforces 1 block batches
-        true // TODO: add sealing criteria
+        false // TODO: add sealing criteria
     }
 }
