@@ -66,6 +66,7 @@ impl BlockContextProvider {
     pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,
+        is_external_node: bool,
     ) -> anyhow::Result<PreparedBlockCommand> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
@@ -104,15 +105,17 @@ impl BlockContextProvider {
                 }
             }
             BlockCommand::Replay(record) => {
-                for tx in &record.transactions {
-                    match tx.envelope() {
-                        ZkEnvelope::L1(l1_tx) => {
-                            assert_eq!(
-                                self.l1_transactions.recv().await.unwrap().priority_id(),
-                                l1_tx.priority_id()
-                            );
+                if !is_external_node {
+                    for tx in &record.transactions {
+                        match tx.envelope() {
+                            ZkEnvelope::L1(l1_tx) => {
+                                assert_eq!(
+                                    self.l1_transactions.recv().await.unwrap().priority_id(),
+                                    l1_tx.priority_id()
+                                );
+                            }
+                            ZkEnvelope::L2(_) => {}
                         }
-                        ZkEnvelope::L2(_) => {}
                     }
                 }
                 PreparedBlockCommand {
