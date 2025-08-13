@@ -6,7 +6,7 @@ use std::path::PathBuf;
 pub struct StateConfig {
     /// If set to true, the state storage will be erased on startup
     /// Only use when replaying/starting from genesis
-    pub erase_storage_on_start: bool,
+    pub erase_storage_on_start_unsafe: bool,
 
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
