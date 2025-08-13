@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{
-    FakeFriProversConfig, FakeSnarkProversConfig, MempoolConfig, ProverApiConfig,
+    FakeFriProversConfig, FakeSnarkProversConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
     ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 
@@ -132,10 +132,14 @@ impl TesterBuilder {
             address: format!("0.0.0.0:{}", prover_api_locked_port.port),
             ..Default::default()
         };
+        let genesis_config = GenesisConfig {
+            genesis_input_path: "../genesis.json".into(),
+            ..Default::default()
+        };
         let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
-                Default::default(),
+                genesis_config,
                 rpc_config,
                 MempoolConfig::default(),
                 sequencer_config,
