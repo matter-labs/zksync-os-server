@@ -409,7 +409,7 @@ pub async fn run(
     tracing::info!(
         storage_map_block = storage_map_compacted_block,
         wal_block = wal_block,
-        canonized_block = repositories.get_latest_block(),
+        canonized_block = repositories_persisted_block,
         tree_last_processed_block = tree_last_processed_block,
         "▶ Sequencer will start from block {}",
         storage_map_compacted_block + 1
