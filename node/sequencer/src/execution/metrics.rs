@@ -1,3 +1,4 @@
+use crate::execution::block_executor::SealReason;
 use std::time::Duration;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use vise::{Counter, EncodeLabelValue};
@@ -5,21 +6,6 @@ use zksync_os_observability::GenericComponentState;
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 const STORAGE_WRITES: Buckets = Buckets::exponential(1.0..=1000.0, 1.7);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[metrics(label = "seal_reason", rename_all = "snake_case")]
-pub enum SealReason {
-    Replay,
-    Timeout,
-    TxCountLimit,
-    // Tx's gas limit + cumulative block gas > block gas limit - no execution attempt
-    GasLimit,
-    // VM returned `BlockGasLimitReached`
-    GasVm,
-    NativeCycles,
-    Pubdata,
-    L2ToL1Logs,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "state", rename_all = "snake_case")]

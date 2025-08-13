@@ -1,4 +1,4 @@
-use crate::execution::metrics::{EXECUTION_METRICS, SealReason, SequencerState};
+use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
@@ -7,6 +7,7 @@ use alloy::primitives::TxHash;
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
+use vise::EncodeLabelValue;
 use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
 use zksync_os_observability::ComponentStateLatencyTracker;
 use zksync_os_state::StateHandle;
@@ -262,6 +263,21 @@ enum TxRejectionMethod {
     Skip,
     // block is out of some resource, so it should be sealed.
     SealBlock(SealReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[metrics(label = "seal_reason", rename_all = "snake_case")]
+pub enum SealReason {
+    Replay,
+    Timeout,
+    TxCountLimit,
+    // Tx's gas limit + cumulative block gas > block gas limit - no execution attempt
+    GasLimit,
+    // VM returned `BlockGasLimitReached`
+    GasVm,
+    NativeCycles,
+    Pubdata,
+    L2ToL1Logs,
 }
 
 fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
