@@ -24,8 +24,8 @@ pub struct TreeManager {
 }
 
 impl TreeManager {
-    pub fn tree_wrapper(path: &Path) -> RocksDBWrapper {
-        let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
+    pub fn tree_wrapper(path: &Path, with_sync_writes: bool) -> RocksDBWrapper {
+        let mut db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
             path,
             RocksDBOptions {
                 block_cache_capacity: Some(128 << 20),
@@ -36,22 +36,23 @@ impl TreeManager {
             },
         )
         .unwrap();
+        if with_sync_writes {
+            db = db.with_sync_writes();
+        }
         RocksDBWrapper::from(db)
     }
+
     pub fn new(
         tree_wrapper: RocksDBWrapper,
         block_receiver: Receiver<BlockOutput>,
     ) -> (TreeManager, MerkleTreeForReading<RocksDBWrapper>) {
         let (latest_block_sender, latest_block_receiver) = watch::channel(0u64);
-        let mut tree = MerkleTree::new(tree_wrapper).unwrap();
+        let tree = MerkleTree::new(tree_wrapper).unwrap();
 
         let version = tree
             .latest_version()
-            .expect("cannot access tree on startup");
-        if version.is_none() {
-            // Initialize the tree with an empty genesis batch
-            tree.extend(&[]).expect("cannot extend tree on startup");
-        }
+            .expect("cannot access tree on startup")
+            .expect("missing tree genesis version");
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
         let tree_manager = Self {
@@ -155,6 +156,11 @@ impl TreeManager {
             }
         }
         Ok(())
+    }
+
+    pub fn genesis(tree_wrapper: RocksDBWrapper, tree_entries: &[TreeEntry]) {
+        let mut tree = MerkleTree::new(tree_wrapper).unwrap();
+        tree.extend(tree_entries).unwrap();
     }
 }
 

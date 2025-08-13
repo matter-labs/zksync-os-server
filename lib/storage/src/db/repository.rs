@@ -1,4 +1,7 @@
 use crate::metrics::REPOSITORIES_METRICS;
+use crate::shared::alloy_header;
+use alloy::consensus::Sealed;
+use alloy::primitives::B256;
 use alloy::{
     consensus::{Block, Transaction},
     eips::{Decodable2718, Encodable2718},
@@ -8,6 +11,7 @@ use alloy::{
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
+use zk_os_forward_system::run::output::BlockHeader;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{
@@ -127,7 +131,7 @@ impl RepositoryDb {
             .observe(batch.size_in_bytes());
         REPOSITORIES_METRICS
             .block_data_size_per_tx
-            .observe(batch.size_in_bytes() / txs.len());
+            .observe(batch.size_in_bytes() / txs.len().max(1));
         self.db.write(batch).unwrap();
         self.latest_block_number.send_replace(block_number);
     }
@@ -156,6 +160,24 @@ impl RepositoryDb {
             &initiator_and_nonce_key,
             tx_hash.as_slice(),
         );
+    }
+
+    pub fn process_genesis(db_path: &Path, genesis_block: BlockHeader) {
+        let mut this = Self::new(db_path);
+        this.db = this.db.with_sync_writes();
+        let hash = genesis_block.hash();
+        let block = Sealed::new_unchecked(
+            Block {
+                header: alloy_header(&genesis_block),
+                body: alloy::consensus::BlockBody {
+                    transactions: vec![],
+                    ommers: vec![],
+                    withdrawals: None,
+                },
+            },
+            B256::from_slice(&hash),
+        );
+        this.write_block(&block, &[]);
     }
 }
 

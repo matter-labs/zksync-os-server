@@ -27,7 +27,7 @@ use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
-use crate::genesis::build_genesis;
+use crate::genesis::{is_genesis_required, perform_genesis};
 use crate::metadata::NODE_VERSION;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -233,6 +233,16 @@ pub async fn run(
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
 
+    if is_genesis_required(sequencer_config.rocks_db_path.clone()) {
+        tracing::info!("Performing genesis..");
+        perform_genesis(
+            genesis_config.genesis_input_path,
+            sequencer_config.rocks_db_path.clone(),
+        )
+        .context("perform_genesis")
+        .unwrap();
+    }
+
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
@@ -259,7 +269,6 @@ pub async fn run(
     let repositories = RepositoryManager::new(
         sequencer_config.blocks_to_retain_in_memory,
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
-        build_genesis(),
     );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
@@ -377,9 +386,10 @@ pub async fn run(
 
     // =========== Initialize TreeManager ========
     tracing::info!("Initializing TreeManager");
-    let tree_wrapper = TreeManager::tree_wrapper(Path::new(
-        &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
-    ));
+    let tree_wrapper = TreeManager::tree_wrapper(
+        Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
+        false,
+    );
     let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
 
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
@@ -483,7 +493,24 @@ pub async fn run(
     // ========== Initialize L1 sender ===========
 
     let (last_committed_block_number, prev_batch_info) = if l1_state.last_committed_batch == 0 {
-        (0, genesis_stored_batch_info())
+        let genesis_block = repositories
+            .get_block_by_number(0)
+            .expect("Failed to read genesis block from repositories")
+            .expect("Missing genesis block in repositories");
+        let root_info = persistent_tree
+            .clone()
+            .get_at_block(0)
+            .await
+            .root_info()
+            .expect("Failed to get genesis root info");
+        (
+            0,
+            dbg!(genesis_stored_batch_info(
+                genesis_block.hash(),
+                root_info,
+                genesis_config.chain_id
+            )),
+        )
     } else {
         let batch_metadata = proof_storage
             .get(l1_state.last_committed_batch)

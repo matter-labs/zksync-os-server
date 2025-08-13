@@ -15,26 +15,26 @@ pub struct L1SenderConfig {
 
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
-    // TODO: Pre-configured value, to be removed (pk for 0x1561ac2f6ac6f3073c2180094ec67898b6fea40f)
-    #[config(alias = "operator_private_key", default_t = "0x2338cc241022abdc9f3bcb0999d2336bdc1d7402560a5619d168b4bb88282c52".into())]
+    // TODO: Pre-configured value, to be removed
+    #[config(alias = "operator_private_key", default_t = "0xa7ec0c8816b0abd78e5134482df1b7b19e57537f06b30a80b546ef4cdcaa8984".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
-    // TODO: Pre-configured value, to be removed (pk for 0xa61464658AfeAf65CccaaFD3a512b69A83B77618)
-    #[config(default_t = "0xac1e735be8536c6534bb4f17f06f6afc73b2b5ba84ac2cfb12f7461b20c0bbe3".into())]
+    // TODO: Pre-configured value, to be removed
+    #[config(default_t = "0xff1095abbff446a695ba0ae6d69ed2cc512d789eae0c2669578466c39c3be4d5".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
-    // TODO: Pre-configured value, to be removed (pk for 0x0d43eb5b8a47ba8900d84aa36656c92024e9772e)
-    #[config(default_t = "0xd293c684d884d56f8d6abd64fc76757d3664904e309a0645baf8522ab6366d9e".into())]
+    // TODO: Pre-configured value, to be removed
+    #[config(default_t = "0x1f6812f5fe0e507f32856ba5c34dc705d961e18d0d0312568aaa6aa4fdcb76b7".into())]
     pub operator_execute_pk: SecretString,
 
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0xe9815d305416a6651c576e33b6c99d9848ca66ba".parse().unwrap())]
     pub bridgehub_address: Address,
 
     /// Max fee per gas we are willing to spend (in gwei).

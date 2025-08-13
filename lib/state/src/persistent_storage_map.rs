@@ -127,6 +127,23 @@ impl PersistentStorageMap {
                 Bytes32::from(arr)
             })
     }
+
+    pub fn process_genesis(db: &RocksDB<StorageMapCF>, storage_logs: Vec<(Bytes32, Bytes32)>) {
+        let mut batch = db.new_write_batch();
+        for (k, v) in storage_logs {
+            batch.put_cf(
+                StorageMapCF::Storage,
+                k.as_u8_array_ref(),
+                v.as_u8_array_ref(),
+            );
+        }
+        batch.put_cf(
+            StorageMapCF::Meta,
+            StorageMapCF::base_block_key(),
+            0u64.to_be_bytes().as_ref(),
+        );
+        db.write(batch).expect("RocksDB write failed");
+    }
 }
 
 fn rocksdb_block_number(rocks_db: &RocksDB<StorageMapCF>) -> u64 {
@@ -135,4 +152,11 @@ fn rocksdb_block_number(rocks_db: &RocksDB<StorageMapCF>) -> u64 {
         .unwrap()
         .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
         .unwrap_or(0)
+}
+
+pub fn rocksdb_block_number_optional(rocks_db: &RocksDB<StorageMapCF>) -> Option<u64> {
+    rocks_db
+        .get_cf(StorageMapCF::Meta, StorageMapCF::base_block_key())
+        .unwrap()
+        .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
 }

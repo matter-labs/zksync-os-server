@@ -83,6 +83,19 @@ impl PersistentPreimages {
         self.rocks.write(batch).expect("RocksDB write failed");
         latency_observer.observe();
     }
+
+    pub fn process_genesis(db: &RocksDB<PreimagesCF>, preimages: Vec<(Bytes32, Vec<u8>)>) {
+        let mut batch = db.new_write_batch();
+        for (k, v) in preimages {
+            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v.as_slice());
+        }
+        batch.put_cf(
+            PreimagesCF::Meta,
+            PreimagesCF::block_key(),
+            0u64.to_be_bytes().as_ref(),
+        );
+        db.write(batch).expect("RocksDB write failed");
+    }
 }
 
 impl PreimageSource for PersistentPreimages {

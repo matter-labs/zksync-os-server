@@ -8,6 +8,7 @@ mod storage_metrics;
 
 use ruint::aliases::B160;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use zk_ee::common_structs::derive_flat_storage_key;
@@ -21,6 +22,7 @@ use zk_os_forward_system::run::{
 use zksync_os_rocksdb::RocksDB;
 // Re-export commonly used types
 use crate::persistent_preimages::{PersistentPreimages, PreimagesCF};
+use crate::persistent_storage_map::rocksdb_block_number_optional;
 use crate::storage_map_view::StorageMapView;
 use crate::storage_metrics::StorageMetrics;
 pub use config::StateConfig;
@@ -129,6 +131,29 @@ impl StateHandle {
             ticker.tick().await;
             map.compact();
         }
+    }
+
+    pub fn requires_genesis(rocks_db_path: PathBuf) -> bool {
+        let state_db = RocksDB::<StorageMapCF>::new(&rocks_db_path.join(STATE_STORAGE_DB_NAME))
+            .expect("Failed to open State DB");
+        rocksdb_block_number_optional(&state_db).is_none()
+    }
+
+    pub fn process_genesis(
+        rocks_db_path: PathBuf,
+        storage_logs: Vec<(Bytes32, Bytes32)>,
+        preimages: Vec<(Bytes32, Vec<u8>)>,
+    ) {
+        let state_db = RocksDB::<StorageMapCF>::new(&rocks_db_path.join(STATE_STORAGE_DB_NAME))
+            .expect("Failed to open State DB")
+            .with_sync_writes();
+        PersistentStorageMap::process_genesis(&state_db, storage_logs);
+
+        let preimages_db =
+            RocksDB::<PreimagesCF>::new(&rocks_db_path.join(PREIMAGES_STORAGE_DB_NAME))
+                .expect("Failed to open Preimages DB")
+                .with_sync_writes();
+        PersistentPreimages::process_genesis(&preimages_db, preimages);
     }
 }
 

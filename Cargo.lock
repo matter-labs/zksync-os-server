@@ -11194,6 +11194,7 @@ dependencies = [
  "blake2",
  "cli",
  "dashmap",
+ "evm_interpreter",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
  "forward_system",
  "full_statement_verifier",

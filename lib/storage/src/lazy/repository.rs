@@ -27,13 +27,17 @@ pub struct RepositoryManager {
 }
 
 impl RepositoryManager {
-    pub fn new(blocks_to_retain: usize, db_path: PathBuf, genesis: RepositoryBlock) -> Self {
+    pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
         let db = RepositoryDb::new(&db_path);
+        let genesis_block = db
+            .get_block_by_number(0)
+            .unwrap()
+            .expect("Missing genesis block in DB");
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
         RepositoryManager {
             // Initializes in-memory repository with genesis block. It is never pruned from cache.
-            in_memory: RepositoryInMemory::new(genesis),
+            in_memory: RepositoryInMemory::new(genesis_block),
             db,
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
