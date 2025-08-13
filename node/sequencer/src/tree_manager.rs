@@ -12,6 +12,7 @@ use zk_os_forward_system::run::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
+use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
@@ -82,9 +83,13 @@ impl TreeManager {
     }
 
     pub async fn run_loop(mut self) -> anyhow::Result<()> {
+        let mut latency_tracker =
+            ComponentStateLatencyTracker::new("tree", GenericComponentState::WaitingRecv, None);
         loop {
+            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             match self.block_receiver.recv().await {
                 Some(block_output) => {
+                    latency_tracker.enter_state(GenericComponentState::Processing);
                     let started_at = Instant::now();
                     let block_number = block_output.header.number;
 

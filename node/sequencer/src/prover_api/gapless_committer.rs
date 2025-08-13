@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 
 /// Receives Batches with proofs - potentially out of order;
 /// Fixes the order (by filling in the `buffer` field);  
@@ -23,6 +24,7 @@ pub struct GaplessCommitter {
     // outbound
     proof_storage: ProofStorage,
     commit_batch_sender: mpsc::Sender<CommitCommand>,
+    latency_tracker: ComponentStateLatencyTracker,
 }
 
 impl GaplessCommitter {
@@ -32,19 +34,29 @@ impl GaplessCommitter {
         proof_storage: ProofStorage,
         commit_batch_sender: mpsc::Sender<CommitCommand>,
     ) -> Self {
+        let latency_tracker = ComponentStateLatencyTracker::new(
+            "gapless_committer",
+            GenericComponentState::WaitingRecv,
+            None,
+        );
         GaplessCommitter {
             buffer: Default::default(),
             next_expected,
             batches_with_proof_receiver,
             proof_storage,
             commit_batch_sender,
+            latency_tracker,
         }
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
         loop {
+            self.latency_tracker
+                .enter_state(GenericComponentState::WaitingRecv);
             match self.batches_with_proof_receiver.recv().await {
                 Some(batch) => {
+                    self.latency_tracker
+                        .enter_state(GenericComponentState::Processing);
                     self.buffer.insert(batch.batch_number(), batch);
                     self.flush_ready().await?;
                 }
@@ -75,9 +87,13 @@ impl GaplessCommitter {
         for batch in ready {
             let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
             self.proof_storage.save_proof(&batch)?;
+            self.latency_tracker
+                .enter_state(GenericComponentState::WaitingSend);
             self.commit_batch_sender
                 .send(CommitCommand::new(batch))
                 .await?;
+            self.latency_tracker
+                .enter_state(GenericComponentState::Processing);
         }
 
         Ok(())
