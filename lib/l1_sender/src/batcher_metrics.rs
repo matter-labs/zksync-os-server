@@ -10,7 +10,6 @@ use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 pub enum BatchExecutionStage {
     Sealed,
     ProverInputStarted,
-    ProverInputGenerated,
     FriProverPicked,
     FriProvedReal,
     FriProvedFake,
