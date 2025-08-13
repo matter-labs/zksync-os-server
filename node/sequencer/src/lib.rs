@@ -44,12 +44,14 @@ use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
+use ruint::aliases::U256;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
+use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -515,7 +517,15 @@ pub async fn run(
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
         .map(|record| record.block_context.block_hashes)
-        .unwrap_or_default(); // TODO: take into account genesis block hash.
+        .unwrap_or_else(|| {
+            let mut block_hashes = BlockHashes::default();
+            let genesis_block = repositories
+                .get_block_by_number(0)
+                .expect("Failed to read genesis block from repositories")
+                .expect("Missing genesis block in repositories");
+            block_hashes.0[255] = U256::from_be_slice(genesis_block.hash().as_slice());
+            block_hashes
+        });
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions,
