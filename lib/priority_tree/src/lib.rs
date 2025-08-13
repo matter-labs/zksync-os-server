@@ -8,6 +8,7 @@ use zksync_os_crypto::hasher::keccak::KeccakHasher;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
+use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 use zksync_os_storage_api::ReadReplay;
 use zksync_os_types::ZkEnvelope;
 
@@ -20,6 +21,7 @@ pub struct PriorityTreeManager<ReplayStorage> {
 
     // outbound
     execute_batches_sender: mpsc::Sender<ExecuteCommand>,
+    pub latency_tracker: ComponentStateLatencyTracker,
 }
 
 impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
@@ -32,11 +34,17 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         // outbound
         execute_batches_sender: mpsc::Sender<ExecuteCommand>,
     ) -> anyhow::Result<Self> {
+        let latency_tracker = ComponentStateLatencyTracker::new(
+            "priority_tree_manager",
+            GenericComponentState::Processing,
+            None,
+        );
         Ok(Self {
             replay_storage,
             last_executed_block,
             batch_l1_proved_receiver,
             execute_batches_sender,
+            latency_tracker,
         })
     }
 
@@ -74,9 +82,13 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         );
 
         loop {
+            self.latency_tracker
+                .enter_state(GenericComponentState::WaitingRecv);
             // todo(#160): we enforce executing one batch at a time for now as we don't have
             //             aggregation seal criteria yet
             let batches = self.take_n(1).await?;
+            self.latency_tracker
+                .enter_state(GenericComponentState::Processing);
             let mut priority_ops = Vec::new();
             for batch in &batches {
                 let count = batch.batch.commit_batch_info.number_of_layer1_txs as usize;
@@ -124,6 +136,8 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                         .collect(),
                 });
             }
+            self.latency_tracker
+                .enter_state(GenericComponentState::WaitingSend);
             self.execute_batches_sender
                 .send(ExecuteCommand::new(batches, priority_ops))
                 .await?;

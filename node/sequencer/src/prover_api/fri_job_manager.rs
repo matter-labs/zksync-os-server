@@ -11,6 +11,8 @@
 //! * When any proof is submitted (real or fake):
 //!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
 //!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
+//!
+//! `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
 
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::PROVER_METRICS;
@@ -20,9 +22,12 @@ use itertools::MinMaxResult::MinMax;
 use serde::Serialize;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::mpsc::Permit;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -55,6 +60,8 @@ pub struct FriJobManager {
     batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
     // == config ==
     max_assigned_batch_range: usize,
+    // == metrics ==
+    latency_tracker: std::sync::Mutex<ComponentStateLatencyTracker>,
 }
 
 impl FriJobManager {
@@ -66,11 +73,17 @@ impl FriJobManager {
         max_assigned_batch_range: usize,
     ) -> Self {
         let jobs = ProverJobMap::new(assignment_timeout);
+        let latency_tracker = ComponentStateLatencyTracker::new(
+            "fri_job_manager",
+            GenericComponentState::Processing,
+            None,
+        );
         Self {
             assigned_jobs: jobs,
             inbound: Mutex::new(PeekableReceiver::new(batches_for_prove_receiver)),
             batches_with_proof_sender,
             max_assigned_batch_range,
+            latency_tracker: std::sync::Mutex::new(latency_tracker),
         }
     }
 
@@ -172,8 +185,11 @@ impl FriJobManager {
         PROVER_METRICS.prove_time_per_tx[&label]
             .observe(prove_time / batch_metadata.tx_count as u32);
 
+        // We want to ensure we can send the result downstream before we remove the job
+        let permit = self.try_reserve_permit_downstream()?;
+
         // Remove the job from the assigned map. If already removed due to a race
-        // (another submit won), we treat it as success to keep the API idempotent.
+        // (another submit won), we treat it as a success to keep the API idempotent.
         let Some(removed_job) = self.assigned_jobs.remove(batch_number) else {
             tracing::warn!(
                 batch_number,
@@ -189,12 +205,7 @@ impl FriJobManager {
             .with_data(FriProof::Real(proof_bytes))
             .with_stage(BatchExecutionStage::FriProvedReal);
 
-        // We don't try to recover from errors in `send()` - we already removed value from `assigned_jobs` so it won't be retried.
-        // Note that this error may only happen when channel is closing (system shutdown)
-        self.batches_with_proof_sender
-            .send(envelope)
-            .await
-            .expect("Failed to send proof to batches_with_proof_sender");
+        permit.send(envelope);
 
         Ok(())
     }
@@ -206,8 +217,11 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        // We are removing the job from `assigned_jobs` right away -
-        // fake proofs are always valid, so there is no chance that we want to reschedule it
+        // We want to ensure we can send the result downstream before we remove the job
+        let permit = self.try_reserve_permit_downstream()?;
+
+        // Downstream capacity availably - we remove the job from `assigned_jobs`.
+        // Fake proofs are always valid, so there is no chance that we want to reschedule it
         let assigned = match self.assigned_jobs.remove(batch_number) {
             Some(e) => e,
             None => return Err(SubmitError::UnknownJob(batch_number)),
@@ -227,16 +241,34 @@ impl FriJobManager {
             .with_data(FriProof::Fake)
             .with_stage(BatchExecutionStage::FriProvedFake);
 
-        self.batches_with_proof_sender
-            .send(envelope)
-            .await
-            .expect("Failed to send proof to batches_with_proof_sender");
+        permit.send(envelope);
 
         tracing::info!(batch_number, "Fake proof accepted");
         Ok(())
     }
+    fn try_reserve_permit_downstream(
+        &self,
+    ) -> Result<Permit<BatchEnvelope<FriProof>>, SubmitError> {
+        Ok(match self.batches_with_proof_sender.try_reserve() {
+            Ok(permit) => {
+                self.set_status(GenericComponentState::Processing);
+                permit
+            }
+            Err(TrySendError::Full(_)) => {
+                self.set_status(GenericComponentState::WaitingSend);
+                return Err(SubmitError::Other("downstream backpressure".to_string()));
+            }
+            Err(TrySendError::Closed(_)) => {
+                return Err(SubmitError::Other("server is shutting down".to_string()));
+            }
+        })
+    }
 
     pub fn status(&self) -> Vec<JobState> {
         self.assigned_jobs.status()
+    }
+
+    fn set_status(&self, status: GenericComponentState) {
+        self.latency_tracker.lock().unwrap().enter_state(status);
     }
 }

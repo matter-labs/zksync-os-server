@@ -12,7 +12,7 @@ categories.workspace = true
 [dependencies]
 anyhow.workspace = true
 itertools.workspace = true
-tokio.workspace = true
 tracing.workspace = true
+tokio.workspace = true
 vise.workspace = true
 vise-exporter.workspace = true
