@@ -1,3 +1,4 @@
+use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
@@ -14,7 +15,6 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
-use zksync_os_l1_watcher::METRICS;
 use zksync_os_mempool::{
     CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
     RethTransactionPoolExt, best_transactions,
@@ -152,7 +152,9 @@ impl BlockContextProvider {
                 }
             }
         }
-        METRICS.next_l1_priority_id.set(self.next_l1_priority_id);
+        EXECUTION_METRICS
+            .next_l1_priority_id
+            .set(self.next_l1_priority_id);
 
         // Advance `block_hashes_for_next_block`.
         let last_block_hash = block_output.header.hash();

@@ -1,0 +1,129 @@
+use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::{L1WatcherConfig, util};
+use alloy::primitives::{Address, BlockNumber};
+use alloy::providers::{DynProvider, Provider};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_contract_interface::ZkChain;
+use zksync_os_types::{L1Envelope, L1EnvelopeError};
+
+/// Don't try to process that many block linearly
+const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
+
+pub struct L1TxWatcher {
+    l1_watcher: L1Watcher<L1Envelope>,
+    next_l1_priority_id: u64,
+    poll_interval: Duration,
+    output: mpsc::Sender<L1Envelope>,
+}
+
+impl L1TxWatcher {
+    pub async fn new(
+        config: L1WatcherConfig,
+        provider: DynProvider,
+        zk_chain_address: Address,
+        output: mpsc::Sender<L1Envelope>,
+        next_l1_priority_id: u64,
+    ) -> anyhow::Result<Self> {
+        tracing::info!(
+            config.max_blocks_to_process,
+            ?config.poll_interval,
+            ?zk_chain_address,
+            "initializing L1 transaction watcher"
+        );
+        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
+
+        let current_l1_block = provider.get_block_number().await?;
+        let next_l1_block = find_l1_block_by_priority_id(zk_chain, next_l1_priority_id)
+            .await
+            .or_else(|err| {
+                // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
+                // We default to `0` in this case - `eth_getLogs` are still supported.
+                // Assert that we don't fallback on longer chains (e.g. Sepolia)
+                if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
+                    anyhow::bail!(
+                        "Binary search failed with {}. Cannot default starting block to zero for a long chain. Current L1 block number: {}. Limit: {}.",
+                        err,
+                        current_l1_block,
+                        MAX_L1_BLOCKS_LOOKBEHIND,
+                    )
+                } else {
+                    Ok(0)
+                }
+            })?;
+
+        tracing::info!(next_l1_block, "resolved on L1");
+
+        let l1_watcher = L1Watcher::new(
+            provider,
+            zk_chain_address,
+            next_l1_block,
+            config.max_blocks_to_process,
+        );
+
+        Ok(Self {
+            l1_watcher,
+            next_l1_priority_id,
+            output,
+            poll_interval: config.poll_interval,
+        })
+    }
+
+    pub async fn run(mut self) -> L1TxWatcherResult<()> {
+        let mut timer = tokio::time::interval(self.poll_interval);
+        loop {
+            timer.tick().await;
+            self.poll().await?;
+        }
+    }
+}
+
+impl L1TxWatcher {
+    async fn poll(&mut self) -> L1TxWatcherResult<()> {
+        let priority_txs = self.l1_watcher.poll().await?;
+        for tx in priority_txs {
+            if tx.priority_id() < self.next_l1_priority_id {
+                tracing::debug!(
+                    priority_id = tx.priority_id(),
+                    hash = ?tx.hash(),
+                    "skipping already processed priority transaction",
+                )
+            } else {
+                self.next_l1_priority_id = tx.priority_id() + 1;
+                tracing::debug!(
+                    priority_id = tx.priority_id(),
+                    hash = ?tx.hash(),
+                    "sending new priority transaction for processing",
+                );
+                self.output
+                    .send(tx)
+                    .await
+                    .map_err(|_| L1TxWatcherError::OutputClosed)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+async fn find_l1_block_by_priority_id(
+    zk_chain: ZkChain<DynProvider>,
+    next_l1_priority_id: u64,
+) -> anyhow::Result<BlockNumber> {
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
+        let res = zk.get_total_priority_txs_at_block(block.into()).await?;
+        Ok(res >= next_l1_priority_id)
+    })
+    .await
+}
+
+impl WatchedEvent for L1Envelope {
+    const NAME: &'static str = "priority_tx";
+
+    type SolEvent = NewPriorityRequest;
+}
+
+pub type L1TxWatcherResult<T> = Result<T, L1TxWatcherError>;
+pub type L1TxWatcherError = L1WatcherError<L1EnvelopeError>;
