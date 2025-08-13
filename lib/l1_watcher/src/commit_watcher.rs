@@ -1,0 +1,125 @@
+use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::{L1WatcherConfig, util};
+use alloy::primitives::{Address, BlockNumber};
+use alloy::providers::{DynProvider, Provider};
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::Duration;
+use zksync_os_contract_interface::IExecutor::BlockCommit;
+use zksync_os_contract_interface::ZkChain;
+
+/// Don't try to process that many block linearly
+const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
+
+pub struct L1CommitWatcher {
+    l1_watcher: L1Watcher<BlockCommit>,
+    next_batch_number: u64,
+    poll_interval: Duration,
+}
+
+impl L1CommitWatcher {
+    pub async fn new(
+        config: L1WatcherConfig,
+        provider: DynProvider,
+        zk_chain_address: Address,
+        next_batch_number: u64,
+    ) -> anyhow::Result<Self> {
+        tracing::info!(
+            config.max_blocks_to_process,
+            ?config.poll_interval,
+            ?zk_chain_address,
+            "initializing L1 commit watcher"
+        );
+        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
+
+        let current_l1_block = provider.get_block_number().await?;
+        let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number)
+            .await
+            .or_else(|err| {
+                // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
+                // We default to `0` in this case - `eth_getLogs` are still supported.
+                // Assert that we don't fallback on longer chains (e.g. Sepolia)
+                if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
+                    anyhow::bail!(
+                        "Binary search failed with {}. Cannot default starting block to zero for a long chain. Current L1 block number: {}. Limit: {}.",
+                        err,
+                        current_l1_block,
+                        MAX_L1_BLOCKS_LOOKBEHIND,
+                    )
+                } else {
+                    Ok(0)
+                }
+            })?;
+
+        tracing::info!(next_l1_block, "resolved on L1");
+
+        let l1_watcher = L1Watcher::new(
+            provider,
+            zk_chain_address,
+            next_l1_block,
+            config.max_blocks_to_process,
+        );
+
+        Ok(Self {
+            l1_watcher,
+            next_batch_number,
+            poll_interval: config.poll_interval,
+        })
+    }
+
+    pub async fn run(mut self) -> L1CommitWatcherResult<()> {
+        let mut timer = tokio::time::interval(self.poll_interval);
+        loop {
+            timer.tick().await;
+            self.poll().await?;
+        }
+    }
+}
+
+impl L1CommitWatcher {
+    async fn poll(&mut self) -> L1CommitWatcherResult<()> {
+        let batch_commits = self.l1_watcher.poll().await?;
+        for batch_commit in batch_commits {
+            let batch_number = batch_commit.batchNumber.to::<u64>();
+            let batch_hash = batch_commit.batchHash;
+            let batch_commitment = batch_commit.commitment;
+            if batch_number < self.next_batch_number {
+                tracing::debug!(
+                    batch_number,
+                    ?batch_hash,
+                    ?batch_commitment,
+                    "skipping already processed committed batch",
+                );
+            } else {
+                tracing::info!(
+                    batch_number,
+                    ?batch_hash,
+                    ?batch_commitment,
+                    "discovered committed batch"
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+async fn find_l1_commit_block_by_batch_number(
+    zk_chain: ZkChain<DynProvider>,
+    next_batch_number: u64,
+) -> anyhow::Result<BlockNumber> {
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
+        let res = zk.get_total_batches_committed(block.into()).await?;
+        Ok(res >= next_batch_number)
+    })
+    .await
+}
+
+impl WatchedEvent for BlockCommit {
+    const NAME: &'static str = "block_commit";
+
+    type SolEvent = BlockCommit;
+}
+
+pub type L1CommitWatcherResult<T> = Result<T, L1CommitWatcherError>;
+pub type L1CommitWatcherError = L1WatcherError<Infallible>;

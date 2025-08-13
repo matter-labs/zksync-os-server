@@ -117,6 +117,8 @@ alloy::sol! {
             bytes operatorDAInput;
         }
 
+        event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
+
         function commitBatchesSharedBridge(
             uint256 _chainId,
             uint256 _processFrom,
@@ -269,8 +271,16 @@ impl<P: Provider> ZkChain<P> {
             .await
     }
 
-    pub async fn get_total_batches_committed(&self) -> alloy::contract::Result<U256> {
-        self.instance.getTotalBatchesCommitted().call().await
+    pub async fn get_total_batches_committed(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<u64> {
+        self.instance
+            .getTotalBatchesCommitted()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
     }
 
     pub async fn get_total_batches_proved(&self) -> alloy::contract::Result<U256> {

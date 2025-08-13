@@ -11,6 +11,7 @@ use alloy::rlp::{BufMut, Decodable, Encodable};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
+use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::L2CanonicalTransaction;
 
 // L1 transactions are not encodable when we use type id 255 so we pretend like they have type 42
@@ -419,6 +420,14 @@ impl TryFrom<L2CanonicalTransaction> for L1Envelope {
                 B256::from(hash),
             ),
         })
+    }
+}
+
+impl TryFrom<NewPriorityRequest> for L1Envelope {
+    type Error = L1EnvelopeError;
+
+    fn try_from(value: NewPriorityRequest) -> Result<Self, Self::Error> {
+        value.transaction.try_into()
     }
 }
 
