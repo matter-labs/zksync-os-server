@@ -63,7 +63,7 @@ use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{ReadReplay, ReplayRecord};
+use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
 use zksync_storage::RocksDB;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -400,7 +400,7 @@ pub async fn run(
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
     // only reading these for assertions
-    let repositories_persisted_block = repositories.get_latest_persisted_block();
+    let repositories_persisted_block = repositories.get_latest_block();
     let wal_block = block_replay_storage.latest_block().unwrap_or(0);
     let tree_last_processed_block = tree_manager
         .last_processed_block()
@@ -409,7 +409,7 @@ pub async fn run(
     tracing::info!(
         storage_map_block = storage_map_compacted_block,
         wal_block = wal_block,
-        canonized_block = repositories.get_latest_persisted_block(),
+        canonized_block = repositories.get_latest_block(),
         tree_last_processed_block = tree_last_processed_block,
         "▶ Sequencer will start from block {}",
         storage_map_compacted_block + 1
