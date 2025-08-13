@@ -3,9 +3,13 @@ use crate::model::blocks::BlockCommand;
 use alloy::primitives::{B256, BlockNumber};
 use futures::Stream;
 use futures::stream::{self, BoxStream, StreamExt};
+use pin_project::pin_project;
 use ruint::aliases::U256;
 use std::convert::TryInto;
 use std::task::Poll;
+use std::time::Duration;
+use tokio::pin;
+use tokio::time::{Instant, Sleep};
 use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_rocksdb::RocksDB;
@@ -191,22 +195,30 @@ impl BlockReplayStorage {
 
     /// Streams all replay commands with block_number ≥ `start`, in ascending block order and waits for new ones on running out
     pub fn replay_commands_forever(&self, start: BlockNumber) -> BoxStream<ReplayRecord> {
+        #[pin_project]
         struct BlockStream {
             replays: BlockReplayStorage,
             current_block: BlockNumber,
+            #[pin]
+            sleep: Sleep,
         }
         impl Stream for BlockStream {
             type Item = ReplayRecord;
 
             fn poll_next(
-                mut self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
             ) -> std::task::Poll<Option<Self::Item>> {
-                if let Some(record) = self.replays.get_replay_record(self.current_block) {
-                    self.current_block += 1;
+                let mut this = self.project();
+                if let Some(record) = this.replays.get_replay_record(*this.current_block) {
+                    *this.current_block += 1;
                     Poll::Ready(Some(record))
                 } else {
-                    // TODO: would be nice to be woken up when the block is available
+                    // TODO: would be nice to be woken up only when the next block is available
+                    this.sleep
+                        .as_mut()
+                        .reset(Instant::now() + Duration::from_millis(50));
+                    assert_eq!(this.sleep.poll(cx), Poll::Pending);
                     Poll::Pending
                 }
             }
@@ -215,6 +227,7 @@ impl BlockReplayStorage {
         Box::pin(BlockStream {
             replays: self.clone(),
             current_block: start,
+            sleep: tokio::time::sleep(Duration::from_millis(50)),
         })
     }
 }

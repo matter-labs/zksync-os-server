@@ -68,3 +68,4 @@ zksync_os_state.workspace = true
 zksync_os_merkle_tree.workspace = true
 axum.workspace = true
 http.workspace = true
+pin-project = "1.1.10"
