@@ -8,12 +8,12 @@ use alloy::{
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
 use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
-use zksync_storage::RocksDB;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 #[derive(Clone, Copy, Debug)]
 pub enum RepositoryCF {

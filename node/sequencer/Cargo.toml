@@ -13,6 +13,7 @@ categories.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
+zksync_os_rocksdb.workspace = true
 zksync_os_rpc.workspace = true
 zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
@@ -38,8 +39,6 @@ reth-revm = { workspace = true }
 reth-storage-api = { workspace = true }
 reth-execution-types = { workspace = true }
 
-zksync_storage.workspace = true
-
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256", "rand"] }
 blake2.workspace = true
@@ -47,13 +46,12 @@ ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 thiserror.workspace = true
 itertools.workspace = true
 futures.workspace = true
 dashmap.workspace = true
 vise.workspace = true
-zksync_vlog.workspace = true
 base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

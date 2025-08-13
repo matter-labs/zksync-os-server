@@ -18,7 +18,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zk_os_forward_system::run::{
     LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
 };
-use zksync_storage::RocksDB;
+use zksync_os_rocksdb::RocksDB;
 // Re-export commonly used types
 use crate::persistent_preimages::{PersistentPreimages, PreimagesCF};
 use crate::storage_map_view::StorageMapView;
