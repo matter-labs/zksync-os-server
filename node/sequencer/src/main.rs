@@ -4,12 +4,12 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
+use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_sequencer::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig,
 };
 use zksync_os_sequencer::run;
-use zksync_vlog::prometheus::PrometheusExporterConfig;
 
 #[tokio::main]
 pub async fn main() {

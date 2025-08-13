@@ -18,6 +18,8 @@ pub struct ExecutionMetrics {
 
     #[metrics(buckets = STORAGE_WRITES)]
     pub storage_writes_per_block: Histogram<u64>,
+
+    pub next_l1_priority_id: Gauge<u64>,
 }
 
 #[derive(Debug, Metrics)]

@@ -39,6 +39,7 @@ use crate::prover_input_generator::ProverInputGenerator;
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
+use alloy::providers::{DynProvider, ProviderBuilder};
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, StreamExt};
@@ -58,13 +59,13 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
-use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
+use zksync_os_l1_watcher::{L1CommitWatcher, L1TxWatcher, L1WatcherConfig};
 use zksync_os_priority_tree::PriorityTreeManager;
+use zksync_os_rocksdb::RocksDB;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
-use zksync_storage::RocksDB;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -250,10 +251,6 @@ pub async fn run(
     prover_input_generator_config: ProverInputGeneratorConfig,
     prover_api_config: ProverApiConfig,
 ) {
-    // todo: decide on an approach to configuration to stop having to set up the same parameters in
-    //       multiple places
-    let bridgehub_address = l1_watcher_config.bridgehub_address;
-
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
 
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
@@ -303,9 +300,19 @@ pub async fn run(
     );
 
     tracing::info!("reading L1 state");
-    let l1_state = get_l1_state(l1_sender_config.clone(), genesis_config.chain_id)
-        .await
-        .expect("Failed to read L1 state");
+    let l1_provider = DynProvider::new(
+        ProviderBuilder::new()
+            .connect(&l1_sender_config.l1_api_url)
+            .await
+            .expect("failed to connect to L1 api"),
+    );
+    let l1_state = get_l1_state(
+        &l1_provider,
+        l1_sender_config.clone(),
+        genesis_config.chain_id,
+    )
+    .await
+    .expect("Failed to read L1 state");
 
     // ======= Initialize async channels  ===========
 
@@ -438,14 +445,23 @@ pub async fn run(
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
 
-    let l1_watcher = L1Watcher::new(
-        l1_watcher_config,
-        genesis_config.chain_id,
+    let l1_tx_watcher = L1TxWatcher::new(
+        l1_watcher_config.clone(),
+        l1_provider.clone(),
+        l1_state.diamond_proxy,
         l1_transactions_sender,
         next_l1_priority_id,
     )
     .await;
-    let l1_watcher_task = l1_watcher.expect("failed to start L1 watcher").run();
+    let l1_tx_watcher_task = l1_tx_watcher
+        .expect("failed to start L1 transaction watcher")
+        .run();
+
+    let l1_commit_watcher =
+        L1CommitWatcher::new(l1_watcher_config, l1_provider, l1_state.diamond_proxy, 1).await;
+    let l1_commit_watcher_task = l1_commit_watcher
+        .expect("failed to start L1 commit watcher")
+        .run();
 
     // ========== Initialize BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
@@ -619,7 +635,7 @@ pub async fn run(
         batch_for_priority_tree_sender,
         batch_for_execute_receiver,
         fully_processed_batch_sender,
-        l1_state,
+        &l1_state,
     );
 
     let priority_tree_manager = PriorityTreeManager::new(
@@ -656,7 +672,7 @@ pub async fn run(
         res = run_jsonrpsee_server(
             rpc_config,
             genesis_config.chain_id,
-            bridgehub_address,
+            l1_state.bridgehub,
             repositories.clone(),
             block_replay_storage.clone(),
             state_handle.clone(),
@@ -675,10 +691,17 @@ pub async fn run(
             }
         }
 
-        res = l1_watcher_task => {
+        res = l1_tx_watcher_task => {
             match res {
-                Ok(_)  => tracing::warn!("L1 watcher unexpectedly exited"),
-                Err(e) => tracing::error!("L1 watcher failed: {e:#}"),
+                Ok(_)  => tracing::warn!("L1 transaction watcher unexpectedly exited"),
+                Err(e) => tracing::error!("L1 transaction watcher failed: {e:#}"),
+            }
+        }
+
+        res = l1_commit_watcher_task => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 commit watcher unexpectedly exited"),
+                Err(e) => tracing::error!("L1 commit watcher failed: {e:#}"),
             }
         }
 
@@ -796,7 +819,7 @@ fn run_l1_senders(
     batch_for_execute_receiver: Receiver<ExecuteCommand>,
     fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
 
-    l1_state: L1State,
+    l1_state: &L1State,
 ) -> (
     impl Future<Output = Result<()>>,
     impl Future<Output = Result<()>>,

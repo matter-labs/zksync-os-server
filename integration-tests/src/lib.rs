@@ -118,7 +118,6 @@ impl TesterBuilder {
             ..Default::default()
         };
         let l1_watcher_config = L1WatcherConfig {
-            l1_api_url: l1_address.clone(),
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {

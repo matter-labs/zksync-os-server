@@ -12,8 +12,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_crypto.workspace = true
-
-zksync_storage.workspace = true
+zksync_os_rocksdb.workspace = true
 
 alloy = { workspace = true, default-features = false }
 anyhow.workspace = true

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
 use zk_ee::utils::Bytes32;
-use zksync_storage::RocksDB;
-use zksync_storage::db::NamedColumnFamily;
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::NamedColumnFamily;
 
 /// Wrapper for map of storage diffs that are persisted in RocksDB.
 ///

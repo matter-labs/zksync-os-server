@@ -2,8 +2,8 @@ use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
+use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
-use zksync_storage::rocksdb;
 
 /// Sealed block (i.e. pre-computed hash) along with transaction hashes included in that block.
 /// This is the structure stored in the repository and hence what is served in its API.

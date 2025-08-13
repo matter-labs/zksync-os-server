@@ -3,8 +3,8 @@
 //!
 
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
-use zksync_storage::RocksDB;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 
 /// Column family set for proof storage.
 #[derive(Copy, Clone, Debug)]
