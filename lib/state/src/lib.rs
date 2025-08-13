@@ -46,7 +46,7 @@ pub struct StateHandle {
 
 impl StateHandle {
     pub fn new(config: StateConfig) -> Self {
-        if config.erase_storage_on_start {
+        if config.erase_storage_on_start_unsafe {
             let path = config.rocks_db_path.join(STATE_STORAGE_DB_NAME);
             if fs::exists(path.clone()).unwrap() {
                 tracing::info!("Erasing state storage");

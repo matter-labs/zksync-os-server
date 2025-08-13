@@ -61,14 +61,6 @@ pub(crate) fn seal_batch(
     )
     .with_stage(BatchExecutionStage::Sealed);
 
-    tracing::info!(
-        block_number_from,
-        block_number_to,
-        batch_number,
-        state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
-        "Batch produced",
-    );
-
     tracing::debug!(
         ?batch_envelope.batch,
         "Batch details",
