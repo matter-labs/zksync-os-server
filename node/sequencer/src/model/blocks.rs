@@ -75,6 +75,7 @@ pub struct PreparedBlockCommand<'a> {
     pub node_version: semver::Version,
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
     pub expected_block_output_hash: Option<B256>,
+    pub previous_block_timestamp: u64,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.
