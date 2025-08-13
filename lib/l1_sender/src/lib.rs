@@ -4,10 +4,10 @@ pub mod commands;
 pub mod commitment;
 pub mod config;
 pub mod l1_discovery;
-pub mod metrics;
+mod metrics;
+mod new_blocks;
 
 use crate::batcher_model::{BatchEnvelope, FriProof};
-mod new_blocks;
 use crate::commands::L1SenderCommand;
 use crate::metrics::L1SenderState;
 use crate::new_blocks::NewBlocks;
@@ -63,9 +63,13 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     command_limit: usize,
-    // == metrics
-    mut latency_tracker: ComponentStateLatencyTracker<L1SenderState>,
 ) -> anyhow::Result<()> {
+    let mut latency_tracker = ComponentStateLatencyTracker::new(
+        Input::NAME,
+        L1SenderState::WaitingRecv,
+        Some(Input::state_metric()),
+    );
+
     let provider = build_provider::<Input>(from_address_pk, l1_api_url).await?;
     let mut heartbeat = Heartbeat::new(provider.clone()).await?;
     let mut cmd_buffer = Vec::with_capacity(command_limit);

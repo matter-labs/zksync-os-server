@@ -56,7 +56,6 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
-use zksync_os_l1_sender::metrics::{L1_SENDER_METRICS, L1SenderState};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1Watcher, L1WatcherConfig};
 use zksync_os_observability::ComponentStateLatencyTracker;
@@ -767,12 +766,6 @@ fn run_l1_senders(
     impl Future<Output = Result<()>>,
     impl Future<Output = Result<()>>,
 ) {
-    let l1_committer_latency_tracker = ComponentStateLatencyTracker::new(
-        "l1_committer",
-        L1SenderState::WaitingRecv,
-        Some(&L1_SENDER_METRICS.commit_state),
-    );
-
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
         batch_for_snark_sender,
@@ -782,14 +775,8 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
-        l1_committer_latency_tracker,
     );
 
-    let l1_proof_latency_tracker = ComponentStateLatencyTracker::new(
-        "l1_prover",
-        L1SenderState::WaitingRecv,
-        Some(&L1_SENDER_METRICS.prove_state),
-    );
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
         batch_for_priority_tree_sender,
@@ -799,14 +786,8 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
-        l1_proof_latency_tracker,
     );
 
-    let l1_execute_latency_tracker = ComponentStateLatencyTracker::new(
-        "l1_execute",
-        L1SenderState::WaitingRecv,
-        Some(&L1_SENDER_METRICS.execute_state),
-    );
     let l1_executor = run_l1_sender(
         batch_for_execute_receiver,
         fully_processed_batch_sender,
@@ -816,7 +797,6 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
-        l1_execute_latency_tracker,
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }
