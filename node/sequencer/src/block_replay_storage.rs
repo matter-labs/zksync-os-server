@@ -7,10 +7,10 @@ use ruint::aliases::U256;
 use std::convert::TryInto;
 use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
-use zksync_storage::RocksDB;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:
@@ -91,6 +91,7 @@ impl BlockReplayStorage {
                 },
                 starting_l1_priority_id: 0,
                 transactions: vec![],
+                previous_block_timestamp: 0,
                 node_version,
                 block_output_hash: B256::ZERO,
             })
@@ -221,6 +222,11 @@ impl ReadReplay for BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::Txs, &key)
             .expect("Failed to read from Txs CF");
+        let previous_block_timestamp = self
+            .get_context(block_number)
+            .map(|context| context.timestamp)
+            .unwrap_or(0);
+
         let node_version_result = self
             .db
             .get_cf(BlockReplayColumnFamily::NodeVersion, &key)
@@ -268,6 +274,7 @@ impl ReadReplay for BlockReplayStorage {
                         .expect("Failed to recover transaction's signer")
                 })
                 .collect(),
+                previous_block_timestamp,
                 node_version: node_version_result
                     .map(|bytes| {
                         String::from_utf8(bytes)

@@ -247,6 +247,7 @@ pub async fn execute_block(
             ctx,
             command.starting_l1_priority_id,
             executed_txs,
+            command.previous_block_timestamp,
             command.node_version,
             block_hash_output,
         ),

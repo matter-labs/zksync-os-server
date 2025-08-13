@@ -13,7 +13,7 @@ use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
 use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
-use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
 pub struct TreeManager {

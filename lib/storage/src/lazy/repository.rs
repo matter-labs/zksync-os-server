@@ -186,7 +186,9 @@ impl ReadRepository for RepositoryManager {
     }
 
     fn get_latest_block(&self) -> u64 {
-        self.in_memory.get_latest_block()
+        self.in_memory
+            .get_latest_block()
+            .max(self.db.get_latest_block())
     }
 }
 

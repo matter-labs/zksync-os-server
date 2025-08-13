@@ -5,3 +5,6 @@ pub use component_state_latency_tracker::ComponentStateLatencyTracker;
 pub use component_state_latency_tracker::GenericComponentState;
 
 mod metrics;
+
+mod prometheus;
+pub use prometheus::PrometheusExporterConfig;

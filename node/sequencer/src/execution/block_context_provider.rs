@@ -1,3 +1,4 @@
+use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
@@ -14,7 +15,6 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
-use zksync_os_l1_watcher::METRICS;
 use zksync_os_mempool::{
     CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
     RethTransactionPoolExt, best_transactions,
@@ -37,6 +37,7 @@ pub struct BlockContextProvider {
     l1_transactions: mpsc::Receiver<L1Envelope>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
+    previous_block_timestamp: u64,
     chain_id: u64,
     node_version: semver::Version,
 }
@@ -47,6 +48,7 @@ impl BlockContextProvider {
         l1_transactions: mpsc::Receiver<L1Envelope>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
+        previous_block_timestamp: u64,
         chain_id: u64,
         node_version: semver::Version,
     ) -> Self {
@@ -55,6 +57,7 @@ impl BlockContextProvider {
             l1_transactions,
             l2_mempool,
             block_hashes_for_next_block,
+            previous_block_timestamp,
             chain_id,
             node_version,
         }
@@ -97,6 +100,7 @@ impl BlockContextProvider {
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
                     expected_block_output_hash: None,
+                    previous_block_timestamp: self.previous_block_timestamp,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -120,6 +124,7 @@ impl BlockContextProvider {
                     metrics_label: "replay",
                     node_version: record.node_version,
                     expected_block_output_hash: Some(record.block_output_hash),
+                    previous_block_timestamp: self.previous_block_timestamp,
                 }
             }
         };
@@ -147,7 +152,9 @@ impl BlockContextProvider {
                 }
             }
         }
-        METRICS.next_l1_priority_id.set(self.next_l1_priority_id);
+        EXECUTION_METRICS
+            .next_l1_priority_id
+            .set(self.next_l1_priority_id);
 
         // Advance `block_hashes_for_next_block`.
         let last_block_hash = block_output.header.hash();
@@ -161,6 +168,7 @@ impl BlockContextProvider {
                 .try_into()
                 .unwrap(),
         );
+        self.previous_block_timestamp = block_output.header.timestamp;
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
         //       so far it looks like below is sufficient

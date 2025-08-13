@@ -530,7 +530,7 @@ mod rocksdb {
     use serde::{Deserialize, Serialize};
     use serde_with::{hex::Hex, serde_as};
     use tempfile::TempDir;
-    use zksync_storage::RocksDB;
+    use zksync_os_rocksdb::RocksDB;
 
     use super::*;
 
