@@ -74,14 +74,18 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     let mut heartbeat = Heartbeat::new(provider.clone()).await?;
     let mut cmd_buffer = Vec::with_capacity(command_limit);
 
-    // This sleeps until **at least one** command is received from the channel. Additionally,
-    // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
-    // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
-    // emptied in every iteration, its size never exceeds `self.command_limit`.
-    //
-    // This method only returns `0` if the channel has been closed and there are no more items
-    // in the queue.
-    while inbound.recv_many(&mut cmd_buffer, command_limit).await != 0 {
+    loop {
+        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        // This sleeps until **at least one** command is received from the channel. Additionally,
+        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
+        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
+        // emptied in every iteration, its size never exceeds `self.command_limit`.
+        let received = inbound.recv_many(&mut cmd_buffer, command_limit).await;
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
+        if received == 0 {
+            anyhow::bail!("inbound channel closed");
+        }
         latency_tracker.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&cmd_buffer); // Only for logging
         let command_name = Input::NAME;
@@ -127,9 +131,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
                 outbound.send(output_envelope).await?;
             }
         }
-        latency_tracker.enter_state(L1SenderState::WaitingRecv);
     }
-    anyhow::bail!("inbound channel closed");
 }
 
 async fn tx_request_with_gas_fields(

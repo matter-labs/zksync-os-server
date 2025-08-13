@@ -118,7 +118,7 @@ pub async fn execute_block(
                                         )
                                     }
                                     (ZkTxType::L2(_), InvalidTxPolicy::RejectAndContinue) => {
-                                        let rejection_method = rejection_method(e.clone());
+                                        let rejection_method = rejection_method(&e);
 
                                         // mark the tx as invalid regardless of the `rejection_method`.
                                         command.tx_source.as_mut().mark_last_tx_as_invalid();
@@ -132,7 +132,7 @@ pub async fn execute_block(
                                                 tracing::warn!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → skipped");
                                             },
                                             TxRejectionMethod::SealBlock(reason) => {
-                                                tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "sealing block by criterion");
+                                                tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
                                                 break reason;
                                             }
                                         }
@@ -280,7 +280,7 @@ pub enum SealReason {
     L2ToL1Logs,
 }
 
-fn rejection_method(error: InvalidTransaction) -> TxRejectionMethod {
+fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
     match error {
         InvalidTransaction::InvalidEncoding
         | InvalidTransaction::InvalidStructure

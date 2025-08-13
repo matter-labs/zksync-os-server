@@ -97,8 +97,12 @@ pub async fn run_sequencer_actor(
         SequencerState::WaitingForUpstreamCommand,
         Some(&EXECUTION_METRICS.block_execution_stages),
     );
+    loop {
+        latency_tracker.enter_state(SequencerState::WaitingForUpstreamCommand);
 
-    while let Some(cmd) = stream.next().await {
+        let Some(cmd) = stream.next().await else {
+            anyhow::bail!("inbound channel closed");
+        };
         let block_number = cmd.block_number();
 
         tracing::info!(
@@ -177,9 +181,7 @@ pub async fn run_sequencer_actor(
         EXECUTION_METRICS.block_number[&"execute"].set(block_number);
 
         tracing::info!(block_number, "Block fully processed");
-        latency_tracker.enter_state(SequencerState::WaitingForUpstreamCommand);
     }
-    Ok::<(), anyhow::Error>(())
 }
 
 /// In decentralized case, consensus will provide a stream of
