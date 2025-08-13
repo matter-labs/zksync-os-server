@@ -23,6 +23,6 @@ impl ReadFinality for Finality {
 impl WriteFinality for Finality {
     fn update_finality_status(&self, f: impl FnOnce(&mut FinalityStatus)) {
         let mut data = self.data.write().unwrap();
-        f(&mut *data);
+        f(&mut data);
     }
 }
