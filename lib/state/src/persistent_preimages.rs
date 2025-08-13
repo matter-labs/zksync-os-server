@@ -1,8 +1,8 @@
 use crate::metrics::PREIMAGES_METRICS;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::PreimageSource;
-use zksync_storage::RocksDB;
-use zksync_storage::db::NamedColumnFamily;
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::NamedColumnFamily;
 
 #[derive(Clone, Debug)]
 pub struct PersistentPreimages {

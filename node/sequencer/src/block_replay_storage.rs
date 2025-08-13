@@ -7,10 +7,10 @@ use ruint::aliases::U256;
 use std::convert::TryInto;
 use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
+use zksync_os_rocksdb::RocksDB;
+use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
-use zksync_storage::RocksDB;
-use zksync_storage::db::{NamedColumnFamily, WriteBatch};
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:

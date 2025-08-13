@@ -17,7 +17,7 @@ use zksync_os_merkle_tree::{
     Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree, MerkleTreeColumnFamily,
     PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams, unstable,
 };
-use zksync_storage::{RocksDB, RocksDBOptions, db::NamedColumnFamily};
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions, db::NamedColumnFamily};
 
 #[derive(Debug)]
 struct WithDynHasher;

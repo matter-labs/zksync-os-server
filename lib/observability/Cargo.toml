@@ -10,6 +10,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-vise.workspace = true
+anyhow.workspace = true
 itertools.workspace = true
+tokio.workspace = true
 tracing.workspace = true
+vise.workspace = true
+vise-exporter.workspace = true

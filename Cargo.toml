@@ -8,6 +8,7 @@ members = [
     "lib/merkle_tree",
     "lib/mini_merkle_tree",
     "lib/priority_tree",
+    "lib/rocksdb",
     "lib/rpc",
     "lib/rpc_api",
     "lib/state",
@@ -105,9 +106,9 @@ tower-http = "0.6.6"
 hyper = "1.6.0"
 semver = "1"
 async-stream = "0.3.6"
-
-zksync_vlog = "28.1.0-non-semver-compat"
-zksync_storage = "28.1.0-non-semver-compat"
+num_cpus = "1.17.0"
+rocksdb = "0.23.0"
+thread_local = "1.1.9"
 
 # Reth dependencies
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
@@ -129,6 +130,7 @@ zksync_os_mini_merkle_tree = { path = "lib/mini_merkle_tree" }
 zksync_os_merkle_tree = { path = "lib/merkle_tree" }
 zksync_os_priority_tree = { path = "lib/priority_tree" }
 zksync_os_observability = { path = "lib/observability" }
+zksync_os_rocksdb = { path = "lib/rocksdb" }
 zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
 zksync_os_state = { path = "lib/state" }

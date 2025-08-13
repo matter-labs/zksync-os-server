@@ -61,11 +61,11 @@ use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1TxWatcher, L1WatcherConfig};
 use zksync_os_priority_tree::PriorityTreeManager;
+use zksync_os_rocksdb::RocksDB;
 use zksync_os_rpc::run_jsonrpsee_server;
 use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
-use zksync_storage::RocksDB;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";

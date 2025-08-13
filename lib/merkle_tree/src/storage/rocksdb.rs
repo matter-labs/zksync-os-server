@@ -5,7 +5,7 @@ use std::{ops, path::Path};
 use alloy::primitives::B256;
 use anyhow::Context as _;
 use once_cell::sync::OnceCell;
-use zksync_storage::{RocksDB, db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice};
+use zksync_os_rocksdb::{RocksDB, db::NamedColumnFamily, rocksdb, rocksdb::DBPinnableSlice};
 
 use crate::{
     Database, DeserializeError,
@@ -118,8 +118,10 @@ impl RocksDBWrapper {
 
         keys.par_chunks(self.multi_get_chunk_size)
             .map(|chunk| {
-                let keys = chunk.iter().map(NodeKey::as_db_key);
-                let results = self.db.multi_get_cf(MerkleTreeColumnFamily::Tree, keys);
+                let keys = chunk.iter().map(NodeKey::as_db_key).collect::<Vec<_>>();
+                let results = self
+                    .db
+                    .multi_get_cf(MerkleTreeColumnFamily::Tree, keys.iter());
                 results
                     .into_iter()
                     .map(|result| result.expect("Failed reading from RocksDB"))

@@ -10,16 +10,16 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_rocksdb.workspace = true
+
+zk_os_forward_system.workspace = true
+zk_os_basic_system.workspace = true
+zk_ee.workspace = true
+
 anyhow.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
 smart-config.workspace = true
-
-zksync_storage.workspace = true
-zk_os_forward_system.workspace = true
-zk_os_basic_system.workspace = true
-zk_ee.workspace = true
 dashmap.workspace = true
 vise.workspace = true

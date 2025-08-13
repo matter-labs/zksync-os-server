@@ -12,7 +12,7 @@ use zk_os_forward_system::run::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
-use zksync_storage::{RocksDB, RocksDBOptions, StalledWritesRetries};
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
 pub struct TreeManager {
