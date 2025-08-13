@@ -149,3 +149,11 @@ pub struct GenesisConfig {
     #[config(default_t = 270)]
     pub chain_id: u64,
 }
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct PrometheusConfig {
+    /// Prometheus address to listen on.
+    #[config(default_t = 3322)]
+    pub port: u16,
+}

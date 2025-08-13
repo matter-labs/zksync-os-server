@@ -93,7 +93,10 @@ WARNING: when you see the tool failing on postgres - it is ok, as the chain got 
 
 After this, you can finally run the sequencer:
 ```
-l1_sender_operator_private_key=0x..... l1_sender_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c  l1_watcher_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c cargo run --release
+l1_sender_operator_commit_pk= 
+l1_sender_operator_prove_pk= 
+l1_sender_operator_execute_pk=  
+l1_sender_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c  l1_watcher_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c cargo run --release
 ```
 
 The operator private key must match value from `$chain_name/configs/wallets.yaml` operator (where chain_name in our example is era1)
@@ -145,8 +148,8 @@ Make sure to fund the accounts again (see the script in the docs above).
 Init new chain (deploying contacts etc):
 
 ```shell
-zkstack ecosystem init --deploy-paymaster=false --deploy-erc20=false --observability=false \
-  --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --chain era2 \
+zkstack chain init --deploy-paymaster=false  \
+  --l1-rpc-url=http://localhost:8545 --chain era2 \
   --server-db-url=postgres://invalid --server-db-name=invalid
 ```
 
@@ -165,12 +168,10 @@ And start the sequencer -- make sure that all the config values are set correctl
 
 
 ```shell
-l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 rpc_prometheus_port=3313 l1_sender_operator_private_key=0xf32ac37325f0b1249b9bfd3c25c91309ec89f524225534db6194c7cc75ab9b51 l1_sender_bridgehub_address=0xbfb1f781d4c7123213050b1870cc9e3f2b0f2e1b  l1_watcher_bridgehub_address=0xbfb1f781d4c7123213050b1870cc9e3f2b0f2e1b cargo run --release
+genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 prometheus_port=3313 l1_sender_operator_commit_pk=0x.. l1_sender_operator_prove_pk=0x.. l1_sender_operator_execute_pk=0x.. l1_sender_bridgehub_address=0x..  l1_watcher_bridgehub_address=0x.. cargo run --release
 
 ```
 
 Stuff that didn't work:
-* prometheus port not part of the config
-* invalid chain_id (hardcoded!!) 
 * nit: multiple thing has to be defined in many configs
 * typos in config names 

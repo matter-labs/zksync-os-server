@@ -6,8 +6,8 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
-    RpcConfig, SequencerConfig,
+    BatcherConfig, GenesisConfig, MempoolConfig, PrometheusConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 use zksync_os_sequencer::run;
 
@@ -32,10 +32,11 @@ pub async fn main() {
         batcher_config,
         prover_input_generator_config,
         prover_api_config,
+        prometheus_config,
     ) = build_configs();
 
     let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(rpc_config.prometheus_port);
+        PrometheusExporterConfig::pull(prometheus_config.port);
 
     // =========== init interruption channel ===========
 
@@ -79,6 +80,7 @@ fn build_configs() -> (
     BatcherConfig,
     ProverInputGeneratorConfig,
     ProverApiConfig,
+    PrometheusConfig,
 ) {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
@@ -112,6 +114,9 @@ fn build_configs() -> (
     schema
         .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
         .expect("Failed to insert prover api config");
+    schema
+        .insert(&PrometheusConfig::DESCRIPTION, "prometheus")
+        .expect("Failed to insert prometheus config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -168,6 +173,12 @@ fn build_configs() -> (
         .expect("Failed to load prover api config")
         .parse()
         .expect("Failed to parse prover api config");
+
+    let prometheus_config = repo
+        .single::<PrometheusConfig>()
+        .expect("Failed to load prometheus config")
+        .parse()
+        .expect("Failed to parse prometheus config");
     (
         genesis_config,
         rpc_config,
@@ -178,5 +189,6 @@ fn build_configs() -> (
         batcher_config,
         prover_input_generator_config,
         prover_api_config,
+        prometheus_config,
     )
 }
