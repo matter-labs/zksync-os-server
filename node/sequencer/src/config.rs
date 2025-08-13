@@ -154,6 +154,6 @@ pub struct GenesisConfig {
 #[config(derive(Default))]
 pub struct PrometheusConfig {
     /// Prometheus address to listen on.
-    #[config(default_t = 3322)]
+    #[config(default_t = 3312)]
     pub port: u16,
 }
