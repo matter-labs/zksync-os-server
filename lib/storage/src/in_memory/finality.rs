@@ -1,28 +1,26 @@
-use std::sync::{Arc, RwLock};
+use tokio::sync::watch;
 use zksync_os_storage_api::{FinalityStatus, ReadFinality, WriteFinality};
 
 #[derive(Debug, Clone)]
 pub struct Finality {
-    data: Arc<RwLock<FinalityStatus>>,
+    sender: watch::Sender<FinalityStatus>,
 }
 
 impl Finality {
     pub fn new(initial_status: FinalityStatus) -> Self {
-        Self {
-            data: Arc::new(RwLock::new(initial_status)),
-        }
+        let (sender, _) = watch::channel(initial_status);
+        Self { sender }
     }
 }
 
 impl ReadFinality for Finality {
     fn get_finality_status(&self) -> FinalityStatus {
-        self.data.read().unwrap().clone()
+        self.sender.borrow().clone()
     }
 }
 
 impl WriteFinality for Finality {
     fn update_finality_status(&self, f: impl FnOnce(&mut FinalityStatus)) {
-        let mut data = self.data.write().unwrap();
-        f(&mut data);
+        self.sender.send_modify(f);
     }
 }
