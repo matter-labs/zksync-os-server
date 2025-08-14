@@ -497,7 +497,6 @@ pub async fn run(
         l1_watcher_config,
         l1_provider,
         l1_state.diamond_proxy,
-        1,
         finality_storage.clone(),
     )
     .await;

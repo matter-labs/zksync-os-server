@@ -19,12 +19,11 @@ pub struct L1CommitWatcher<Finality> {
     finality: Finality,
 }
 
-impl<Finality> L1CommitWatcher<Finality> {
+impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
         zk_chain_address: Address,
-        next_batch_number: u64,
         finality: Finality,
     ) -> anyhow::Result<Self> {
         tracing::info!(
@@ -36,6 +35,7 @@ impl<Finality> L1CommitWatcher<Finality> {
         let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
 
         let current_l1_block = provider.get_block_number().await?;
+        let next_batch_number = finality.get_finality_status().last_committed_block + 1;
         let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number)
             .await
             .or_else(|err| {
@@ -104,6 +104,11 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
                 // todo: presuming 1 batch = 1 block right now, fetch from FRI cache instead
                 let last_committed_block = batch_number;
                 self.finality.update_finality_status(|finality| {
+                    assert_eq!(
+                        finality.last_committed_block + 1,
+                        last_committed_block,
+                        "non-sequential committed block"
+                    );
                     finality.last_committed_block = last_committed_block;
                 });
             }
