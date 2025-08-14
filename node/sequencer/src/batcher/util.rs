@@ -4,12 +4,25 @@ use ruint::aliases::{B160, U256};
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::system::BatchOutput;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
+use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
+use zksync_os_storage::lazy::RepositoryManager;
+use zksync_os_storage_api::ReadRepository;
 
-pub fn genesis_stored_batch_info(
-    genesis_block_hash: B256,
-    genesis_root_info: (B256, u64),
+pub async fn load_genesis_stored_batch_info(
+    repository_manager: &RepositoryManager,
+    tree: MerkleTreeForReading<RocksDBWrapper>,
     chain_id: u64,
 ) -> StoredBatchInfo {
+    let genesis_block = repository_manager
+        .get_block_by_number(0)
+        .expect("Failed to read genesis block from repositories")
+        .expect("Missing genesis block in repositories");
+    let (genesis_root_info) = tree
+        .get_at_block(0)
+        .await
+        .root_info()
+        .expect("Failed to get genesis root info");
+
     let number = 0u64;
     let timestamp = 0u64;
 
@@ -18,7 +31,7 @@ pub fn genesis_stored_batch_info(
         for _ in 0..255 {
             blocks_hasher.update([0u8; 32]);
         }
-        blocks_hasher.update(genesis_block_hash);
+        blocks_hasher.update(genesis_block.hash());
 
         blocks_hasher.finalize()
     };

@@ -22,7 +22,10 @@ use zksync_os_storage::db::RepositoryDb;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenesisInput {
+    /// Initial contracts to deploy in genesis.
+    /// Storage entries that set the contracts as deployed and preimages will be derived from this field.
     pub initial_contracts: Vec<(Address, alloy::primitives::Bytes)>,
+    /// Additional (not related to contract deployments) storage entries to add in genesis state.
     pub additional_storage: Vec<(Bytes32, Bytes32)>,
 }
 

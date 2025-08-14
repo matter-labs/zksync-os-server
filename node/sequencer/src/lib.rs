@@ -17,7 +17,7 @@ pub mod tree_manager;
 mod util;
 
 use crate::batch_sink::BatchSink;
-use crate::batcher::{Batcher, util::genesis_stored_batch_info};
+use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
@@ -411,19 +411,9 @@ pub async fn run(
         .expect("cannot read tree last processed block after initialization");
 
     let (last_committed_block, last_committed_batch_info) = if l1_state.last_committed_batch == 0 {
-        let genesis_block = repositories
-            .get_block_by_number(0)
-            .expect("Failed to read genesis block from repositories")
-            .expect("Missing genesis block in repositories");
-        let root_info = persistent_tree
-            .clone()
-            .get_at_block(0)
-            .await
-            .root_info()
-            .expect("Failed to get genesis root info");
         (
             0,
-            genesis_stored_batch_info(genesis_block.hash(), root_info, genesis_config.chain_id),
+            load_genesis_stored_batch_info(&repositories, persistent_tree.clone(), genesis_config.chain_id),
         )
     } else {
         let batch_metadata = proof_storage
