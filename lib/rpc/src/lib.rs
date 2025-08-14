@@ -10,6 +10,8 @@ mod eth_pubsub_impl;
 mod metrics;
 mod ots_impl;
 mod result;
+mod rpc_storage;
+pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod sandbox;
 mod tx_handler;
 mod types;
@@ -32,45 +34,26 @@ use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
-use zksync_os_state::StateHandle;
-use zksync_os_storage_api::notifications::SubscribeToBlocks;
-use zksync_os_storage_api::{ReadReplay, ReadRepository};
 
-pub async fn run_jsonrpsee_server<
-    Repository: ReadRepository + SubscribeToBlocks + Clone,
-    ReplayStorage: ReadReplay,
-    Mempool: L2TransactionPool,
->(
+pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>(
     config: RpcConfig,
     chain_id: u64,
     bridgehub_address: Address,
-
-    repository_manager: Repository,
-    replay_storage: ReplayStorage,
-    state_handle: StateHandle,
+    storage: RpcStorage,
     mempool: Mempool,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
     let mut rpc = RpcModule::new(());
     rpc.merge(
-        EthNamespace::new(
-            config.clone(),
-            repository_manager.clone(),
-            replay_storage,
-            state_handle.clone(),
-            mempool.clone(),
-            chain_id,
-        )
-        .into_rpc(),
+        EthNamespace::new(config.clone(), storage.clone(), mempool.clone(), chain_id).into_rpc(),
     )?;
     rpc.merge(
-        EthFilterNamespace::new(config.clone(), repository_manager.clone(), mempool.clone())
-            .into_rpc(),
+        EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone()).into_rpc(),
     )?;
-    rpc.merge(EthPubsubNamespace::new(repository_manager.clone(), mempool).into_rpc())?;
+    rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
     rpc.merge(ZksNamespace::new(bridgehub_address).into_rpc())?;
-    rpc.merge(OtsNamespace::new(repository_manager, state_handle).into_rpc())?;
+    rpc.merge(OtsNamespace::new(storage).into_rpc())?;
 
     // Add a CORS middleware for handling HTTP requests.
     // This middleware does affect the response, including appropriate
