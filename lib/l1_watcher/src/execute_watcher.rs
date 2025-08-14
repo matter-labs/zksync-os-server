@@ -7,24 +7,26 @@ use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_storage_api::WriteFinality;
+use zksync_os_storage_api::{ReadBatch, WriteFinality};
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-pub struct L1ExecuteWatcher<Finality> {
+pub struct L1ExecuteWatcher<Finality, BatchStorage> {
     l1_watcher: L1Watcher<BlockExecution>,
     next_batch_number: u64,
     poll_interval: Duration,
     finality: Finality,
+    batch_storage: BatchStorage,
 }
 
-impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
+impl<Finality: WriteFinality, BatchStorage> L1ExecuteWatcher<Finality, BatchStorage> {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
         zk_chain_address: Address,
         finality: Finality,
+        batch_storage: BatchStorage,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -68,11 +70,12 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
             next_batch_number,
             poll_interval: config.poll_interval,
             finality,
+            batch_storage,
         })
     }
 }
 
-impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
+impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality, BatchStorage> {
     pub async fn run(mut self) -> L1ExecuteWatcherResult<()> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
@@ -101,13 +104,14 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
                     ?batch_commitment,
                     "discovered executed batch"
                 );
-                // todo: presuming 1 batch = 1 block right now, fetch from FRI cache instead
-                let last_executed_block = batch_number;
+                let (_, last_executed_block) = self
+                    .batch_storage
+                    .get_batch_range_by_number(batch_number)?
+                    .expect("executed batch is missing");
                 self.finality.update_finality_status(|finality| {
-                    assert_eq!(
-                        finality.last_executed_block + 1,
-                        last_executed_block,
-                        "non-sequential executed block"
+                    assert!(
+                        last_executed_block > finality.last_executed_block,
+                        "non-monotonous executed block"
                     );
                     finality.last_executed_block = last_executed_block;
                 });

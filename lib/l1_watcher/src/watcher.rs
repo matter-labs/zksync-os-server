@@ -6,6 +6,7 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use std::marker::PhantomData;
+use zksync_os_storage_api::ReadBatchError;
 
 pub(crate) struct L1Watcher<Event> {
     provider: DynProvider<Ethereum>,
@@ -104,6 +105,8 @@ pub enum L1WatcherError<E> {
     Sol(#[from] alloy::sol_types::Error),
     #[error(transparent)]
     Transport(#[from] alloy::transports::TransportError),
+    #[error(transparent)]
+    Batch(#[from] ReadBatchError),
     #[error(transparent)]
     Convert(E),
     #[error("output has been closed")]

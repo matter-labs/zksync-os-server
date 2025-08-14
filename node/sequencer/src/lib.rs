@@ -497,6 +497,7 @@ pub async fn run(
         l1_provider.clone(),
         l1_state.diamond_proxy,
         finality_storage.clone(),
+        proof_storage.clone(),
     )
     .await;
     let l1_commit_watcher_task = l1_commit_watcher
@@ -507,6 +508,7 @@ pub async fn run(
         l1_provider,
         l1_state.diamond_proxy,
         finality_storage.clone(),
+        proof_storage.clone(),
     )
     .await;
     let l1_execute_watcher_task = l1_execute_watcher
