@@ -58,7 +58,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1TxWatcher, L1WatcherConfig};
+use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1WatcherConfig};
 use zksync_os_observability::ComponentStateLatencyTracker;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rocksdb::RocksDB;
@@ -494,14 +494,24 @@ pub async fn run(
         last_executed_block,
     });
     let l1_commit_watcher = L1CommitWatcher::new(
-        l1_watcher_config,
-        l1_provider,
+        l1_watcher_config.clone(),
+        l1_provider.clone(),
         l1_state.diamond_proxy,
         finality_storage.clone(),
     )
     .await;
     let l1_commit_watcher_task = l1_commit_watcher
         .expect("failed to start L1 commit watcher")
+        .run();
+    let l1_execute_watcher = L1ExecuteWatcher::new(
+        l1_watcher_config,
+        l1_provider,
+        l1_state.diamond_proxy,
+        finality_storage.clone(),
+    )
+    .await;
+    let l1_execute_watcher_task = l1_execute_watcher
+        .expect("failed to start L1 execute watcher")
         .run();
 
     // ========== Initialize BlockContextProvider and its state ===========
@@ -712,6 +722,13 @@ pub async fn run(
             match res {
                 Ok(_)  => tracing::warn!("L1 commit watcher unexpectedly exited"),
                 Err(e) => tracing::error!("L1 commit watcher failed: {e:#}"),
+            }
+        }
+
+        res = l1_execute_watcher_task => {
+            match res {
+                Ok(_)  => tracing::warn!("L1 execute watcher unexpectedly exited"),
+                Err(e) => tracing::error!("L1 execute watcher failed: {e:#}"),
             }
         }
 

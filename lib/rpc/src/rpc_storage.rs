@@ -46,9 +46,11 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
                 .get_finality_status()
                 .last_committed_block
                 .into()),
-            BlockId::Number(BlockNumberOrTag::Finalized) => {
-                Err(RepositoryError::FinalizedBlockNotSupported)
-            }
+            BlockId::Number(BlockNumberOrTag::Finalized) => Ok(self
+                .finality()
+                .get_finality_status()
+                .last_executed_block
+                .into()),
             BlockId::Number(BlockNumberOrTag::Earliest) => {
                 Err(RepositoryError::EarliestBlockNotSupported)
             }
