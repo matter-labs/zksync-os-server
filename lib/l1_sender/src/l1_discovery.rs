@@ -47,9 +47,8 @@ pub async fn get_l1_state(
     let last_executed_batch = bridgehub
         .zk_chain()
         .await?
-        .get_total_batches_executed()
-        .await?
-        .saturating_to::<u64>();
+        .get_total_batches_executed(BlockId::latest())
+        .await?;
 
     Ok(L1State {
         bridgehub: config.bridgehub_address,

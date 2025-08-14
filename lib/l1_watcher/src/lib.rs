@@ -9,5 +9,8 @@ pub use tx_watcher::{L1TxWatcher, L1TxWatcherError, L1TxWatcherResult};
 mod commit_watcher;
 pub use commit_watcher::{L1CommitWatcher, L1CommitWatcherError, L1CommitWatcherResult};
 
+mod execute_watcher;
+pub use execute_watcher::{L1ExecuteWatcher, L1ExecuteWatcherError, L1ExecuteWatcherResult};
+
 mod util;
 mod watcher;
