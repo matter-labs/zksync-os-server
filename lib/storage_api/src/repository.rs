@@ -53,9 +53,6 @@ pub type RepositoryResult<Ok> = Result<Ok, RepositoryError>;
 /// Error variants thrown by various repositories.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum RepositoryError {
-    // todo: should resolve to last executed block here when available
-    #[error("finalized block tag is not supported yet")]
-    FinalizedBlockNotSupported,
     // todo: should resolve to first non-compressed/non-pruned block? unclear, might depend on the method
     #[error("earliest block tag is not supported yet")]
     EarliestBlockNotSupported,
