@@ -48,29 +48,19 @@ impl StorageMapCF {
 
 impl PersistentStorageMap {
     pub fn new(rocks: RocksDB<StorageMapCF>, genesis: &Genesis) -> Self {
-        let rocksdb_block_number = rocksdb_block_number(&rocks).unwrap_or_else(|| {
-            let mut batch = rocks.new_write_batch();
-            for (k, v) in &genesis.inner().storage_logs {
-                batch.put_cf(
-                    StorageMapCF::Storage,
-                    k.as_u8_array_ref(),
-                    v.as_u8_array_ref(),
-                );
-            }
-            batch.put_cf(
-                StorageMapCF::Meta,
-                StorageMapCF::base_block_key(),
-                0u64.to_be_bytes().as_ref(),
-            );
-            rocks.write(batch).expect("RocksDB write failed");
-
-            0
-        });
-        Self {
+        let rocksdb_block_number = rocksdb_block_number(&rocks);
+        let this = Self {
             rocks,
-            persistent_block_lower_bound: Arc::new(rocksdb_block_number.into()),
-            persistent_block_upper_bound: Arc::new(rocksdb_block_number.into()),
+            persistent_block_lower_bound: Arc::new(rocksdb_block_number.unwrap_or(0).into()),
+            persistent_block_upper_bound: Arc::new(rocksdb_block_number.unwrap_or(0).into()),
+        };
+        if rocksdb_block_number.is_none() {
+            this.compact_sync(
+                0,
+                genesis.inner().storage_logs.clone().into_iter().collect(),
+            );
         }
+        this
     }
 
     pub fn compact_sync(&self, new_block_number: u64, diffs: HashMap<Bytes32, Bytes32>) {
@@ -118,7 +108,7 @@ impl PersistentStorageMap {
 
         STORAGE_MAP_METRICS
             .compact
-            .observe(started_at.elapsed() / (new_block_number - prev_persisted) as u32);
+            .observe(started_at.elapsed() / (new_block_number - prev_persisted).max(1) as u32);
         STORAGE_MAP_METRICS
             .compact_batch_size
             .observe(new_block_number - prev_persisted);
