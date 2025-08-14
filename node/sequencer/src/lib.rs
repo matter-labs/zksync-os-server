@@ -398,20 +398,29 @@ pub async fn run(
         .last_processed_block()
         .expect("cannot read tree last processed block after initialization");
 
-    let (last_committed_block_number, last_committed_batch_info) =
-        if l1_state.last_committed_batch == 0 {
-            (0, genesis_stored_batch_info())
-        } else {
-            let batch_metadata = proof_storage
-                .get(l1_state.last_committed_batch)
-                .expect("Failed to get last committed block from proof storage")
-                .map(|proof| proof.batch)
-                .expect("Committed batch is not present in proof storage");
-            (
-                batch_metadata.last_block_number,
-                batch_metadata.commit_batch_info.into(),
-            )
-        };
+    let (last_committed_block, last_committed_batch_info) = if l1_state.last_committed_batch == 0 {
+        (0, genesis_stored_batch_info())
+    } else {
+        let batch_metadata = proof_storage
+            .get(l1_state.last_committed_batch)
+            .expect("Failed to get last committed block from proof storage")
+            .map(|proof| proof.batch)
+            .expect("Committed batch is not present in proof storage");
+        (
+            batch_metadata.last_block_number,
+            batch_metadata.commit_batch_info.into(),
+        )
+    };
+    let last_proved_block = proof_storage
+        .get(l1_state.last_proved_batch)
+        .expect("failed to load last proved batch")
+        .map(|batch_envelope| batch_envelope.batch.last_block_number)
+        .unwrap_or(0);
+    let last_executed_block = proof_storage
+        .get(l1_state.last_executed_batch)
+        .expect("failed to load last executed batch")
+        .map(|batch_envelope| batch_envelope.batch.last_block_number)
+        .unwrap_or(0);
 
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
@@ -420,19 +429,21 @@ pub async fn run(
         wal_block,
         repositories_persisted_block,
         tree_last_processed_block,
-        l1_state.last_committed_batch,
-        l1_state.last_proved_batch,
-        last_committed_block_number,
+        last_committed_batch = l1_state.last_committed_batch,
+        last_proved_batch = l1_state.last_proved_batch,
+        last_executed_batch = l1_state.last_executed_batch,
+        last_committed_block,
+        last_proved_block,
+        last_executed_block,
         last_stored_batch_with_proof,
-        l1_state.last_executed_batch,
         "▶ Sequencer will start from block {}. Batcher will start from block {} and batch {}",
         storage_map_compacted_block + 1,
-        last_committed_block_number + 1,
+        last_committed_block + 1,
         l1_state.last_committed_batch + 1,
     );
 
     assert!(
-        wal_block >= last_committed_block_number
+        wal_block >= last_committed_block
             && wal_block >= storage_map_compacted_block
             && wal_block >= tree_last_processed_block
             && wal_block >= repositories_persisted_block,
@@ -440,7 +451,7 @@ pub async fn run(
     );
 
     assert!(
-        last_committed_block_number >= storage_map_compacted_block
+        last_committed_block >= storage_map_compacted_block
             && repositories_persisted_block >= storage_map_compacted_block
             && tree_last_processed_block >= storage_map_compacted_block,
         "Inconsistent block numbers: storage is compacted ahead of a needed block."
@@ -477,21 +488,6 @@ pub async fn run(
         .expect("failed to start L1 transaction watcher")
         .run();
 
-    let last_committed_block = proof_storage
-        .get(l1_state.last_committed_batch)
-        .expect("failed to load last committed batch")
-        .map(|batch_envelope| batch_envelope.batch.last_block_number)
-        .unwrap_or(0);
-    let last_proved_block = proof_storage
-        .get(l1_state.last_proved_batch)
-        .expect("failed to load last proved batch")
-        .map(|batch_envelope| batch_envelope.batch.last_block_number)
-        .unwrap_or(0);
-    let last_executed_block = proof_storage
-        .get(l1_state.last_executed_batch)
-        .expect("failed to load last executed batch")
-        .map(|batch_envelope| batch_envelope.batch.last_block_number)
-        .unwrap_or(0);
     let finality_storage = Finality::new(FinalityStatus {
         last_committed_block,
         last_proved_block,
