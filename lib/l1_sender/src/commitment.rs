@@ -129,6 +129,7 @@ impl CommitBatchInfo {
                         number_of_layer1_txs += 1;
                     }
                     ZkEnvelope::L2(_) => {}
+                    ZkEnvelope::Upgrade(_) => {}
                 }
             }
 

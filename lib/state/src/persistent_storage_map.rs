@@ -50,7 +50,7 @@ impl PersistentStorageMap {
     pub fn new(rocks: RocksDB<StorageMapCF>, genesis: &Genesis) -> Self {
         let rocksdb_block_number = rocksdb_block_number(&rocks).unwrap_or_else(|| {
             let mut batch = rocks.new_write_batch();
-            for (k, v) in &genesis.inner().storage_logs {
+            for (k, v) in &genesis.state().storage_logs {
                 batch.put_cf(
                     StorageMapCF::Storage,
                     k.as_u8_array_ref(),

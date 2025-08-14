@@ -234,7 +234,28 @@ pub async fn run(
     prover_api_config: ProverApiConfig,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
-    let genesis = Genesis::new(genesis_config.genesis_input_path);
+    let l1_provider = DynProvider::new(
+        ProviderBuilder::new()
+            .connect(&l1_sender_config.l1_api_url)
+            .await
+            .expect("failed to connect to L1 api"),
+    );
+
+    tracing::info!("reading L1 state");
+    let l1_state = get_l1_state(
+        &l1_provider,
+        l1_sender_config.clone(),
+        genesis_config.chain_id,
+    )
+    .await
+    .expect("Failed to read L1 state");
+    tracing::info!(?l1_state, "L1 state read");
+
+    let genesis = Genesis::new(
+        genesis_config.genesis_input_path,
+        l1_provider.clone(),
+        l1_state.diamond_proxy,
+    );
 
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
@@ -288,23 +309,6 @@ pub async fn run(
         ),
         mempool_config.max_tx_input_bytes,
     );
-
-    tracing::info!("reading L1 state");
-    let l1_provider = DynProvider::new(
-        ProviderBuilder::new()
-            .connect(&l1_sender_config.l1_api_url)
-            .await
-            .expect("failed to connect to L1 api"),
-    );
-    let l1_state = get_l1_state(
-        &l1_provider,
-        l1_sender_config.clone(),
-        genesis_config.chain_id,
-    )
-    .await
-    .expect("Failed to read L1 state");
-
-    tracing::info!(?l1_state, "L1 state read");
     // ======= Initialize async channels  ===========
 
     // Channel between `BlockExecutor` and `ProverInputGenerator`
@@ -587,6 +591,7 @@ pub async fn run(
         previous_block_timestamp,
         genesis_config.chain_id,
         node_version,
+        genesis,
     );
 
     if !batcher_config.subsystem_enabled {

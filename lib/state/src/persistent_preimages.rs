@@ -39,7 +39,7 @@ impl PersistentPreimages {
     pub fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
         if rocksdb_block_number(&rocks).is_none() {
             let mut batch = rocks.new_write_batch();
-            for (k, v) in &genesis.inner().preimages {
+            for (k, v) in &genesis.state().preimages {
                 batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v.as_slice());
             }
             batch.put_cf(

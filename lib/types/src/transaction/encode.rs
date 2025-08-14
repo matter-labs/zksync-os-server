@@ -223,6 +223,7 @@ impl From<ZkTransaction> for TransactionData {
         let (l2_envelope, signer) = value.into_parts();
         match l2_envelope {
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
+            ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.into(),
             ZkEnvelope::L2(l2_envelope) => L2Transaction::new_unchecked(l2_envelope, signer).into(),
         }
     }

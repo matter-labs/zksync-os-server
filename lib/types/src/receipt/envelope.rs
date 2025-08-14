@@ -1,6 +1,6 @@
 use crate::receipt::ZkReceipt;
 use crate::transaction::{L1PriorityTxType, L1TxType};
-use crate::{L2ToL1Log, ZkTxType};
+use crate::{L2ToL1Log, UpgradeTxType, ZkTxType};
 use alloy::consensus::{Eip658Value, ReceiptWithBloom, TxReceipt, TxType};
 use alloy::eips::Typed2718;
 use alloy::eips::eip2718::{
@@ -51,6 +51,9 @@ pub enum ZkReceiptEnvelope<T = Log, U = L2ToL1Log> {
     /// Receipt envelope with type flag 255, containing an L1->L2 priority transaction receipt.
     #[serde(rename = "0xff")]
     L1(ReceiptWithBloom<ZkReceipt<T, U>>),
+    /// Receipt envelope with type flag 254, containing an upgrade transaction receipt.
+    #[serde(rename = "0xfe")]
+    Upgrade(ReceiptWithBloom<ZkReceipt<T, U>>),
 }
 
 impl<T, U> ZkReceiptEnvelope<T, U> {
@@ -66,6 +69,7 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             ZkTxType::L2(TxType::Eip4844) => Self::Eip4844(receipt.into()),
             ZkTxType::L2(TxType::Eip7702) => Self::Eip7702(receipt.into()),
             ZkTxType::L1 => Self::L1(receipt.into()),
+            ZkTxType::Upgrade => Self::Upgrade(receipt.into()),
         }
     }
 
@@ -96,6 +100,9 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             Self::L1(r) => {
                 ZkReceiptEnvelope::L1(r.map_receipt(|r| r.map_logs(logs_f, l2_to_l1_logs_f)))
             }
+            Self::Upgrade(r) => {
+                ZkReceiptEnvelope::Upgrade(r.map_receipt(|r| r.map_logs(logs_f, l2_to_l1_logs_f)))
+            }
         }
     }
 
@@ -108,6 +115,7 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             Self::Eip4844(_) => ZkTxType::L2(TxType::Eip4844),
             Self::Eip7702(_) => ZkTxType::L2(TxType::Eip7702),
             Self::L1(_) => ZkTxType::L1,
+            Self::Upgrade(_) => ZkTxType::Upgrade,
         }
     }
 
@@ -160,7 +168,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip1559(t)
             | Self::Eip4844(t)
             | Self::Eip7702(t)
-            | Self::L1(t) => Some(t),
+            | Self::L1(t)
+            | Self::Upgrade(t) => Some(t),
         }
     }
 
@@ -175,7 +184,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip1559(t)
             | Self::Eip4844(t)
             | Self::Eip7702(t)
-            | Self::L1(t) => Some(t),
+            | Self::L1(t)
+            | Self::Upgrade(t) => Some(t),
         }
     }
 
@@ -187,7 +197,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip1559(t)
             | Self::Eip4844(t)
             | Self::Eip7702(t)
-            | Self::L1(t) => t.receipt,
+            | Self::L1(t)
+            | Self::Upgrade(t) => t.receipt,
         }
     }
 
@@ -200,7 +211,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip1559(t)
             | Self::Eip4844(t)
             | Self::Eip7702(t)
-            | Self::L1(t) => Some(&t.receipt),
+            | Self::L1(t)
+            | Self::Upgrade(t) => Some(&t.receipt),
         }
     }
 }
@@ -288,6 +300,7 @@ impl Typed2718 for ZkReceiptEnvelope {
             Self::Eip4844(_) => EIP4844_TX_TYPE_ID,
             Self::Eip7702(_) => EIP7702_TX_TYPE_ID,
             Self::L1(_) => L1PriorityTxType::FAKE_TX_TYPE,
+            Self::Upgrade(_) => UpgradeTxType::FAKE_TX_TYPE,
         }
     }
 }
@@ -325,6 +338,7 @@ impl Decodable2718 for ZkReceiptEnvelope {
             ZkTxType::L2(TxType::Eip7702) => Ok(Self::Eip7702(receipt)),
             ZkTxType::L2(TxType::Legacy) => Err(Eip2718Error::UnexpectedType(0)),
             ZkTxType::L1 => Ok(Self::L1(receipt)),
+            ZkTxType::Upgrade => Ok(Self::Upgrade(receipt)),
         }
     }
 
