@@ -54,8 +54,9 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub is_external_node: bool,
 
-    #[config(default_t = 8103)]
-    pub block_server_port: u16,
+    /// The address where an external node gets block replays or where a main node serves them.
+    #[config(default_t = "0.0.0.0:8103".into())]
+    pub block_server_address: String,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

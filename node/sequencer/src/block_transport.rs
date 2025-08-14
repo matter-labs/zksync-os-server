@@ -1,5 +1,6 @@
 use alloy::primitives::BlockNumber;
 use futures::{SinkExt, StreamExt, stream::BoxStream};
+use tokio::net::ToSocketAddrs;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -9,8 +10,11 @@ use zksync_os_storage_api::ReplayRecord;
 
 use crate::{block_replay_storage::BlockReplayStorage, model::blocks::BlockCommand};
 
-pub async fn block_server(block_replays: BlockReplayStorage, port: u16) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+pub async fn block_server(
+    block_replays: BlockReplayStorage,
+    address: impl ToSocketAddrs,
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(address).await?;
 
     loop {
         let (mut socket, _) = listener.accept().await?;
@@ -31,9 +35,9 @@ pub async fn block_server(block_replays: BlockReplayStorage, port: u16) -> anyho
 
 pub async fn block_receiver(
     starting_block: BlockNumber,
-    port: u16,
+    address: impl ToSocketAddrs,
 ) -> BoxStream<'static, BlockCommand> {
-    let mut socket = TcpStream::connect(("localhost", port)).await.unwrap();
+    let mut socket = TcpStream::connect(address).await.unwrap();
 
     socket.write_u64(starting_block).await.unwrap();
 
