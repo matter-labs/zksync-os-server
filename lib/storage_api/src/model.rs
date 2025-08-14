@@ -76,9 +76,9 @@ impl ReplayRecord {
     }
 }
 
+/// Chain's L1 finality status. Does not track last proved block as there is no need for it (yet).
 #[derive(Clone, Debug)]
 pub struct FinalityStatus {
     pub last_committed_block: u64,
-    pub last_proved_block: u64,
     pub last_executed_block: u64,
 }

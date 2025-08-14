@@ -490,7 +490,6 @@ pub async fn run(
 
     let finality_storage = Finality::new(FinalityStatus {
         last_committed_block,
-        last_proved_block,
         last_executed_block,
     });
     let l1_commit_watcher = L1CommitWatcher::new(
