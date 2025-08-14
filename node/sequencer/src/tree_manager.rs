@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_genesis::Genesis;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
@@ -24,8 +25,8 @@ pub struct TreeManager {
 }
 
 impl TreeManager {
-    pub fn tree_wrapper(path: &Path, with_sync_writes: bool) -> RocksDBWrapper {
-        let mut db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
+    pub fn tree_wrapper(path: &Path) -> RocksDBWrapper {
+        let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
             path,
             RocksDBOptions {
                 block_cache_capacity: Some(128 << 20),
@@ -36,23 +37,32 @@ impl TreeManager {
             },
         )
         .unwrap();
-        if with_sync_writes {
-            db = db.with_sync_writes();
-        }
         RocksDBWrapper::from(db)
     }
 
     pub fn new(
         tree_wrapper: RocksDBWrapper,
         block_receiver: Receiver<BlockOutput>,
+        genesis: &Genesis,
     ) -> (TreeManager, MerkleTreeForReading<RocksDBWrapper>) {
         let (latest_block_sender, latest_block_receiver) = watch::channel(0u64);
-        let tree = MerkleTree::new(tree_wrapper).unwrap();
+        let mut tree = MerkleTree::new(tree_wrapper).unwrap();
 
         let version = tree
             .latest_version()
-            .expect("cannot access tree on startup")
-            .expect("missing tree genesis version");
+            .expect("cannot access tree on startup");
+        if version.is_none() {
+            let tree_entries = genesis
+                .inner()
+                .storage_logs
+                .iter()
+                .map(|(key, value)| TreeEntry {
+                    key: key.as_u8_array().into(),
+                    value: value.as_u8_array().into(),
+                })
+                .collect::<Vec<_>>();
+            tree.extend(&tree_entries).unwrap();
+        }
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
         let tree_manager = Self {
@@ -156,11 +166,6 @@ impl TreeManager {
             }
         }
         Ok(())
-    }
-
-    pub fn genesis(tree_wrapper: RocksDBWrapper, tree_entries: &[TreeEntry]) {
-        let mut tree = MerkleTree::new(tree_wrapper).unwrap();
-        tree.extend(tree_entries).unwrap();
     }
 }
 

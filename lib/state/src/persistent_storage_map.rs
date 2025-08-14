@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
 use zk_ee::utils::Bytes32;
+use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 
@@ -46,8 +47,25 @@ impl StorageMapCF {
 }
 
 impl PersistentStorageMap {
-    pub fn new(rocks: RocksDB<StorageMapCF>) -> Self {
-        let rocksdb_block_number = rocksdb_block_number(&rocks);
+    pub fn new(rocks: RocksDB<StorageMapCF>, genesis: &Genesis) -> Self {
+        let rocksdb_block_number = rocksdb_block_number(&rocks).unwrap_or_else(|| {
+            let mut batch = rocks.new_write_batch();
+            for (k, v) in &genesis.inner().storage_logs {
+                batch.put_cf(
+                    StorageMapCF::Storage,
+                    k.as_u8_array_ref(),
+                    v.as_u8_array_ref(),
+                );
+            }
+            batch.put_cf(
+                StorageMapCF::Meta,
+                StorageMapCF::base_block_key(),
+                0u64.to_be_bytes().as_ref(),
+            );
+            rocks.write(batch).expect("RocksDB write failed");
+
+            0
+        });
         Self {
             rocks,
             persistent_block_lower_bound: Arc::new(rocksdb_block_number.into()),
@@ -107,7 +125,7 @@ impl PersistentStorageMap {
     }
 
     pub fn rocksdb_block_number(&self) -> u64 {
-        rocksdb_block_number(&self.rocks)
+        rocksdb_block_number(&self.rocks).unwrap()
     }
 
     pub fn persistent_block_upper_bound(&self) -> u64 {
@@ -127,34 +145,9 @@ impl PersistentStorageMap {
                 Bytes32::from(arr)
             })
     }
-
-    pub fn process_genesis(db: &RocksDB<StorageMapCF>, storage_logs: Vec<(Bytes32, Bytes32)>) {
-        let mut batch = db.new_write_batch();
-        for (k, v) in storage_logs {
-            batch.put_cf(
-                StorageMapCF::Storage,
-                k.as_u8_array_ref(),
-                v.as_u8_array_ref(),
-            );
-        }
-        batch.put_cf(
-            StorageMapCF::Meta,
-            StorageMapCF::base_block_key(),
-            0u64.to_be_bytes().as_ref(),
-        );
-        db.write(batch).expect("RocksDB write failed");
-    }
 }
 
-fn rocksdb_block_number(rocks_db: &RocksDB<StorageMapCF>) -> u64 {
-    rocks_db
-        .get_cf(StorageMapCF::Meta, StorageMapCF::base_block_key())
-        .unwrap()
-        .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
-        .unwrap_or(0)
-}
-
-pub fn rocksdb_block_number_optional(rocks_db: &RocksDB<StorageMapCF>) -> Option<u64> {
+fn rocksdb_block_number(rocks_db: &RocksDB<StorageMapCF>) -> Option<u64> {
     rocks_db
         .get_cf(StorageMapCF::Meta, StorageMapCF::base_block_key())
         .unwrap()

@@ -11,7 +11,7 @@ use alloy::{
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::watch;
-use zk_os_forward_system::run::output::BlockHeader;
+use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{
@@ -77,17 +77,34 @@ pub struct RepositoryDb {
 }
 
 impl RepositoryDb {
-    pub fn new(db_path: &Path) -> Self {
+    pub fn new(db_path: &Path, genesis: &Genesis) -> Self {
         let db = RocksDB::<RepositoryCF>::new(db_path).expect("Failed to open db");
-        let latest_block_number_value = db
+        let latest_block_number = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
-            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
-            .unwrap_or(0);
+            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
+        let latest_block_number = latest_block_number.unwrap_or_else(|| {
+            let header = genesis.inner().header.clone();
+            let hash = header.hash();
+            let block = Sealed::new_unchecked(
+                Block {
+                    header: alloy_header(&header),
+                    body: alloy::consensus::BlockBody {
+                        transactions: vec![],
+                        ommers: vec![],
+                        withdrawals: None,
+                    },
+                },
+                B256::from_slice(&hash),
+            );
+            Self::write_block_inner(&db, &block, &[]);
+
+            0
+        });
 
         Self {
             db,
-            latest_block_number: watch::channel(latest_block_number_value).0,
+            latest_block_number: watch::channel(latest_block_number).0,
         }
     }
 
@@ -102,13 +119,17 @@ impl RepositoryDb {
             .unwrap()
     }
 
-    pub fn write_block(&self, block: &Block<TxHash>, txs: &[Arc<StoredTxData>]) {
+    fn write_block_inner(
+        db: &RocksDB<RepositoryCF>,
+        block: &Block<TxHash>,
+        txs: &[Arc<StoredTxData>],
+    ) {
         let block_number = block.number;
         let block_hash = block.hash_slow();
         let block_number_bytes = block_number.to_be_bytes();
         let block_hash_bytes = block_hash.to_vec();
 
-        let mut batch = self.db.new_write_batch();
+        let mut batch = db.new_write_batch();
         batch.put_cf(
             RepositoryCF::BlockNumberToHash,
             &block_number_bytes,
@@ -132,8 +153,12 @@ impl RepositoryDb {
         REPOSITORIES_METRICS
             .block_data_size_per_tx
             .observe(batch.size_in_bytes() / txs.len().max(1));
-        self.db.write(batch).unwrap();
-        self.latest_block_number.send_replace(block_number);
+        db.write(batch).unwrap();
+    }
+
+    pub fn write_block(&self, block: &Block<TxHash>, txs: &[Arc<StoredTxData>]) {
+        Self::write_block_inner(&self.db, block, txs);
+        self.latest_block_number.send_replace(block.number);
     }
 
     fn add_tx_to_write_batch(batch: &mut WriteBatch<RepositoryCF>, tx: &StoredTxData) {
@@ -160,24 +185,6 @@ impl RepositoryDb {
             &initiator_and_nonce_key,
             tx_hash.as_slice(),
         );
-    }
-
-    pub fn process_genesis(db_path: &Path, genesis_block: BlockHeader) {
-        let mut this = Self::new(db_path);
-        this.db = this.db.with_sync_writes();
-        let hash = genesis_block.hash();
-        let block = Sealed::new_unchecked(
-            Block {
-                header: alloy_header(&genesis_block),
-                body: alloy::consensus::BlockBody {
-                    transactions: vec![],
-                    ommers: vec![],
-                    withdrawals: None,
-                },
-            },
-            B256::from_slice(&hash),
-        );
-        this.write_block(&block, &[]);
     }
 }
 

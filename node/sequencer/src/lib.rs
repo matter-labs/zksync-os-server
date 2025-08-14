@@ -7,7 +7,6 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 pub mod execution;
-mod genesis;
 mod metadata;
 pub mod model;
 pub mod prover_api;
@@ -27,7 +26,6 @@ use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
-use crate::genesis::{is_genesis_required, perform_genesis};
 use crate::metadata::NODE_VERSION;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -53,6 +51,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_genesis::Genesis;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -235,16 +234,7 @@ pub async fn run(
     prover_api_config: ProverApiConfig,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
-
-    if is_genesis_required(sequencer_config.rocks_db_path.clone()) {
-        tracing::info!("Performing genesis..");
-        perform_genesis(
-            genesis_config.genesis_input_path,
-            sequencer_config.rocks_db_path.clone(),
-        )
-        .context("perform_genesis")
-        .unwrap();
-    }
+    let genesis = Genesis::new(genesis_config.genesis_input_path);
 
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
@@ -266,16 +256,20 @@ pub async fn run(
     if sequencer_config.replay_all_blocks_unsafe {
         tracing::warn!("!!! Replay all blocks mode is enabled. Starting from block zero.");
     }
-    let state_handle = StateHandle::new(StateConfig {
-        erase_storage_on_start_unsafe: sequencer_config.replay_all_blocks_unsafe,
-        blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
-        rocks_db_path: sequencer_config.rocks_db_path.clone(),
-    });
+    let state_handle = StateHandle::new(
+        StateConfig {
+            erase_storage_on_start_unsafe: sequencer_config.replay_all_blocks_unsafe,
+            blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
+            rocks_db_path: sequencer_config.rocks_db_path.clone(),
+        },
+        &genesis,
+    );
 
     tracing::info!("Initializing RepositoryManager");
     let repositories = RepositoryManager::new(
         sequencer_config.blocks_to_retain_in_memory,
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        &genesis,
     );
     let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
         &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
@@ -393,11 +387,11 @@ pub async fn run(
 
     // =========== Initialize TreeManager ========
     tracing::info!("Initializing TreeManager");
-    let tree_wrapper = TreeManager::tree_wrapper(
-        Path::new(&sequencer_config.rocks_db_path.join(TREE_DB_NAME)),
-        false,
-    );
-    let (tree_manager, persistent_tree) = TreeManager::new(tree_wrapper.clone(), tree_receiver);
+    let tree_wrapper = TreeManager::tree_wrapper(Path::new(
+        &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
+    ));
+    let (tree_manager, persistent_tree) =
+        TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis);
 
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
 
@@ -413,7 +407,12 @@ pub async fn run(
     let (last_committed_block, last_committed_batch_info) = if l1_state.last_committed_batch == 0 {
         (
             0,
-            load_genesis_stored_batch_info(&repositories, persistent_tree.clone(), genesis_config.chain_id),
+            load_genesis_stored_batch_info(
+                &repositories,
+                persistent_tree.clone(),
+                genesis_config.chain_id,
+            )
+            .await,
         )
     } else {
         let batch_metadata = proof_storage

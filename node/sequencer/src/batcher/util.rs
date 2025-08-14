@@ -17,7 +17,7 @@ pub async fn load_genesis_stored_batch_info(
         .get_block_by_number(0)
         .expect("Failed to read genesis block from repositories")
         .expect("Missing genesis block in repositories");
-    let (genesis_root_info) = tree
+    let genesis_root_info = tree
         .get_at_block(0)
         .await
         .root_info()

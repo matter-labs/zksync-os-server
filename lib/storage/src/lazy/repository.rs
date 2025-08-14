@@ -6,6 +6,7 @@ use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_genesis::Genesis;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
@@ -27,8 +28,8 @@ pub struct RepositoryManager {
 }
 
 impl RepositoryManager {
-    pub fn new(blocks_to_retain: usize, db_path: PathBuf) -> Self {
-        let db = RepositoryDb::new(&db_path);
+    pub fn new(blocks_to_retain: usize, db_path: PathBuf, genesis: &Genesis) -> Self {
+        let db = RepositoryDb::new(&db_path, genesis);
         let genesis_block = db
             .get_block_by_number(0)
             .unwrap()

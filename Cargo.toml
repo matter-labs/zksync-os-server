@@ -2,6 +2,7 @@
 members = [
     "lib/contract_interface",
     "lib/crypto",
+    "lib/genesis",
     "lib/l1_sender",
     "lib/l1_watcher",
     "lib/mempool",
@@ -138,6 +139,7 @@ zksync_os_state = { path = "lib/state" }
 zksync_os_storage = { path = "lib/storage" }
 zksync_os_storage_api = { path = "lib/storage_api" }
 zksync_os_types = { path = "lib/types" }
+zksync_os_genesis = { path = "lib/genesis" }
 
 zksync_os_sequencer = { path = "node/sequencer" }
 

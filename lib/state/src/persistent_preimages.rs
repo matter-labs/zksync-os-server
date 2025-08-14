@@ -1,6 +1,7 @@
 use crate::metrics::PREIMAGES_METRICS;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::PreimageSource;
+use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 
@@ -35,17 +36,25 @@ impl PreimagesCF {
 }
 
 impl PersistentPreimages {
-    pub fn new(rocks: RocksDB<PreimagesCF>) -> Self {
+    pub fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
+        if rocksdb_block_number(&rocks).is_none() {
+            let mut batch = rocks.new_write_batch();
+            for (k, v) in &genesis.inner().preimages {
+                batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v.as_slice());
+            }
+            batch.put_cf(
+                PreimagesCF::Meta,
+                PreimagesCF::block_key(),
+                0u64.to_be_bytes().as_ref(),
+            );
+            rocks.write(batch).expect("RocksDB write failed");
+        }
+
         Self { rocks }
     }
 
     pub fn rocksdb_block_number(&self) -> u64 {
-        self.rocks
-            .get_cf(PreimagesCF::Meta, PreimagesCF::block_key())
-            .ok()
-            .flatten()
-            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
-            .unwrap_or(0)
+        rocksdb_block_number(&self.rocks).unwrap()
     }
 
     /// Insert multiple preimages at once.
@@ -83,23 +92,18 @@ impl PersistentPreimages {
         self.rocks.write(batch).expect("RocksDB write failed");
         latency_observer.observe();
     }
-
-    pub fn process_genesis(db: &RocksDB<PreimagesCF>, preimages: Vec<(Bytes32, Vec<u8>)>) {
-        let mut batch = db.new_write_batch();
-        for (k, v) in preimages {
-            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v.as_slice());
-        }
-        batch.put_cf(
-            PreimagesCF::Meta,
-            PreimagesCF::block_key(),
-            0u64.to_be_bytes().as_ref(),
-        );
-        db.write(batch).expect("RocksDB write failed");
-    }
 }
 
 impl PreimageSource for PersistentPreimages {
     fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
         self.get(hash)
     }
+}
+
+fn rocksdb_block_number(rocks_db: &RocksDB<PreimagesCF>) -> Option<u64> {
+    rocks_db
+        .get_cf(PreimagesCF::Meta, PreimagesCF::block_key())
+        .ok()
+        .flatten()
+        .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
 }
