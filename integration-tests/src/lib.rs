@@ -24,6 +24,7 @@ pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
 mod prover_api;
+pub mod provider;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
@@ -40,8 +41,6 @@ pub struct Tester {
     pub l2_wallet: EthereumWallet,
 
     pub prover_api: ProverApi,
-
-    pub l1_sender_config: L1SenderConfig,
 
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
@@ -138,7 +137,6 @@ impl TesterBuilder {
             genesis_input_path: "../genesis.json".into(),
             ..Default::default()
         };
-        let l1_sender_config_ = l1_sender_config.clone();
         let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
@@ -146,7 +144,7 @@ impl TesterBuilder {
                 rpc_config,
                 MempoolConfig::default(),
                 sequencer_config,
-                l1_sender_config_,
+                l1_sender_config,
                 l1_watcher_config,
                 Default::default(),
                 ProverInputGeneratorConfig {
@@ -228,7 +226,6 @@ impl TesterBuilder {
             l1_wallet,
             l2_wallet,
             prover_api: ProverApi::new(prover_api_url),
-            l1_sender_config,
             stop_sender,
             main_task,
         })
