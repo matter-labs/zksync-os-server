@@ -250,8 +250,12 @@ pub async fn run(
     );
 
     tracing::info!("Initializing StateHandle");
+
+    if sequencer_config.replay_all_blocks_unsafe {
+        tracing::warn!("!!! Replay all blocks mode is enabled. Starting from block zero.");
+    }
     let state_handle = StateHandle::new(StateConfig {
-        erase_storage_on_start: false,
+        erase_storage_on_start_unsafe: sequencer_config.replay_all_blocks_unsafe,
         blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
         rocks_db_path: sequencer_config.rocks_db_path.clone(),
     });
@@ -385,7 +389,6 @@ pub async fn run(
 
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
 
-    // this will be the starting block
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
     // only reading these for assertions
@@ -395,25 +398,60 @@ pub async fn run(
         .last_processed_block()
         .expect("cannot read tree last processed block after initialization");
 
+    let (last_committed_block_number, last_committed_batch_info) =
+        if l1_state.last_committed_batch == 0 {
+            (0, genesis_stored_batch_info())
+        } else {
+            let batch_metadata = proof_storage
+                .get(l1_state.last_committed_batch)
+                .expect("Failed to get last committed block from proof storage")
+                .map(|proof| proof.batch)
+                .expect("Committed batch is not present in proof storage");
+            (
+                batch_metadata.last_block_number,
+                batch_metadata.commit_batch_info.into(),
+            )
+        };
+
+    let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
+
     tracing::info!(
-        storage_map_block = storage_map_compacted_block,
-        wal_block = wal_block,
-        canonized_block = repositories_persisted_block,
-        tree_last_processed_block = tree_last_processed_block,
-        "▶ Sequencer will start from block {}",
-        storage_map_compacted_block + 1
+        storage_map_compacted_block,
+        wal_block,
+        repositories_persisted_block,
+        tree_last_processed_block,
+        l1_state.last_committed_batch,
+        l1_state.last_proved_batch,
+        last_committed_block_number,
+        last_stored_batch_with_proof,
+        l1_state.last_executed_batch,
+        "▶ Sequencer will start from block {}. Batcher will start from block {} and batch {}",
+        storage_map_compacted_block + 1,
+        last_committed_block_number + 1,
+        l1_state.last_committed_batch + 1,
+    );
+
+    assert!(
+        wal_block >= last_committed_block_number
+            && wal_block >= storage_map_compacted_block
+            && wal_block >= tree_last_processed_block
+            && wal_block >= repositories_persisted_block,
+        "Inconsistent block numbers: there is a block ahead of wal."
+    );
+
+    assert!(
+        last_committed_block_number >= storage_map_compacted_block
+            && repositories_persisted_block >= storage_map_compacted_block
+            && tree_last_processed_block >= storage_map_compacted_block,
+        "Inconsistent block numbers: storage is compacted ahead of a needed block."
+    );
+
+    assert!(
+        last_stored_batch_with_proof >= l1_state.last_committed_batch,
+        "Inconsistent batch numbers: committed batch not found in proof storage."
     );
 
     let starting_block = storage_map_compacted_block + 1;
-
-    assert!(
-        wal_block >= storage_map_compacted_block
-            && repositories_persisted_block >= storage_map_compacted_block
-            && tree_last_processed_block >= storage_map_compacted_block
-            && tree_last_processed_block <= wal_block
-            && repositories_persisted_block <= wal_block,
-        "Block numbers are inconsistent on startup!"
-    );
 
     tracing::info!("Initializing L1Watcher");
 
@@ -507,33 +545,6 @@ pub async fn run(
         // .boxed()
     }
     tracing::info!("Initializing batcher subsystem");
-    // ========== Initialize L1 sender ===========
-
-    let prev_batch_info = if l1_state.last_committed_batch == 0 {
-        genesis_stored_batch_info()
-    } else {
-        let batch_metadata = proof_storage
-            .get(l1_state.last_committed_batch)
-            .expect("Failed to get last committed block from proof storage")
-            .map(|proof| proof.batch)
-            .expect("Committed batch is not present in proof storage");
-        batch_metadata.commit_batch_info.into()
-    };
-
-    let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
-
-    tracing::info!(
-        l1_state.last_committed_batch,
-        last_committed_block,
-        last_stored_batch_with_proof,
-        "L1 sender initialized"
-    );
-    assert!(
-        last_committed_block <= wal_block
-            && last_committed_block >= storage_map_compacted_block
-            && last_stored_batch_with_proof >= l1_state.last_committed_batch,
-        "L1 sender last committed block number is inconsistent with WAL or storage map"
-    );
 
     // ========== Initialize ProverInputGenerator ===========
     tracing::info!("Initializing ProverInputGenerator");
@@ -561,7 +572,7 @@ pub async fn run(
             batch_for_proving_sender,
             persistent_tree,
         );
-        Box::pin(batcher.run_loop(prev_batch_info))
+        Box::pin(batcher.run_loop(last_committed_batch_info))
     };
 
     // ======= Initialize Prover Api Server========

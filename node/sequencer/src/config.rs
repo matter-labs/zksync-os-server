@@ -41,6 +41,11 @@ pub struct SequencerConfig {
     /// Path to the directory where block dumps for unexpected failures will be saved.
     #[config(default_t = "./block_dumps".into())]
     pub block_dump_path: PathBuf,
+
+    /// If set to true, the server will replay all blocks starting from genesis.
+    /// Useful when there are inconsistencies in saved block numbers.
+    #[config(default_t = false)]
+    pub replay_all_blocks_unsafe: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -55,7 +60,7 @@ pub struct BatcherConfig {
     pub batch_timeout: Duration,
 
     /// Max number of blocks per batch
-    #[config(default_t = 100)]
+    #[config(default_t = 5)]
     pub blocks_per_batch_limit: usize,
 }
 
@@ -97,7 +102,7 @@ pub struct ProverApiConfig {
     /// If the difference is larger than this, provers will not be assigned new jobs.
     /// We use max range instead of length limit to avoid having one old batch stuck -
     /// otherwise GaplessCommitter's buffer would grow indefinitely.
-    #[config(default_t = 50)]
+    #[config(default_t = 20)]
     pub max_assigned_batch_range: usize,
 
     /// Max number of FRI proofs that will be aggregated to a single SNARK job.
