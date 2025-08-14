@@ -9,10 +9,8 @@ use zksync_os_storage_api::ReplayRecord;
 
 use crate::{block_replay_storage::BlockReplayStorage, model::blocks::BlockCommand};
 
-const PORT: u16 = 8103;
-
-pub async fn block_server(block_replays: BlockReplayStorage) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", PORT)).await?;
+pub async fn block_server(block_replays: BlockReplayStorage, port: u16) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
 
     loop {
         let (mut socket, _) = listener.accept().await?;
@@ -31,8 +29,11 @@ pub async fn block_server(block_replays: BlockReplayStorage) -> anyhow::Result<(
     }
 }
 
-pub async fn block_receiver(starting_block: BlockNumber) -> BoxStream<'static, BlockCommand> {
-    let mut socket = TcpStream::connect(("localhost", PORT)).await.unwrap();
+pub async fn block_receiver(
+    starting_block: BlockNumber,
+    port: u16,
+) -> BoxStream<'static, BlockCommand> {
+    let mut socket = TcpStream::connect(("localhost", port)).await.unwrap();
 
     socket.write_u64(starting_block).await.unwrap();
 

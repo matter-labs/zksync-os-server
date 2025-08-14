@@ -112,6 +112,7 @@ impl TesterBuilder {
         };
         let sequencer_config = SequencerConfig {
             rocks_db_path: rocksdb_path.path().to_path_buf(),
+            block_server_port: LockedPort::acquire_unused().await?.port,
             ..Default::default()
         };
         let l1_sender_config = L1SenderConfig {

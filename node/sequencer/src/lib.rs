@@ -606,7 +606,13 @@ pub async fn run(
     // ========== Start Sequencer ===========
 
     if !sequencer_config.is_external_node {
-        tasks.spawn(block_server(block_replay_storage.clone()).map(report_exit("block server")));
+        tasks.spawn(
+            block_server(
+                block_replay_storage.clone(),
+                sequencer_config.block_server_port,
+            )
+            .map(report_exit("block server")),
+        );
     }
 
     {
@@ -617,7 +623,7 @@ pub async fn run(
 
         tasks.spawn(async move {
             let block_stream = if sequencer_config.is_external_node {
-                block_receiver(starting_block).await
+                block_receiver(starting_block, sequencer_config.block_server_port).await
             } else {
                 command_source(
                     &block_replay_storage,
