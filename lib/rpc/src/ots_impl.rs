@@ -1,5 +1,6 @@
 use crate::eth_impl::{EthError, EthResult, build_api_receipt, build_api_tx};
 use crate::result::ToRpcResult;
+use crate::rpc_storage::ReadRpcStorage;
 use alloy::consensus::Typed2718;
 use alloy::eips::BlockId;
 use alloy::eips::eip1898::LenientBlockNumberOrTag;
@@ -15,8 +16,7 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::ots::OtsApiServer;
-use zksync_os_state::StateHandle;
-use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, StoredTxData};
+use zksync_os_storage_api::StoredTxData;
 use zksync_os_types::ZkEnvelope;
 
 /// Max Otterscan API level we support.
@@ -27,26 +27,22 @@ const API_LEVEL: u64 = 8;
 /// which works for simple cases that we currently use Otterscan for.
 const MAX_BLOCKS_TO_SCAN: u64 = 1000;
 
-pub struct OtsNamespace<Repository> {
-    repository: Repository,
-    state_handle: StateHandle,
+pub struct OtsNamespace<RpcStorage> {
+    storage: RpcStorage,
 }
 
-impl<Repository> OtsNamespace<Repository> {
-    pub fn new(repository: Repository, state_handle: StateHandle) -> Self {
-        Self {
-            repository,
-            state_handle,
-        }
+impl<RpcStorage> OtsNamespace<RpcStorage> {
+    pub fn new(storage: RpcStorage) -> Self {
+        Self { storage }
     }
 }
 
-impl<Repository: ReadRepository> OtsNamespace<Repository> {
+impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
     fn get_header_by_number_impl(
         &self,
         block_number: LenientBlockNumberOrTag,
     ) -> EthResult<Option<Header>> {
-        let Some(block) = self.repository.get_block_by_id(block_number.into())? else {
+        let Some(block) = self.storage.get_block_by_id(block_number.into())? else {
             return Ok(None);
         };
         let (block, hash) = block.into_parts();
@@ -65,13 +61,14 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
     ) -> EthResult<bool> {
         // todo(#36): re-implement, move to a state handler
         let block_id = block_id.unwrap_or_default().into();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let mut view = self
-            .state_handle
+            .storage
+            .state()
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
         let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
@@ -82,7 +79,7 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
 
     fn get_block_details_by_id_impl(&self, block_id: BlockId) -> EthResult<BlockDetails> {
         let block = self
-            .repository
+            .storage
             .get_block_by_id(block_id)?
             .ok_or(EthError::BlockNotFound(block_id))?;
         let (block, hash) = block.into_parts();
@@ -91,7 +88,8 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
         let mut total_fees = U256::ZERO;
         for tx_hash in block.body.transactions {
             let meta = self
-                .repository
+                .storage
+                .repository()
                 .get_transaction_meta(tx_hash)?
                 .ok_or(EthError::BlockNotFound(block_id))?;
             total_fees += U256::from(meta.gas_used) * U256::from(meta.effective_gas_price);
@@ -118,7 +116,7 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
     ) -> EthResult<OtsBlockTransactions<Transaction<ZkEnvelope>>> {
         let block_id = block_number.into();
         let block = self
-            .repository
+            .storage
             .get_block_by_id(block_id)?
             .ok_or(EthError::BlockNotFound(block_id))?;
         let (mut block, hash) = block.into_parts();
@@ -140,7 +138,8 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
         let mut receipts = Vec::with_capacity(transactions.len());
         for tx_hash in transactions {
             let StoredTxData { tx, receipt, meta } = self
-                .repository
+                .storage
+                .repository()
                 .get_stored_transaction(tx_hash)?
                 .ok_or(EthError::BlockNotFound(block_id))?;
 
@@ -192,13 +191,17 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
                 has_more = true;
                 break;
             }
-            let Some(block) = self.repository.get_block_by_number(block_number)? else {
+            let Some(block) = self
+                .storage
+                .repository()
+                .get_block_by_number(block_number)?
+            else {
                 break;
             };
             let (block, _) = block.into_parts();
             for tx_hash in block.body.transactions {
                 let Some(StoredTxData { tx, receipt, meta }) =
-                    self.repository.get_stored_transaction(tx_hash)?
+                    self.storage.repository().get_stored_transaction(tx_hash)?
                 else {
                     continue;
                 };
@@ -237,10 +240,10 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
     ) -> EthResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>> {
         let block_id = block_number.into();
         let mut upper_block_number = self
-            .repository
+            .storage
             .resolve_block_number(block_id)?
             .ok_or(EthError::BlockNotFound(block_id))?;
-        let latest_block_number = self.repository.get_latest_block();
+        let latest_block_number = self.storage.repository().get_latest_block();
         if upper_block_number == 0 {
             upper_block_number = latest_block_number + 1;
         }
@@ -267,11 +270,11 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
         let block_id = block_number.into();
         // Logic below uses inclusive lower bound so we add +1 here to adjust the boundary
         let lower_block_number = self
-            .repository
+            .storage
             .resolve_block_number(block_id)?
             .ok_or(EthError::BlockNotFound(block_id))?
             + 1;
-        let latest_block_number = self.repository.get_latest_block();
+        let latest_block_number = self.storage.repository().get_latest_block();
         let upper_block_number = lower_block_number
             .saturating_add(MAX_BLOCKS_TO_SCAN)
             .min(latest_block_number);
@@ -297,7 +300,8 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
         nonce: u64,
     ) -> EthResult<Option<TxHash>> {
         let Some(tx_hash) = self
-            .repository
+            .storage
+            .repository()
             .get_transaction_hash_by_sender_nonce(sender, nonce)?
         else {
             return Ok(None);
@@ -314,7 +318,7 @@ impl<Repository: ReadRepository> OtsNamespace<Repository> {
 }
 
 #[async_trait]
-impl<Repository: ReadRepository> OtsApiServer for OtsNamespace<Repository> {
+impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
     async fn get_header_by_number(
         &self,
         block_number: LenientBlockNumberOrTag,

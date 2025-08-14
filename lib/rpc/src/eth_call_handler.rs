@@ -1,5 +1,6 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
+use crate::rpc_storage::ReadRpcStorage;
 use crate::sandbox::execute;
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, Transaction, TxEip1559, TxEip2930, TxLegacy, TxType};
@@ -12,36 +13,22 @@ use ruint::aliases::B160;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
-use zksync_os_state::StateHandle;
-use zksync_os_storage_api::{ReadReplay, ReadRepository, ReadRepositoryExt, RepositoryError};
+use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::{L2Envelope, L2Transaction};
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 
-pub struct EthCallHandler<Repository, ReplayStorage> {
+pub struct EthCallHandler<RpcStorage> {
     config: RpcConfig,
-    state_handle: StateHandle,
-
-    repository: Repository,
-    replay_storage: ReplayStorage,
+    storage: RpcStorage,
     chain_id: u64,
 }
 
-impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
-    EthCallHandler<Repository, ReplayStorage>
-{
-    pub fn new(
-        config: RpcConfig,
-        state_handle: StateHandle,
-        repository: Repository,
-        replay_storage: ReplayStorage,
-        chain_id: u64,
-    ) -> Self {
+impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
+    pub fn new(config: RpcConfig, storage: RpcStorage, chain_id: u64) -> Self {
         Self {
             config,
-            state_handle,
-            repository,
-            replay_storage,
+            storage,
             chain_id,
         }
     }
@@ -79,7 +66,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
         let nonce = if let Some(nonce) = nonce {
             nonce
         } else {
-            self.state_handle
+            self.storage
+                .state()
                 .state_view_at_block(block_context.block_number)
                 .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
                 .get_account(B160::from_be_bytes(from.unwrap_or_default().into_array()))
@@ -174,20 +162,22 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
         }
 
         let block_id = block.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthCallError::BlockNotFound(block_id));
         };
         tracing::info!(?block_id, block_number, "resolved block id");
 
         // using previous block context
         let block_context = self
-            .replay_storage
+            .storage
+            .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
         let tx = self.create_tx_from_request(request, &block_context)?;
 
         let storage_view = self
-            .state_handle
+            .storage
+            .state()
             .state_view_at_block(block_number)
             // todo: introduce error hierarchy for `zksync_os_state`
             .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
@@ -209,11 +199,12 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
             return Err(EthCallError::StateOverridesNotSupported);
         }
         let block_id = block_number.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthCallError::BlockNotFound(block_id));
         };
         let block_context = self
-            .replay_storage
+            .storage
+            .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockStateNotAvailable(block_number))?;
 
@@ -247,7 +238,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
             > 0
         {
             let balance = self
-                .state_handle
+                .storage
+                .state()
                 .state_view_at_block(block_context.block_number)
                 .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
                 .get_account(B160::from_be_bytes(
@@ -287,7 +279,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay>
         let tx = self.create_tx_from_request(request, &block_context)?;
 
         let storage_view = self
-            .state_handle
+            .storage
+            .state()
             .state_view_at_block(block_number)
             // todo: introduce error hierarchy for `zksync_os_state`
             .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
