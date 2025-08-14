@@ -11018,14 +11018,13 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "serde_json",
  "smart-config",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
  "vise",
  "zksync_os_contract_interface",
- "zksync_os_rocksdb",
+ "zksync_os_storage_api",
  "zksync_os_types",
 ]
 

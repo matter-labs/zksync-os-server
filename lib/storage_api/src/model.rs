@@ -75,3 +75,10 @@ impl ReplayRecord {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct FinalityStatus {
+    pub last_committed_block: u64,
+    pub last_proved_block: u64,
+    pub last_executed_block: u64,
+}

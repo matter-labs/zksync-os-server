@@ -2,6 +2,7 @@ use crate::config::RpcConfig;
 use crate::eth_impl::build_api_log;
 use crate::metrics::API_METRICS;
 use crate::result::ToRpcResult;
+use crate::rpc_storage::ReadRpcStorage;
 use crate::types::QueryLimits;
 use alloy::consensus::transaction::{Recovered, TransactionInfo};
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -19,12 +20,12 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
 use zksync_os_mempool::{EthPooledTransaction, L2TransactionPool, NewSubpoolTransactionStream};
 use zksync_os_rpc_api::filter::EthFilterApiServer;
-use zksync_os_storage_api::{ReadRepository, ReadRepositoryExt, RepositoryError};
+use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2Envelope;
 
 #[derive(Clone)]
-pub struct EthFilterNamespace<Repository, Mempool> {
-    repository: Repository,
+pub struct EthFilterNamespace<RpcStorage, Mempool> {
+    storage: RpcStorage,
     query_limits: QueryLimits,
     /// Duration since the last filter poll, after which the filter is considered stale
     stale_filter_ttl: Duration,
@@ -32,14 +33,14 @@ pub struct EthFilterNamespace<Repository, Mempool> {
     active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
 }
 
-impl<Repository: ReadRepository + Clone, Mempool: L2TransactionPool>
-    EthFilterNamespace<Repository, Mempool>
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
+    EthFilterNamespace<RpcStorage, Mempool>
 {
-    pub fn new(config: RpcConfig, repository: Repository, mempool: Mempool) -> Self {
+    pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
         let this = Self {
-            repository,
+            storage,
             query_limits,
             stale_filter_ttl: config.stale_filter_ttl,
             mempool,
@@ -56,11 +57,11 @@ impl<Repository: ReadRepository + Clone, Mempool: L2TransactionPool>
     }
 }
 
-impl<Repository: ReadRepository, Mempool: L2TransactionPool>
-    EthFilterNamespace<Repository, Mempool>
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
+    EthFilterNamespace<RpcStorage, Mempool>
 {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
-        let last_poll_block_number = self.repository.get_latest_block();
+        let last_poll_block_number = self.storage.repository().get_latest_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
 
         self.active_filters.insert(
@@ -78,7 +79,7 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
         &self,
         id: FilterId,
     ) -> EthFilterResult<FilterChanges<Transaction<L2Envelope>>> {
-        let latest_block = self.repository.get_latest_block();
+        let latest_block = self.storage.repository().get_latest_block();
 
         // start_block is the block from which we should start fetching changes, the next block from
         // the last time changes were polled, in other words the best block at last poll + 1
@@ -108,7 +109,11 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
             FilterKind::Block => {
                 let mut block_hashes = Vec::new();
                 for block_number in start_block..=latest_block {
-                    let Some(block) = self.repository.get_block_by_number(block_number)? else {
+                    let Some(block) = self
+                        .storage
+                        .repository()
+                        .get_block_by_number(block_number)?
+                    else {
                         return Err(EthFilterError::BlockNotFound(block_number.into()));
                     };
                     block_hashes.push(B256::from(block.header.hash_slow()));
@@ -157,7 +162,7 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
         let (from, to) = match filter.block_option {
             FilterBlockOption::AtBlockHash(block_hash) => {
                 let block_id = block_hash.into();
-                let Some(block) = self.repository.resolve_block_number(block_id)? else {
+                let Some(block) = self.storage.resolve_block_number(block_id)? else {
                     return Err(EthFilterError::BlockNotFound(block_id));
                 };
                 (block, block)
@@ -192,7 +197,7 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
         let mut negative_scanned_blocks = 0u64;
         let mut logs = Vec::new();
         for number in from..=to {
-            if let Some(block) = self.repository.get_block_by_number(number)? {
+            if let Some(block) = self.storage.repository().get_block_by_number(number)? {
                 let mut log_index_in_block = 0u64;
                 if filter.matches_bloom(block.header.logs_bloom) {
                     tracing::trace!(
@@ -206,7 +211,8 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
                         .transactions
                         .into_iter()
                         .map(|hash| {
-                            self.repository
+                            self.storage
+                                .repository()
                                 .get_stored_transaction(hash)?
                                 .ok_or(EthFilterError::BlockNotFound(number.into()))
                         })
@@ -293,11 +299,11 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
         to_block: Option<BlockNumberOrTag>,
     ) -> EthFilterResult<(BlockNumber, BlockNumber)> {
         let from_block_id = from_block.unwrap_or_default().into();
-        let Some(from) = self.repository.resolve_block_number(from_block_id)? else {
+        let Some(from) = self.storage.resolve_block_number(from_block_id)? else {
             return Err(EthFilterError::BlockNotFound(from_block_id));
         };
         let to_block_id = to_block.unwrap_or_default().into();
-        let Some(to) = self.repository.resolve_block_number(to_block_id)? else {
+        let Some(to) = self.storage.resolve_block_number(to_block_id)? else {
             return Err(EthFilterError::BlockNotFound(to_block_id));
         };
         Ok((from, to))
@@ -305,8 +311,8 @@ impl<Repository: ReadRepository, Mempool: L2TransactionPool>
 }
 
 #[async_trait]
-impl<Repository: ReadRepository, Mempool: L2TransactionPool> EthFilterApiServer
-    for EthFilterNamespace<Repository, Mempool>
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthFilterApiServer
+    for EthFilterNamespace<RpcStorage, Mempool>
 {
     async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {
         self.install_filter(FilterKind::Log(Box::new(filter)))

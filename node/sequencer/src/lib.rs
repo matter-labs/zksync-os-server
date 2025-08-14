@@ -62,10 +62,11 @@ use zksync_os_l1_watcher::{L1CommitWatcher, L1TxWatcher, L1WatcherConfig};
 use zksync_os_observability::ComponentStateLatencyTracker;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rocksdb::RocksDB;
-use zksync_os_rpc::run_jsonrpsee_server;
+use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_state::{StateConfig, StateHandle};
+use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{ReadReplay, ReadRepository, ReplayRecord};
+use zksync_os_storage_api::{FinalityStatus, ReadReplay, ReadRepository, ReplayRecord};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
@@ -397,20 +398,29 @@ pub async fn run(
         .last_processed_block()
         .expect("cannot read tree last processed block after initialization");
 
-    let (last_committed_block_number, last_committed_batch_info) =
-        if l1_state.last_committed_batch == 0 {
-            (0, genesis_stored_batch_info())
-        } else {
-            let batch_metadata = proof_storage
-                .get(l1_state.last_committed_batch)
-                .expect("Failed to get last committed block from proof storage")
-                .map(|proof| proof.batch)
-                .expect("Committed batch is not present in proof storage");
-            (
-                batch_metadata.last_block_number,
-                batch_metadata.commit_batch_info.into(),
-            )
-        };
+    let (last_committed_block, last_committed_batch_info) = if l1_state.last_committed_batch == 0 {
+        (0, genesis_stored_batch_info())
+    } else {
+        let batch_metadata = proof_storage
+            .get(l1_state.last_committed_batch)
+            .expect("Failed to get last committed block from proof storage")
+            .map(|proof| proof.batch)
+            .expect("Committed batch is not present in proof storage");
+        (
+            batch_metadata.last_block_number,
+            batch_metadata.commit_batch_info.into(),
+        )
+    };
+    let last_proved_block = proof_storage
+        .get(l1_state.last_proved_batch)
+        .expect("failed to load last proved batch")
+        .map(|batch_envelope| batch_envelope.batch.last_block_number)
+        .unwrap_or(0);
+    let last_executed_block = proof_storage
+        .get(l1_state.last_executed_batch)
+        .expect("failed to load last executed batch")
+        .map(|batch_envelope| batch_envelope.batch.last_block_number)
+        .unwrap_or(0);
 
     let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
@@ -419,19 +429,21 @@ pub async fn run(
         wal_block,
         repositories_persisted_block,
         tree_last_processed_block,
-        l1_state.last_committed_batch,
-        l1_state.last_proved_batch,
-        last_committed_block_number,
+        last_committed_batch = l1_state.last_committed_batch,
+        last_proved_batch = l1_state.last_proved_batch,
+        last_executed_batch = l1_state.last_executed_batch,
+        last_committed_block,
+        last_proved_block,
+        last_executed_block,
         last_stored_batch_with_proof,
-        l1_state.last_executed_batch,
         "▶ Sequencer will start from block {}. Batcher will start from block {} and batch {}",
         storage_map_compacted_block + 1,
-        last_committed_block_number + 1,
+        last_committed_block + 1,
         l1_state.last_committed_batch + 1,
     );
 
     assert!(
-        wal_block >= last_committed_block_number
+        wal_block >= last_committed_block
             && wal_block >= storage_map_compacted_block
             && wal_block >= tree_last_processed_block
             && wal_block >= repositories_persisted_block,
@@ -439,7 +451,7 @@ pub async fn run(
     );
 
     assert!(
-        last_committed_block_number >= storage_map_compacted_block
+        last_committed_block >= storage_map_compacted_block
             && repositories_persisted_block >= storage_map_compacted_block
             && tree_last_processed_block >= storage_map_compacted_block,
         "Inconsistent block numbers: storage is compacted ahead of a needed block."
@@ -476,8 +488,18 @@ pub async fn run(
         .expect("failed to start L1 transaction watcher")
         .run();
 
-    let l1_commit_watcher =
-        L1CommitWatcher::new(l1_watcher_config, l1_provider, l1_state.diamond_proxy, 1).await;
+    let finality_storage = Finality::new(FinalityStatus {
+        last_committed_block,
+        last_proved_block,
+        last_executed_block,
+    });
+    let l1_commit_watcher = L1CommitWatcher::new(
+        l1_watcher_config,
+        l1_provider,
+        l1_state.diamond_proxy,
+        finality_storage.clone(),
+    )
+    .await;
     let l1_commit_watcher_task = l1_commit_watcher
         .expect("failed to start L1 commit watcher")
         .run();
@@ -538,7 +560,7 @@ pub async fn run(
     let batcher_task = {
         let batcher = Batcher::new(
             genesis_config.chain_id,
-            last_committed_block_number + 1,
+            last_committed_block + 1,
             repositories_persisted_block,
             batcher_config,
             blocks_for_batcher_receiver,
@@ -611,11 +633,6 @@ pub async fn run(
             noop_task(stop_receiver)
         };
 
-    let last_executed_block = proof_storage
-        .get(l1_state.last_executed_batch)
-        .expect("failed to load last executed batch")
-        .map(|batch_envelope| batch_envelope.batch.last_block_number)
-        .unwrap_or(0);
     let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
         l1_sender_config,
         batch_for_commit_receiver,
@@ -639,6 +656,12 @@ pub async fn run(
 
     // ======= Run tasks ===========
 
+    let rpc_storage = RpcStorage::new(
+        repositories.clone(),
+        block_replay_storage.clone(),
+        finality_storage,
+        state_handle.clone(),
+    );
     tokio::select! {
         // ── Sequencer task ───────────────────────────────────────────────
         res = run_sequencer_actor(
@@ -662,9 +685,7 @@ pub async fn run(
             rpc_config,
             genesis_config.chain_id,
             l1_state.bridgehub,
-            repositories.clone(),
-            block_replay_storage.clone(),
-            state_handle.clone(),
+            rpc_storage,
             l2_mempool,
         ) => {
             match res {

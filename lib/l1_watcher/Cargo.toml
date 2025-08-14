@@ -11,12 +11,11 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_contract_interface.workspace = true
-zksync_os_rocksdb.workspace = true
+zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
 anyhow.workspace = true
-serde_json.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }
 tokio.workspace = true
 tracing.workspace = true
