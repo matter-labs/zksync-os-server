@@ -1,4 +1,5 @@
 use crate::eth_impl::build_api_log;
+use crate::rpc_storage::ReadRpcStorage;
 use alloy::consensus::Sealed;
 use alloy::consensus::transaction::TransactionInfo;
 use alloy::primitives::TxHash;
@@ -12,46 +13,45 @@ use serde::Serialize;
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_mempool::{EthPooledTransaction, L2TransactionPool, NewTransactionEvent};
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
-use zksync_os_storage_api::ReadRepository;
-use zksync_os_storage_api::notifications::SubscribeToBlocks;
 
 #[derive(Clone)]
-pub struct EthPubsubNamespace<Repository, Mempool> {
-    repository: Repository,
+pub struct EthPubsubNamespace<RpcStorage, Mempool> {
+    storage: RpcStorage,
     mempool: Mempool,
 }
 
-impl<Repository, Mempool> EthPubsubNamespace<Repository, Mempool> {
-    pub fn new(repository: Repository, mempool: Mempool) -> Self {
-        Self {
-            repository,
-            mempool,
-        }
+impl<RpcStorage, Mempool> EthPubsubNamespace<RpcStorage, Mempool> {
+    pub fn new(storage: RpcStorage, mempool: Mempool) -> Self {
+        Self { storage, mempool }
     }
 }
 
-impl<Repository: ReadRepository + SubscribeToBlocks, Mempool: L2TransactionPool>
-    EthPubsubNamespace<Repository, Mempool>
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
+    EthPubsubNamespace<RpcStorage, Mempool>
 {
     /// Returns a stream that yields all new RPC blocks.
     fn new_headers_stream(
         &self,
-    ) -> impl Stream<Item = alloy::rpc::types::Header> + use<Repository, Mempool> {
-        self.repository.block_stream().map(|notification| {
-            alloy::rpc::types::Header::from_consensus(
-                Sealed::new_unchecked(
-                    notification.block.as_ref().header.clone(),
-                    notification.block.hash(),
-                ),
-                None,
-                None,
-            )
-        })
+    ) -> impl Stream<Item = alloy::rpc::types::Header> + use<RpcStorage, Mempool> {
+        self.storage
+            .block_subscriptions()
+            .block_stream()
+            .map(|notification| {
+                alloy::rpc::types::Header::from_consensus(
+                    Sealed::new_unchecked(
+                        notification.block.as_ref().header.clone(),
+                        notification.block.hash(),
+                    ),
+                    None,
+                    None,
+                )
+            })
     }
 
     /// Returns a stream that yields all logs that match the given filter.
-    fn log_stream(&self, filter: Filter) -> impl Stream<Item = Log> + use<Repository, Mempool> {
-        self.repository
+    fn log_stream(&self, filter: Filter) -> impl Stream<Item = Log> + use<RpcStorage, Mempool> {
+        self.storage
+            .block_subscriptions()
             .block_stream()
             .flat_map(move |notification| {
                 let mut logs = Vec::new();
@@ -74,14 +74,14 @@ impl<Repository: ReadRepository + SubscribeToBlocks, Mempool: L2TransactionPool>
     /// Returns a stream that yields all transaction hashes emitted by the mempool.
     fn pending_transaction_hashes_stream(
         &self,
-    ) -> impl Stream<Item = TxHash> + use<Repository, Mempool> {
+    ) -> impl Stream<Item = TxHash> + use<RpcStorage, Mempool> {
         ReceiverStream::new(self.mempool.pending_transactions_listener())
     }
 
     /// Returns a stream that yields all transactions emitted by the mempool.
     fn full_pending_transaction_stream(
         &self,
-    ) -> impl Stream<Item = NewTransactionEvent<EthPooledTransaction>> + use<Repository, Mempool>
+    ) -> impl Stream<Item = NewTransactionEvent<EthPooledTransaction>> + use<RpcStorage, Mempool>
     {
         self.mempool.new_pending_pool_transactions_listener()
     }
@@ -143,8 +143,8 @@ impl<Repository: ReadRepository + SubscribeToBlocks, Mempool: L2TransactionPool>
 }
 
 #[async_trait]
-impl<Repository: ReadRepository + SubscribeToBlocks, Mempool: L2TransactionPool> EthPubSubApiServer
-    for EthPubsubNamespace<Repository, Mempool>
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthPubSubApiServer
+    for EthPubsubNamespace<RpcStorage, Mempool>
 {
     async fn subscribe(
         &self,

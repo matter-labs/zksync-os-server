@@ -1,6 +1,5 @@
 use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
-use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
 use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
@@ -48,76 +47,12 @@ pub trait ReadRepository: Send + Sync + 'static {
     fn get_latest_block(&self) -> u64;
 }
 
-/// Extension methods for `ReadRepository` implementations.
-pub trait ReadRepositoryExt: ReadRepository {
-    /// Get sealed block with transaction hashes by its hash OR number.
-    fn get_block_by_hash_or_number(
-        &self,
-        hash_or_number: BlockHashOrNumber,
-    ) -> RepositoryResult<Option<RepositoryBlock>> {
-        match hash_or_number {
-            BlockHashOrNumber::Hash(hash) => self.get_block_by_hash(hash),
-            BlockHashOrNumber::Number(number) => self.get_block_by_number(number),
-        }
-    }
-
-    /// Resolve block's hash OR number by its id. This method can be useful when caller does not
-    /// care which of the block's hash or number to deal with and wants to perform as few look-up
-    /// actions as possible.
-    ///
-    /// WARNING: Does not ensure that the returned block's hash or number actually exists
-    fn resolve_block_hash_or_number(
-        &self,
-        block_id: BlockId,
-    ) -> RepositoryResult<BlockHashOrNumber> {
-        match block_id {
-            BlockId::Hash(hash) => Ok(hash.block_hash.into()),
-            BlockId::Number(BlockNumberOrTag::Pending) => Ok(self.get_latest_block().into()),
-            BlockId::Number(BlockNumberOrTag::Latest) => Ok(self.get_latest_block().into()),
-            BlockId::Number(BlockNumberOrTag::Safe) => Err(RepositoryError::SafeBlockNotSupported),
-            BlockId::Number(BlockNumberOrTag::Finalized) => {
-                Err(RepositoryError::FinalizedBlockNotSupported)
-            }
-            BlockId::Number(BlockNumberOrTag::Earliest) => {
-                Err(RepositoryError::EarliestBlockNotSupported)
-            }
-            BlockId::Number(BlockNumberOrTag::Number(number)) => Ok(number.into()),
-        }
-    }
-
-    /// Resolve block's number by its id.
-    fn resolve_block_number(&self, block_id: BlockId) -> RepositoryResult<Option<BlockNumber>> {
-        let block_hash_or_number = self.resolve_block_hash_or_number(block_id)?;
-        match block_hash_or_number {
-            // todo: should be possible to not load the entire block here
-            BlockHashOrNumber::Hash(block_hash) => Ok(self
-                .get_block_by_hash(block_hash)?
-                .map(|header| header.number)),
-            BlockHashOrNumber::Number(number) => Ok(Some(number)),
-        }
-    }
-
-    /// Get sealed block with transaction hashes number by its id.
-    fn get_block_by_id(&self, block_id: BlockId) -> RepositoryResult<Option<RepositoryBlock>> {
-        // We presume that a reasonable number of historical blocks are being saved, so that
-        // `Latest`/`Pending`/`Safe`/`Finalized` always resolve even if we don't take a look between
-        // two actions below.
-        let block_hash_or_number = self.resolve_block_hash_or_number(block_id)?;
-        self.get_block_by_hash_or_number(block_hash_or_number)
-    }
-}
-
-impl<R: ReadRepository> ReadRepositoryExt for R {}
-
 /// Repository result type.
 pub type RepositoryResult<Ok> = Result<Ok, RepositoryError>;
 
 /// Error variants thrown by various repositories.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum RepositoryError {
-    // todo: should resolve to last committed block here when available
-    #[error("safe block tag is not supported yet")]
-    SafeBlockNotSupported,
     // todo: should resolve to last executed block here when available
     #[error("finalized block tag is not supported yet")]
     FinalizedBlockNotSupported,

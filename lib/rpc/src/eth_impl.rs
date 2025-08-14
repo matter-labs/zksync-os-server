@@ -2,6 +2,7 @@ use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
 use crate::metrics::API_METRICS;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
+use crate::rpc_storage::ReadRpcStorage;
 use crate::tx_handler::TxHandler;
 use alloy::consensus::Account;
 use alloy::consensus::transaction::Recovered;
@@ -28,62 +29,39 @@ use zk_os_api::helpers::{get_balance, get_code, get_nonce};
 use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
-use zksync_os_state::StateHandle;
-use zksync_os_storage_api::{
-    ReadReplay, ReadRepository, ReadRepositoryExt, RepositoryError, TxMeta,
-};
+use zksync_os_storage_api::{RepositoryError, TxMeta};
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
-pub struct EthNamespace<Repository, ReplayStorage, Mempool> {
+pub struct EthNamespace<RpcStorage, Mempool> {
     tx_handler: TxHandler<Mempool>,
-    eth_call_handler: EthCallHandler<Repository, ReplayStorage>,
+    eth_call_handler: EthCallHandler<RpcStorage>,
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
     // reconsider approach to API in this regard
-    pub repository: Repository,
+    storage: RpcStorage,
     mempool: Mempool,
-    state_handle: StateHandle,
 
-    pub chain_id: u64,
+    chain_id: u64,
 }
 
-impl<Repository: ReadRepository + Clone, ReplayStorage: ReadReplay, Mempool: L2TransactionPool>
-    EthNamespace<Repository, ReplayStorage, Mempool>
-{
-    pub fn new(
-        config: RpcConfig,
-
-        repository: Repository,
-        block_replay_storage: ReplayStorage,
-        state_handle: StateHandle,
-        mempool: Mempool,
-        chain_id: u64,
-    ) -> Self {
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
+    pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool, chain_id: u64) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
 
-        let eth_call_handler = EthCallHandler::new(
-            config,
-            state_handle.clone(),
-            repository.clone(),
-            block_replay_storage,
-            chain_id,
-        );
+        let eth_call_handler = EthCallHandler::new(config, storage.clone(), chain_id);
         Self {
             tx_handler,
             eth_call_handler,
-            repository,
+            storage,
             mempool,
-            state_handle,
             chain_id,
         }
     }
 }
 
-impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2TransactionPool>
-    EthNamespace<Repository, ReplayStorage, Mempool>
-{
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
     fn block_number_impl(&self) -> EthResult<U256> {
-        Ok(U256::from(self.repository.get_latest_block()))
+        Ok(U256::from(self.storage.repository().get_latest_block()))
     }
 
     fn block_by_id_impl(
@@ -94,7 +72,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         full: bool,
     ) -> EthResult<Option<Block<Transaction<ZkEnvelope>>>> {
         let block_id = block_id.unwrap_or_default();
-        let Some(block) = self.repository.get_block_by_id(block_id)? else {
+        let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
         if full {
@@ -123,7 +101,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
     }
 
     fn block_transaction_count_by_id_impl(&self, block_id: BlockId) -> EthResult<Option<U256>> {
-        let Some(block) = self.repository.get_block_by_id(block_id)? else {
+        let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
         Ok(Some(U256::from(block.body.transactions.len())))
@@ -133,7 +111,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         &self,
         block_id: BlockId,
     ) -> EthResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
-        let Some(block) = self.repository.get_block_by_id(block_id)? else {
+        let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
         let mut receipts = Vec::new();
@@ -147,7 +125,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
     }
 
     fn block_uncles_count_by_id_impl(&self, block_id: BlockId) -> EthResult<Option<U256>> {
-        let block = self.repository.get_block_by_id(block_id)?;
+        let block = self.storage.get_block_by_id(block_id)?;
         if block.is_some() {
             // ZKsync OS is not PoW and hence does not have uncle blocks
             Ok(Some(U256::ZERO))
@@ -163,7 +141,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
                 pool_tx.transaction.transaction.encoded_2718(),
             )));
         }
-        if let Some(raw_tx) = self.repository.get_raw_transaction(hash)? {
+        if let Some(raw_tx) = self.storage.repository().get_raw_transaction(hash)? {
             return Ok(Some(Bytes::from(raw_tx)));
         }
         Ok(None)
@@ -178,8 +156,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
                 None,
             )));
         }
-        if let Some(tx) = self.repository.get_transaction(hash)?
-            && let Some(meta) = self.repository.get_transaction_meta(hash)?
+        if let Some(tx) = self.storage.repository().get_transaction(hash)?
+            && let Some(meta) = self.storage.repository().get_transaction_meta(hash)?
         {
             return Ok(Some(build_api_tx(tx, Some(&meta))));
         }
@@ -191,14 +169,15 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         block_id: BlockId,
         index: Index,
     ) -> EthResult<Option<Bytes>> {
-        let Some(block) = self.repository.get_block_by_id(block_id)? else {
+        let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
         let Some(tx_hash) = block.body.transactions.get(index.0) else {
             return Ok(None);
         };
         Ok(self
-            .repository
+            .storage
+            .repository()
             .get_raw_transaction(*tx_hash)?
             .map(Bytes::from))
     }
@@ -208,16 +187,16 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         block_id: BlockId,
         index: Index,
     ) -> EthResult<Option<Transaction<ZkEnvelope>>> {
-        let Some(block) = self.repository.get_block_by_id(block_id)? else {
+        let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
         let Some(tx_hash) = block.body.transactions.get(index.0) else {
             return Ok(None);
         };
-        let Some(tx) = self.repository.get_transaction(*tx_hash)? else {
+        let Some(tx) = self.storage.repository().get_transaction(*tx_hash)? else {
             return Ok(None);
         };
-        let Some(meta) = self.repository.get_transaction_meta(*tx_hash)? else {
+        let Some(meta) = self.storage.repository().get_transaction_meta(*tx_hash)? else {
             return Ok(None);
         };
         Ok(Some(build_api_tx(tx, Some(&meta))))
@@ -229,7 +208,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         nonce: U64,
     ) -> EthResult<Option<Transaction<ZkEnvelope>>> {
         let Some(tx_hash) = self
-            .repository
+            .storage
+            .repository()
             .get_transaction_hash_by_sender_nonce(sender, nonce.saturating_to())?
         else {
             return Ok(None);
@@ -241,7 +221,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
         &self,
         tx_hash: B256,
     ) -> EthResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
-        let Some(stored_tx) = self.repository.get_stored_transaction(tx_hash)? else {
+        let Some(stored_tx) = self.storage.repository().get_stored_transaction(tx_hash)? else {
             return Ok(None);
         };
         Ok(Some(build_api_receipt(
@@ -255,11 +235,12 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
     fn balance_impl(&self, address: Address, block_id: Option<BlockId>) -> EthResult<U256> {
         // todo(#36): re-implement, move to a state handler
         let block_id = block_id.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
         Ok(self
-            .state_handle
+            .storage
+            .state()
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
             .get_account(B160::from_be_bytes(address.into_array()))
@@ -276,7 +257,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
     ) -> EthResult<B256> {
         // todo(#36): re-implement, move to a state handler
         let block_id = block_id.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
 
@@ -284,7 +265,7 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
             &B160::from_be_bytes(address.into_array()),
             &Bytes32::from(key.as_b256().0),
         );
-        let Ok(mut state) = self.state_handle.state_view_at_block(block_number) else {
+        let Ok(mut state) = self.storage.state().state_view_at_block(block_number) else {
             return Err(EthError::BlockStateNotAvailable(block_number));
         };
         Ok(B256::from(
@@ -299,13 +280,14 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
     ) -> EthResult<U256> {
         // todo(#36): re-implement, move to a state handler
         let block_id = block_id.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let nonce = self
-            .state_handle
+            .storage
+            .state()
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
             .get_account(B160::from_be_bytes(address.into_array()))
@@ -318,13 +300,14 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
     fn get_code_impl(&self, address: Address, block_id: Option<BlockId>) -> EthResult<Bytes> {
         // todo(#36): re-implement, move to a state handler
         let block_id = block_id.unwrap_or_default();
-        let Some(block_number) = self.repository.resolve_block_number(block_id)? else {
+        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthError::BlockNotFound(block_id));
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let mut view = self
-            .state_handle
+            .storage
+            .state()
             .state_view_at_block(block_number)
             .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
         let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
@@ -336,8 +319,8 @@ impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2Transacti
 }
 
 #[async_trait]
-impl<Repository: ReadRepository, ReplayStorage: ReadReplay, Mempool: L2TransactionPool> EthApiServer
-    for EthNamespace<Repository, ReplayStorage, Mempool>
+impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
+    for EthNamespace<RpcStorage, Mempool>
 {
     async fn protocol_version(&self) -> RpcResult<String> {
         Ok("zksync_os/0.0.1".to_string())

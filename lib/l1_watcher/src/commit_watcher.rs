@@ -7,22 +7,24 @@ use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_storage_api::WriteFinality;
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-pub struct L1CommitWatcher {
+pub struct L1CommitWatcher<Finality> {
     l1_watcher: L1Watcher<BlockCommit>,
     next_batch_number: u64,
     poll_interval: Duration,
+    finality: Finality,
 }
 
-impl L1CommitWatcher {
+impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
         zk_chain_address: Address,
-        next_batch_number: u64,
+        finality: Finality,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -33,6 +35,7 @@ impl L1CommitWatcher {
         let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
 
         let current_l1_block = provider.get_block_number().await?;
+        let next_batch_number = finality.get_finality_status().last_committed_block + 1;
         let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number)
             .await
             .or_else(|err| {
@@ -64,9 +67,12 @@ impl L1CommitWatcher {
             l1_watcher,
             next_batch_number,
             poll_interval: config.poll_interval,
+            finality,
         })
     }
+}
 
+impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     pub async fn run(mut self) -> L1CommitWatcherResult<()> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
@@ -74,9 +80,7 @@ impl L1CommitWatcher {
             self.poll().await?;
         }
     }
-}
 
-impl L1CommitWatcher {
     async fn poll(&mut self) -> L1CommitWatcherResult<()> {
         let batch_commits = self.l1_watcher.poll().await?;
         for batch_commit in batch_commits {
@@ -91,12 +95,22 @@ impl L1CommitWatcher {
                     "skipping already processed committed batch",
                 );
             } else {
-                tracing::info!(
+                tracing::debug!(
                     batch_number,
                     ?batch_hash,
                     ?batch_commitment,
                     "discovered committed batch"
                 );
+                // todo: presuming 1 batch = 1 block right now, fetch from FRI cache instead
+                let last_committed_block = batch_number;
+                self.finality.update_finality_status(|finality| {
+                    assert_eq!(
+                        finality.last_committed_block + 1,
+                        last_committed_block,
+                        "non-sequential committed block"
+                    );
+                    finality.last_committed_block = last_committed_block;
+                });
             }
         }
 
