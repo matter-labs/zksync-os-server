@@ -2,9 +2,11 @@
 //! May be extracted to a separate service later on (aka FRI Cache)
 //!
 
+use alloy::primitives::BlockNumber;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
+use zksync_os_storage_api::{ReadBatch, ReadBatchResult};
 
 /// Column family set for proof storage.
 #[derive(Copy, Clone, Debug)]
@@ -79,11 +81,25 @@ impl ProofStorage {
     }
 
     /// Loads a BatchWithProof for `batch_number`, if present.
-    pub fn get(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
+    pub fn get(&self, batch_number: u64) -> ReadBatchResult<Option<BatchEnvelope<FriProof>>> {
         let key = batch_number.to_be_bytes();
         let bytes = self.db.get_cf(ProofColumnFamily::Proofs, &key)?;
         let Some(bytes) = bytes else { return Ok(None) };
-        let res = serde_json::from_slice(&bytes)?;
+        let res = serde_json::from_slice(&bytes).expect("malformed stored batch");
         Ok(Some(res))
+    }
+}
+
+impl ReadBatch for ProofStorage {
+    fn get_batch_range_by_number(
+        &self,
+        batch_number: u64,
+    ) -> ReadBatchResult<Option<(BlockNumber, BlockNumber)>> {
+        Ok(self.get(batch_number)?.map(|envelope| {
+            (
+                envelope.batch.first_block_number,
+                envelope.batch.last_block_number,
+            )
+        }))
     }
 }
