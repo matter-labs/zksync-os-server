@@ -5,21 +5,21 @@ use alloy::providers::{DynProvider, Provider};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_contract_interface::IExecutor::BlockCommit;
+use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-pub struct L1CommitWatcher<Finality> {
-    l1_watcher: L1Watcher<BlockCommit>,
+pub struct L1ExecuteWatcher<Finality> {
+    l1_watcher: L1Watcher<BlockExecution>,
     next_batch_number: u64,
     poll_interval: Duration,
     finality: Finality,
 }
 
-impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
+impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
@@ -30,13 +30,13 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
             config.max_blocks_to_process,
             ?config.poll_interval,
             ?zk_chain_address,
-            "initializing L1 commit watcher"
+            "initializing L1 execute watcher"
         );
         let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
 
         let current_l1_block = provider.get_block_number().await?;
-        let next_batch_number = finality.get_finality_status().last_committed_block + 1;
-        let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number)
+        let next_batch_number = finality.get_finality_status().last_executed_block + 1;
+        let next_l1_block = find_l1_execute_block_by_batch_number(zk_chain, next_batch_number)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -72,8 +72,8 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     }
 }
 
-impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
-    pub async fn run(mut self) -> L1CommitWatcherResult<()> {
+impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
+    pub async fn run(mut self) -> L1ExecuteWatcherResult<()> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
@@ -81,35 +81,35 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
         }
     }
 
-    async fn poll(&mut self) -> L1CommitWatcherResult<()> {
-        let batch_commits = self.l1_watcher.poll().await?;
-        for batch_commit in batch_commits {
-            let batch_number = batch_commit.batchNumber.to::<u64>();
-            let batch_hash = batch_commit.batchHash;
-            let batch_commitment = batch_commit.commitment;
+    async fn poll(&mut self) -> L1ExecuteWatcherResult<()> {
+        let batch_executions = self.l1_watcher.poll().await?;
+        for batch_execute in batch_executions {
+            let batch_number = batch_execute.batchNumber.to::<u64>();
+            let batch_hash = batch_execute.batchHash;
+            let batch_commitment = batch_execute.commitment;
             if batch_number < self.next_batch_number {
                 tracing::debug!(
                     batch_number,
                     ?batch_hash,
                     ?batch_commitment,
-                    "skipping already processed committed batch",
+                    "skipping already processed executed batch",
                 );
             } else {
                 tracing::debug!(
                     batch_number,
                     ?batch_hash,
                     ?batch_commitment,
-                    "discovered committed batch"
+                    "discovered executed batch"
                 );
                 // todo: presuming 1 batch = 1 block right now, fetch from FRI cache instead
-                let last_committed_block = batch_number;
+                let last_executed_block = batch_number;
                 self.finality.update_finality_status(|finality| {
                     assert_eq!(
-                        finality.last_committed_block + 1,
-                        last_committed_block,
-                        "non-sequential committed block"
+                        finality.last_executed_block + 1,
+                        last_executed_block,
+                        "non-sequential executed block"
                     );
-                    finality.last_committed_block = last_committed_block;
+                    finality.last_executed_block = last_executed_block;
                 });
             }
         }
@@ -118,22 +118,22 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     }
 }
 
-async fn find_l1_commit_block_by_batch_number(
+async fn find_l1_execute_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
     next_batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
     util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
-        let res = zk.get_total_batches_committed(block.into()).await?;
+        let res = zk.get_total_batches_executed(block.into()).await?;
         Ok(res >= next_batch_number)
     })
     .await
 }
 
-impl WatchedEvent for BlockCommit {
-    const NAME: &'static str = "block_commit";
+impl WatchedEvent for BlockExecution {
+    const NAME: &'static str = "block_execution";
 
-    type SolEvent = BlockCommit;
+    type SolEvent = BlockExecution;
 }
 
-pub type L1CommitWatcherResult<T> = Result<T, L1CommitWatcherError>;
-pub type L1CommitWatcherError = L1WatcherError<Infallible>;
+pub type L1ExecuteWatcherResult<T> = Result<T, L1ExecuteWatcherError>;
+pub type L1ExecuteWatcherError = L1WatcherError<Infallible>;
