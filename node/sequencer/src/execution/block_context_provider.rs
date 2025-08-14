@@ -75,11 +75,10 @@ impl BlockContextProvider {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 let upgrade_tx = if produce_command.block_number == 1 {
-                    Some(self.genesis.genesis_upgrade_tx().await)
+                    Some(self.genesis.genesis_upgrade_tx().await.0)
                 } else {
                     None
                 };
-                dbg!(&upgrade_tx);
 
                 // Create stream:
                 // - For block #1 genesis upgrade tx goes first.

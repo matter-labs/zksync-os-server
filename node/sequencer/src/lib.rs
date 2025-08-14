@@ -284,7 +284,8 @@ pub async fn run(
             rocks_db_path: sequencer_config.rocks_db_path.clone(),
         },
         &genesis,
-    );
+    )
+    .await;
 
     tracing::info!("Initializing RepositoryManager");
     let repositories = RepositoryManager::new(

@@ -11,7 +11,7 @@ use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use std::alloc::Global;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -44,7 +44,8 @@ pub struct Genesis {
     l1_provider: DynProvider<Ethereum>,
     zk_chain_address: Address,
     state: OnceLock<GenesisState>,
-    genesis_upgrade_tx: OnceCell<L1UpgradeEnvelope>,
+    // (upgrade tx, force deploy bytecode hashes and preimages)
+    genesis_upgrade_tx: OnceCell<(L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>)>,
 }
 
 impl Debug for Genesis {
@@ -79,7 +80,7 @@ impl Genesis {
             .get_or_init(|| build_genesis(self.input_path.clone()))
     }
 
-    pub async fn genesis_upgrade_tx(&self) -> L1UpgradeEnvelope {
+    pub async fn genesis_upgrade_tx(&self) -> (L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>) {
         self.genesis_upgrade_tx
             .get_or_try_init(|| load_genesis_upgrade_tx(&self.l1_provider, self.zk_chain_address))
             .await
@@ -101,11 +102,10 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
     )
     .expect("Failed to parse genesis input file");
 
-    let mut storage_logs: HashMap<Bytes32, Bytes32> = HashMap::new();
+    let mut storage_logs: BTreeMap<Bytes32, Bytes32> = BTreeMap::new();
     let mut preimages = vec![];
 
     for (address, deployed_code) in genesis_input.initial_contracts {
-        dbg!(address);
         let mut versioning_data = VersioningData::empty_non_deployed();
         versioning_data.set_as_deployed();
         versioning_data.set_code_version(ARTIFACTS_CACHING_CODE_VERSION_BYTE);
@@ -202,7 +202,7 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
 async fn load_genesis_upgrade_tx(
     provider: &DynProvider<Ethereum>,
     zk_chain_address: Address,
-) -> anyhow::Result<L1UpgradeEnvelope> {
+) -> anyhow::Result<(L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>)> {
     const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
     let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
@@ -242,5 +242,18 @@ async fn load_genesis_upgrade_tx(
         logs
     );
     let sol_event = GenesisUpgrade::decode_log(&logs[0].inner)?.data;
-    L1UpgradeEnvelope::try_from(sol_event._l2Transaction).map_err(Into::into)
+    let upgrade_tx = L1UpgradeEnvelope::try_from(sol_event._l2Transaction)?;
+    let preimages = sol_event
+        ._factoryDeps
+        .into_iter()
+        .map(|preimage| {
+            let preimage = preimage.to_vec();
+            let digest = Blake2s256::digest(&preimage);
+            let mut digest_array = [0u8; 32];
+            digest_array.copy_from_slice(digest.as_slice());
+            (Bytes32::from_array(digest_array), preimage)
+        })
+        .collect();
+
+    Ok((upgrade_tx, preimages))
 }
