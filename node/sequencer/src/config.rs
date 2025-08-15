@@ -157,4 +157,8 @@ pub struct GenesisConfig {
     /// Chain ID of the chain node operates on.
     #[config(default_t = 270)]
     pub chain_id: u64,
+
+    /// Path to the file with genesis input.
+    #[config(default_t = "./genesis/genesis.json".into())]
+    pub genesis_input_path: PathBuf,
 }

@@ -10961,6 +10961,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_genesis"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "basic_system",
+ "blake2",
+ "evm_interpreter",
+ "forward_system",
+ "ruint",
+ "serde",
+ "serde_json",
+ "zk_ee",
+]
+
+[[package]]
 name = "zksync_os_integration_tests"
 version = "0.1.0"
 dependencies = [
@@ -11193,6 +11208,7 @@ dependencies = [
  "blake2",
  "cli",
  "dashmap",
+ "evm_interpreter",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
  "forward_system",
  "full_statement_verifier",
@@ -11220,6 +11236,7 @@ dependencies = [
  "vise",
  "zk_ee",
  "zksync_os_api",
+ "zksync_os_genesis",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
@@ -11248,6 +11265,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
+ "zksync_os_genesis",
  "zksync_os_rocksdb",
 ]
 
@@ -11261,6 +11279,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
+ "zksync_os_genesis",
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
  "zksync_os_types",

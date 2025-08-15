@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_genesis::Genesis;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
@@ -38,9 +39,11 @@ impl TreeManager {
         .unwrap();
         RocksDBWrapper::from(db)
     }
+
     pub fn new(
         tree_wrapper: RocksDBWrapper,
         block_receiver: Receiver<BlockOutput>,
+        genesis: &Genesis,
     ) -> (TreeManager, MerkleTreeForReading<RocksDBWrapper>) {
         let (latest_block_sender, latest_block_receiver) = watch::channel(0u64);
         let mut tree = MerkleTree::new(tree_wrapper).unwrap();
@@ -49,8 +52,16 @@ impl TreeManager {
             .latest_version()
             .expect("cannot access tree on startup");
         if version.is_none() {
-            // Initialize the tree with an empty genesis batch
-            tree.extend(&[]).expect("cannot extend tree on startup");
+            let tree_entries = genesis
+                .inner()
+                .storage_logs
+                .iter()
+                .map(|(key, value)| TreeEntry {
+                    key: key.as_u8_array().into(),
+                    value: value.as_u8_array().into(),
+                })
+                .collect::<Vec<_>>();
+            tree.extend(&tree_entries).unwrap();
         }
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
