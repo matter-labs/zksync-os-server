@@ -157,7 +157,7 @@ And start the sequencer -- make sure that all the config values are set correctl
 
 * rpc_chain_id
 * rpc_address
-* rpc_prometheus_port
+* sequencer_prometheus_port
 * sequencer_rocks_db_path
 * prover_api_address
 * l1_watcher_rocks_db_path
@@ -168,7 +168,7 @@ And start the sequencer -- make sure that all the config values are set correctl
 
 
 ```shell
-genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 prometheus_port=3313 l1_sender_operator_commit_pk=0x.. l1_sender_operator_prove_pk=0x.. l1_sender_operator_execute_pk=0x.. l1_sender_bridgehub_address=0x..  l1_watcher_bridgehub_address=0x.. cargo run --release
+genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 sequencer_prometheus_port=3313 l1_sender_operator_commit_pk=0x.. l1_sender_operator_prove_pk=0x.. l1_sender_operator_execute_pk=0x.. l1_sender_bridgehub_address=0x..  l1_watcher_bridgehub_address=0x.. cargo run --release
 
 ```
 
