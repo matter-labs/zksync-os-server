@@ -1,6 +1,7 @@
 use crate::metrics::PREIMAGES_METRICS;
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::PreimageSource;
+use zksync_os_genesis::Genesis;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 
@@ -35,17 +36,18 @@ impl PreimagesCF {
 }
 
 impl PersistentPreimages {
-    pub fn new(rocks: RocksDB<PreimagesCF>) -> Self {
-        Self { rocks }
+    pub fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
+        let genesis_needed = rocksdb_block_number(&rocks).is_none();
+        let this = Self { rocks };
+        if genesis_needed {
+            this.add(0, genesis.inner().preimages.iter().map(|(k, v)| (*k, v)));
+        }
+
+        this
     }
 
     pub fn rocksdb_block_number(&self) -> u64 {
-        self.rocks
-            .get_cf(PreimagesCF::Meta, PreimagesCF::block_key())
-            .ok()
-            .flatten()
-            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
-            .unwrap_or(0)
+        rocksdb_block_number(&self.rocks).unwrap()
     }
 
     /// Insert multiple preimages at once.
@@ -89,4 +91,12 @@ impl PreimageSource for PersistentPreimages {
     fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
         self.get(hash)
     }
+}
+
+fn rocksdb_block_number(rocks_db: &RocksDB<PreimagesCF>) -> Option<u64> {
+    rocks_db
+        .get_cf(PreimagesCF::Meta, PreimagesCF::block_key())
+        .ok()
+        .flatten()
+        .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
 }
