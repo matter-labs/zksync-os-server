@@ -174,4 +174,4 @@ genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_r
 
 Stuff that didn't work:
 * nit: multiple thing has to be defined in many configs
-* typos in config names 
+* there is no spellcheck in config names - consider using file-based configs 
