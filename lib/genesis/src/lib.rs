@@ -36,6 +36,9 @@ pub struct GenesisInput {
     pub additional_storage: Vec<(Bytes32, Bytes32)>,
 }
 
+/// (upgrade tx, force deploy bytecode hashes and preimages)
+pub type GenesisUpgradeTxInfo = (L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>);
+
 /// Struct that represents the genesis state of the system.
 /// Lazy-initialized to avoid unnecessary computation at startup.
 #[derive(Clone)]
@@ -44,8 +47,7 @@ pub struct Genesis {
     l1_provider: DynProvider<Ethereum>,
     zk_chain_address: Address,
     state: OnceLock<GenesisState>,
-    // (upgrade tx, force deploy bytecode hashes and preimages)
-    genesis_upgrade_tx: OnceCell<(L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>)>,
+    genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
 }
 
 impl Debug for Genesis {
@@ -55,7 +57,7 @@ impl Debug for Genesis {
             .field("l1_provider", &self.l1_provider)
             .field("zk_chain_address", &self.zk_chain_address)
             .field("state", &self.state.get())
-            .field("inner", &self.genesis_upgrade_tx.get())
+            .field("genesis_upgrade_tx", &self.genesis_upgrade_tx.get())
             .finish()
     }
 }
@@ -102,6 +104,8 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
     )
     .expect("Failed to parse genesis input file");
 
+    // BTreeMap is used to ensure that the storage logs are sorted by key, so that the order is deterministic
+    // which is important for tree.
     let mut storage_logs: BTreeMap<Bytes32, Bytes32> = BTreeMap::new();
     let mut preimages = vec![];
 
