@@ -16,25 +16,25 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x35955b18eedcc7aa4aa3a4d3b860d2c36a18a54bbe3af4ba7234e42c53d7da24".into())]
+    #[config(alias = "operator_private_key", default_t = "0x85dddaefe4c7dbe9d9718e115ef7b3d73cef6dc52b25b2d9cc1df8a73edbfe2e".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x7f1db95672c6c626e220894232ae2292836311a526e7ee12dc3cb1182c3ca600".into())]
+    #[config(default_t = "0x23554649ed89ad65782dc6d56d81b0d11e631b0e8acc88b3a2d77cee4c2bf871".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x86386eb4ef9266884b1c7e0a4c1f2b5302045bc6641ddeb49873e128b2880c4e".into())]
+    #[config(default_t = "0x6afc8796d288cabd9f6c95ce0ee5cc76aa0dfc06f2f19a3a91746062ecd63d91".into())]
     pub operator_execute_pk: SecretString,
 
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0xdd498f482e683e270a2947c11dc383ea0d6b4b03".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0xf8fd5b98e60fd511ce5af1f988e62eafbd4ddb09".parse().unwrap())]
     pub bridgehub_address: Address,
 
     /// Max fee per gas we are willing to spend (in gwei).
