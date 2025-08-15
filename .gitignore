@@ -3,7 +3,7 @@
 
 .idea
 
-db/node1/*
+db/*
 block_dumps/*
 
 .DS_Store

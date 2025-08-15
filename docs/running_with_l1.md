@@ -93,7 +93,10 @@ WARNING: when you see the tool failing on postgres - it is ok, as the chain got 
 
 After this, you can finally run the sequencer:
 ```
-l1_sender_operator_private_key=0x..... l1_sender_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c  l1_watcher_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c cargo run --release
+l1_sender_operator_commit_pk= 
+l1_sender_operator_prove_pk= 
+l1_sender_operator_execute_pk=  
+l1_sender_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c  l1_watcher_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c cargo run --release
 ```
 
 The operator private key must match value from `$chain_name/configs/wallets.yaml` operator (where chain_name in our example is era1)
@@ -128,8 +131,53 @@ Process finished with exit code 0
 
 ```
 Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--load-state zkos-l1-state.json`  (`--load-state` - not `--state`, otherwise it will be overwritten). Commit the new file in git.
+
 Update default value for `bridgehub_address` in `L1SenderConfig`.
 Also, update `operator_commit_pk`, `operator_prove_pk`, `operator_execute_pk`. You should use wallets from `configs/wallets.yaml` file: 
 - `operator_private_key` -> `operator_commit_pk`
 - `blob_operator_private_key` -> `operator_prove_pk`
 - `deployer_private_key` -> `operator_execute_pk`
+
+
+## Running multiple chains
+
+
+### Create a new chain (era2)
+
+```shell
+zkstack ecosystem create --ecosystem-name local-v1 --l1-network localhost --chain-name era2 --chain-id 271 --prover-mode no-proofs --wallet-creation random --link-to-code ../../zksync-era --l1-batch-commit-data-generator-mode rollup --start-containers false   --base-token-address 0x0000000000000000000000000000000000000001 --base-token-price-nominator 1 --base-token-price-denominator 1 --evm-emulator false
+```
+
+Make sure to fund the accounts again (see the script in the docs above).
+
+
+Init new chain (deploying contacts etc):
+
+```shell
+zkstack chain init --deploy-paymaster=false  \
+  --l1-rpc-url=http://localhost:8545 --chain era2 \
+  --server-db-url=postgres://invalid --server-db-name=invalid
+```
+
+And start the sequencer -- make sure that all the config values are set correctly:
+
+* rpc_chain_id
+* rpc_address
+* sequencer_prometheus_port
+* sequencer_rocks_db_path
+* prover_api_address
+* l1_watcher_rocks_db_path
+* l1_watcher_chain_id
+* l1_sender_chain_id
+
+
+
+
+```shell
+genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 sequencer_prometheus_port=3313 l1_sender_operator_commit_pk=0x.. l1_sender_operator_prove_pk=0x.. l1_sender_operator_execute_pk=0x.. l1_sender_bridgehub_address=0x..  l1_watcher_bridgehub_address=0x.. cargo run --release
+
+```
+
+Stuff that didn't work:
+* nit: multiple thing has to be defined in many configs
+* there is no spellcheck in config names - consider using file-based configs 
