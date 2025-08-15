@@ -168,7 +168,6 @@ fn build_configs() -> (
         .expect("Failed to load prover api config")
         .parse()
         .expect("Failed to parse prover api config");
-
     (
         genesis_config,
         rpc_config,
