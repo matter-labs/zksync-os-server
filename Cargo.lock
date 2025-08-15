@@ -10935,6 +10935,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_cli"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap",
+ "rocksdb",
+ "tokio",
+ "zksync_os_contract_interface",
+]
+
+[[package]]
 name = "zksync_os_contract_interface"
 version = "0.1.0"
 dependencies = [

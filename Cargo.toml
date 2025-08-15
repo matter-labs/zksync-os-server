@@ -19,6 +19,7 @@ members = [
     "node/sequencer",
     "integration-tests",
     "tools/generate-deposit",
+    "tools/cli",
     "lib/observability",
 ]
 resolver = "3"
