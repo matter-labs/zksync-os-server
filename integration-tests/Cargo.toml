@@ -20,7 +20,7 @@ zksync_os_types.workspace = true
 
 zkos_prover = { git = "https://github.com/matter-labs/zksync-era.git", branch = "zksync-os-integration", optional = true }
 
-alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub"] }
+alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 fs2.workspace = true
 tokio.workspace = true
