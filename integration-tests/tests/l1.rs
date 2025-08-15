@@ -9,6 +9,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_types::{L2ToL1Log, ZkTxType};
 
 #[test_log::test(tokio::test)]
@@ -21,7 +22,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
 
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
-        Address::from_str("0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f").unwrap(),
+        tester.l2_zk_provier.get_bridgehub_contract().await?,
         tester.l1_provider.clone(),
         270,
     );

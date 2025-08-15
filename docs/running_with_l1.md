@@ -50,7 +50,7 @@ Now we're ready to compile contracts and deploy them to L1.
 
 
 Before the step below, you might want to fund some of the wallet accounts above.
-If you're running on local L1, you can use the script below.
+If you're running on local L1, you can use the script below. Do not forget to use different PRIVKEY in case you have initialized the anvil with a different mnemonic.
 If you're running on sepolia, zkstack will tell you which accounts to fund.
 
 ```shell
@@ -117,7 +117,8 @@ anvil -m "stuff slice staff easily soup parent arm payment cotton trade scatter 
 Note that we pass this mnemonic to have `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` rich wallet - legacy from era.
 
 Then deploy the contracts using legacy tooling (see above). 
-After that, add a deposit transaction to the state - integration and load tests expect that `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` has L2 funds. For this, use `generate-deposit` tool in this repo. Make sure to update the `bridgehub_addres` with the newly generated one:
+After that, add a deposit transaction to the state - integration and load tests expect that `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` has L2 funds. For this, use `generate-deposit` tool in this repo. 
+Make sure to update the `bridgehub_addres` in the code of the tool with the newly generated one (you can find it in `configs/contracts.yaml`):
 ```
 > cargo run --bin zksync_os_generate_deposit
 L1 balance: 9879999865731420184000
@@ -127,3 +128,8 @@ Process finished with exit code 0
 
 ```
 Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--load-state zkos-l1-state.json`  (`--load-state` - not `--state`, otherwise it will be overwritten). Commit the new file in git.
+Update default value for `bridgehub_address` in `L1SenderConfig`.
+Also, update `operator_commit_pk`, `operator_prove_pk`, `operator_execute_pk`. You should use wallets from `configs/wallets.yaml` file: 
+- `operator_private_key` -> `operator_commit_pk`
+- `blob_operator_private_key` -> `operator_prove_pk`
+- `deployer_private_key` -> `operator_execute_pk`

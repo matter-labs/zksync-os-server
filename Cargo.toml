@@ -2,6 +2,7 @@
 members = [
     "lib/contract_interface",
     "lib/crypto",
+    "lib/genesis",
     "lib/l1_sender",
     "lib/l1_watcher",
     "lib/mempool",
@@ -56,6 +57,7 @@ zk_os_forward_system = { package = "forward_system", git = "https://github.com/m
 zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.9" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.9" }
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.9" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.9" }
 
 #air-compiler-cli = { package = "cli", path = "../zksync-airbender/tools/cli" }
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
@@ -137,6 +139,7 @@ zksync_os_state = { path = "lib/state" }
 zksync_os_storage = { path = "lib/storage" }
 zksync_os_storage_api = { path = "lib/storage_api" }
 zksync_os_types = { path = "lib/types" }
+zksync_os_genesis = { path = "lib/genesis" }
 
 zksync_os_sequencer = { path = "node/sequencer" }
 

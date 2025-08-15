@@ -1,0 +1,21 @@
+[package]
+name = "zksync_os_genesis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "k256"] }
+serde.workspace = true
+serde_json.workspace = true
+blake2.workspace = true
+ruint.workspace = true
+zk_ee.workspace = true
+zk_os_basic_system.workspace = true
+zk_os_evm_interpreter.workspace = true
+zk_os_forward_system.workspace = true

@@ -1,9 +1,28 @@
 use alloy::primitives::{B256, keccak256};
 use blake2::{Blake2s256, Digest};
+use ruint::aliases::{B160, U256};
+use zk_ee::utils::Bytes32;
+use zk_os_basic_system::system_implementation::system::BatchOutput;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
-use zksync_os_merkle_tree::{MerkleTree, PatchSet};
+use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
+use zksync_os_storage::lazy::RepositoryManager;
+use zksync_os_storage_api::ReadRepository;
 
-pub fn genesis_stored_batch_info() -> StoredBatchInfo {
+pub async fn load_genesis_stored_batch_info(
+    repository_manager: &RepositoryManager,
+    tree: MerkleTreeForReading<RocksDBWrapper>,
+    chain_id: u64,
+) -> StoredBatchInfo {
+    let genesis_block = repository_manager
+        .get_block_by_number(0)
+        .expect("Failed to read genesis block from repositories")
+        .expect("Missing genesis block in repositories");
+    let genesis_root_info = tree
+        .get_at_block(0)
+        .await
+        .root_info()
+        .expect("Failed to get genesis root info");
+
     let number = 0u64;
     let timestamp = 0u64;
 
@@ -12,18 +31,14 @@ pub fn genesis_stored_batch_info() -> StoredBatchInfo {
         for _ in 0..255 {
             blocks_hasher.update([0u8; 32]);
         }
-        blocks_hasher.update([0u8; 32]); // TODO: use genesis block hash
+        blocks_hasher.update(genesis_block.hash());
 
         blocks_hasher.finalize()
     };
 
-    // TODO: replace empty tree hash and leaf count with the ones from the genesis block
-    let empty_tree_hash = MerkleTree::<PatchSet>::empty_tree_hash();
-    let leaf_count = 2u64;
-
     let mut hasher = Blake2s256::new();
-    hasher.update(empty_tree_hash.as_slice());
-    hasher.update(leaf_count.to_be_bytes());
+    hasher.update(genesis_root_info.0.as_slice());
+    hasher.update(genesis_root_info.1.to_be_bytes());
     hasher.update(number.to_be_bytes());
     hasher.update(last_256_block_hashes_blake);
     hasher.update(timestamp.to_be_bytes());
@@ -37,10 +52,21 @@ pub fn genesis_stored_batch_info() -> StoredBatchInfo {
         // `DEFAULT_L2_LOGS_TREE_ROOT_HASH` is explicitly set to zero in L1 contracts.
         // See `era-contracts/l1-contracts/contracts/common/Config.sol`.
         l2_to_l1_logs_root_hash: Default::default(),
-        // TODO: Calculate from empty header
-        commitment: "0x753b52ab98b0062963a4b2ea1c061c4ab522f53f50b8fefe0a52760cbcc9e183"
-            .parse()
-            .unwrap(),
+        commitment: genesis_batch_output(chain_id).hash().into(),
         last_block_timestamp: timestamp,
+    }
+}
+
+fn genesis_batch_output(chain_id: u64) -> BatchOutput {
+    BatchOutput {
+        chain_id: U256::from_be_slice(&chain_id.to_be_bytes()),
+        first_block_timestamp: 0,
+        last_block_timestamp: 0,
+        used_l2_da_validator_address: B160::ZERO,
+        pubdata_commitment: Bytes32::ZERO,
+        number_of_layer_1_txs: U256::ZERO,
+        priority_operations_hash: Bytes32::from_array(keccak256([]).0),
+        l2_logs_tree_root: Bytes32::ZERO,
+        upgrade_tx_hash: Bytes32::ZERO,
     }
 }

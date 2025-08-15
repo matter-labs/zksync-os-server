@@ -26,6 +26,7 @@ use crate::storage_metrics::StorageMetrics;
 pub use config::StateConfig;
 pub use persistent_storage_map::{PersistentStorageMap, StorageMapCF};
 pub use storage_map::{Diff, StorageMap};
+use zksync_os_genesis::Genesis;
 
 const STATE_STORAGE_DB_NAME: &str = "state";
 const PREIMAGES_STORAGE_DB_NAME: &str = "preimages";
@@ -43,7 +44,7 @@ pub struct StateHandle {
 }
 
 impl StateHandle {
-    pub fn new(config: StateConfig) -> Self {
+    pub fn new(config: StateConfig, genesis: &Genesis) -> Self {
         if config.erase_storage_on_start_unsafe {
             let path = config.rocks_db_path.join(STATE_STORAGE_DB_NAME);
             if fs::exists(path.clone()).unwrap() {
@@ -56,7 +57,7 @@ impl StateHandle {
         let state_db =
             RocksDB::<StorageMapCF>::new(&config.rocks_db_path.join(STATE_STORAGE_DB_NAME))
                 .expect("Failed to open State DB");
-        let persistent_storage_map = PersistentStorageMap::new(state_db);
+        let persistent_storage_map = PersistentStorageMap::new(state_db, genesis);
 
         let storage_map =
             StorageMap::new(persistent_storage_map, config.blocks_to_retain_in_memory);
@@ -65,7 +66,7 @@ impl StateHandle {
             RocksDB::<PreimagesCF>::new(&config.rocks_db_path.join(PREIMAGES_STORAGE_DB_NAME))
                 .expect("Failed to open Preimages DB");
 
-        let persistent_preimages = PersistentPreimages::new(preimages_db);
+        let persistent_preimages = PersistentPreimages::new(preimages_db, genesis);
 
         let storage_map_block = storage_map.latest_block.load(Ordering::Relaxed);
         let preimages_block = persistent_preimages.rocksdb_block_number();
