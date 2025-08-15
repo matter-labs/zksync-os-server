@@ -134,7 +134,7 @@ impl TesterBuilder {
             ..Default::default()
         };
         let genesis_config = GenesisConfig {
-            genesis_input_path: "../genesis.json".into(),
+            genesis_input_path: "../genesis/genesis.json".into(),
             ..Default::default()
         };
         let main_task = tokio::task::spawn(async move {
