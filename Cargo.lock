@@ -10944,6 +10944,8 @@ dependencies = [
  "clap",
  "hex",
  "rocksdb",
+ "ruint",
+ "serde",
  "tokio",
  "zksync_os_contract_interface",
 ]

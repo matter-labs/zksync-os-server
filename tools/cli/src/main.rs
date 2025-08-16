@@ -1,6 +1,10 @@
-use alloy::rpc::types::Block;
 use clap::{Parser, Subcommand};
 use std::fmt::Write;
+
+use crate::block::{Block, BlockMetadata};
+
+mod block;
+mod rlp;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -19,6 +23,10 @@ enum Command {
 
     /// Displays basic information about the database.
     Info {},
+
+    Block {
+        block_number: u64,
+    },
 }
 
 #[tokio::main]
@@ -27,17 +35,14 @@ async fn main() -> anyhow::Result<()> {
 
     let db_path = cli.db_path;
 
-    println!("Hello {}", db_path);
-
     match cli.command {
         Command::Show {} => {
-            // Here you would implement the logic to show the status.
             show_db(db_path).await?;
         }
         Command::Info {} => {
-            // Here you would implement the logic to show the info.
             info_db(db_path).await?;
         }
+        Command::Block { block_number } => show_block(&db_path, block_number, true)?,
     }
     Ok(())
 }
@@ -123,27 +128,7 @@ async fn info_db(db_path: String) -> anyhow::Result<()> {
     for i in 0..=5 {
         let block_id = latest_block.saturating_sub(i);
         if block_id > latest_block_info.state {
-            println!("==== Block {}", block_id);
-            let wal_block_info = wal_block_info(&db_path, block_id)?;
-
-            let label_width = 18usize;
-            println!("  {:<label_width$} {}", "Output Hash:", wal_block_info.hash,);
-            println!(
-                "  {:<label_width$} {}",
-                "Last l1 tx:", wal_block_info.last_l1_tx_id,
-            );
-            println!("  {:<label_width$} {}", "L2 txs:", wal_block_info.l2_txs,);
-
-            println!(
-                "  {:<label_width$} {}",
-                "Node version:", wal_block_info.node_version,
-            );
-
-            let repository_block_info = repository_block_info(&db_path, block_id)?;
-            println!(
-                "  {:<label_width$} {}",
-                "Block Hash:", repository_block_info.hash,
-            );
+            show_block(&db_path, block_id, false)?;
         }
     }
 
@@ -231,6 +216,7 @@ struct WALBlockInfo {
 
     pub l2_txs: usize,
     pub node_version: String,
+    pub context: BlockMetadata,
 }
 
 fn wal_block_info(db_path: &str, block_number: u64) -> anyhow::Result<WALBlockInfo> {
@@ -269,18 +255,27 @@ fn wal_block_info(db_path: &str, block_number: u64) -> anyhow::Result<WALBlockIn
     let (txs, _) =
         bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(&txs, bincode::config::standard())?;
 
+    let context = read_from_rocksdb(
+        path.join("block_replay_wal").to_str().unwrap(),
+        "context",
+        &block_number.to_be_bytes(),
+    )?
+    .expect("context missing");
+
+    let (context, _) = bincode::serde::decode_from_slice::<BlockMetadata, _>(
+        &context,
+        bincode::config::standard(),
+    )?;
+
     // Stuff left:
-    // - context
     // - proofs table
-    // - block data (from repository)
-    // - block number to hash (from repository)
-    // - block hash to number (from repository)
 
     let block_info = WALBlockInfo {
         hash: hex::encode(block_hash),
         last_l1_tx_id: last_l1,
         l2_txs: txs.len(),
         node_version: String::from_utf8(node_version).expect("invalid UTF-8"),
+        context,
     };
 
     Ok(block_info)
@@ -288,6 +283,7 @@ fn wal_block_info(db_path: &str, block_number: u64) -> anyhow::Result<WALBlockIn
 
 struct RepositoryBlockInfo {
     pub hash: String,
+    pub block_data: Block,
 }
 
 fn repository_block_info(db_path: &str, block_number: u64) -> anyhow::Result<RepositoryBlockInfo> {
@@ -300,17 +296,85 @@ fn repository_block_info(db_path: &str, block_number: u64) -> anyhow::Result<Rep
     )?
     .expect("block hash missing");
 
+    let block_payload = read_from_rocksdb(
+        path.join("repository").to_str().unwrap(),
+        "block_data",
+        &block_hash,
+    )?
+    .expect("block data missing");
+
+    let block_rlp = rlp::decode(&block_payload)
+        .map_err(|e| anyhow::anyhow!("Failed to decode block RLP: {:?}", e))?;
+
+    let block_data = crate::block::Block::new_from_rlp(&block_rlp);
+
     let block_info = RepositoryBlockInfo {
         hash: hex::encode(block_hash),
+        block_data,
     };
 
     Ok(block_info)
 }
 
-fn vec_to_u64_be(bytes: &Vec<u8>) -> u64 {
+fn proof_info(db_path: &str, block_number: u64) -> anyhow::Result<bool> {
+    let path = std::path::Path::new(&db_path);
+
+    let proof = read_from_rocksdb(
+        path.join("proofs").to_str().unwrap(),
+        "proofs",
+        &block_number.to_be_bytes(),
+    )?;
+
+    Ok(proof.is_some())
+}
+
+fn vec_to_u64_be(bytes: &[u8]) -> u64 {
     let mut out = 0u64;
     for b in bytes {
-        out = (out << 8) | (b.clone() as u64);
+        out = (out << 8) | (*b as u64);
     }
     out
+}
+
+fn show_block(db_path: &str, block_number: u64, show_transactions: bool) -> anyhow::Result<()> {
+    println!("==== Block {}", block_number);
+    let wal_block_info = wal_block_info(&db_path, block_number)?;
+
+    let label_width = 18usize;
+    println!("  {:<label_width$} {}", "Output Hash:", wal_block_info.hash,);
+    println!(
+        "  {:<label_width$} {}",
+        "Last l1 tx:", wal_block_info.last_l1_tx_id,
+    );
+    println!("  {:<label_width$} {}", "L2 txs:", wal_block_info.l2_txs,);
+
+    println!(
+        "  {:<label_width$} {}",
+        "Node version:", wal_block_info.node_version,
+    );
+    println!(
+        "  {:<label_width$} {:21}",
+        "Context:", wal_block_info.context,
+    );
+
+    let repository_block_info = repository_block_info(&db_path, block_number)?;
+    println!(
+        "  {:<label_width$} {}",
+        "Block Hash:", repository_block_info.hash,
+    );
+    println!(
+        "  {:<label_width$} {:21}",
+        "Block data:", repository_block_info.block_data,
+    );
+
+    let proof = proof_info(&db_path, block_number)?;
+    println!("  {:<label_width$} {}", "Proof exists:", proof);
+
+    if show_transactions {
+        println!("  Transactions:");
+        for tx in &repository_block_info.block_data.transactions {
+            println!("    - {}", tx);
+        }
+    }
+    Ok(())
 }
