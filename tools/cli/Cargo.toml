@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_contract_interface.workspace = true
+hex.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "signer-local"] }
 anyhow.workspace = true
@@ -18,3 +19,4 @@ tokio = { workspace = true, features = ["full"] }
 
 clap = { version = "4.5.21", features = ["derive"] }
 rocksdb.workspace = true
+bincode.workspace = true

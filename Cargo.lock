@@ -10940,7 +10940,9 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "bincode 2.0.1",
  "clap",
+ "hex",
  "rocksdb",
  "tokio",
  "zksync_os_contract_interface",

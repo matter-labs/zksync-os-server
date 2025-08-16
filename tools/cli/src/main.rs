@@ -1,3 +1,4 @@
+use alloy::rpc::types::Block;
 use clap::{Parser, Subcommand};
 use std::fmt::Write;
 
@@ -15,6 +16,9 @@ struct Cli {
 enum Command {
     /// Shows the current status.
     Show {},
+
+    /// Displays basic information about the database.
+    Info {},
 }
 
 #[tokio::main]
@@ -28,13 +32,17 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Show {} => {
             // Here you would implement the logic to show the status.
-            show_db(db_path).await;
+            show_db(db_path).await?;
+        }
+        Command::Info {} => {
+            // Here you would implement the logic to show the info.
+            info_db(db_path).await?;
         }
     }
     Ok(())
 }
 
-async fn show_db(db_path: String) {
+async fn show_db(db_path: String) -> anyhow::Result<()> {
     println!("Showing status for database at: {}", db_path);
 
     let path = std::path::Path::new(&db_path);
@@ -47,24 +55,262 @@ async fn show_db(db_path: String) {
     }
     let options = rocksdb::Options::default();
 
-    match rocksdb::DB::open_for_read_only(&options, path, false) {
+    let cf_names = match rocksdb::DB::list_cf(&options, path) {
+        Ok(names) => names,
+        Err(_) => vec!["default".to_string()], // fallback if listing fails
+    };
+
+    println!("Found CFs: {:?}", cf_names);
+
+    match rocksdb::DB::open_cf_for_read_only(&options, path, &cf_names, false) {
         Ok(db) => {
             println!("Opened RocksDB (read-only) at {}", db_path);
-            let mut count = 0usize;
-            for result in db.iterator(rocksdb::IteratorMode::Start) {
-                if let Ok((key, value)) = result {
-                    println!("---");
-                    println!("key (hex):   {}", to_hex(&key));
-                    println!("value (hex): {}", to_hex(&value));
-                    println!("key (utf8):  {}", String::from_utf8_lossy(&key));
-                    println!("value (utf8): {}", String::from_utf8_lossy(&value));
-                    count += 1;
+
+            for cf_name in &cf_names {
+                let cf = db
+                    .cf_handle(cf_name)
+                    .ok_or_else(|| anyhow::anyhow!("CF handle missing: {}", cf_name))?;
+                println!("=== Column Family: {} ===", cf_name);
+
+                let mut count = 0usize;
+                for result in db.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+                    if let Ok((key, value)) = result {
+                        println!("---");
+                        println!("key (hex):   {}", to_hex(&key));
+                        println!("value (hex): {}", to_hex(&value));
+                        println!("key (utf8):  {}", String::from_utf8_lossy(&key));
+                        println!("value (utf8): {}", String::from_utf8_lossy(&value));
+                        count += 1;
+                    }
                 }
+                println!("Total entries: {}", count);
             }
-            println!("Total entries: {}", count);
         }
         Err(e) => {
             eprintln!("Failed to open RocksDB in read-only mode: {}", e);
         }
+    };
+    Ok(())
+}
+
+async fn info_db(db_path: String) -> anyhow::Result<()> {
+    println!("Displaying info for database at: {}", db_path);
+
+    // We'll access following things:
+
+    let latest_block_info = latest_blocks(&db_path)?;
+
+    // print latest block info in a nice format
+    println!("Latest Block Info:");
+    println!("  State: {}", latest_block_info.state);
+    println!("  WAL: {}", latest_block_info.wal);
+    println!("  Preimage: {}", latest_block_info.preimage);
+    println!("  Repository: {}", latest_block_info.repository);
+
+    if latest_block_info.wal < latest_block_info.repository {
+        println!(
+            "Warning: WAL is behind the repository. This may indicate an issue with the block processing."
+        );
     }
+
+    // Assume that 'wal' has the most recent info.
+    let latest_block = latest_block_info.wal;
+
+    // show last 5 blocks (if they are larger than state)
+
+    println!("=== Last 5 blocks ===");
+
+    for i in 0..=5 {
+        let block_id = latest_block.saturating_sub(i);
+        if block_id > latest_block_info.state {
+            println!("==== Block {}", block_id);
+            let wal_block_info = wal_block_info(&db_path, block_id)?;
+
+            let label_width = 18usize;
+            println!("  {:<label_width$} {}", "Output Hash:", wal_block_info.hash,);
+            println!(
+                "  {:<label_width$} {}",
+                "Last l1 tx:", wal_block_info.last_l1_tx_id,
+            );
+            println!("  {:<label_width$} {}", "L2 txs:", wal_block_info.l2_txs,);
+
+            println!(
+                "  {:<label_width$} {}",
+                "Node version:", wal_block_info.node_version,
+            );
+
+            let repository_block_info = repository_block_info(&db_path, block_id)?;
+            println!(
+                "  {:<label_width$} {}",
+                "Block Hash:", repository_block_info.hash,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn read_from_rocksdb(
+    db_path: &str,
+    column_family: &str,
+    key: &[u8],
+) -> anyhow::Result<Option<Vec<u8>>> {
+    let path = std::path::Path::new(db_path);
+    let options = rocksdb::Options::default();
+    let cf_names = [&column_family.to_string()];
+
+    match rocksdb::DB::open_cf_for_read_only(&options, path, &cf_names, false) {
+        Ok(db) => {
+            let cf = db
+                .cf_handle(column_family)
+                .ok_or_else(|| anyhow::anyhow!("Column family not found: {}", column_family))?;
+
+            match db.get_cf(cf, key) {
+                Ok(value) => Ok(value),
+                Err(e) => Err(anyhow::anyhow!("Failed to read from RocksDB: {}", e)),
+            }
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to open RocksDB: {}", e)),
+    }
+}
+
+struct LatestBlocks {
+    pub state: u64,
+    pub wal: u64,
+    pub preimage: u64,
+    pub repository: u64,
+}
+
+fn latest_blocks(db_path: &str) -> anyhow::Result<LatestBlocks> {
+    let path = std::path::Path::new(&db_path);
+
+    let block = read_from_rocksdb(path.join("state").to_str().unwrap(), "meta", b"base_block")?
+        .expect("last block info missing");
+
+    let last_block_number = u64::from_be_bytes(block.as_slice().try_into().unwrap());
+
+    let last_wal_entry = read_from_rocksdb(
+        path.join("block_replay_wal").to_str().unwrap(),
+        "latest",
+        b"latest_block",
+    )?
+    .expect("last WAL entry missing");
+
+    let last_wal_number = u64::from_be_bytes(last_wal_entry.as_slice().try_into().unwrap());
+
+    // latest block from preimages
+    let last_preimage_entry =
+        read_from_rocksdb(path.join("preimages").to_str().unwrap(), "meta", b"block")?
+            .expect("last preimage entry missing");
+
+    let last_preimage_number =
+        u64::from_be_bytes(last_preimage_entry.as_slice().try_into().unwrap());
+
+    // latest block from repository
+    let last_repo_entry = read_from_rocksdb(
+        path.join("repository").to_str().unwrap(),
+        "meta",
+        b"block_number",
+    )?
+    .expect("last repository entry missing");
+
+    let last_repo_number = u64::from_be_bytes(last_repo_entry.as_slice().try_into().unwrap());
+
+    Ok(LatestBlocks {
+        state: last_block_number,
+        wal: last_wal_number,
+        preimage: last_preimage_number,
+        repository: last_repo_number,
+    })
+}
+
+struct WALBlockInfo {
+    pub hash: String,
+    // Last L1 transaction id that was processed in this block.
+    pub last_l1_tx_id: u64,
+
+    pub l2_txs: usize,
+    pub node_version: String,
+}
+
+fn wal_block_info(db_path: &str, block_number: u64) -> anyhow::Result<WALBlockInfo> {
+    let path = std::path::Path::new(&db_path);
+
+    let block_hash = read_from_rocksdb(
+        path.join("block_replay_wal").to_str().unwrap(),
+        "block_output_hash",
+        &block_number.to_be_bytes(),
+    )?
+    .expect("block hash missing");
+
+    let last_l1 = read_from_rocksdb(
+        path.join("block_replay_wal").to_str().unwrap(),
+        "last_processed_l1_tx_id",
+        &block_number.to_be_bytes(),
+    )?
+    .expect("last L1 tx id missing");
+    let last_l1 = vec_to_u64_be(&last_l1);
+
+    let txs = read_from_rocksdb(
+        path.join("block_replay_wal").to_str().unwrap(),
+        "txs",
+        &block_number.to_be_bytes(),
+    )?
+    .expect("txs missing");
+
+    // node version
+    let node_version = read_from_rocksdb(
+        path.join("block_replay_wal").to_str().unwrap(),
+        "node_version",
+        &block_number.to_be_bytes(),
+    )?
+    .expect("node version missing");
+
+    let (txs, _) =
+        bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(&txs, bincode::config::standard())?;
+
+    // Stuff left:
+    // - context
+    // - proofs table
+    // - block data (from repository)
+    // - block number to hash (from repository)
+    // - block hash to number (from repository)
+
+    let block_info = WALBlockInfo {
+        hash: hex::encode(block_hash),
+        last_l1_tx_id: last_l1,
+        l2_txs: txs.len(),
+        node_version: String::from_utf8(node_version).expect("invalid UTF-8"),
+    };
+
+    Ok(block_info)
+}
+
+struct RepositoryBlockInfo {
+    pub hash: String,
+}
+
+fn repository_block_info(db_path: &str, block_number: u64) -> anyhow::Result<RepositoryBlockInfo> {
+    let path = std::path::Path::new(&db_path);
+
+    let block_hash = read_from_rocksdb(
+        path.join("repository").to_str().unwrap(),
+        "block_number_to_hash",
+        &block_number.to_be_bytes(),
+    )?
+    .expect("block hash missing");
+
+    let block_info = RepositoryBlockInfo {
+        hash: hex::encode(block_hash),
+    };
+
+    Ok(block_info)
+}
+
+fn vec_to_u64_be(bytes: &Vec<u8>) -> u64 {
+    let mut out = 0u64;
+    for b in bytes {
+        out = (out << 8) | (b.clone() as u64);
+    }
+    out
 }
