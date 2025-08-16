@@ -1,10 +1,14 @@
 use clap::{Parser, Subcommand};
 use std::fmt::Write;
 
-use crate::block::{Block, BlockMetadata};
+use crate::{
+    block::{Block, BlockMetadata},
+    tx::{ZkOSTx, ZkOsReceipt},
+};
 
 mod block;
 mod rlp;
+mod tx;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -27,6 +31,10 @@ enum Command {
     Block {
         block_number: u64,
     },
+
+    Tx {
+        hash: String,
+    },
 }
 
 #[tokio::main]
@@ -43,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
             info_db(db_path).await?;
         }
         Command::Block { block_number } => show_block(&db_path, block_number, true)?,
+        Command::Tx { hash } => show_tx(&db_path, &hash)?,
     }
     Ok(())
 }
@@ -376,5 +385,37 @@ fn show_block(db_path: &str, block_number: u64, show_transactions: bool) -> anyh
             println!("    - {}", tx);
         }
     }
+    Ok(())
+}
+
+fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
+    println!("==== Transaction {}", hash);
+    let path = std::path::Path::new(&db_path);
+
+    let hash = hex::decode(hash)?;
+
+    let tx_data = read_from_rocksdb(path.join("repository").to_str().unwrap(), "tx", &hash)?
+        .expect("Transaction data not found");
+
+    let tx_hex = hex::encode(&tx_data);
+    println!("  Raw Transaction (hex): {}", tx_hex);
+
+    let tx = ZkOSTx::from_bytes(&tx_data).expect("Failed to decode transaction");
+
+    println!("  Transaction: {:13}", tx);
+
+    let receipt_data = read_from_rocksdb(
+        path.join("repository").to_str().unwrap(),
+        "tx_receipt",
+        &hash,
+    )?;
+
+    if let Some(receipt_data) = receipt_data {
+        let receipt = ZkOsReceipt::from_bytes(&receipt_data).unwrap();
+        println!("  Receipt: {:13}", receipt);
+    } else {
+        println!("  Receipt data: Not found");
+    }
+
     Ok(())
 }
