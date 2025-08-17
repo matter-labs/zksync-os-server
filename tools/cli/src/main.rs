@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use crate::{
     block::{Block, BlockMetadata},
-    tx::{ZkOSTx, ZkOsReceipt},
+    tx::{ZkOSTx, ZkOsReceipt, ZkOsTxMeta},
 };
 
 mod block;
@@ -397,12 +397,12 @@ fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
     let tx_data = read_from_rocksdb(path.join("repository").to_str().unwrap(), "tx", &hash)?
         .expect("Transaction data not found");
 
-    let tx_hex = hex::encode(&tx_data);
-    println!("  Raw Transaction (hex): {}", tx_hex);
+    //let tx_hex = hex::encode(&tx_data);
+    //println!("  Raw Transaction (hex): {}", tx_hex);
 
     let tx = ZkOSTx::from_bytes(&tx_data).expect("Failed to decode transaction");
 
-    println!("  Transaction: {:13}", tx);
+    println!("{}", tx);
 
     let receipt_data = read_from_rocksdb(
         path.join("repository").to_str().unwrap(),
@@ -412,9 +412,18 @@ fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
 
     if let Some(receipt_data) = receipt_data {
         let receipt = ZkOsReceipt::from_bytes(&receipt_data).unwrap();
-        println!("  Receipt: {:13}", receipt);
+        println!("{}", receipt);
     } else {
         println!("  Receipt data: Not found");
+    }
+
+    let tx_meta = read_from_rocksdb(path.join("repository").to_str().unwrap(), "tx_meta", &hash)?;
+
+    if let Some(tx_meta) = tx_meta {
+        let tx_meta = ZkOsTxMeta::from_bytes(&tx_meta).unwrap();
+        println!("{}", tx_meta);
+    } else {
+        println!("  Transaction Meta: Not found");
     }
 
     Ok(())
