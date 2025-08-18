@@ -28,6 +28,13 @@ Shows detailed information about the transaction:
 cargo run -- --db-path ../../db/node1/ tx 8aaa3134a4e3ec915fb5f00a1400a8212a3a0a331cd8cf36f672197b8f8fcc11
 ```
 
+**All rows**
+Prints all the rows from the sub database (please select correct dir)
+
+```shell
+cargo run -- --db-path ../../db/node1/preimages all-rows
+```
+
 
 ## TODO:
 

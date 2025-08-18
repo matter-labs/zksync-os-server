@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::fmt::Write;
 
 use crate::{
     block::{Block, BlockMetadata},
@@ -22,19 +21,17 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Shows the current status.
-    Show {},
+    /// Shows All the rows from current Database (must point as specific one).
+    AllRows {},
 
     /// Displays basic information about the database.
     Info {},
 
-    Block {
-        block_number: u64,
-    },
+    /// Displays information about the block.
+    Block { block_number: u64 },
 
-    Tx {
-        hash: String,
-    },
+    /// Displays information about the transaction.
+    Tx { hash: String },
 }
 
 #[tokio::main]
@@ -44,8 +41,8 @@ async fn main() -> anyhow::Result<()> {
     let db_path = cli.db_path;
 
     match cli.command {
-        Command::Show {} => {
-            show_db(db_path).await?;
+        Command::AllRows {} => {
+            all_rows(db_path).await?;
         }
         Command::Info {} => {
             info_db(db_path).await?;
@@ -56,17 +53,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn show_db(db_path: String) -> anyhow::Result<()> {
+async fn all_rows(db_path: String) -> anyhow::Result<()> {
     println!("Showing status for database at: {}", db_path);
 
     let path = std::path::Path::new(&db_path);
-    fn to_hex(bytes: &[u8]) -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            write!(&mut s, "{:02x}", b).ok();
-        }
-        s
-    }
     let options = rocksdb::Options::default();
 
     let cf_names = match rocksdb::DB::list_cf(&options, path) {
@@ -90,8 +80,8 @@ async fn show_db(db_path: String) -> anyhow::Result<()> {
                 for result in db.iterator_cf(cf, rocksdb::IteratorMode::Start) {
                     if let Ok((key, value)) = result {
                         println!("---");
-                        println!("key (hex):   {}", to_hex(&key));
-                        println!("value (hex): {}", to_hex(&value));
+                        println!("key (hex):   {}", hex::encode(&key));
+                        println!("value (hex): {}", hex::encode(&value));
                         println!("key (utf8):  {}", String::from_utf8_lossy(&key));
                         println!("value (utf8): {}", String::from_utf8_lossy(&value));
                         count += 1;
@@ -396,9 +386,6 @@ fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
 
     let tx_data = read_from_rocksdb(path.join("repository").to_str().unwrap(), "tx", &hash)?
         .expect("Transaction data not found");
-
-    //let tx_hex = hex::encode(&tx_data);
-    //println!("  Raw Transaction (hex): {}", tx_hex);
 
     let tx = ZkOSTx::from_bytes(&tx_data).expect("Failed to decode transaction");
 
