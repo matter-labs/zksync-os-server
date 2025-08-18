@@ -393,6 +393,9 @@ fn transaction_to_api_data(
         .l2_to_l1_logs
         .iter()
         .map(|l2_to_l1_log| L2ToL1Log {
+            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+            is_service: l2_to_l1_log.log.is_service,
+            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
             sender: Address::new(l2_to_l1_log.log.sender.to_be_bytes()),
             key: B256::new(l2_to_l1_log.log.key.as_u8_array()),
             value: B256::new(l2_to_l1_log.log.value.as_u8_array()),

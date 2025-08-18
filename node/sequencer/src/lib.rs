@@ -551,6 +551,7 @@ pub async fn run(
         repositories.clone(),
         block_replay_storage.clone(),
         finality_storage,
+        proof_storage.clone(),
         state_handle.clone(),
     );
 

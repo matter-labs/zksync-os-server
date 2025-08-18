@@ -34,7 +34,8 @@ pub async fn main() {
         prover_api_config,
     ) = build_configs();
 
-    let prometheus: PrometheusExporterConfig = PrometheusExporterConfig::pull(3312);
+    let prometheus: PrometheusExporterConfig =
+        PrometheusExporterConfig::pull(sequencer_config.prometheus_port);
 
     // =========== init interruption channel ===========
 

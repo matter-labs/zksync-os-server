@@ -16,7 +16,22 @@ cargo run
 ```
 Note that by default, fake (dummy) proofs are used both for FRI and SNARK proofs.
 
-Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
+
+**Rich account:**
+
+```
+PRIVATE_KEY = 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+ACCOUNT_ID = 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
+```
+
+Example transaction to send:
+
+```
+cast send -r http://localhost:3050 0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0 --value 
+100 --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+```
+
+**Config options**
 
 See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g.:
 
@@ -63,7 +78,7 @@ rm -rf db/node1/*
 anvil --load-state zkos-l1-state.json --port 8545
 ```
 
-### Otterscan
+### Otterscan (Local Explorer)
 
 Server supports `ots_` namespace and hence can be used in combination with [Otterscan](https://github.com/otterscan/otterscan)
 block explorer. To run a local instance as a Docker container (bound to `http://localhost:5100`):
@@ -192,3 +207,15 @@ Minimal Node only needs (1).
 ## L1 State
 
 Please see the [How to run with L1 doc](docs/running_with_l1.md)
+
+
+## FAQ
+
+**Failed to read L1 state: contract call to `getAllZKChainChainIDs` returned no data ("0x"); the called address might not be a contract**
+
+Something went wrong with L1 - check that you're really running the anvil with the proper state on the right port.
+
+
+**Failed to deserialize context**
+
+If you hit this error when starting, check if you don't have some 'old' rocksDB data in db/node1 directory.
