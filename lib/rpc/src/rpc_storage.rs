@@ -3,7 +3,8 @@ use alloy::primitives::BlockNumber;
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
-    ReadFinality, ReadReplay, ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult,
+    ReadBatch, ReadFinality, ReadReplay, ReadRepository, RepositoryBlock, RepositoryError,
+    RepositoryResult,
 };
 
 pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
@@ -11,6 +12,7 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
     fn block_subscriptions(&self) -> &dyn SubscribeToBlocks;
     fn replay_storage(&self) -> &dyn ReadReplay;
     fn finality(&self) -> &dyn ReadFinality;
+    fn batch(&self) -> &dyn ReadBatch;
     fn state(&self) -> &StateHandle;
 
     /// Get sealed block with transaction hashes by its hash OR number.
@@ -82,24 +84,27 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
 }
 
 #[derive(Clone)]
-pub struct RpcStorage<Repository, Replay, Finality> {
+pub struct RpcStorage<Repository, Replay, Finality, Batch> {
     repository: Repository,
     replay_storage: Replay,
     finality: Finality,
+    batch: Batch,
     state: StateHandle,
 }
 
-impl<Repository, Replay, Finality> RpcStorage<Repository, Replay, Finality> {
+impl<Repository, Replay, Finality, Batch> RpcStorage<Repository, Replay, Finality, Batch> {
     pub fn new(
         repository: Repository,
         replay_storage: Replay,
         finality: Finality,
+        batch: Batch,
         state: StateHandle,
     ) -> Self {
         Self {
             repository,
             replay_storage,
             finality,
+            batch,
             state,
         }
     }
@@ -109,7 +114,8 @@ impl<
     Repository: ReadRepository + SubscribeToBlocks + Clone,
     Replay: ReadReplay + Clone,
     Finality: ReadFinality + Clone,
-> ReadRpcStorage for RpcStorage<Repository, Replay, Finality>
+    Batch: ReadBatch + Clone,
+> ReadRpcStorage for RpcStorage<Repository, Replay, Finality, Batch>
 {
     fn repository(&self) -> &dyn ReadRepository {
         &self.repository
@@ -125,6 +131,9 @@ impl<
 
     fn finality(&self) -> &dyn ReadFinality {
         &self.finality
+    }
+    fn batch(&self) -> &dyn ReadBatch {
+        &self.batch
     }
 
     fn state(&self) -> &StateHandle {

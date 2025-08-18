@@ -91,6 +91,22 @@ impl ProofStorage {
 }
 
 impl ReadBatch for ProofStorage {
+    fn get_batch_by_block_number(&self, block_number: BlockNumber) -> ReadBatchResult<Option<u64>> {
+        // todo: insanely inefficient, to be replaced
+        for batch_number in 1..=block_number {
+            if let Some(batch) = self.get(batch_number)? {
+                if batch.batch.first_block_number <= block_number
+                    && batch.batch.last_block_number >= block_number
+                {
+                    return Ok(Some(batch_number));
+                }
+            } else {
+                return Ok(None);
+            }
+        }
+        Ok(None)
+    }
+
     fn get_batch_range_by_number(
         &self,
         batch_number: u64,

@@ -13,5 +13,6 @@ categories.workspace = true
 zksync_os_contract_interface.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "k256"] }
+alloy-rlp.workspace = true
 serde.workspace = true
 thiserror.workspace = true

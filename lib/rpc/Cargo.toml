@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_mempool.workspace = true
+zksync_os_mini_merkle_tree.workspace = true
 zksync_os_rpc_api = { workspace = true, features = ["server"] }
 zksync_os_state.workspace = true
 zksync_os_storage_api.workspace = true
