@@ -52,7 +52,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone()).into_rpc(),
     )?;
     rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
-    rpc.merge(ZksNamespace::new(bridgehub_address).into_rpc())?;
+    rpc.merge(ZksNamespace::new(bridgehub_address, storage.clone()).into_rpc())?;
     rpc.merge(OtsNamespace::new(storage).into_rpc())?;
 
     // Add a CORS middleware for handling HTTP requests.
