@@ -33,10 +33,16 @@ const L1_CHAIN_ID: u64 = 31337;
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,
+
     /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
     /// system to be Ethereum-compatible. But this can be useful if you need to assert custom fields
     /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
-    pub l2_zk_provier: DynProvider<Zksync>,
+    pub l2_zk_provider: DynProvider<Zksync>,
+
+    /// Same as `l2_provider`, but for the external node.
+    /// Cannot be used to send transactions, as the EN only replays them.
+    pub en_l2_provider: Option<EthDynProvider>,
+
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -44,6 +50,7 @@ pub struct Tester {
 
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
+    en_task: Option<JoinHandle<()>>,
 }
 
 impl Tester {
@@ -59,12 +66,18 @@ impl Tester {
 #[derive(Default)]
 pub struct TesterBuilder {
     enable_prover: bool,
+    enable_external_node: bool,
 }
 
 impl TesterBuilder {
     #[cfg(feature = "prover-tests")]
     pub fn enable_prover(mut self) -> Self {
         self.enable_prover = true;
+        self
+    }
+
+    pub fn enable_external_node(mut self) -> Self {
+        self.enable_external_node = true;
         self
     }
 
@@ -106,10 +119,6 @@ impl TesterBuilder {
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
-        let rpc_config = RpcConfig {
-            address: format!("0.0.0.0:{}", l2_locked_port.port),
-            ..Default::default()
-        };
         let sequencer_config = SequencerConfig {
             rocks_db_path: rocksdb_path.path().to_path_buf(),
             block_server_address: format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port),
@@ -138,23 +147,36 @@ impl TesterBuilder {
             genesis_input_path: "../genesis/genesis.json".into(),
             ..Default::default()
         };
-        let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run(
-                stop_receiver,
-                genesis_config,
-                rpc_config,
-                MempoolConfig::default(),
-                sequencer_config,
-                l1_sender_config,
-                l1_watcher_config,
-                Default::default(),
-                ProverInputGeneratorConfig {
-                    logging_enabled: self.enable_prover,
-                    ..Default::default()
-                },
-                prover_api_config,
-            )
-            .await;
+
+        let main_task = tokio::task::spawn({
+            let stop_receiver = stop_receiver.clone();
+            let genesis_config = genesis_config.clone();
+            let sequencer_config = sequencer_config.clone();
+            let l1_sender_config = l1_sender_config.clone();
+            let l1_watcher_config = l1_watcher_config.clone();
+            let prover_api_config = prover_api_config.clone();
+
+            async move {
+                zksync_os_sequencer::run(
+                    stop_receiver,
+                    genesis_config,
+                    RpcConfig {
+                        address: format!("0.0.0.0:{}", l2_locked_port.port),
+                        ..Default::default()
+                    },
+                    MempoolConfig::default(),
+                    sequencer_config,
+                    l1_sender_config,
+                    l1_watcher_config,
+                    Default::default(),
+                    ProverInputGeneratorConfig {
+                        logging_enabled: self.enable_prover,
+                        ..Default::default()
+                    },
+                    prover_api_config,
+                )
+                .await;
+            }
         });
 
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
@@ -214,22 +236,75 @@ impl TesterBuilder {
         })
         .await?;
 
-        let l2_zk_provier = ProviderBuilder::new_with_network::<Zksync>()
+        let l2_zk_provider = ProviderBuilder::new_with_network::<Zksync>()
             .wallet(l2_wallet.clone())
             .connect(&l2_address)
             .await?;
 
         let l1_wallet = l1_provider.wallet().clone();
 
+        let (en_task, en_l2_provider) = if self.enable_external_node {
+            let en_l2_locked_port = LockedPort::acquire_unused().await?;
+            let en_l2_address = format!("ws://localhost:{}", l2_locked_port.port);
+
+            let en_task = tokio::task::spawn(async move {
+                zksync_os_sequencer::run(
+                    stop_receiver,
+                    genesis_config,
+                    RpcConfig {
+                        address: format!("0.0.0.0:{}", en_l2_locked_port.port),
+                        ..Default::default()
+                    },
+                    MempoolConfig::default(),
+                    SequencerConfig {
+                        is_external_node: true,
+                        ..sequencer_config
+                    },
+                    l1_sender_config,
+                    l1_watcher_config,
+                    Default::default(),
+                    Default::default(),
+                    prover_api_config,
+                )
+                .await;
+            });
+
+            let en_l2_provider = (|| async {
+                let l2_provider = ProviderBuilder::new()
+                    .wallet(l2_wallet.clone())
+                    .connect(&en_l2_address)
+                    .await?;
+
+                // Wait for L2 node to get up and be able to respond.
+                l2_provider.get_chain_id().await?;
+                anyhow::Ok(l2_provider)
+            })
+            .retry(
+                ConstantBuilder::default()
+                    .with_delay(Duration::from_secs(1))
+                    .with_max_times(10),
+            )
+            .notify(|err: &anyhow::Error, dur: Duration| {
+                tracing::info!(?err, ?dur, "retrying connection to external node");
+            })
+            .await?;
+
+            (Some(en_task), Some(EthDynProvider::new(en_l2_provider)))
+        } else {
+            (None, None)
+        };
+
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
-            l2_zk_provier: DynProvider::new(l2_zk_provier),
+            l2_zk_provider: DynProvider::new(l2_zk_provider),
+            en_l2_provider,
             l1_wallet,
             l2_wallet,
             prover_api: ProverApi::new(prover_api_url),
             stop_sender,
             main_task,
+            en_task,
         })
     }
 }
@@ -239,5 +314,6 @@ impl Drop for Tester {
         // Send stop signal to main node
         self.stop_sender.send(true).unwrap();
         self.main_task.abort();
+        self.en_task.as_ref().map(|task| task.abort());
     }
 }

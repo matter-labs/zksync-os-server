@@ -22,7 +22,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
 
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
-        tester.l2_zk_provier.get_bridgehub_contract().await?,
+        tester.l2_zk_provider.get_bridgehub_contract().await?,
         tester.l1_provider.clone(),
         270,
     );
@@ -75,7 +75,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
         .expect("no L1->L2 logs produced by deposit tx");
     let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
 
-    let receipt = PendingTransactionBuilder::new(tester.l2_zk_provier.root().clone(), l2_tx_hash)
+    let receipt = PendingTransactionBuilder::new(tester.l2_zk_provider.root().clone(), l2_tx_hash)
         .expect_successful_receipt()
         .await?;
     assert_eq!(
@@ -126,7 +126,7 @@ async fn l1_withdraw() -> anyhow::Result<()> {
     let alice_l2_initial_balance = tester.l2_provider.get_balance(alice).await?;
     let amount = U256::from(100);
 
-    let l2_base_token = L2BaseToken::new(tester.l2_zk_provier.clone());
+    let l2_base_token = L2BaseToken::new(tester.l2_zk_provider.clone());
     let withdrawal_l2_receipt = l2_base_token
         .withdraw(alice, amount)
         .await?
@@ -137,7 +137,7 @@ async fn l1_withdraw() -> anyhow::Result<()> {
     );
 
     let l1_asset_router =
-        L1AssetRouter::new(tester.l1_provider.clone(), tester.l2_zk_provier.clone()).await?;
+        L1AssetRouter::new(tester.l1_provider.clone(), tester.l2_zk_provider.clone()).await?;
     let l1_nullifier = l1_asset_router.l1_nullifier().await?;
     let finalize_withdrawal_l1_receipt = l1_nullifier
         .finalize_withdrawal(withdrawal_l2_receipt)
