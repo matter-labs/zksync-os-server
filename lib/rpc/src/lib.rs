@@ -69,13 +69,12 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
+        .max_request_body_size(config.max_request_size_bytes())
+        .max_response_body_size(config.max_response_size_bytes())
         .build();
     let server_builder = ServerBuilder::default()
         .set_config(server_config)
         .set_http_middleware(middleware);
-    // .max_response_body_size(response_body_size_limit)
-    // .set_batch_request_config(batch_request_config)
-    // .set_rpc_middleware(rpc_middleware);
 
     let server = server_builder
         .build(config.address)

@@ -17,6 +17,14 @@ pub struct RpcConfig {
     #[config(default_t = 1000)]
     pub max_connections: u32,
 
+    /// Maximum RPC request payload size for both HTTP and WS in megabytes
+    #[config(default_t = 15)]
+    pub max_request_size: u32,
+
+    /// Maximum RPC response payload size for both HTTP and WS in megabytes
+    #[config(default_t = 24)]
+    pub max_response_size: u32,
+
     /// Maximum number of blocks that could be scanned per filter
     #[config(default_t = 100_000)]
     pub max_blocks_per_filter: u64,
@@ -28,4 +36,16 @@ pub struct RpcConfig {
     /// Duration since the last filter poll, after which the filter is considered stale
     #[config(default_t = 15 * TimeUnit::Minutes)]
     pub stale_filter_ttl: Duration,
+}
+
+impl RpcConfig {
+    /// Returns the max request size in bytes.
+    pub fn max_request_size_bytes(&self) -> u32 {
+        self.max_request_size.saturating_mul(1024 * 1024)
+    }
+
+    /// Returns the max response size in bytes.
+    pub fn max_response_size_bytes(&self) -> u32 {
+        self.max_response_size.saturating_mul(1024 * 1024)
+    }
 }
