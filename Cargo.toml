@@ -54,11 +54,11 @@ serde_json = "1"
 #zk_os_api = { package = "zksync_os_api", path="../zksync-os/api"}
 #zk_os_evm_interpreter = { package = "evm_interpreter", path="../zksync-os/evm_interpreter" }
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "do-not-apply-upgrade-tx-to-rolling-hash", features = ["evm-compatibility", "unlimited_native", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "do-not-apply-upgrade-tx-to-rolling-hash" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "do-not-apply-upgrade-tx-to-rolling-hash" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", branch = "do-not-apply-upgrade-tx-to-rolling-hash" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", branch = "do-not-apply-upgrade-tx-to-rolling-hash" }
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
 
 #air-compiler-cli = { package = "cli", path = "../zksync-airbender/tools/cli" }
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
