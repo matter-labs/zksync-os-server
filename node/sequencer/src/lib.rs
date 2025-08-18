@@ -341,47 +341,6 @@ pub async fn run(
     let (fully_processed_batch_sender, fully_processed_batch_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(10);
 
-    // There may be batches that are Committed but not Proven on L1 yet, or Proven but not Executed yet.
-    // We will reschedule them by loading `BatchEnvelope`s from ProofStorage
-    // and sending them to the corresponding channels.
-    // Target components don't differentiate whether a batch was rescheduled or loaded during normal operations
-
-    let committed_not_proven_batches = get_committed_not_proven_batches(&l1_state, &proof_storage)
-        .await
-        .expect("Cannot get committed not proven batches");
-
-    let proven_not_executed_batches = get_proven_not_executed_batches(&l1_state, &proof_storage)
-        .await
-        .expect("Cannot get proven not executed batches");
-
-    // We need to adopt capacity in accordance to the number of batches that we need to reschedule.
-    // Otherwise it's possible that not all rescheduled batches fit into the channel.
-    // todo: This may theoretical grow every time node restarts.
-    //  Alternatively, we can start processing messages from these channels in parallel with rescheduling -
-    //  but then we should defer launching real senders before all pending are processed
-
-    // Channel between `L1Committer` and `SnarkJobManager`
-    let (batch_for_snark_sender, batch_for_snark_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
-            committed_not_proven_batches.len().max(10),
-        );
-
-    // Channel between `L1ProofSubmitter` and `PriorityTree`
-    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
-            proven_not_executed_batches.len().max(10),
-        );
-
-    reschedule_committed_not_proved_batches(committed_not_proven_batches, &batch_for_snark_sender)
-        .await
-        .expect("reschedule not proven batches");
-    reschedule_proven_not_executed_batches(
-        proven_not_executed_batches,
-        &batch_for_priority_tree_sender,
-    )
-    .await
-    .expect("reschedule not executed batches");
-
     let mut tasks = JoinSet::new();
 
     // =========== Start TreeManager ========
@@ -396,280 +355,206 @@ pub async fn run(
 
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
-    // only reading these for assertions
-    let repositories_persisted_block = repositories.get_latest_block();
-    let wal_block = block_replay_storage.latest_block().unwrap_or(0);
-    let tree_last_processed_block = tree_manager
-        .last_processed_block()
-        .expect("cannot read tree last processed block after initialization");
-
-    let (last_committed_block, last_committed_batch_info) = if l1_state.last_committed_batch == 0 {
-        (
-            0,
-            load_genesis_stored_batch_info(
-                &repositories,
-                persistent_tree.clone(),
-                genesis_config.chain_id,
-            )
-            .await,
-        )
+    let finality_storage = if sequencer_config.is_external_node {
+        Finality::new(FinalityStatus {
+            last_committed_block: 0,
+            last_executed_block: 0,
+        })
     } else {
-        let batch_metadata = proof_storage
-            .get(l1_state.last_committed_batch)
-            .expect("Failed to get last committed block from proof storage")
-            .map(|proof| proof.batch)
-            .expect("Committed batch is not present in proof storage");
-        (
-            batch_metadata.last_block_number,
-            batch_metadata.commit_batch_info.into(),
-        )
-    };
-    let last_proved_block = proof_storage
-        .get(l1_state.last_proved_batch)
-        .expect("failed to load last proved batch")
-        .map(|batch_envelope| batch_envelope.batch.last_block_number)
-        .unwrap_or(0);
-    let last_executed_block = proof_storage
-        .get(l1_state.last_executed_batch)
-        .expect("failed to load last executed batch")
-        .map(|batch_envelope| batch_envelope.batch.last_block_number)
-        .unwrap_or(0);
+        // ========== Ensure consistency between L1 and node state =========
+        // External nodes do not need to worry about this, as they do not commit batches.
 
-    let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
+        // There may be batches that are Committed but not Proven on L1 yet, or Proven but not Executed yet.
+        // We will reschedule them by loading `BatchEnvelope`s from ProofStorage
+        // and sending them to the corresponding channels.
+        // Target components don't differentiate whether a batch was rescheduled or loaded during normal operations
 
-    tracing::info!(
-        storage_map_compacted_block,
-        wal_block,
-        repositories_persisted_block,
-        tree_last_processed_block,
-        last_committed_batch = l1_state.last_committed_batch,
-        last_proved_batch = l1_state.last_proved_batch,
-        last_executed_batch = l1_state.last_executed_batch,
-        last_committed_block,
-        last_proved_block,
-        last_executed_block,
-        last_stored_batch_with_proof,
-        "▶ Sequencer will start from block {}. Batcher will start from block {} and batch {}",
-        storage_map_compacted_block + 1,
-        last_committed_block + 1,
-        l1_state.last_committed_batch + 1,
-    );
-
-    assert!(
-        wal_block >= last_committed_block
-            && wal_block >= storage_map_compacted_block
-            && wal_block >= tree_last_processed_block
-            && wal_block >= repositories_persisted_block,
-        "Inconsistent block numbers: there is a block ahead of wal."
-    );
-
-    assert!(
-        last_committed_block >= storage_map_compacted_block
-            && repositories_persisted_block >= storage_map_compacted_block
-            && tree_last_processed_block >= storage_map_compacted_block,
-        "Inconsistent block numbers: storage is compacted ahead of a needed block."
-    );
-
-    assert!(
-        last_stored_batch_with_proof >= l1_state.last_committed_batch,
-        "Inconsistent batch numbers: committed batch not found in proof storage."
-    );
-
-    let starting_block = storage_map_compacted_block + 1;
-
-    tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
-
-    tracing::info!("Initializing L1Watcher");
-
-    let first_replay_record = block_replay_storage.get_replay_record(starting_block);
-    assert!(
-        first_replay_record.is_some() || starting_block == 1,
-        "Unless it's a new chain, replay record must exist"
-    );
-
-    let next_l1_priority_id = first_replay_record
-        .as_ref()
-        .map_or(0, |record| record.starting_l1_priority_id);
-
-    tasks.spawn(
-        L1TxWatcher::new(
-            l1_watcher_config.clone(),
-            l1_provider.clone(),
-            l1_state.diamond_proxy,
-            l1_transactions_sender,
-            next_l1_priority_id,
-        )
-        .await
-        .expect("failed to start L1 transaction watcher")
-        .run()
-        .map(report_exit("L1 transaction watcher")),
-    );
-
-    let finality_storage = Finality::new(FinalityStatus {
-        last_committed_block,
-        last_executed_block,
-    });
-    tasks.spawn(
-        L1CommitWatcher::new(
-            l1_watcher_config.clone(),
-            l1_provider.clone(),
-            l1_state.diamond_proxy,
-            finality_storage.clone(),
-            proof_storage.clone(),
-        )
-        .await
-        .expect("failed to start L1 commit watcher")
-        .run()
-        .map(report_exit("L1 commit watcher")),
-    );
-
-    tasks.spawn(
-        L1ExecuteWatcher::new(
-            l1_watcher_config,
-            l1_provider,
-            l1_state.diamond_proxy,
-            finality_storage.clone(),
-            proof_storage.clone(),
-        )
-        .await
-        .expect("failed to start L1 execute watcher")
-        .run()
-        .map(report_exit("L1 execute watcher")),
-    );
-
-    // =========== Start JSON RPC ========
-
-    let rpc_storage = RpcStorage::new(
-        repositories.clone(),
-        block_replay_storage.clone(),
-        finality_storage,
-        proof_storage.clone(),
-        state_handle.clone(),
-    );
-
-    tasks.spawn(
-        run_jsonrpsee_server(
-            rpc_config,
-            genesis_config.chain_id,
-            l1_state.bridgehub,
-            rpc_storage,
-            l2_mempool.clone(),
-        )
-        .map(report_exit("JSON-RPC server")),
-    );
-
-    // ========== Start BlockContextProvider and its state ===========
-    tracing::info!("Initializing BlockContextProvider");
-
-    let previous_block_timestamp: u64 = first_replay_record
-        .as_ref()
-        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
-
-    let block_hashes_for_next_block = first_replay_record
-        .as_ref()
-        .map(|record| record.block_context.block_hashes)
-        .unwrap_or_else(|| {
-            let mut block_hashes = BlockHashes::default();
-            let genesis_block = repositories
-                .get_block_by_number(0)
-                .expect("Failed to read genesis block from repositories")
-                .expect("Missing genesis block in repositories");
-            block_hashes.0[255] = U256::from_be_slice(genesis_block.hash().as_slice());
-            block_hashes
-        });
-    let command_block_context_provider = BlockContextProvider::new(
-        next_l1_priority_id,
-        l1_transactions,
-        l2_mempool,
-        block_hashes_for_next_block,
-        previous_block_timestamp,
-        genesis_config.chain_id,
-        node_version,
-    );
-
-    if !batcher_config.subsystem_enabled {
-        tracing::error!(
-            "!!! Batcher subsystem disabled via configuration. This mode is only recommended for running tree loadtest."
-        );
-        unimplemented!("Running without batcher is not supported at the moment.");
-        // let mut blocks_receiver = blocks_for_batcher_receiver;
-        // async move {
-        //     while blocks_receiver.recv().await.is_some() {
-        //         // Drop messages silently to prevent backpressure
-        //     }
-        //     Ok::<(), anyhow::Error>(())
-        // }
-        // .boxed()
-    }
-    tracing::info!("Initializing batcher subsystem");
-
-    // ========== Start Sequencer ===========
-
-    if !sequencer_config.is_external_node {
-        tasks.spawn(
-            block_server(
-                block_replay_storage.clone(),
-                sequencer_config.block_server_address.clone(),
-            )
-            .map(report_exit("block server")),
-        );
-    }
-
-    {
-        let state_handle = state_handle.clone();
-        let block_replay_storage = block_replay_storage.clone();
-        let repositories = repositories.clone();
-        let sequencer_config = sequencer_config.clone();
-
-        tasks.spawn(async move {
-            let block_stream = if sequencer_config.is_external_node {
-                block_receiver(
-                    starting_block,
-                    sequencer_config.block_server_address.clone(),
-                )
+        let committed_not_proven_batches =
+            get_committed_not_proven_batches(&l1_state, &proof_storage)
                 .await
+                .expect("Cannot get committed not proven batches");
+
+        let proven_not_executed_batches =
+            get_proven_not_executed_batches(&l1_state, &proof_storage)
+                .await
+                .expect("Cannot get proven not executed batches");
+
+        // We need to adopt capacity in accordance to the number of batches that we need to reschedule.
+        // Otherwise it's possible that not all rescheduled batches fit into the channel.
+        // todo: This may theoretical grow every time node restarts.
+        //  Alternatively, we can start processing messages from these channels in parallel with rescheduling -
+        //  but then we should defer launching real senders before all pending are processed
+
+        // Channel between `L1Committer` and `SnarkJobManager`
+        let (batch_for_snark_sender, batch_for_snark_receiver) =
+            tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+                committed_not_proven_batches.len().max(10),
+            );
+
+        // Channel between `L1ProofSubmitter` and `PriorityTree`
+        let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
+            tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+                proven_not_executed_batches.len().max(10),
+            );
+
+        reschedule_committed_not_proved_batches(
+            committed_not_proven_batches,
+            &batch_for_snark_sender,
+        )
+        .await
+        .expect("reschedule not proven batches");
+        reschedule_proven_not_executed_batches(
+            proven_not_executed_batches,
+            &batch_for_priority_tree_sender,
+        )
+        .await
+        .expect("reschedule not executed batches");
+
+        // assertions about L1 and database consistency
+        let repositories_persisted_block = repositories.get_latest_block();
+        let wal_block = block_replay_storage.latest_block().unwrap_or(0);
+        let tree_last_processed_block = tree_manager
+            .last_processed_block()
+            .expect("cannot read tree last processed block after initialization");
+
+        let (last_committed_block, last_committed_batch_info) =
+            if l1_state.last_committed_batch == 0 {
+                (
+                    0,
+                    load_genesis_stored_batch_info(
+                        &repositories,
+                        persistent_tree.clone(),
+                        genesis_config.chain_id,
+                    )
+                    .await,
+                )
             } else {
-                command_source(
-                    &block_replay_storage,
-                    starting_block,
-                    sequencer_config.block_time,
-                    sequencer_config.max_transactions_in_block,
+                let batch_metadata = proof_storage
+                    .get(l1_state.last_committed_batch)
+                    .expect("Failed to get last committed block from proof storage")
+                    .map(|proof| proof.batch)
+                    .expect("Committed batch is not present in proof storage");
+                (
+                    batch_metadata.last_block_number,
+                    batch_metadata.commit_batch_info.into(),
                 )
             };
-            run_sequencer_actor(
-                block_stream,
-                blocks_for_prover_input_generator_sender,
-                tree_sender,
-                command_block_context_provider,
-                state_handle,
-                block_replay_storage.clone(),
-                repositories,
-                sequencer_config,
-            )
-            .map(report_exit("Sequencer server"))
-            .await
+        let last_proved_block = proof_storage
+            .get(l1_state.last_proved_batch)
+            .expect("failed to load last proved batch")
+            .map(|batch_envelope| batch_envelope.batch.last_block_number)
+            .unwrap_or(0);
+        let last_executed_block = proof_storage
+            .get(l1_state.last_executed_batch)
+            .expect("failed to load last executed batch")
+            .map(|batch_envelope| batch_envelope.batch.last_block_number)
+            .unwrap_or(0);
+
+        let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
+
+        tracing::info!(
+            storage_map_compacted_block,
+            wal_block,
+            repositories_persisted_block,
+            tree_last_processed_block,
+            last_committed_batch = l1_state.last_committed_batch,
+            last_proved_batch = l1_state.last_proved_batch,
+            last_executed_batch = l1_state.last_executed_batch,
+            last_committed_block,
+            last_proved_block,
+            last_executed_block,
+            last_stored_batch_with_proof,
+            "▶ Sequencer will start from block {}. Batcher will start from block {} and batch {}",
+            storage_map_compacted_block + 1,
+            last_committed_block + 1,
+            l1_state.last_committed_batch + 1,
+        );
+
+        assert!(
+            wal_block >= last_committed_block
+                && wal_block >= storage_map_compacted_block
+                && wal_block >= tree_last_processed_block
+                && wal_block >= repositories_persisted_block,
+            "Inconsistent block numbers: there is a block ahead of wal."
+        );
+
+        assert!(
+            last_committed_block >= storage_map_compacted_block
+                && repositories_persisted_block >= storage_map_compacted_block
+                && tree_last_processed_block >= storage_map_compacted_block,
+            "Inconsistent block numbers: storage is compacted ahead of a needed block."
+        );
+
+        assert!(
+            last_stored_batch_with_proof >= l1_state.last_committed_batch,
+            "Inconsistent batch numbers: committed batch not found in proof storage."
+        );
+
+        let finality_storage = Finality::new(FinalityStatus {
+            last_committed_block,
+            last_executed_block,
         });
-    }
+        tasks.spawn(
+            L1CommitWatcher::new(
+                l1_watcher_config.clone(),
+                l1_provider.clone(),
+                l1_state.diamond_proxy,
+                finality_storage.clone(),
+                proof_storage.clone(),
+            )
+            .await
+            .expect("failed to start L1 commit watcher")
+            .run()
+            .map(report_exit("L1 commit watcher")),
+        );
 
-    tracing::info!("Initializing Batcher");
-    let batcher = Batcher::new(
-        genesis_config.chain_id,
-        last_committed_block + 1,
-        repositories_persisted_block,
-        batcher_config,
-        blocks_for_batcher_receiver,
-        batch_for_proving_sender,
-        persistent_tree.clone(),
-    );
-    tasks.spawn(
-        batcher
-            .run_loop(last_committed_batch_info)
-            .map(report_exit("Batcher")),
-    );
+        tasks.spawn(
+            L1ExecuteWatcher::new(
+                l1_watcher_config.clone(),
+                l1_provider.clone(),
+                l1_state.diamond_proxy,
+                finality_storage.clone(),
+                proof_storage.clone(),
+            )
+            .await
+            .expect("failed to start L1 execute watcher")
+            .run()
+            .map(report_exit("L1 execute watcher")),
+        );
 
-    // ======= Prover Api Server========
+        // ========== Start proving end ===========
 
-    if !sequencer_config.is_external_node {
+        if !batcher_config.subsystem_enabled {
+            tracing::error!(
+                "!!! Batcher subsystem disabled via configuration. This mode is only recommended for running tree loadtest."
+            );
+            unimplemented!("Running without batcher is not supported at the moment.");
+            // let mut blocks_receiver = blocks_for_batcher_receiver;
+            // async move {
+            //     while blocks_receiver.recv().await.is_some() {
+            //         // Drop messages silently to prevent backpressure
+            //     }
+            //     Ok::<(), anyhow::Error>(())
+            // }
+            // .boxed()
+        }
+
+        tracing::info!("Initializing Batcher");
+        let batcher = Batcher::new(
+            genesis_config.chain_id,
+            last_committed_block + 1,
+            repositories_persisted_block,
+            batcher_config,
+            blocks_for_batcher_receiver,
+            batch_for_proving_sender,
+            persistent_tree.clone(),
+        );
+        tasks.spawn(
+            batcher
+                .run_loop(last_committed_batch_info)
+                .map(report_exit("Batcher")),
+        );
+
         tracing::info!("Initializing ProverInputGenerator");
         let prover_input_generator = ProverInputGenerator::new(
             prover_input_generator_config.logging_enabled,
@@ -787,6 +672,136 @@ pub async fn run(
             .run()
             .map(report_exit("Priority tree manager")),
         );
+
+        finality_storage
+    };
+
+    let starting_block = storage_map_compacted_block + 1;
+
+    tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
+
+    tracing::info!("Initializing L1Watcher");
+
+    let first_replay_record = block_replay_storage.get_replay_record(starting_block);
+    assert!(
+        first_replay_record.is_some() || starting_block == 1,
+        "Unless it's a new chain, replay record must exist"
+    );
+
+    let next_l1_priority_id = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.starting_l1_priority_id);
+
+    tasks.spawn(
+        L1TxWatcher::new(
+            l1_watcher_config,
+            l1_provider,
+            l1_state.diamond_proxy,
+            l1_transactions_sender,
+            next_l1_priority_id,
+        )
+        .await
+        .expect("failed to start L1 transaction watcher")
+        .run()
+        .map(report_exit("L1 transaction watcher")),
+    );
+
+    // =========== Start JSON RPC ========
+
+    let rpc_storage = RpcStorage::new(
+        repositories.clone(),
+        block_replay_storage.clone(),
+        finality_storage,
+        proof_storage.clone(),
+        state_handle.clone(),
+    );
+
+    tasks.spawn(
+        run_jsonrpsee_server(
+            rpc_config,
+            genesis_config.chain_id,
+            l1_state.bridgehub,
+            rpc_storage,
+            l2_mempool.clone(),
+        )
+        .map(report_exit("JSON-RPC server")),
+    );
+
+    // ========== Start BlockContextProvider and its state ===========
+    tracing::info!("Initializing BlockContextProvider");
+
+    let previous_block_timestamp: u64 = first_replay_record
+        .as_ref()
+        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
+
+    let block_hashes_for_next_block = first_replay_record
+        .as_ref()
+        .map(|record| record.block_context.block_hashes)
+        .unwrap_or_else(|| {
+            let mut block_hashes = BlockHashes::default();
+            let genesis_block = repositories
+                .get_block_by_number(0)
+                .expect("Failed to read genesis block from repositories")
+                .expect("Missing genesis block in repositories");
+            block_hashes.0[255] = U256::from_be_slice(genesis_block.hash().as_slice());
+            block_hashes
+        });
+    let command_block_context_provider = BlockContextProvider::new(
+        next_l1_priority_id,
+        l1_transactions,
+        l2_mempool,
+        block_hashes_for_next_block,
+        previous_block_timestamp,
+        genesis_config.chain_id,
+        node_version,
+    );
+
+    // ========== Start Sequencer ===========
+
+    if !sequencer_config.is_external_node {
+        tasks.spawn(
+            block_server(
+                block_replay_storage.clone(),
+                sequencer_config.block_server_address.clone(),
+            )
+            .map(report_exit("block server")),
+        );
+    }
+
+    {
+        let state_handle = state_handle.clone();
+        let block_replay_storage = block_replay_storage.clone();
+        let repositories = repositories.clone();
+        let sequencer_config = sequencer_config.clone();
+
+        tasks.spawn(async move {
+            let block_stream = if sequencer_config.is_external_node {
+                block_receiver(
+                    starting_block,
+                    sequencer_config.block_server_address.clone(),
+                )
+                .await
+            } else {
+                command_source(
+                    &block_replay_storage,
+                    starting_block,
+                    sequencer_config.block_time,
+                    sequencer_config.max_transactions_in_block,
+                )
+            };
+            run_sequencer_actor(
+                block_stream,
+                blocks_for_prover_input_generator_sender,
+                tree_sender,
+                command_block_context_provider,
+                state_handle,
+                block_replay_storage.clone(),
+                repositories,
+                sequencer_config,
+            )
+            .map(report_exit("Sequencer server"))
+            .await
+        });
     }
 
     tasks.spawn(
