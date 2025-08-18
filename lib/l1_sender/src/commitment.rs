@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::{ZkEnvelope, ZkTransaction};
+use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
@@ -187,10 +187,11 @@ impl CommitBatchInfo {
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
         /* ---------- root hash of l2->l1 logs ---------- */
-        // todo - extract constant
-        let l2_l1_local_root =
-            MiniMerkleTree::new(encoded_l2_l1_logs.clone().into_iter(), Some(1 << 14))
-                .merkle_root();
+        let l2_l1_local_root = MiniMerkleTree::new(
+            encoded_l2_l1_logs.clone().into_iter(),
+            Some(L2_TO_L1_TREE_SIZE),
+        )
+        .merkle_root();
         // The result should be Keccak(l2_l1_local_root, aggreagation_root) - we don't compute aggregation root yet
         let l2_to_l1_logs_root_hash = keccak256([l2_l1_local_root.0, [0u8; 32]].concat());
 

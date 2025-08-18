@@ -11182,6 +11182,7 @@ dependencies = [
  "zk_ee",
  "zksync_os_api",
  "zksync_os_mempool",
+ "zksync_os_mini_merkle_tree",
  "zksync_os_rpc_api",
  "zksync_os_state",
  "zksync_os_storage_api",
@@ -11323,6 +11324,7 @@ name = "zksync_os_types"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "serde",
  "thiserror 2.0.12",
  "zksync_os_contract_interface",

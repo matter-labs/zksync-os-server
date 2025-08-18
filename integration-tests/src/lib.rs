@@ -214,6 +214,7 @@ impl TesterBuilder {
         .await?;
 
         let l2_zk_provier = ProviderBuilder::new_with_network::<Zksync>()
+            .wallet(l2_wallet.clone())
             .connect(&l2_address)
             .await?;
 
