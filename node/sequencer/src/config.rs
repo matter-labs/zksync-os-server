@@ -46,6 +46,10 @@ pub struct SequencerConfig {
     /// Useful when there are inconsistencies in saved block numbers.
     #[config(default_t = false)]
     pub replay_all_blocks_unsafe: bool,
+
+    /// Prometheus address to listen on.
+    #[config(default_t = 3312)]
+    pub prometheus_port: u16,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
