@@ -319,6 +319,8 @@ impl Drop for Tester {
         // Send stop signal to main node
         self.stop_sender.send(true).unwrap();
         self.main_task.abort();
-        self.en_task.as_ref().map(|task| task.abort());
+        if let Some(task) = &self.en_task {
+            task.abort();
+        }
     }
 }
