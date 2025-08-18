@@ -10947,7 +10947,6 @@ dependencies = [
  "ruint",
  "serde",
  "tokio",
- "zksync_os_contract_interface",
 ]
 
 [[package]]
