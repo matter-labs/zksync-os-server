@@ -16,25 +16,25 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed (pk for 0x1561ac2f6ac6f3073c2180094ec67898b6fea40f)
-    #[config(alias = "operator_private_key", default_t = "0x2338cc241022abdc9f3bcb0999d2336bdc1d7402560a5619d168b4bb88282c52".into())]
+    #[config(alias = "operator_private_key", default_t = "0xf46dccff774032da25fbbdad34f1cebaddfb1ef73b74ba309aa8d9843eeec2a3".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed (pk for 0xa61464658AfeAf65CccaaFD3a512b69A83B77618)
-    #[config(default_t = "0xac1e735be8536c6534bb4f17f06f6afc73b2b5ba84ac2cfb12f7461b20c0bbe3".into())]
+    #[config(default_t = "0x12890560e559587828e12e1092f2ec7392daffa54505764aed1d2e4db9aea335".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed (pk for 0x0d43eb5b8a47ba8900d84aa36656c92024e9772e)
-    #[config(default_t = "0xd293c684d884d56f8d6abd64fc76757d3664904e309a0645baf8522ab6366d9e".into())]
+    #[config(default_t = "0x615e1e1c84c368f3322930297065a05e6cc280e13be4364102224122ae9fefb6".into())]
     pub operator_execute_pk: SecretString,
 
     /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x2bb295fe80bfcc2a9336402a5ad5ac099784b44f".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0xdf7cb997c81686acadf14f6ed77ccb921dc1b20a".parse().unwrap())]
     pub bridgehub_address: Address,
 
     /// Max fee per gas we are willing to spend (in gwei).

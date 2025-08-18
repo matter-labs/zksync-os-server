@@ -32,7 +32,7 @@ impl L1SenderCommand for ProofCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
 
     fn solidity_call(&self) -> impl SolCall {
-        assert!(matches!(self.proof, SnarkProof::Fake));
+        // assert!(matches!(self.proof, SnarkProof::Fake));
         proveBatchesSharedBridgeCall::new((
             U256::from(0),
             U256::from(self.batches.first().unwrap().batch_number()),
