@@ -121,7 +121,10 @@ impl TesterBuilder {
         // Create a handle to run the sequencer in the background
         let sequencer_config = SequencerConfig {
             rocks_db_path: rocksdb_path.path().to_path_buf(),
-            block_server_address: format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port),
+            block_replay_server_address: format!(
+                "0.0.0.0:{}",
+                LockedPort::acquire_unused().await?.port
+            ),
             ..Default::default()
         };
         let l1_sender_config = L1SenderConfig {
@@ -257,7 +260,9 @@ impl TesterBuilder {
                     },
                     MempoolConfig::default(),
                     SequencerConfig {
-                        is_external_node: true,
+                        block_replay_download_address: Some(
+                            sequencer_config.block_replay_server_address.clone(),
+                        ),
                         ..sequencer_config
                     },
                     l1_sender_config,

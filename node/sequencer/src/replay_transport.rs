@@ -10,7 +10,7 @@ use zksync_os_storage_api::ReplayRecord;
 
 use crate::{block_replay_storage::BlockReplayStorage, model::blocks::BlockCommand};
 
-pub async fn block_server(
+pub async fn replay_server(
     block_replays: BlockReplayStorage,
     address: impl ToSocketAddrs,
 ) -> anyhow::Result<()> {
@@ -33,7 +33,7 @@ pub async fn block_server(
     }
 }
 
-pub async fn block_receiver(
+pub async fn replay_receiver(
     starting_block: BlockNumber,
     address: impl ToSocketAddrs,
 ) -> BoxStream<'static, BlockCommand> {

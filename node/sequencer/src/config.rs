@@ -51,12 +51,14 @@ pub struct SequencerConfig {
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
-    #[config(default_t = false)]
-    pub is_external_node: bool,
-
-    /// The address where an external node gets block replays or where a main node serves them.
+    /// Where to serve block replays
     #[config(default_t = "0.0.0.0:8103".into())]
-    pub block_server_address: String,
+    pub block_replay_server_address: String,
+
+    /// Where to download replays instead of actually running blocks.
+    /// Setting this makes the node into an external node.
+    #[config(default_t = None)]
+    pub block_replay_download_address: Option<String>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

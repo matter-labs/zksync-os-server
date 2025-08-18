@@ -5,13 +5,13 @@
 mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
-mod block_transport;
 pub mod config;
 pub mod execution;
 mod metadata;
 pub mod model;
 pub mod prover_api;
 mod prover_input_generator;
+mod replay_transport;
 pub mod reth_state;
 pub mod tree_manager;
 mod util;
@@ -19,7 +19,6 @@ mod util;
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
-use crate::block_transport::{block_receiver, block_server};
 use crate::config::{
     BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
     RpcConfig, SequencerConfig,
@@ -36,6 +35,7 @@ use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
+use crate::replay_transport::{replay_receiver, replay_server};
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
@@ -229,6 +229,7 @@ pub async fn run(
     prover_api_config: ProverApiConfig,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
+    let is_external_node = sequencer_config.block_replay_download_address.is_some();
     let genesis = Genesis::new(genesis_config.genesis_input_path);
 
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
@@ -353,7 +354,7 @@ pub async fn run(
 
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
-    let finality_storage = if sequencer_config.is_external_node {
+    let finality_storage = if is_external_node {
         Finality::new(FinalityStatus {
             last_committed_block: 0,
             last_executed_block: 0,
@@ -756,15 +757,13 @@ pub async fn run(
 
     // ========== Start Sequencer ===========
 
-    if !sequencer_config.is_external_node {
-        tasks.spawn(
-            block_server(
-                block_replay_storage.clone(),
-                sequencer_config.block_server_address.clone(),
-            )
-            .map(report_exit("block server")),
-        );
-    }
+    tasks.spawn(
+        replay_server(
+            block_replay_storage.clone(),
+            sequencer_config.block_replay_server_address.clone(),
+        )
+        .map(report_exit("replay server")),
+    );
 
     {
         let state_handle = state_handle.clone();
@@ -773,12 +772,10 @@ pub async fn run(
         let sequencer_config = sequencer_config.clone();
 
         tasks.spawn(async move {
-            let block_stream = if sequencer_config.is_external_node {
-                block_receiver(
-                    starting_block,
-                    sequencer_config.block_server_address.clone(),
-                )
-                .await
+            let block_stream = if let Some(replay_download_address) =
+                &sequencer_config.block_replay_download_address
+            {
+                replay_receiver(starting_block, replay_download_address).await
             } else {
                 command_source(
                     &block_replay_storage,
