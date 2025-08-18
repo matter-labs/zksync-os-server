@@ -61,21 +61,21 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     // "Access-Control-Allow-Origin: *" header is appended to the response.
     let cors = CorsLayer::new()
         // Allow `POST` when accessing the resource
-        .allow_methods([Method::POST])
+        .allow_methods([Method::GET, Method::POST])
         // Allow requests from any origin
         .allow_origin(Any)
-        .allow_headers([hyper::header::CONTENT_TYPE]);
+        // Allow requests with any headers
+        .allow_headers(Any);
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
+        .max_request_body_size(config.max_request_size_bytes())
+        .max_response_body_size(config.max_response_size_bytes())
         .build();
     let server_builder = ServerBuilder::default()
         .set_config(server_config)
         .set_http_middleware(middleware);
-    // .max_response_body_size(response_body_size_limit)
-    // .set_batch_request_config(batch_request_config)
-    // .set_rpc_middleware(rpc_middleware);
 
     let server = server_builder
         .build(config.address)
