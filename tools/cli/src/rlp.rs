@@ -97,7 +97,7 @@ fn decode_item(input: &[u8], i: usize) -> Result<(Rlp, usize), RlpError> {
         items.push(item);
         idx = new_idx;
     }
-    return Ok((Rlp::List(items), end));
+    Ok((Rlp::List(items), end))
 }
 
 /// helper: decode big-endian bytes into usize

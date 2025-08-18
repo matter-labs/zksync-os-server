@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn all_rows(db_path: String) -> anyhow::Result<()> {
-    println!("Showing status for database at: {}", db_path);
+    println!("Showing status for database at: {db_path}");
 
     let path = std::path::Path::new(&db_path);
     let options = rocksdb::Options::default();
@@ -64,41 +64,39 @@ async fn all_rows(db_path: String) -> anyhow::Result<()> {
         Err(_) => vec!["default".to_string()], // fallback if listing fails
     };
 
-    println!("Found CFs: {:?}", cf_names);
+    println!("Found CFs: {cf_names:?}");
 
     match rocksdb::DB::open_cf_for_read_only(&options, path, &cf_names, false) {
         Ok(db) => {
-            println!("Opened RocksDB (read-only) at {}", db_path);
+            println!("Opened RocksDB (read-only) at {db_path}");
 
             for cf_name in &cf_names {
                 let cf = db
                     .cf_handle(cf_name)
-                    .ok_or_else(|| anyhow::anyhow!("CF handle missing: {}", cf_name))?;
-                println!("=== Column Family: {} ===", cf_name);
+                    .ok_or_else(|| anyhow::anyhow!("CF handle missing: {cf_name}"))?;
+                println!("=== Column Family: {cf_name} ===");
 
                 let mut count = 0usize;
-                for result in db.iterator_cf(cf, rocksdb::IteratorMode::Start) {
-                    if let Ok((key, value)) = result {
-                        println!("---");
-                        println!("key (hex):   {}", hex::encode(&key));
-                        println!("value (hex): {}", hex::encode(&value));
-                        println!("key (utf8):  {}", String::from_utf8_lossy(&key));
-                        println!("value (utf8): {}", String::from_utf8_lossy(&value));
-                        count += 1;
-                    }
+                for (key, value) in db.iterator_cf(cf, rocksdb::IteratorMode::Start).flatten() {
+                    println!("---");
+                    println!("key (hex):   {}", hex::encode(&key));
+                    println!("value (hex): {}", hex::encode(&value));
+                    println!("key (utf8):  {}", String::from_utf8_lossy(&key));
+                    println!("value (utf8): {}", String::from_utf8_lossy(&value));
+                    count += 1;
                 }
-                println!("Total entries: {}", count);
+                println!("Total entries: {count}");
             }
         }
         Err(e) => {
-            eprintln!("Failed to open RocksDB in read-only mode: {}", e);
+            eprintln!("Failed to open RocksDB in read-only mode: {e}");
         }
     };
     Ok(())
 }
 
 async fn info_db(db_path: String) -> anyhow::Result<()> {
-    println!("Displaying info for database at: {}", db_path);
+    println!("Displaying info for database at: {db_path}");
 
     // We'll access following things:
 
@@ -143,7 +141,7 @@ fn read_from_rocksdb(
     let options = rocksdb::Options::default();
     let cf_names = [&column_family.to_string()];
 
-    match rocksdb::DB::open_cf_for_read_only(&options, path, &cf_names, false) {
+    match rocksdb::DB::open_cf_for_read_only(&options, path, cf_names, false) {
         Ok(db) => {
             let cf = db
                 .cf_handle(column_family)
@@ -336,8 +334,8 @@ fn vec_to_u64_be(bytes: &[u8]) -> u64 {
 }
 
 fn show_block(db_path: &str, block_number: u64, show_transactions: bool) -> anyhow::Result<()> {
-    println!("==== Block {}", block_number);
-    let wal_block_info = wal_block_info(&db_path, block_number)?;
+    println!("==== Block {block_number}");
+    let wal_block_info = wal_block_info(db_path, block_number)?;
 
     let label_width = 18usize;
     println!("  {:<label_width$} {}", "Output Hash:", wal_block_info.hash,);
@@ -356,7 +354,7 @@ fn show_block(db_path: &str, block_number: u64, show_transactions: bool) -> anyh
         "Context:", wal_block_info.context,
     );
 
-    let repository_block_info = repository_block_info(&db_path, block_number)?;
+    let repository_block_info = repository_block_info(db_path, block_number)?;
     println!(
         "  {:<label_width$} {}",
         "Block Hash:", repository_block_info.hash,
@@ -366,20 +364,20 @@ fn show_block(db_path: &str, block_number: u64, show_transactions: bool) -> anyh
         "Block data:", repository_block_info.block_data,
     );
 
-    let proof = proof_info(&db_path, block_number)?;
+    let proof = proof_info(db_path, block_number)?;
     println!("  {:<label_width$} {}", "Proof exists:", proof);
 
     if show_transactions {
         println!("  Transactions:");
         for tx in &repository_block_info.block_data.transactions {
-            println!("    - {}", tx);
+            println!("    - {tx}");
         }
     }
     Ok(())
 }
 
 fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
-    println!("==== Transaction {}", hash);
+    println!("==== Transaction {hash}");
     let path = std::path::Path::new(&db_path);
 
     let hash = hex::decode(hash)?;
@@ -389,7 +387,7 @@ fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
 
     let tx = ZkOSTx::from_bytes(&tx_data).expect("Failed to decode transaction");
 
-    println!("{}", tx);
+    println!("{tx}");
 
     let receipt_data = read_from_rocksdb(
         path.join("repository").to_str().unwrap(),
@@ -399,7 +397,7 @@ fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
 
     if let Some(receipt_data) = receipt_data {
         let receipt = ZkOsReceipt::from_bytes(&receipt_data).unwrap();
-        println!("{}", receipt);
+        println!("{receipt}");
     } else {
         println!("  Receipt data: Not found");
     }
@@ -408,7 +406,7 @@ fn show_tx(db_path: &str, hash: &str) -> anyhow::Result<()> {
 
     if let Some(tx_meta) = tx_meta {
         let tx_meta = ZkOsTxMeta::from_bytes(&tx_meta).unwrap();
-        println!("{}", tx_meta);
+        println!("{tx_meta}");
     } else {
         println!("  Transaction Meta: Not found");
     }

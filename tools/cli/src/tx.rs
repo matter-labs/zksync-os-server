@@ -33,52 +33,51 @@ pub enum ZkOsTxType {
 impl std::fmt::Display for ZkOSTx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pad = " ".repeat(f.width().unwrap_or(0));
-        write!(f, "Tx {{\n")?;
-        write!(f, "{}    tx_type: {:?},\n", pad, self.tx_type)?;
-        write!(f, "{}    chain_id: {},\n", pad, self.chain_id)?;
-        write!(f, "{}    nonce: {},\n", pad, self.nonce)?;
-        write!(f, "{}    gas_limit: {},\n", pad, self.gas_limit)?;
-        write!(f, "{}    max_fee_per_gas: {},\n", pad, self.max_fee_per_gas)?;
-        write!(
+        writeln!(f, "Tx {{")?;
+        writeln!(f, "{}    tx_type: {:?},", pad, self.tx_type)?;
+        writeln!(f, "{}    chain_id: {},", pad, self.chain_id)?;
+        writeln!(f, "{}    nonce: {},", pad, self.nonce)?;
+        writeln!(f, "{}    gas_limit: {},", pad, self.gas_limit)?;
+        writeln!(f, "{}    max_fee_per_gas: {},", pad, self.max_fee_per_gas)?;
+        writeln!(
             f,
-            "{}    max_priority_fee_per_gas: {},\n",
+            "{}    max_priority_fee_per_gas: {},",
             pad, self.max_priority_fee_per_gas
         )?;
-        write!(f, "{}    to: {},\n", pad, self.to)?;
-        write!(f, "{}    value: {}\n", pad, self.value)?;
+        writeln!(f, "{}    to: {},", pad, self.to)?;
+        writeln!(f, "{}    value: {}", pad, self.value)?;
         if let Some(to_mint) = &self.to_mint {
-            write!(f, "{}    to_mint: {},\n", pad, to_mint)?;
+            writeln!(f, "{pad}    to_mint: {to_mint},")?;
         }
 
         if let Some(refund_recipient) = &self.refund_recipient {
-            write!(f, "{}    refund_recipient: {},\n", pad, refund_recipient)?;
+            writeln!(f, "{pad}    refund_recipient: {refund_recipient},")?;
         }
 
         if !self.factory_deps.is_empty() {
-            write!(
+            writeln!(
                 f,
-                "{}    factory_deps_len: {:?},\n",
+                "{}    factory_deps_len: {:?},",
                 pad,
                 self.factory_deps.len()
             )?;
         }
 
         if let Some(from) = &self.from {
-            write!(f, "{}    from: {},\n", pad, from)?;
+            writeln!(f, "{pad}    from: {from},")?;
         }
 
         if let Some(tx_hash) = &self.tx_hash {
-            write!(f, "{}    tx_hash: {},\n", pad, tx_hash)?;
+            writeln!(f, "{pad}    tx_hash: {tx_hash},")?;
         }
         if let Some(gas_per_pubdata_byte_limit) = self.gas_per_pubdata_byte_limit {
-            write!(
+            writeln!(
                 f,
-                "{}    gas_per_pubdata_byte_limit: {},\n",
-                pad, gas_per_pubdata_byte_limit
+                "{pad}    gas_per_pubdata_byte_limit: {gas_per_pubdata_byte_limit},",
             )?;
         }
 
-        write!(f, "{}}}", pad)?;
+        writeln!(f, "{pad}}}")?;
         Ok(())
     }
 }
@@ -261,14 +260,11 @@ impl ZkOsReceipt {
 
         // data[3] is logs, data[4] is l2 to l1 logs.
         let logs = data[3].as_list().unwrap();
-        let logs: Vec<Log> = logs.iter().map(|log| Log::from_rlp(log)).collect();
+        let logs: Vec<Log> = logs.iter().map(Log::from_rlp).collect();
 
         let l2_to_l1_logs = data[4].as_list().unwrap();
 
-        let l2_to_l1_logs: Vec<L2L1Log> = l2_to_l1_logs
-            .iter()
-            .map(|log| L2L1Log::from_rlp(log))
-            .collect();
+        let l2_to_l1_logs: Vec<L2L1Log> = l2_to_l1_logs.iter().map(L2L1Log::from_rlp).collect();
 
         // there should be 'logs' and 'l2 to l1 logs'..
 
@@ -285,24 +281,24 @@ impl ZkOsReceipt {
 impl std::fmt::Display for ZkOsReceipt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pad = " ".repeat(f.width().unwrap_or(0));
-        write!(f, "Receipt  {{\n")?;
-        write!(f, "{}    tx_type: {:?},\n", pad, self.tx_type)?;
-        write!(f, "{}    status: {}\n", pad, self.status)?;
-        write!(f, "{}    gas_used: {}\n", pad, self.gas_used)?;
-        write!(f, "{}    logs_len: {}\n", pad, self.logs.len())?;
+        writeln!(f, "Receipt  {{")?;
+        writeln!(f, "{}    tx_type: {:?},", pad, self.tx_type)?;
+        writeln!(f, "{}    status: {},", pad, self.status)?;
+        writeln!(f, "{}    gas_used: {},", pad, self.gas_used)?;
+        writeln!(f, "{}    logs_len: {},", pad, self.logs.len())?;
         for log in &self.logs {
-            write!(f, "{}    - {}\n", pad, log)?;
+            writeln!(f, "{pad}    - {log}")?;
         }
-        write!(
+        writeln!(
             f,
-            "{}    l2_to_l1_logs_len: {}\n",
+            "{}    l2_to_l1_logs_len: {}",
             pad,
             self.l2_to_l1_logs.len()
         )?;
         for log in &self.l2_to_l1_logs {
-            write!(f, "{}    - {}\n", pad, log)?;
+            writeln!(f, "{pad}    - {log}")?;
         }
-        write!(f, "{}}}", pad)?;
+        writeln!(f, "{pad}}}")?;
         Ok(())
     }
 }
@@ -351,30 +347,30 @@ impl ZkOsTxMeta {
 impl std::fmt::Display for ZkOsTxMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pad = " ".repeat(f.width().unwrap_or(0));
-        write!(f, "MetaTx {{\n")?;
-        write!(f, "{}    block_hash: {},\n", pad, self.block_hash)?;
-        write!(f, "{}    block_number: {},\n", pad, self.block_number)?;
-        write!(f, "{}    block_timestamp: {},\n", pad, self.block_timestamp)?;
-        write!(
+        writeln!(f, "MetaTx {{")?;
+        writeln!(f, "{}    block_hash: {},", pad, self.block_hash)?;
+        writeln!(f, "{}    block_number: {},", pad, self.block_number)?;
+        writeln!(f, "{}    block_timestamp: {},", pad, self.block_timestamp)?;
+        writeln!(
             f,
-            "{}    tx_index_in_block: {},\n",
+            "{}    tx_index_in_block: {},",
             pad, self.tx_index_in_block
         )?;
-        write!(
+        writeln!(
             f,
-            "{}    effective_gas_price: {},\n",
+            "{}    effective_gas_price: {},",
             pad, self.effective_gas_price
         )?;
-        write!(
+        writeln!(
             f,
-            "{}    number_of_logs_before_this_tx: {},\n",
+            "{}    number_of_logs_before_this_tx: {},",
             pad, self.number_of_logs_before_this_tx
         )?;
-        write!(f, "{}    gas_used: {},\n", pad, self.gas_used)?;
+        writeln!(f, "{}    gas_used: {},", pad, self.gas_used)?;
         if let Some(ref contract_address) = self.contract_address {
-            write!(f, "{}    contract_address: {},\n", pad, contract_address)?;
+            writeln!(f, "{pad}    contract_address: {contract_address},")?;
         }
-        write!(f, "{}}}", pad)?;
+        writeln!(f, "{pad}}}")?;
         Ok(())
     }
 }

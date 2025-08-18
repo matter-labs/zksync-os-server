@@ -18,16 +18,16 @@ pub struct Block {
 impl std::fmt::Display for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pad = " ".repeat(f.width().unwrap_or(0));
-        write!(f, "Block {{\n")?;
-        write!(f, "{}  block_number: {},\n", pad, self.block_number)?;
-        write!(f, "{}  parent_hash: {},\n", pad, self.parent_hash)?;
-        write!(f, "{}  state_root: {},\n", pad, self.state_root)?;
-        write!(f, "{}  transaction_root: {},\n", pad, self.transaction_root)?;
-        write!(f, "{}  gas_limit: {},\n", pad, self.gas_limit)?;
-        write!(f, "{}  gas_used: {},\n", pad, self.gas_used)?;
-        write!(f, "{}  timestamp: {},\n", pad, self.timestamp)?;
-        write!(f, "{}  base_fee_per_gas: {}\n", pad, self.base_fee_per_gas)?;
-        write!(f, "{}}}", pad)?;
+        writeln!(f, "Block {{")?;
+        writeln!(f, "{}  block_number: {},", pad, self.block_number)?;
+        writeln!(f, "{}  parent_hash: {},", pad, self.parent_hash)?;
+        writeln!(f, "{}  state_root: {},", pad, self.state_root)?;
+        writeln!(f, "{}  transaction_root: {},", pad, self.transaction_root)?;
+        writeln!(f, "{}  gas_limit: {},", pad, self.gas_limit)?;
+        writeln!(f, "{}  gas_used: {},", pad, self.gas_used)?;
+        writeln!(f, "{}  timestamp: {},", pad, self.timestamp)?;
+        writeln!(f, "{}  base_fee_per_gas: {}", pad, self.base_fee_per_gas)?;
+        writeln!(f, "{pad}}}")?;
         Ok(())
     }
 }
@@ -58,13 +58,13 @@ impl Block {
         // 6 - bloom
         // 7 - difficulty
         let block_number = vec_to_u64_be(header[8]);
-        let gas_limit = vec_to_u64_be(&header[9]);
-        let gas_used = vec_to_u64_be(&header[10]);
-        let timestamp = vec_to_u64_be(&header[11]);
+        let gas_limit = vec_to_u64_be(header[9]);
+        let gas_used = vec_to_u64_be(header[10]);
+        let timestamp = vec_to_u64_be(header[11]);
         // 12 - extra data
         // 13 - mix hash
         // 14 - nonce
-        let base_fee_per_gas = vec_to_u64_be(&header[15]);
+        let base_fee_per_gas = vec_to_u64_be(header[15]);
 
         Block {
             block_number,
@@ -101,24 +101,24 @@ impl std::fmt::Display for BlockMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let pad = " ".repeat(f.width().unwrap_or(0));
 
-        write!(f, "BlockMetadata {{\n")?;
-        write!(f, "{}  chain_id: {},\n", pad, self.chain_id)?;
-        write!(f, "{}  block_number: {},\n", pad, self.block_number)?;
-        write!(
+        writeln!(f, "BlockMetadata {{")?;
+        writeln!(f, "{}  chain_id: {},", pad, self.chain_id)?;
+        writeln!(f, "{}  block_number: {},", pad, self.block_number)?;
+        writeln!(
             f,
-            "{}  block_hashes: len: {},\n",
+            "{}  block_hashes: len: {},",
             pad,
             self.block_hashes.len()
         )?;
-        write!(f, "{}  timestamp: {},\n", pad, self.timestamp)?;
-        write!(f, "{}  eip1559_basefee: {},\n", pad, self.eip1559_basefee)?;
-        write!(f, "{}  gas_per_pubdata: {},\n", pad, self.gas_per_pubdata)?;
-        write!(f, "{}  native_price: {},\n", pad, self.native_price)?;
-        write!(f, "{}  coinbase: {:?},\n", pad, self.coinbase)?;
-        write!(f, "{}  gas_limit: {},\n", pad, self.gas_limit)?;
-        write!(f, "{}  pubdata_limit: {},\n", pad, self.pubdata_limit)?;
-        write!(f, "{}  mix_hash: {},\n", pad, self.mix_hash)?;
-        write!(f, "{}}}", pad)?;
+        writeln!(f, "{}  timestamp: {},", pad, self.timestamp)?;
+        writeln!(f, "{}  eip1559_basefee: {},", pad, self.eip1559_basefee)?;
+        writeln!(f, "{}  gas_per_pubdata: {},", pad, self.gas_per_pubdata)?;
+        writeln!(f, "{}  native_price: {},", pad, self.native_price)?;
+        writeln!(f, "{}  coinbase: {:?},", pad, self.coinbase)?;
+        writeln!(f, "{}  gas_limit: {},", pad, self.gas_limit)?;
+        writeln!(f, "{}  pubdata_limit: {},", pad, self.pubdata_limit)?;
+        writeln!(f, "{}  mix_hash: {},", pad, self.mix_hash)?;
+        writeln!(f, "{pad}}}")?;
         Ok(())
     }
 }
