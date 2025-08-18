@@ -15,8 +15,8 @@ use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{
-    FakeFriProversConfig, FakeSnarkProversConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GenesisConfig, MempoolConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 
 pub mod assert_traits;
@@ -39,10 +39,6 @@ pub struct Tester {
     /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
     pub l2_zk_provider: DynProvider<Zksync>,
 
-    /// Same as `l2_provider`, but for the external node.
-    /// Cannot be used to send transactions, as the EN only replays them.
-    pub en_l2_provider: Option<EthDynProvider>,
-
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -50,7 +46,10 @@ pub struct Tester {
 
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
-    en_task: Option<JoinHandle<()>>,
+
+    // Needed to be able to connect external nodes
+    l1_address: String,
+    replay_url: String,
 }
 
 impl Tester {
@@ -61,43 +60,25 @@ impl Tester {
     pub async fn setup() -> anyhow::Result<Self> {
         Self::builder().build().await
     }
-}
 
-#[derive(Default)]
-pub struct TesterBuilder {
-    enable_prover: bool,
-    enable_external_node: bool,
-}
-
-impl TesterBuilder {
-    #[cfg(feature = "prover-tests")]
-    pub fn enable_prover(mut self) -> Self {
-        self.enable_prover = true;
-        self
+    pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
+        Self::launch_node(
+            self.l1_address.clone(),
+            self.l1_provider.clone(),
+            self.l1_wallet.clone(),
+            false,
+            Some(self.replay_url.clone()),
+        )
+        .await
     }
 
-    pub fn enable_external_node(mut self) -> Self {
-        self.enable_external_node = true;
-        self
-    }
-
-    pub async fn build(self) -> anyhow::Result<Tester> {
-        let l1_locked_port = LockedPort::acquire_unused().await?;
-        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
-        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-            let anvil = if std::env::var("CI").is_ok() {
-                // This is where `anvil` gets installed to in our CI. For some reason it does not
-                // make it into PATH. todo: investigate why
-                anvil.path("/root/.foundry/bin/anvil")
-            } else {
-                anvil
-            };
-            anvil
-                .port(l1_locked_port.port)
-                .chain_id(L1_CHAIN_ID)
-                .arg("--load-state")
-                .arg("../zkos-l1-state.json")
-        })?;
+    async fn launch_node(
+        l1_address: String,
+        l1_provider: EthDynProvider,
+        l1_wallet: EthereumWallet,
+        enable_prover: bool,
+        main_node_replay_url: Option<String>,
+    ) -> anyhow::Result<Self> {
         (|| async {
             // Wait for L1 node to get up and be able to respond.
             l1_provider.clone().get_chain_id().await?;
@@ -119,24 +100,20 @@ impl TesterBuilder {
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
+        let replay_url = format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port);
         let sequencer_config = SequencerConfig {
             rocks_db_path: rocksdb_path.path().to_path_buf(),
-            block_replay_server_address: format!(
-                "0.0.0.0:{}",
-                LockedPort::acquire_unused().await?.port
-            ),
+            block_replay_server_address: replay_url.clone(),
+            block_replay_download_address: main_node_replay_url,
             ..Default::default()
         };
-        let l1_sender_config = L1SenderConfig {
-            l1_api_url: l1_address.clone(),
-            ..Default::default()
-        };
-        let l1_watcher_config = L1WatcherConfig {
+        let rpc_config = RpcConfig {
+            address: format!("0.0.0.0:{}", l2_locked_port.port),
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
             fake_fri_provers: FakeFriProversConfig {
-                enabled: !self.enable_prover,
+                enabled: !enable_prover,
                 ..Default::default()
             },
             fake_snark_provers: FakeSnarkProversConfig {
@@ -146,40 +123,31 @@ impl TesterBuilder {
             address: format!("0.0.0.0:{}", prover_api_locked_port.port),
             ..Default::default()
         };
-        let genesis_config = GenesisConfig {
-            genesis_input_path: "../genesis/genesis.json".into(),
+        let l1_sender_config = L1SenderConfig {
+            l1_api_url: l1_address.clone(),
             ..Default::default()
         };
 
-        let main_task = tokio::task::spawn({
-            let stop_receiver = stop_receiver.clone();
-            let genesis_config = genesis_config.clone();
-            let sequencer_config = sequencer_config.clone();
-            let l1_sender_config = l1_sender_config.clone();
-            let l1_watcher_config = l1_watcher_config.clone();
-            let prover_api_config = prover_api_config.clone();
-
-            async move {
-                zksync_os_sequencer::run(
-                    stop_receiver,
-                    genesis_config,
-                    RpcConfig {
-                        address: format!("0.0.0.0:{}", l2_locked_port.port),
-                        ..Default::default()
-                    },
-                    MempoolConfig::default(),
-                    sequencer_config,
-                    l1_sender_config,
-                    l1_watcher_config,
-                    Default::default(),
-                    ProverInputGeneratorConfig {
-                        logging_enabled: self.enable_prover,
-                        ..Default::default()
-                    },
-                    prover_api_config,
-                )
-                .await;
-            }
+        let main_task = tokio::task::spawn(async move {
+            zksync_os_sequencer::run(
+                stop_receiver,
+                GenesisConfig {
+                    genesis_input_path: "../genesis/genesis.json".into(),
+                    ..Default::default()
+                },
+                rpc_config,
+                MempoolConfig::default(),
+                sequencer_config,
+                l1_sender_config,
+                L1WatcherConfig::default(),
+                BatcherConfig::default(),
+                ProverInputGeneratorConfig {
+                    logging_enabled: enable_prover,
+                    ..Default::default()
+                },
+                prover_api_config,
+            )
+            .await;
         });
 
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
@@ -244,73 +212,61 @@ impl TesterBuilder {
             .connect(&l2_address)
             .await?;
 
-        let l1_wallet = l1_provider.wallet().clone();
-
-        let (en_task, en_l2_provider) = if self.enable_external_node {
-            let en_l2_locked_port = LockedPort::acquire_unused().await?;
-            let en_l2_address = format!("ws://localhost:{}", l2_locked_port.port);
-
-            let en_task = tokio::task::spawn(async move {
-                zksync_os_sequencer::run(
-                    stop_receiver,
-                    genesis_config,
-                    RpcConfig {
-                        address: format!("0.0.0.0:{}", en_l2_locked_port.port),
-                        ..Default::default()
-                    },
-                    MempoolConfig::default(),
-                    SequencerConfig {
-                        block_replay_download_address: Some(
-                            sequencer_config.block_replay_server_address.clone(),
-                        ),
-                        ..sequencer_config
-                    },
-                    l1_sender_config,
-                    l1_watcher_config,
-                    Default::default(),
-                    Default::default(),
-                    prover_api_config,
-                )
-                .await;
-            });
-
-            let en_l2_provider = (|| async {
-                let l2_provider = ProviderBuilder::new()
-                    .wallet(l2_wallet.clone())
-                    .connect(&en_l2_address)
-                    .await?;
-
-                // Wait for L2 node to get up and be able to respond.
-                l2_provider.get_chain_id().await?;
-                anyhow::Ok(l2_provider)
-            })
-            .retry(
-                ConstantBuilder::default()
-                    .with_delay(Duration::from_secs(1))
-                    .with_max_times(10),
-            )
-            .notify(|err: &anyhow::Error, dur: Duration| {
-                tracing::info!(?err, ?dur, "retrying connection to external node");
-            })
-            .await?;
-
-            (Some(en_task), Some(EthDynProvider::new(en_l2_provider)))
-        } else {
-            (None, None)
-        };
-
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
             l2_zk_provider: DynProvider::new(l2_zk_provider),
-            en_l2_provider,
             l1_wallet,
             l2_wallet,
             prover_api: ProverApi::new(prover_api_url),
             stop_sender,
             main_task,
-            en_task,
+            l1_address,
+            replay_url,
         })
+    }
+}
+
+#[derive(Default)]
+pub struct TesterBuilder {
+    enable_prover: bool,
+}
+
+impl TesterBuilder {
+    #[cfg(feature = "prover-tests")]
+    pub fn enable_prover(mut self) -> Self {
+        self.enable_prover = true;
+        self
+    }
+
+    pub async fn build(self) -> anyhow::Result<Tester> {
+        let l1_locked_port = LockedPort::acquire_unused().await?;
+        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
+            let anvil = if std::env::var("CI").is_ok() {
+                // This is where `anvil` gets installed to in our CI. For some reason it does not
+                // make it into PATH. todo: investigate why
+                anvil.path("/root/.foundry/bin/anvil")
+            } else {
+                anvil
+            };
+            anvil
+                .port(l1_locked_port.port)
+                .chain_id(L1_CHAIN_ID)
+                .arg("--load-state")
+                .arg("../zkos-l1-state.json")
+        })?;
+
+        let l1_wallet = l1_provider.wallet().clone();
+
+        Tester::launch_node(
+            l1_address,
+            EthDynProvider::new(l1_provider),
+            l1_wallet,
+            self.enable_prover,
+            None,
+        )
+        .await
     }
 }
 
@@ -319,8 +275,5 @@ impl Drop for Tester {
         // Send stop signal to main node
         self.stop_sender.send(true).unwrap();
         self.main_task.abort();
-        if let Some(task) = &self.en_task {
-            task.abort();
-        }
     }
 }
