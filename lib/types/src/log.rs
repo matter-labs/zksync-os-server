@@ -5,6 +5,7 @@ use alloy_rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 
 pub const L2_TO_L1_LOG_SERIALIZE_SIZE: usize = 88;
+pub const L2_TO_L1_TREE_SIZE: usize = 16384;
 
 ///
 /// L2 to l1 log structure, used for merkle tree leaves.
