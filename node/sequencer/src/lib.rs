@@ -109,9 +109,7 @@ pub async fn run_sequencer_actor(
         );
         latency_tracker.enter_state(SequencerState::PreparingBlockCommand);
 
-        let prepared_command = command_block_context_provider
-            .prepare_command(cmd, sequencer_config.is_external_node)
-            .await?;
+        let prepared_command = command_block_context_provider.prepare_command(cmd).await?;
 
         tracing::debug!(
             block_number,
