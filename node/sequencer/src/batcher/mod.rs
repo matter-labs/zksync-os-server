@@ -1,4 +1,6 @@
+use crate::batcher::sealing_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
+use crate::util::peekable_receiver::PeekableReceiver;
 use std::pin::Pin;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
@@ -8,8 +10,6 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
 use zksync_os_storage_api::ReplayRecord;
-use crate::batcher::sealing_criteria::BatchInfoAccumulator;
-use crate::util::peekable_receiver::PeekableReceiver;
 
 mod batch_builder;
 mod sealing_criteria;

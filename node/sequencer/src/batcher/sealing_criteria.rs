@@ -1,7 +1,7 @@
+use crate::config::BatcherConfig;
 use zk_ee::common_structs::MAX_NUMBER_OF_LOGS;
 use zk_ee::system::MAX_NATIVE_COMPUTATIONAL;
 use zk_os_forward_system::run::BlockOutput;
-use crate::config::BatcherConfig;
 
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
@@ -18,7 +18,11 @@ impl BatchInfoAccumulator {
         self.gas_used += block_output.header.gas_used;
         // self.native_cycles += block_output.native_cycles;
         self.pubdata_bytes += block_output.pubdata.len() as u64;
-        self.l2_to_l1_logs_count += block_output.tx_results.iter().map(|tx_result| { tx_result.as_ref().map_or(0, |tx| tx.l2_to_l1_logs.len()) }).sum::<usize>() as u64;
+        self.l2_to_l1_logs_count += block_output
+            .tx_results
+            .iter()
+            .map(|tx_result| tx_result.as_ref().map_or(0, |tx| tx.l2_to_l1_logs.len()))
+            .sum::<usize>() as u64;
 
         self
     }
