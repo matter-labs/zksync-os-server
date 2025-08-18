@@ -69,5 +69,3 @@ Keeps things that were 'compacted' from write-ahead log.
 | key_indices |  some hash | key index |
 
 'magic' manifest is stored in key 0.
-
-Plus something magic in '00' ??
