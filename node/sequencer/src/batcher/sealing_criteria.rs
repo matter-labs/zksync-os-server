@@ -16,7 +16,8 @@ impl BatchInfoAccumulator {
     pub fn add(&mut self, block_output: &BlockOutput) -> &Self {
         self.tx_count += block_output.tx_results.len() as u64;
         self.gas_used += block_output.header.gas_used;
-        // self.native_cycles += block_output.native_cycles;
+        // TODO: uncomment when zksync-os is 0.0.10
+        // self.native_cycles += block_output.computaional_native_used;
         self.pubdata_bytes += block_output.pubdata.len() as u64;
         self.l2_to_l1_logs_count += block_output
             .tx_results
