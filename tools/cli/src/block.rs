@@ -104,7 +104,12 @@ impl std::fmt::Display for BlockMetadata {
         write!(f, "BlockMetadata {{\n")?;
         write!(f, "{}  chain_id: {},\n", pad, self.chain_id)?;
         write!(f, "{}  block_number: {},\n", pad, self.block_number)?;
-        write!(f, "{}  block_hashes: [skipped],\n", pad)?;
+        write!(
+            f,
+            "{}  block_hashes: len: {},\n",
+            pad,
+            self.block_hashes.len()
+        )?;
         write!(f, "{}  timestamp: {},\n", pad, self.timestamp)?;
         write!(f, "{}  eip1559_basefee: {},\n", pad, self.eip1559_basefee)?;
         write!(f, "{}  gas_per_pubdata: {},\n", pad, self.gas_per_pubdata)?;

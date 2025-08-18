@@ -5,10 +5,6 @@ pub enum Rlp {
 }
 
 impl Rlp {
-    pub fn is_bytes(&self) -> bool {
-        matches!(self, Rlp::Bytes(_))
-    }
-
     pub fn as_bytes(&self) -> Option<&[u8]> {
         if let Rlp::Bytes(bytes) = self {
             Some(bytes)
