@@ -61,7 +61,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1WatcherConfig};
+use zksync_os_l1_watcher::{L1TxWatcher, L1WatcherConfig};
 use zksync_os_observability::ComponentStateLatencyTracker;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rocksdb::RocksDB;
@@ -499,33 +499,33 @@ pub async fn run(
             last_committed_block,
             last_executed_block,
         });
-        tasks.spawn(
-            L1CommitWatcher::new(
-                l1_watcher_config.clone(),
-                l1_provider.clone(),
-                l1_state.diamond_proxy,
-                finality_storage.clone(),
-                proof_storage.clone(),
-            )
-            .await
-            .expect("failed to start L1 commit watcher")
-            .run()
-            .map(report_exit("L1 commit watcher")),
-        );
+        // tasks.spawn(
+        //     L1CommitWatcher::new(
+        //         l1_watcher_config.clone(),
+        //         l1_provider.clone(),
+        //         l1_state.diamond_proxy,
+        //         finality_storage.clone(),
+        //         proof_storage.clone(),
+        //     )
+        //     .await
+        //     .expect("failed to start L1 commit watcher")
+        //     .run()
+        //     .map(report_exit("L1 commit watcher")),
+        // );
 
-        tasks.spawn(
-            L1ExecuteWatcher::new(
-                l1_watcher_config.clone(),
-                l1_provider.clone(),
-                l1_state.diamond_proxy,
-                finality_storage.clone(),
-                proof_storage.clone(),
-            )
-            .await
-            .expect("failed to start L1 execute watcher")
-            .run()
-            .map(report_exit("L1 execute watcher")),
-        );
+        // tasks.spawn(
+        //     L1ExecuteWatcher::new(
+        //         l1_watcher_config.clone(),
+        //         l1_provider.clone(),
+        //         l1_state.diamond_proxy,
+        //         finality_storage.clone(),
+        //         proof_storage.clone(),
+        //     )
+        //     .await
+        //     .expect("failed to start L1 execute watcher")
+        //     .run()
+        //     .map(report_exit("L1 execute watcher")),
+        // );
 
         // ========== Start proving end ===========
 
