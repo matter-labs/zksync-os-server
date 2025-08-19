@@ -16,3 +16,4 @@ alloy = { workspace = true, default-features = false, features = ["consensus", "
 alloy-rlp.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+bincode.workspace = true

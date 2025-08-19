@@ -55,7 +55,7 @@ pub async fn main() {
             l1_watcher_config,
             batcher_config,
             prover_input_generator_config,
-            prover_api_config
+            prover_api_config,
         ) => {}
 
         // ── Prometheus task ─────────────────────────────────────────

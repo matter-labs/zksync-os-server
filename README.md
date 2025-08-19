@@ -39,6 +39,11 @@ See `node/sequencer/config.rs` for config options and defaults. Use env variable
 prover_api_fake_provers_enabled=false cargo run --release
 ```
 
+### External node
+
+Setting the `block_replay_download_address` environment variable puts the node in external node mode, which means it receives block replays from another node instead of producing its own blocks. The node will get transactions from L1 and check that they match the ones in the replay but it won't change L1 state.
+
+To run the external node locally, you need to set its services' ports so they don't overlap with the main node. See run_en.sh for an example.
 
 
 ### Docker
