@@ -38,7 +38,7 @@ impl<Finality: WriteFinality, BatchStorage> L1CommitWatcher<Finality, BatchStora
 
         let current_l1_block = provider.get_block_number().await?;
         let next_batch_number = finality.get_finality_status().last_committed_block + 1;
-        let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number)
+        let next_l1_block = find_l1_commit_block_by_batch_number(zk_chain, next_batch_number - 1)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
