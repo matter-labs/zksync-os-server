@@ -14,14 +14,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use zksync_os_types::{L1Envelope, L2Envelope, ZkTransaction};
+use zksync_os_types::{L1PriorityEnvelope, L1UpgradeEnvelope, L2Envelope, ZkTransaction};
 
 pub trait TxStream: Stream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
 }
 
 pub struct BestTransactionsStream<'a> {
-    l1_transactions: &'a mut mpsc::Receiver<L1Envelope>,
+    l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
+    upgrade_tx: Option<L1UpgradeEnvelope>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<EthPooledTransaction>>>>,
@@ -33,12 +34,14 @@ pub fn best_transactions<
     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
 >(
     l2_mempool: &RethPool<Client>,
-    l1_transactions: &mut mpsc::Receiver<L1Envelope>,
+    l1_transactions: &mut mpsc::Receiver<L1PriorityEnvelope>,
+    upgrade_tx: Option<L1UpgradeEnvelope>,
 ) -> impl TxStream<Item = ZkTransaction> + Send {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
         l1_transactions,
+        upgrade_tx,
         pending_transactions_listener,
         best_l2_transactions: l2_mempool.best_transactions(),
         last_polled_l2_tx: None,
@@ -51,6 +54,10 @@ impl Stream for BestTransactionsStream<'_> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
+            if let Some(upgrade_tx) = this.upgrade_tx.take() {
+                return Poll::Ready(Some(ZkTransaction::from(upgrade_tx)));
+            }
+
             match this.l1_transactions.poll_recv(cx) {
                 Poll::Ready(Some(tx)) => return Poll::Ready(Some(tx.into())),
                 Poll::Pending => {}

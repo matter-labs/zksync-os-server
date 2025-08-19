@@ -15,12 +15,13 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
+use zksync_os_genesis::Genesis;
 use zksync_os_mempool::{
     CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
     RethTransactionPoolExt, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -34,23 +35,26 @@ use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider {
     next_l1_priority_id: u64,
-    l1_transactions: mpsc::Receiver<L1Envelope>,
+    l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
     chain_id: u64,
     node_version: semver::Version,
+    genesis: Genesis,
 }
 
 impl BlockContextProvider {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         next_l1_priority_id: u64,
-        l1_transactions: mpsc::Receiver<L1Envelope>,
+        l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
         chain_id: u64,
         node_version: semver::Version,
+        genesis: Genesis,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -60,6 +64,7 @@ impl BlockContextProvider {
             previous_block_timestamp,
             chain_id,
             node_version,
+            genesis,
         }
     }
 
@@ -69,8 +74,17 @@ impl BlockContextProvider {
     ) -> anyhow::Result<PreparedBlockCommand> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
-                // Create stream: L1 transactions first, then L2 transactions
-                let best_txs = best_transactions(&self.l2_mempool, &mut self.l1_transactions);
+                let upgrade_tx = if produce_command.block_number == 1 {
+                    Some(self.genesis.genesis_upgrade_tx().await.tx)
+                } else {
+                    None
+                };
+
+                // Create stream:
+                // - For block #1 genesis upgrade tx goes first.
+                // - L1 transactions first, then L2 transactions.
+                let best_txs =
+                    best_transactions(&self.l2_mempool, &mut self.l1_transactions, upgrade_tx);
                 let gas_limit = 100_000_000;
                 let pubdata_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
@@ -110,6 +124,7 @@ impl BlockContextProvider {
                             assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
                         }
                         ZkEnvelope::L2(_) => {}
+                        ZkEnvelope::Upgrade(_) => {}
                     }
                 }
                 PreparedBlockCommand {
@@ -147,6 +162,7 @@ impl BlockContextProvider {
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());
                 }
+                ZkEnvelope::Upgrade(_) => {}
             }
         }
         EXECUTION_METRICS

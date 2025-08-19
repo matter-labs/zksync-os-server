@@ -44,7 +44,7 @@ pub struct StateHandle {
 }
 
 impl StateHandle {
-    pub fn new(config: StateConfig, genesis: &Genesis) -> Self {
+    pub async fn new(config: StateConfig, genesis: &Genesis) -> Self {
         if config.erase_storage_on_start_unsafe {
             let path = config.rocks_db_path.join(STATE_STORAGE_DB_NAME);
             if fs::exists(path.clone()).unwrap() {
@@ -66,7 +66,7 @@ impl StateHandle {
             RocksDB::<PreimagesCF>::new(&config.rocks_db_path.join(PREIMAGES_STORAGE_DB_NAME))
                 .expect("Failed to open Preimages DB");
 
-        let persistent_preimages = PersistentPreimages::new(preimages_db, genesis);
+        let persistent_preimages = PersistentPreimages::new(preimages_db, genesis).await;
 
         let storage_map_block = storage_map.latest_block.load(Ordering::Relaxed);
         let preimages_block = persistent_preimages.rocksdb_block_number();
