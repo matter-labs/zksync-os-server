@@ -123,7 +123,7 @@ impl StoredObject for BatchEnvelope<FriProof> {
     type Key<'a> = u64;
 
     fn encode_key(key: Self::Key<'_>) -> String {
-        format!("fri_batch_envelope_{}.json", key)
+        format!("fri_batch_envelope_{key}.json")
     }
 
     fn serialize(&self) -> Result<Vec<u8>, BoxedError> {

@@ -86,11 +86,11 @@ mod test {
         let object_store = FileBackedObjectStore::new(path).await.unwrap();
         let expected = vec![9, 0, 8, 9, 0, 7];
         object_store
-            .put_raw(Bucket::ProverJobs, "test-key.bin", expected.clone())
+            .put_raw(Bucket::FriBatchEnvelopes, "test-key.bin", expected.clone())
             .await
             .unwrap();
         let bytes = object_store
-            .get_raw(Bucket::ProverJobs, "test-key.bin")
+            .get_raw(Bucket::FriBatchEnvelopes, "test-key.bin")
             .await
             .unwrap();
         assert_eq!(expected, bytes, "expected didn't match");
@@ -103,7 +103,7 @@ mod test {
         let object_store = FileBackedObjectStore::new(path).await.unwrap();
         let bytes = vec![9, 0, 8, 9, 0, 7];
         object_store
-            .put_raw(Bucket::ProverJobs, "test-key.bin", bytes)
+            .put_raw(Bucket::FriBatchEnvelopes, "test-key.bin", bytes)
             .await
             .unwrap();
     }
@@ -114,11 +114,11 @@ mod test {
         let path = dir.path().to_owned();
         let object_store = FileBackedObjectStore::new(path).await.unwrap();
         object_store
-            .put_raw(Bucket::ProverJobs, "test-key.bin", vec![0, 1])
+            .put_raw(Bucket::FriBatchEnvelopes, "test-key.bin", vec![0, 1])
             .await
             .unwrap();
         object_store
-            .remove_raw(Bucket::ProverJobs, "test-key.bin")
+            .remove_raw(Bucket::FriBatchEnvelopes, "test-key.bin")
             .await
             .unwrap();
     }

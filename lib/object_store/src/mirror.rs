@@ -110,48 +110,48 @@ mod tests {
 
         let mock_store = MockObjectStore::default();
         mock_store
-            .put_raw(Bucket::StorageSnapshot, "test", vec![1, 2, 3])
+            .put_raw(Bucket::FriBatchEnvelopes, "test", vec![1, 2, 3])
             .await
             .unwrap();
         let mirroring_store = MirroringObjectStore::new(mock_store, path).await.unwrap();
 
         let object = mirroring_store
-            .get_raw(Bucket::StorageSnapshot, "test")
+            .get_raw(Bucket::FriBatchEnvelopes, "test")
             .await
             .unwrap();
         assert_eq!(object, [1, 2, 3]);
         // Check that the object got mirrored.
         let object_in_mirror = mirroring_store
             .mirror_store
-            .get_raw(Bucket::StorageSnapshot, "test")
+            .get_raw(Bucket::FriBatchEnvelopes, "test")
             .await
             .unwrap();
         assert_eq!(object_in_mirror, [1, 2, 3]);
         let object = mirroring_store
-            .get_raw(Bucket::StorageSnapshot, "test")
+            .get_raw(Bucket::FriBatchEnvelopes, "test")
             .await
             .unwrap();
         assert_eq!(object, [1, 2, 3]);
 
         let err = mirroring_store
-            .get_raw(Bucket::StorageSnapshot, "missing")
+            .get_raw(Bucket::FriBatchEnvelopes, "missing")
             .await
             .unwrap_err();
         assert_matches!(err, ObjectStoreError::KeyNotFound(_));
 
         mirroring_store
-            .put_raw(Bucket::StorageSnapshot, "other", vec![3, 2, 1])
+            .put_raw(Bucket::FriBatchEnvelopes, "other", vec![3, 2, 1])
             .await
             .unwrap();
         // Check that the object got mirrored.
         let object_in_mirror = mirroring_store
             .mirror_store
-            .get_raw(Bucket::StorageSnapshot, "other")
+            .get_raw(Bucket::FriBatchEnvelopes, "other")
             .await
             .unwrap();
         assert_eq!(object_in_mirror, [3, 2, 1]);
         let object = mirroring_store
-            .get_raw(Bucket::StorageSnapshot, "other")
+            .get_raw(Bucket::FriBatchEnvelopes, "other")
             .await
             .unwrap();
         assert_eq!(object, [3, 2, 1]);

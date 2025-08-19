@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn file_backed_from_yaml() {
-        let yaml = r#"
+        let yaml = r"
           # Read by old system
           file_backed:
             file_backed_base_path: ./chains/era/artifacts/
@@ -179,7 +179,7 @@ mod tests {
           file_backed_base_path: ./chains/era/artifacts/
           max_retries: 10
           local_mirror_path: /var/cache
-        "#;
+        ";
         let yaml = Yaml::new("test.yml", serde_yaml::from_str(yaml).unwrap()).unwrap();
         let config: ObjectStoreConfig = test_complete(yaml).unwrap();
         assert_eq!(
@@ -192,11 +192,11 @@ mod tests {
 
     #[test]
     fn public_bucket_from_yaml_with_enum_coercion() {
-        let yaml = r#"
+        let yaml = r"
           gcs_anonymous_read_only:
             bucket_base_url: /public_base_url
           max_retries: 3
-        "#;
+        ";
         let yaml = Yaml::new("test.yml", serde_yaml::from_str(yaml).unwrap()).unwrap();
         let config: ObjectStoreConfig = Tester::default().coerce_serde_enums().test(yaml).unwrap();
         assert_eq!(config.max_retries, 3);
