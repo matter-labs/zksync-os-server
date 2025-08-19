@@ -36,8 +36,14 @@ pub struct GenesisInput {
     pub additional_storage: Vec<(Bytes32, Bytes32)>,
 }
 
-/// (upgrade tx, force deploy bytecode hashes and preimages)
-pub type GenesisUpgradeTxInfo = (L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>);
+/// Info about genesis upgrade fetched from L1:
+/// - genesis upgrade tx
+/// - force deploy bytecode hashes and preimages, note that preimages are not padded and do not contain artifacts
+#[derive(Debug, Clone)]
+pub struct GenesisUpgradeTxInfo {
+    pub tx: L1UpgradeEnvelope,
+    pub force_deploy_preimages: Vec<(Bytes32, Vec<u8>)>,
+}
 
 /// Struct that represents the genesis state of the system.
 /// Lazy-initialized to avoid unnecessary computation at startup.
@@ -82,7 +88,7 @@ impl Genesis {
             .get_or_init(|| build_genesis(self.input_path.clone()))
     }
 
-    pub async fn genesis_upgrade_tx(&self) -> (L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>) {
+    pub async fn genesis_upgrade_tx(&self) -> GenesisUpgradeTxInfo {
         self.genesis_upgrade_tx
             .get_or_try_init(|| load_genesis_upgrade_tx(&self.l1_provider, self.zk_chain_address))
             .await
@@ -93,8 +99,12 @@ impl Genesis {
 
 #[derive(Debug, Clone)]
 pub struct GenesisState {
+    /// Storage logs for the genesis block.
     pub storage_logs: Vec<(Bytes32, Bytes32)>,
+    /// Preimages of the padded bytecodes with artifacts and hashes of account properties
+    /// for the contracts deployed in the genesis block.
     pub preimages: Vec<(Bytes32, Vec<u8>)>,
+    /// The header of the genesis block.
     pub header: BlockHeader,
 }
 
@@ -206,7 +216,7 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
 async fn load_genesis_upgrade_tx(
     provider: &DynProvider<Ethereum>,
     zk_chain_address: Address,
-) -> anyhow::Result<(L1UpgradeEnvelope, Vec<(Bytes32, Vec<u8>)>)> {
+) -> anyhow::Result<GenesisUpgradeTxInfo> {
     const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
     let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
@@ -259,5 +269,8 @@ async fn load_genesis_upgrade_tx(
         })
         .collect();
 
-    Ok((upgrade_tx, preimages))
+    Ok(GenesisUpgradeTxInfo {
+        tx: upgrade_tx,
+        force_deploy_preimages: preimages,
+    })
 }

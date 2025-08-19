@@ -40,7 +40,7 @@ impl PersistentPreimages {
         let genesis_needed = rocksdb_block_number(&rocks).is_none();
         let this = Self { rocks };
         if genesis_needed {
-            let force_deploy_preimages = genesis.genesis_upgrade_tx().await.1;
+            let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
             let iter = genesis
                 .state()
                 .preimages

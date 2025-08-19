@@ -75,7 +75,7 @@ impl BlockContextProvider {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 let upgrade_tx = if produce_command.block_number == 1 {
-                    Some(self.genesis.genesis_upgrade_tx().await.0)
+                    Some(self.genesis.genesis_upgrade_tx().await.tx)
                 } else {
                     None
                 };
