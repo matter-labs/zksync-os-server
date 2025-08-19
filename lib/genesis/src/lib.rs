@@ -3,25 +3,23 @@
 use alloy::consensus::EMPTY_OMMER_ROOT_HASH;
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, B256, U256, keccak256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
-use std::alloc::Global;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
-use zk_ee::execution_environment_type::ExecutionEnvironmentType;
 use zk_ee::utils::Bytes32;
+use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
-    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, VersioningData, bytecode_padding_len,
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
-use zk_os_evm_interpreter::{ARTIFACTS_CACHING_CODE_VERSION_BYTE, BytecodePreprocessingData};
 use zk_os_forward_system::run::output::BlockHeader;
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
@@ -120,47 +118,11 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
     let mut preimages = vec![];
 
     for (address, deployed_code) in genesis_input.initial_contracts {
-        let mut versioning_data = VersioningData::empty_non_deployed();
-        versioning_data.set_as_deployed();
-        versioning_data.set_code_version(ARTIFACTS_CACHING_CODE_VERSION_BYTE);
-        versioning_data.set_ee_version(ExecutionEnvironmentType::EVM as u8);
-
-        let observable_bytecode_hash = {
-            let digest = keccak256(&deployed_code);
-            Bytes32::from_array(digest.0)
-        };
-        let observable_bytecode_len = deployed_code.len() as u32;
-
-        let artifacts = BytecodePreprocessingData::create_artifacts_inner(Global, &deployed_code);
-        let artifacts = artifacts.as_slice();
-        let artifacts_len = artifacts.len() as u32;
-
-        let (bytecode_preimage, bytecode_hash) = {
-            let padding_len = bytecode_padding_len(deployed_code.len());
-            let padding = [0u8; core::mem::size_of::<u64>() - 1];
-            let mut bytecode_preimage =
-                Vec::with_capacity(deployed_code.len() + padding_len + artifacts_len as usize);
-            bytecode_preimage.extend_from_slice(&deployed_code);
-            bytecode_preimage.extend_from_slice(&padding[..padding_len]);
-            bytecode_preimage.extend_from_slice(artifacts);
-
-            let digest = Blake2s256::digest(&bytecode_preimage);
-            let mut digest_array = [0u8; 32];
-            digest_array.copy_from_slice(digest.as_slice());
-            (bytecode_preimage, Bytes32::from_array(digest_array))
-        };
-
-        let account_properties = AccountProperties {
-            versioning_data,
-            // When contracts are deployed, they have a nonce of 1
-            nonce: 1,
-            balance: U256::ZERO,
-            bytecode_hash,
-            unpadded_code_len: observable_bytecode_len,
-            artifacts_len,
-            observable_bytecode_hash,
-            observable_bytecode_len,
-        };
+        let mut account_properties = AccountProperties::default();
+        // When contracts are deployed, they have a nonce of 1.
+        set_properties_nonce(&mut account_properties, 1);
+        let bytecode_preimage = set_properties_code(&mut account_properties, &deployed_code);
+        let bytecode_hash = account_properties.bytecode_hash;
 
         let flat_storage_key = {
             let mut bytes = [0u8; 64];
