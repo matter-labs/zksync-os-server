@@ -133,9 +133,8 @@ impl BlockReplayStorage {
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.last_processed_l1_tx_id");
-        let txs_value =
-            bincode::serde::encode_to_vec(&record.transactions, bincode::config::standard())
-                .expect("Failed to serialize record.transactions");
+        let txs_value = bincode::encode_to_vec(&record.transactions, bincode::config::standard())
+            .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
         // Batch both writes: replay entry and latest pointer
@@ -297,12 +296,9 @@ impl ReadReplay for BlockReplayStorage {
                 )
                 .expect("Failed to deserialize context")
                 .0,
-                transactions: bincode::serde::decode_from_slice(
-                    &bytes_txs,
-                    bincode::config::standard(),
-                )
-                .expect("Failed to deserialize transactions")
-                .0,
+                transactions: bincode::decode_from_slice(&bytes_txs, bincode::config::standard())
+                    .expect("Failed to deserialize transactions")
+                    .0,
                 previous_block_timestamp,
                 node_version: node_version_result
                     .map(|bytes| {
