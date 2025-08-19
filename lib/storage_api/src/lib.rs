@@ -1,5 +1,7 @@
 mod model;
-pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
+pub use model::{
+    CURRENT_REPLAY_VERSION, FinalityStatus, OldReplayRecord, ReplayRecord, StoredTxData, TxMeta,
+};
 
 mod replay;
 pub use replay::ReadReplay;

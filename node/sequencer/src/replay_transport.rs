@@ -8,7 +8,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_util::codec::{self, Framed, LengthDelimitedCodec};
-use zksync_os_storage_api::ReplayRecord;
+use zksync_os_storage_api::{CURRENT_REPLAY_VERSION, OldReplayRecord, ReplayRecord};
 
 use crate::{block_replay_storage::BlockReplayStorage, model::blocks::BlockCommand};
 
@@ -30,6 +30,11 @@ pub async fn replay_server(
                     return;
                 }
             };
+            if let Err(e) = socket.write_u32(CURRENT_REPLAY_VERSION).await {
+                tracing::info!("Could not write replay version: {}", e);
+                return;
+            }
+
             tracing::info!(
                 "Streaming replays to {} starting from {}",
                 socket.peer_addr().unwrap(),
@@ -68,10 +73,19 @@ pub async fn replay_receiver(
         .await?;
 
     socket.write_u64(starting_block).await?;
+    let replay_version = socket.read_u32().await?;
 
-    Ok(Framed::new(socket, BlockReplayCodec::new())
-        .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
-        .boxed())
+    Ok(if replay_version == CURRENT_REPLAY_VERSION {
+        Framed::new(socket, BlockReplayCodec::new())
+            .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
+            .boxed()
+    } else if replay_version == CURRENT_REPLAY_VERSION - 1 {
+        Framed::new(socket, OldReplayCodec::new())
+            .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
+            .boxed()
+    } else {
+        panic!("Unsupported replay version: {replay_version}");
+    })
 }
 
 struct BlockReplayCodec(LengthDelimitedCodec);
@@ -114,5 +128,33 @@ impl codec::Encoder<ReplayRecord> for BlockReplayCodec {
                 .into(),
             dst,
         )
+    }
+}
+
+struct OldReplayCodec(LengthDelimitedCodec);
+
+impl OldReplayCodec {
+    fn new() -> Self {
+        Self(LengthDelimitedCodec::new())
+    }
+}
+
+impl codec::Decoder for OldReplayCodec {
+    type Item = ReplayRecord;
+    type Error = std::io::Error;
+
+    fn decode(
+        &mut self,
+        src: &mut alloy::rlp::BytesMut,
+    ) -> Result<Option<Self::Item>, Self::Error> {
+        self.0.decode(src).map(|inner| {
+            inner.map(|bytes| {
+                let old_replay: OldReplayRecord =
+                    bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
+                        .unwrap()
+                        .0;
+                old_replay.into()
+            })
+        })
     }
 }
