@@ -112,6 +112,7 @@ async-stream = "0.3.6"
 num_cpus = "1.17.0"
 rocksdb = "0.23.0"
 thread_local = "1.1.9"
+pin-project = "1.1.10"
 
 # Reth dependencies
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
