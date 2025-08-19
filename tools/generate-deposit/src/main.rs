@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
     let private_key = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
     // Replace with your Bridgehub address here!
-    let bridgehub_address = address!("0xb02237aee96515ae7b70308ba4d95e4bae047079");
+    let bridgehub_address = address!("0xbfe8aa55ad0b4b18f2cd93760be81fafd4c52712");
     // Deposit 10k ETH by default
     let amount = U256::from(100u128 * 10u128.pow(18));
     let l2_chain_id = 270;
