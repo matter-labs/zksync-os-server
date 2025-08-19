@@ -14,8 +14,6 @@
 //! to store [(de)serializable objects](StoredObject). Prefer using these methods
 //! whenever possible.
 
-// Required for `crc-fast` which is used in `aws-sdk-s3`
-#![feature(stdarch_x86_avx512)]
 // Linter settings.
 #![warn(missing_debug_implementations, bare_trait_objects)]
 #![warn(clippy::all, clippy::pedantic)]
