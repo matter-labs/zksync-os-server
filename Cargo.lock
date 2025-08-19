@@ -9735,6 +9735,7 @@ version = "0.1.1-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
+ "bincode 2.0.1",
  "serde",
  "thiserror 2.0.12",
  "zksync_os_contract_interface",

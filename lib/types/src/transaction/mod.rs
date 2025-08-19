@@ -54,31 +54,36 @@ impl ZkEnvelope {
 /// ZKsync OS transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth
 /// we mostly operate on this type as ZKsync OS expects signer to be provided externally (e.g., from
 /// the sequencer). This could change in the future.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkTransaction {
     pub inner: Recovered<ZkEnvelope>,
 }
 
-impl Serialize for ZkTransaction {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.inner.encoded_2718().serialize(serializer)
+impl bincode::enc::Encode for ZkTransaction {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        self.inner.encoded_2718().encode(encoder)
     }
 }
 
-impl<'de> Deserialize<'de> for ZkTransaction {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(
-            ZkEnvelope::decode_2718(&mut Vec::<u8>::deserialize(deserializer)?.as_slice())
-                .expect("Failed to decode 2718 transaction")
-                .try_into_recovered()
-                .expect("Failed to recover transaction's signer"),
-        )
+impl<Context> bincode::de::Decode<Context> for ZkTransaction {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let bytes = Vec::<u8>::decode(decoder)?;
+        let envelope = ZkEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to decode 2718 transaction".to_string(),
+            )
+        })?;
+        let recovered = envelope.try_into_recovered().map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to recover transaction's signer".to_string(),
+            )
+        })?;
+        Ok(recovered)
     }
 }
 
