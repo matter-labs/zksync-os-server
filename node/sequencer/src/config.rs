@@ -52,7 +52,7 @@ pub struct SequencerConfig {
     pub prometheus_port: u16,
 
     /// Where to serve block replays
-    #[config(default_t = "0.0.0.0:8103".into())]
+    #[config(default_t = "0.0.0.0:3053".into())]
     pub block_replay_server_address: String,
 
     /// Where to download replays instead of actually running blocks.
