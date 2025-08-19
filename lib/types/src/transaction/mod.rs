@@ -60,8 +60,35 @@ impl ZkEnvelope {
 /// the sequencer). This could change in the future.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkTransaction {
-    #[serde(flatten)]
     pub inner: Recovered<ZkEnvelope>,
+}
+
+impl bincode::enc::Encode for ZkTransaction {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        self.inner.encoded_2718().encode(encoder)
+    }
+}
+
+impl<Context> bincode::de::Decode<Context> for ZkTransaction {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let bytes = Vec::<u8>::decode(decoder)?;
+        let envelope = ZkEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to decode 2718 transaction".to_string(),
+            )
+        })?;
+        let recovered = envelope.try_into_recovered().map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to recover transaction's signer".to_string(),
+            )
+        })?;
+        Ok(recovered)
+    }
 }
 
 impl ZkTransaction {
