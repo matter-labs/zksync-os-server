@@ -53,7 +53,7 @@ impl TreeManager {
             .expect("cannot access tree on startup");
         if version.is_none() {
             let tree_entries = genesis
-                .inner()
+                .state()
                 .storage_logs
                 .iter()
                 .map(|(key, value)| TreeEntry {

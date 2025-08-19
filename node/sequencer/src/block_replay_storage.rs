@@ -1,16 +1,20 @@
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::blocks::BlockCommand;
-use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::{B256, BlockNumber};
+use futures::Stream;
 use futures::stream::{self, BoxStream, StreamExt};
+use pin_project::pin_project;
 use ruint::aliases::U256;
 use std::convert::TryInto;
+use std::task::Poll;
+use std::time::Duration;
+use tokio::pin;
+use tokio::time::{Instant, Sleep};
 use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
-use zksync_os_types::ZkEnvelope;
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:
@@ -129,14 +133,8 @@ impl BlockReplayStorage {
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.last_processed_l1_tx_id");
-        let txs_2718_encoded = record
-            .transactions
-            .into_iter()
-            .map(|tx| tx.inner.encoded_2718())
-            .collect::<Vec<_>>();
-        let txs_value =
-            bincode::serde::encode_to_vec(&txs_2718_encoded, bincode::config::standard())
-                .expect("Failed to serialize record.transactions");
+        let txs_value = bincode::encode_to_vec(&record.transactions, bincode::config::standard())
+            .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
         // Batch both writes: replay entry and latest pointer
@@ -192,6 +190,44 @@ impl BlockReplayStorage {
             }
         });
         Box::pin(stream)
+    }
+
+    /// Streams all replay commands with block_number ≥ `start`, in ascending block order and waits for new ones on running out
+    pub fn replay_commands_forever(&self, start: BlockNumber) -> BoxStream<ReplayRecord> {
+        #[pin_project]
+        struct BlockStream {
+            replays: BlockReplayStorage,
+            current_block: BlockNumber,
+            #[pin]
+            sleep: Sleep,
+        }
+        impl Stream for BlockStream {
+            type Item = ReplayRecord;
+
+            fn poll_next(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                let mut this = self.project();
+                if let Some(record) = this.replays.get_replay_record(*this.current_block) {
+                    *this.current_block += 1;
+                    Poll::Ready(Some(record))
+                } else {
+                    // TODO: would be nice to be woken up only when the next block is available
+                    this.sleep
+                        .as_mut()
+                        .reset(Instant::now() + Duration::from_millis(50));
+                    assert_eq!(this.sleep.poll(cx), Poll::Pending);
+                    Poll::Pending
+                }
+            }
+        }
+
+        Box::pin(BlockStream {
+            replays: self.clone(),
+            current_block: start,
+            sleep: tokio::time::sleep(Duration::from_millis(50)),
+        })
     }
 }
 
@@ -260,20 +296,9 @@ impl ReadReplay for BlockReplayStorage {
                 )
                 .expect("Failed to deserialize context")
                 .0,
-                transactions: bincode::serde::decode_from_slice::<Vec<Vec<u8>>, _>(
-                    &bytes_txs,
-                    bincode::config::standard(),
-                )
-                .expect("Failed to deserialize transactions")
-                .0
-                .into_iter()
-                .map(|bytes| {
-                    ZkEnvelope::decode_2718(&mut bytes.as_slice())
-                        .expect("Failed to decode 2718 transaction")
-                        .try_into_recovered()
-                        .expect("Failed to recover transaction's signer")
-                })
-                .collect(),
+                transactions: bincode::decode_from_slice(&bytes_txs, bincode::config::standard())
+                    .expect("Failed to deserialize transactions")
+                    .0,
                 previous_block_timestamp,
                 node_version: node_version_result
                     .map(|bytes| {

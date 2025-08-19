@@ -108,12 +108,12 @@ pub async fn execute_block(
                             }
                             Err(e) => {
                                 match (tx.tx_type(), command.invalid_tx_policy) {
-                                    (ZkTxType::L1, _) => {
+                                    (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                         return Err(
                                             BlockDump {
                                                 ctx,
                                                 txs: all_processed_txs.clone(),
-                                                error: format!("invalid l1 tx: {e:?}"),
+                                                error: format!("invalid {} tx: {e:?}", tx.tx_type()),
                                             }
                                         )
                                     }

@@ -39,6 +39,11 @@ See `node/sequencer/config.rs` for config options and defaults. Use env variable
 prover_api_fake_provers_enabled=false cargo run --release
 ```
 
+### External node
+
+Setting the `block_replay_download_address` environment variable puts the node in external node mode, which means it receives block replays from another node instead of producing its own blocks. The node will get transactions from L1 and check that they match the ones in the replay but it won't change L1 state.
+
+To run the external node locally, you need to set its services' ports so they don't overlap with the main node. See run_en.sh for an example.
 
 
 ### Docker
@@ -203,10 +208,6 @@ Minimal Node only needs (1).
 * `Block` vs `Batch`:
     * One `block` = one vm run in block_executor = one block_receipt,
     * one `batch` = one FRI proof = one L1 commit.
-
-Important: currently zksync-os uses term `batch` for blocks (e.g. `run_batch` etc.).
-Also, return type of a block is `BatchOutput` - which represents a block in our case.
-todo: use `use BatchOutput as BlockOutput` in this repo to avoid confusion.
 
 ## L1 State
 

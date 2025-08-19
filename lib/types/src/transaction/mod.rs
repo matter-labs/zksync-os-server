@@ -25,8 +25,10 @@ use alloy::rlp as alloy_rlp;
 #[derive(Clone, Debug, TransactionEnvelope)]
 #[envelope(alloy_consensus = alloy::consensus, tx_type_name = ZkTxType)]
 pub enum ZkEnvelope {
+    #[envelope(ty = 41)]
+    Upgrade(L1UpgradeEnvelope),
     #[envelope(ty = 42)]
-    L1(L1Envelope),
+    L1(L1PriorityEnvelope),
     #[envelope(flatten)]
     L2(L2Envelope),
 }
@@ -35,6 +37,7 @@ impl ZkEnvelope {
     /// Returns the [`ZkTxType`] of the inner transaction.
     pub const fn tx_type(&self) -> ZkTxType {
         match self {
+            Self::Upgrade(_) => ZkTxType::Upgrade,
             Self::L1(_) => ZkTxType::L1,
             Self::L2(l2_tx) => ZkTxType::L2(l2_tx.tx_type()),
         }
@@ -43,6 +46,7 @@ impl ZkEnvelope {
     /// Recovers the signer of inner transaction and returns a `ZkTransaction`.
     pub fn try_into_recovered(self) -> Result<ZkTransaction, RecoveryError> {
         match self {
+            Self::Upgrade(upgrade_tx) => Ok(ZkTransaction::from(upgrade_tx)),
             Self::L1(l1_tx) => Ok(ZkTransaction::from(l1_tx)),
             Self::L2(l2_tx) => Ok(ZkTransaction::from(SignerRecoverable::try_into_recovered(
                 l2_tx,
@@ -56,8 +60,54 @@ impl ZkEnvelope {
 /// the sequencer). This could change in the future.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkTransaction {
-    #[serde(flatten)]
     pub inner: Recovered<ZkEnvelope>,
+}
+
+impl bincode::enc::Encode for ZkTransaction {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        self.inner.encoded_2718().encode(encoder)
+    }
+}
+
+impl<Context> bincode::de::Decode<Context> for ZkTransaction {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let bytes = Vec::<u8>::decode(decoder)?;
+        let envelope = ZkEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to decode 2718 transaction".to_string(),
+            )
+        })?;
+        let recovered = envelope.try_into_recovered().map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to recover transaction's signer".to_string(),
+            )
+        })?;
+        Ok(recovered)
+    }
+}
+
+impl<'de, Context> bincode::de::BorrowDecode<'de, Context> for ZkTransaction {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let bytes = Vec::<u8>::borrow_decode(decoder)?;
+        let envelope = ZkEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to decode 2718 transaction".to_string(),
+            )
+        })?;
+        let recovered = envelope.try_into_recovered().map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to recover transaction's signer".to_string(),
+            )
+        })?;
+        Ok(recovered)
+    }
 }
 
 impl ZkTransaction {
@@ -71,6 +121,7 @@ impl ZkTransaction {
 
     pub fn hash(&self) -> &B256 {
         match self.envelope() {
+            ZkEnvelope::Upgrade(upgrade_tx) => upgrade_tx.hash(),
             ZkEnvelope::L1(l1_tx) => l1_tx.hash(),
             ZkEnvelope::L2(l2_tx) => l2_tx.hash(),
         }
@@ -97,8 +148,17 @@ impl ZkTransaction {
     }
 }
 
-impl From<L1Envelope> for ZkTransaction {
-    fn from(value: L1Envelope) -> Self {
+impl From<L1UpgradeEnvelope> for ZkTransaction {
+    fn from(value: L1UpgradeEnvelope) -> Self {
+        let signer = value.inner.tx().from;
+        Self {
+            inner: Recovered::new_unchecked(ZkEnvelope::Upgrade(value), signer),
+        }
+    }
+}
+
+impl From<L1PriorityEnvelope> for ZkTransaction {
+    fn from(value: L1PriorityEnvelope) -> Self {
         let signer = value.inner.tx().from;
         Self {
             inner: Recovered::new_unchecked(ZkEnvelope::L1(value), signer),
@@ -120,6 +180,7 @@ impl fmt::Display for ZkTxType {
         match self {
             Self::L2(tx) => tx.fmt(f),
             Self::L1 => write!(f, "L1"),
+            Self::Upgrade => write!(f, "Upgrade"),
         }
     }
 }
