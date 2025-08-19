@@ -64,7 +64,7 @@ impl codec::Decoder for BlockReplayCodec {
     ) -> Result<Option<Self::Item>, Self::Error> {
         self.0.decode(src).map(|inner| {
             inner.map(|bytes| {
-                bincode::serde::decode_from_slice(bytes.as_ref(), bincode::config::standard())
+                bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
                     .unwrap()
                     .0
             })
@@ -81,7 +81,7 @@ impl codec::Encoder<ReplayRecord> for BlockReplayCodec {
         dst: &mut alloy::rlp::BytesMut,
     ) -> Result<(), Self::Error> {
         self.0.encode(
-            bincode::serde::encode_to_vec(item, bincode::config::standard())
+            bincode::encode_to_vec(item, bincode::config::standard())
                 .unwrap()
                 .into(),
             dst,

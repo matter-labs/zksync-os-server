@@ -91,6 +91,25 @@ impl<Context> bincode::de::Decode<Context> for ZkTransaction {
     }
 }
 
+impl<'de, Context> bincode::de::BorrowDecode<'de, Context> for ZkTransaction {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let bytes = Vec::<u8>::borrow_decode(decoder)?;
+        let envelope = ZkEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to decode 2718 transaction".to_string(),
+            )
+        })?;
+        let recovered = envelope.try_into_recovered().map_err(|_| {
+            bincode::error::DecodeError::OtherString(
+                "Failed to recover transaction's signer".to_string(),
+            )
+        })?;
+        Ok(recovered)
+    }
+}
+
 impl ZkTransaction {
     pub fn envelope(&self) -> &ZkEnvelope {
         self.inner.inner()
