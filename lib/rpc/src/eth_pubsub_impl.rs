@@ -2,7 +2,7 @@ use crate::eth_impl::build_api_log;
 use crate::rpc_storage::ReadRpcStorage;
 use alloy::consensus::Sealed;
 use alloy::consensus::transaction::TransactionInfo;
-use alloy::primitives::TxHash;
+use alloy::primitives::{TxHash, U256};
 use alloy::rpc::types::pubsub::{Params, SubscriptionKind};
 use alloy::rpc::types::{Filter, Log, Transaction};
 use async_trait::async_trait;
@@ -10,9 +10,11 @@ use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use jsonrpsee::{PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink};
 use serde::Serialize;
+use std::ops::Deref;
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_mempool::{EthPooledTransaction, L2TransactionPool, NewTransactionEvent};
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
+use zksync_os_types::BlockExt;
 
 #[derive(Clone)]
 pub struct EthPubsubNamespace<RpcStorage, Mempool> {
@@ -43,7 +45,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
                         notification.block.hash(),
                     ),
                     None,
-                    None,
+                    Some(U256::from(notification.block.as_ref().deref().rlp_length())),
                 )
             })
     }
