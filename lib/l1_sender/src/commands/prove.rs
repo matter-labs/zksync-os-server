@@ -18,7 +18,6 @@ const FAKE_PROOF_MAGIC_VALUE: i32 = 13;
 #[derive(Debug)]
 pub struct ProofCommand {
     batches: Vec<BatchEnvelope<FriProof>>,
-    // only fake proof is supported for now
     proof: SnarkProof,
 }
 
