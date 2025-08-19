@@ -52,7 +52,6 @@ COPY --from=builder /app/target/release/zksync_os_sequencer /usr/local/bin/
 
 COPY --from=builder /app/server_app.bin /app/server_app_logging_enabled.bin /app/multiblock_batch.bin /app/
 
-RUN mkdir -p /app/genesis
 COPY --from=builder /app/genesis/genesis.json /app/genesis/
 
 # reuired to support mod.rs in batcher: `concat!(env!("CARGO_MANIFEST_DIR"), "/../../server_app.bin")`
