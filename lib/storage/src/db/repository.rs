@@ -84,7 +84,7 @@ impl RepositoryDb {
             .unwrap()
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
         let latest_block_number = latest_block_number.unwrap_or_else(|| {
-            let header = genesis.inner().header.clone();
+            let header = genesis.state().header.clone();
             let hash = header.hash();
             let block = Sealed::new_unchecked(
                 Block {

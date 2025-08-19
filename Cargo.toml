@@ -57,7 +57,6 @@ zk_os_forward_system = { package = "forward_system", git = "https://github.com/m
 zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.10" }
 
 #air-compiler-cli = { package = "cli", path = "../zksync-airbender/tools/cli" }
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
@@ -106,7 +105,7 @@ sha2 = "0.10.9"
 tower = "0.5.2"
 tower-http = "0.6.6"
 hyper = "1.6.0"
-semver = "1"
+semver = { version = "1", features = ["serde"] }
 async-stream = "0.3.6"
 num_cpus = "1.17.0"
 rocksdb = "0.23.0"

@@ -204,10 +204,6 @@ Minimal Node only needs (1).
     * One `block` = one vm run in block_executor = one block_receipt,
     * one `batch` = one FRI proof = one L1 commit.
 
-Important: currently zksync-os uses term `batch` for blocks (e.g. `run_batch` etc.).
-Also, return type of a block is `BatchOutput` - which represents a block in our case.
-todo: use `use BatchOutput as BlockOutput` in this repo to avoid confusion.
-
 ## L1 State
 
 Please see the [How to run with L1 doc](docs/running_with_l1.md)

@@ -66,6 +66,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                 match tx.into_envelope() {
                     ZkEnvelope::L1(l1_tx) => l1_tx_hashes.push(l1_tx.hash().0.into()),
                     ZkEnvelope::L2(_) => {}
+                    ZkEnvelope::Upgrade(_) => {}
                 }
             }
         }
@@ -108,6 +109,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                                 merkle_tree.push_hash(l1_tx.hash().0.into());
                             }
                             ZkEnvelope::L2(_) => {}
+                            ZkEnvelope::Upgrade(_) => {}
                         }
                     }
                 }
