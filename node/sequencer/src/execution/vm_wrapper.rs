@@ -9,12 +9,12 @@ use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
 use zk_os_forward_system::run::{
     BlockContext, BlockOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
-    run_batch,
+    run_block,
 };
 use zksync_os_state::StateView;
 
-/// A one‐by‐one driver around `run_batch`, enabling `execute_next_tx` interface
-/// (as opposed to pull interface of `run_batch` in zksync-os)
+/// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
+/// (as opposed to pull interface of `run_block` in zksync-os)
 /// consider changing that interface on zksync-os side, which will make this file redundant
 pub struct VmWrapper {
     handle: Option<JoinHandle<Result<BlockOutput, ForwardSubsystemError>>>,
@@ -25,18 +25,18 @@ pub struct VmWrapper {
 impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
     pub fn new(context: BlockContext, state_view: StateView) -> Self {
-        // Channel for sending NextTxResponse (Tx bytes or SealBatch).
+        // Channel for sending NextTxResponse (Tx bytes or SealBlock).
         let (tx_sender, tx_receiver) = channel(1);
         // Channel for receiving per‐tx execution results.
         let (res_sender, res_receiver) = channel(1);
 
-        // Wrap the channels in the traits run_batch expects:
+        // Wrap the channels in the traits run_block expects:
         let tx_source = ChannelTxSource::new(tx_receiver);
         let tx_callback = ChannelTxResultCallback::new(res_sender);
 
-        // Spawn the blocking run_batch(...) call.
+        // Spawn the blocking run_block(...) call.
         let join_handle = spawn_blocking(move || {
-            run_batch(
+            run_block(
                 context,
                 state_view.clone(),
                 state_view,
@@ -81,7 +81,7 @@ impl VmWrapper {
                 let task = self.handle.take().unwrap();
                 match tokio::time::timeout(timeout_duration, task).await {
                     Ok(Ok(Ok(_))) => {
-                        anyhow::bail!("`run_block` finished before `SealBatch` signal")
+                        anyhow::bail!("`run_block` finished before `SealBlock` signal")
                     }
                     Ok(Ok(Err(e))) => anyhow::bail!("`run_block`: {e:?}"),
                     Ok(Err(e)) => anyhow::bail!("failed to join `run_block`: {e:?}"),
@@ -96,7 +96,7 @@ impl VmWrapper {
     /// Tell the VM to seal the block and return the final `BlockOutput`.
     pub async fn seal_block(self) -> anyhow::Result<BlockOutput> {
         // Request batch seal.
-        let _ = self.tx_sender.send(NextTxResponse::SealBatch).await;
+        let _ = self.tx_sender.send(NextTxResponse::SealBlock).await;
         // Await the blocking task's result.
         self.handle
             .unwrap()
@@ -106,7 +106,7 @@ impl VmWrapper {
     }
 }
 
-/// A `TxSource` that drives `run_batch` from a `tokio::sync::mpsc::Receiver`.
+/// A `TxSource` that drives `run_block` from a `tokio::sync::mpsc::Receiver`.
 struct ChannelTxSource {
     receiver: Receiver<NextTxResponse>,
 }
@@ -123,7 +123,7 @@ impl TxSource for ChannelTxSource {
         // If the sender is dropped, default to sealing.
         self.receiver
             .blocking_recv()
-            .unwrap_or(NextTxResponse::SealBatch)
+            .unwrap_or(NextTxResponse::SealBlock)
     }
 }
 
