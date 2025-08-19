@@ -15,6 +15,9 @@ pub(crate) struct ObjectStoreMetrics {
     /// Latency to store an object in the store (accounting for retries).
     #[metrics(buckets = Buckets::LATENCIES, labels = ["bucket"])]
     storing_time: LabeledFamily<&'static str, Histogram<Duration>>,
+    /// Size of the payloads stored in the object store.
+    #[metrics(buckets = Buckets::exponential(1.0..=16.0 * 1_024.0 * 1_024.0, 8.0), labels = ["bucket"])]
+    pub payload_size: LabeledFamily<&'static str, Histogram<usize>>,
 }
 
 impl ObjectStoreMetrics {

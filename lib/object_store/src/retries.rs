@@ -111,6 +111,7 @@ impl<S: ObjectStore> ObjectStore for StoreWithRetries<S> {
         key: &str,
         value: Vec<u8>,
     ) -> Result<(), ObjectStoreError> {
+        OBJECT_STORE_METRICS.payload_size[&bucket.as_str()].observe(value.len());
         let latency = OBJECT_STORE_METRICS.start_store(bucket);
         let result = Request::Put(bucket, key)
             .retry(&self.inner, self.max_retries, || {
