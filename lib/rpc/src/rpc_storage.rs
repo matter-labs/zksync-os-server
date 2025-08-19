@@ -3,8 +3,7 @@ use alloy::primitives::BlockNumber;
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
-    ReadBatch, ReadFinality, ReadReplay, ReadRepository, RepositoryBlock, RepositoryError,
-    RepositoryResult,
+    ReadBatch, ReadFinality, ReadReplay, ReadRepository, RepositoryBlock, RepositoryResult,
 };
 
 pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
@@ -31,38 +30,35 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
     /// actions as possible.
     ///
     /// WARNING: Does not ensure that the returned block's hash or number actually exists
-    fn resolve_block_hash_or_number(
-        &self,
-        block_id: BlockId,
-    ) -> RepositoryResult<BlockHashOrNumber> {
+    fn resolve_block_hash_or_number(&self, block_id: BlockId) -> BlockHashOrNumber {
         match block_id {
-            BlockId::Hash(hash) => Ok(hash.block_hash.into()),
+            BlockId::Hash(hash) => hash.block_hash.into(),
             BlockId::Number(BlockNumberOrTag::Pending) => {
-                Ok(self.repository().get_latest_block().into())
+                self.repository().get_latest_block().into()
             }
             BlockId::Number(BlockNumberOrTag::Latest) => {
-                Ok(self.repository().get_latest_block().into())
+                self.repository().get_latest_block().into()
             }
-            BlockId::Number(BlockNumberOrTag::Safe) => Ok(self
+            BlockId::Number(BlockNumberOrTag::Safe) => self
                 .finality()
                 .get_finality_status()
                 .last_committed_block
-                .into()),
-            BlockId::Number(BlockNumberOrTag::Finalized) => Ok(self
+                .into(),
+            BlockId::Number(BlockNumberOrTag::Finalized) => self
                 .finality()
                 .get_finality_status()
                 .last_executed_block
-                .into()),
+                .into(),
             BlockId::Number(BlockNumberOrTag::Earliest) => {
-                Err(RepositoryError::EarliestBlockNotSupported)
+                self.repository().get_earliest_block().into()
             }
-            BlockId::Number(BlockNumberOrTag::Number(number)) => Ok(number.into()),
+            BlockId::Number(BlockNumberOrTag::Number(number)) => number.into(),
         }
     }
 
     /// Resolve block's number by its id.
     fn resolve_block_number(&self, block_id: BlockId) -> RepositoryResult<Option<BlockNumber>> {
-        let block_hash_or_number = self.resolve_block_hash_or_number(block_id)?;
+        let block_hash_or_number = self.resolve_block_hash_or_number(block_id);
         match block_hash_or_number {
             // todo: should be possible to not load the entire block here
             BlockHashOrNumber::Hash(block_hash) => Ok(self
@@ -78,7 +74,7 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
         // We presume that a reasonable number of historical blocks are being saved, so that
         // `Latest`/`Pending`/`Safe`/`Finalized` always resolve even if we don't take a look between
         // two actions below.
-        let block_hash_or_number = self.resolve_block_hash_or_number(block_id)?;
+        let block_hash_or_number = self.resolve_block_hash_or_number(block_id);
         self.get_block_by_hash_or_number(block_hash_or_number)
     }
 }

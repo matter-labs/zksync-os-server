@@ -45,6 +45,13 @@ pub trait ReadRepository: Send + Sync + 'static {
 
     /// Returns number of the last known block.
     fn get_latest_block(&self) -> u64;
+
+    /// Returns earliest block number that is stored in the repository.
+    fn get_earliest_block(&self) -> u64 {
+        // We presume that blocks never get pruned, so genesis block is always our earliest
+        // block.
+        0
+    }
 }
 
 /// Repository result type.
@@ -53,10 +60,6 @@ pub type RepositoryResult<Ok> = Result<Ok, RepositoryError>;
 /// Error variants thrown by various repositories.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum RepositoryError {
-    // todo: should resolve to first non-compressed/non-pruned block? unclear, might depend on the method
-    #[error("earliest block tag is not supported yet")]
-    EarliestBlockNotSupported,
-
     #[error(transparent)]
     Rocksdb(#[from] rocksdb::Error),
     #[error(transparent)]
