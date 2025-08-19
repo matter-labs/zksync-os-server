@@ -9,14 +9,14 @@ use alloy::consensus::transaction::Recovered;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
+use alloy::network::BlockResponse;
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{Address, B256, BlockNumber, Bytes, TxHash, U64, U256};
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    AccountInfo, Block, BlockOverrides, Bundle, EIP1186AccountProofResponse, EthCallResponse,
-    FeeHistory, Header, Index, Log, StateContext, SyncStatus, Transaction, TransactionReceipt,
-    TransactionRequest,
+    AccountInfo, BlockOverrides, Bundle, EIP1186AccountProofResponse, EthCallResponse, FeeHistory,
+    Index, Log, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
@@ -30,7 +30,10 @@ use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_storage_api::{RepositoryError, TxMeta};
-use zksync_os_types::{L2Envelope, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::rpc::{
+    RpcBlockConvert, ZkBlock, ZkHeader, ZkTransaction, ZkTransactionReceipt,
+};
+use zksync_os_types::{L2Envelope, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
     tx_handler: TxHandler<Mempool>,
@@ -70,34 +73,27 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         // `full=false` means that the returned block will contain a list of transaction hashes.
         // `full=true` means that the returned block will contain a list of transactions (in RPC representation).
         full: bool,
-    ) -> EthResult<Option<Block<Transaction<ZkEnvelope>>>> {
+    ) -> EthResult<Option<ZkBlock>> {
         let block_id = block_id.unwrap_or_default();
         let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
+        let mut rpc_block = block.into_rpc();
         if full {
-            let (block, hash) = block.into_parts();
-            let full_transactions = block
-                .body
-                .transactions
-                .into_iter()
-                .map(|tx_hash| {
-                    self.transaction_by_hash_impl(tx_hash)?
-                        .ok_or(EthError::BlockNotFound(block_id))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Some(Block::new(
-                Header::from_consensus(block.header.seal(hash), None, None),
-                BlockTransactions::Full(full_transactions),
-            )))
-        } else {
-            let hash = block.hash();
-            let block = block.unseal();
-            Ok(Some(Block::new(
-                Header::from_consensus(block.header.seal(hash), None, None),
-                BlockTransactions::Hashes(block.body.transactions),
-            )))
+            let tx_hashes = rpc_block.transactions().hashes();
+            let mut full_txs = Vec::with_capacity(tx_hashes.len());
+            for tx_hash in tx_hashes {
+                if let Some(tx) = self.storage.repository().get_transaction(tx_hash)?
+                    && let Some(meta) = self.storage.repository().get_transaction_meta(tx_hash)?
+                {
+                    full_txs.push(build_api_tx(tx, Some(&meta)));
+                } else {
+                    return Err(EthError::BlockNotFound(block_id));
+                }
+            }
+            rpc_block.transactions = BlockTransactions::Full(full_txs);
         }
+        Ok(Some(rpc_block))
     }
 
     fn block_transaction_count_by_id_impl(&self, block_id: BlockId) -> EthResult<Option<U256>> {
@@ -110,7 +106,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
     fn block_receipts_impl(
         &self,
         block_id: BlockId,
-    ) -> EthResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
+    ) -> EthResult<Option<Vec<ZkTransactionReceipt>>> {
         let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
@@ -147,7 +143,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         Ok(None)
     }
 
-    fn transaction_by_hash_impl(&self, hash: B256) -> EthResult<Option<Transaction<ZkEnvelope>>> {
+    fn transaction_by_hash_impl(&self, hash: B256) -> EthResult<Option<ZkTransaction>> {
         // Look up in mempool first to avoid race condition
         if let Some(pool_tx) = self.mempool.get(&hash) {
             let envelope = L2Envelope::from(pool_tx.transaction.transaction.inner().clone());
@@ -186,7 +182,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         &self,
         block_id: BlockId,
         index: Index,
-    ) -> EthResult<Option<Transaction<ZkEnvelope>>> {
+    ) -> EthResult<Option<ZkTransaction>> {
         let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Ok(None);
         };
@@ -206,7 +202,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         &self,
         sender: Address,
         nonce: U64,
-    ) -> EthResult<Option<Transaction<ZkEnvelope>>> {
+    ) -> EthResult<Option<ZkTransaction>> {
         let Some(tx_hash) = self
             .storage
             .repository()
@@ -217,10 +213,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         self.transaction_by_hash_impl(tx_hash)
     }
 
-    fn transaction_receipt_impl(
-        &self,
-        tx_hash: B256,
-    ) -> EthResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
+    fn transaction_receipt_impl(&self, tx_hash: B256) -> EthResult<Option<ZkTransactionReceipt>> {
         let Some(stored_tx) = self.storage.repository().get_stored_transaction(tx_hash)? else {
             return Ok(None);
         };
@@ -352,11 +345,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         Ok(Some(U64::from(self.chain_id)))
     }
 
-    async fn block_by_hash(
-        &self,
-        hash: B256,
-        full: bool,
-    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>> {
+    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<ZkBlock>> {
         self.block_by_id_impl(Some(hash.into()), full)
             .to_rpc_result()
     }
@@ -365,7 +354,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         &self,
         number: BlockNumberOrTag,
         full: bool,
-    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>> {
+    ) -> RpcResult<Option<ZkBlock>> {
         self.block_by_id_impl(Some(number.into()), full)
             .to_rpc_result()
     }
@@ -399,7 +388,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
     async fn block_receipts(
         &self,
         block_id: BlockId,
-    ) -> RpcResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>> {
+    ) -> RpcResult<Option<Vec<ZkTransactionReceipt>>> {
         self.block_receipts_impl(block_id).to_rpc_result()
     }
 
@@ -407,7 +396,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         &self,
         _hash: B256,
         _index: Index,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<ZkBlock>> {
         // ZKsync OS is not PoW and hence does not have uncle blocks
         Ok(None)
     }
@@ -416,7 +405,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         &self,
         _number: BlockNumberOrTag,
         _index: Index,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<ZkBlock>> {
         // ZKsync OS is not PoW and hence does not have uncle blocks
         Ok(None)
     }
@@ -425,7 +414,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         self.raw_transaction_by_hash_impl(hash).to_rpc_result()
     }
 
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<ZkTransaction>> {
         self.transaction_by_hash_impl(hash).to_rpc_result()
     }
 
@@ -442,7 +431,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         &self,
         hash: B256,
         index: Index,
-    ) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
+    ) -> RpcResult<Option<ZkTransaction>> {
         self.transaction_by_block_id_and_index_impl(hash.into(), index)
             .to_rpc_result()
     }
@@ -460,7 +449,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         &self,
         number: BlockNumberOrTag,
         index: Index,
-    ) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
+    ) -> RpcResult<Option<ZkTransaction>> {
         self.transaction_by_block_id_and_index_impl(number.into(), index)
             .to_rpc_result()
     }
@@ -469,15 +458,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         &self,
         address: Address,
         nonce: U64,
-    ) -> RpcResult<Option<Transaction<ZkEnvelope>>> {
+    ) -> RpcResult<Option<ZkTransaction>> {
         self.transaction_by_sender_and_nonce_impl(address, nonce)
             .to_rpc_result()
     }
 
-    async fn transaction_receipt(
-        &self,
-        hash: B256,
-    ) -> RpcResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>> {
+    async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<ZkTransactionReceipt>> {
         self.transaction_receipt_impl(hash).to_rpc_result()
     }
 
@@ -507,14 +493,17 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         self.get_code_impl(address, block_id).to_rpc_result()
     }
 
-    async fn header_by_number(&self, block_number: BlockNumberOrTag) -> RpcResult<Option<Header>> {
+    async fn header_by_number(
+        &self,
+        block_number: BlockNumberOrTag,
+    ) -> RpcResult<Option<ZkHeader>> {
         Ok(self
             .block_by_id_impl(Some(block_number.into()), false)
             .to_rpc_result()?
             .map(|block| block.header))
     }
 
-    async fn header_by_hash(&self, hash: B256) -> RpcResult<Option<Header>> {
+    async fn header_by_hash(&self, hash: B256) -> RpcResult<Option<ZkHeader>> {
         Ok(self
             .block_by_id_impl(Some(hash.into()), false)
             .to_rpc_result()?
@@ -686,9 +675,9 @@ pub fn build_api_log(
 pub fn build_api_receipt(
     tx_hash: TxHash,
     receipt: ZkReceiptEnvelope,
-    tx: &ZkTransaction,
+    tx: &zksync_os_types::ZkTransaction,
     meta: &TxMeta,
-) -> TransactionReceipt<ZkReceiptEnvelope<Log>> {
+) -> ZkTransactionReceipt {
     let mut log_index_in_tx = 0;
     let inner = receipt.map_logs(
         |inner_log| {
@@ -699,7 +688,7 @@ pub fn build_api_receipt(
         // todo: convert L2->L1 logs to RPC variant when we have one
         identity,
     );
-    TransactionReceipt {
+    ZkTransactionReceipt {
         inner,
         transaction_hash: tx_hash,
         transaction_index: Some(meta.tx_index_in_block),
@@ -715,8 +704,8 @@ pub fn build_api_receipt(
     }
 }
 
-pub fn build_api_tx(tx: ZkTransaction, meta: Option<&TxMeta>) -> Transaction<ZkEnvelope> {
-    Transaction {
+pub fn build_api_tx(tx: zksync_os_types::ZkTransaction, meta: Option<&TxMeta>) -> ZkTransaction {
+    ZkTransaction {
         inner: tx.inner,
         block_hash: meta.map(|meta| meta.block_hash),
         block_number: meta.map(|meta| meta.block_number),
