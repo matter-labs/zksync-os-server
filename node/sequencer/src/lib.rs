@@ -1,7 +1,6 @@
 #![feature(allocator_api)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-#![feature(stdarch_x86_avx512)]
 
 mod batch_sink;
 pub mod batcher;
