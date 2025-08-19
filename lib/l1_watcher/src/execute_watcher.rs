@@ -106,7 +106,8 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
                 );
                 let (_, last_executed_block) = self
                     .batch_storage
-                    .get_batch_range_by_number(batch_number)?
+                    .get_batch_range_by_number(batch_number)
+                    .await?
                     .expect("executed batch is missing");
                 self.finality.update_finality_status(|finality| {
                     assert!(

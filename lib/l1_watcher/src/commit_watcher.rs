@@ -106,7 +106,8 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
                 );
                 let (_, last_committed_block) = self
                     .batch_storage
-                    .get_batch_range_by_number(batch_number)?
+                    .get_batch_range_by_number(batch_number)
+                    .await?
                     .expect("committed batch is missing");
                 self.finality.update_finality_status(|finality| {
                     assert!(

@@ -66,6 +66,7 @@ impl GaplessCommitter {
             }
         }
     }
+
     async fn flush_ready(&mut self) -> anyhow::Result<()> {
         let mut ready: Vec<BatchEnvelope<FriProof>> = Vec::default();
         while let Some(next_batch) = self.buffer.remove(&self.next_expected) {
@@ -86,7 +87,7 @@ impl GaplessCommitter {
         );
         for batch in ready {
             let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
-            self.proof_storage.save_proof(&batch)?;
+            self.proof_storage.save_proof(&batch).await?;
             self.latency_tracker
                 .enter_state(GenericComponentState::WaitingSend);
             self.commit_batch_sender

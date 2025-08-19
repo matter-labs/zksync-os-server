@@ -5,6 +5,8 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
+use zksync_os_object_store::_reexports::BoxedError;
+use zksync_os_object_store::{Bucket, StoredObject};
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -114,4 +116,21 @@ pub enum SnarkProof {
     // Fake proof for testing purposes
     Fake,
     Real(Vec<u8>),
+}
+
+impl StoredObject for BatchEnvelope<FriProof> {
+    const BUCKET: Bucket = Bucket::FriBatchEnvelopes;
+    type Key<'a> = u64;
+
+    fn encode_key(key: Self::Key<'_>) -> String {
+        format!("fri_batch_envelope_{}.json", key)
+    }
+
+    fn serialize(&self) -> Result<Vec<u8>, BoxedError> {
+        serde_json::to_vec(self).map_err(From::from)
+    }
+
+    fn deserialize(bytes: Vec<u8>) -> Result<Self, BoxedError> {
+        serde_json::from_slice(&bytes).map_err(From::from)
+    }
 }

@@ -21,6 +21,7 @@ zksync_os_types.workspace = true
 zksync_os_priority_tree.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_genesis.workspace = true
+zksync_os_object_store.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
@@ -68,3 +69,4 @@ zksync_os_merkle_tree.workspace = true
 axum.workspace = true
 http.workspace = true
 pin-project.workspace = true
+async-trait.workspace = true
