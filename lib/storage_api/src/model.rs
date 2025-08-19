@@ -25,7 +25,14 @@ pub struct StoredTxData {
     pub meta: TxMeta,
 }
 
+/// Used to figure out what type replay to deserialize in external node.
+/// Must be incremented when [ReplayRecord] is changed.
+pub const CURRENT_REPLAY_VERSION: u32 = 1;
+
 /// Full data needed to replay a block - assuming storage is already in the correct state.
+///
+/// When you changes this struct or any of its dependencies, you must increment [CURRENT_REPLAY_VERSION],
+/// move the current struct into [OldReplayRecord] and implement conversion to the new version.
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct ReplayRecord {
     #[bincode(with_serde)]
@@ -78,6 +85,15 @@ impl ReplayRecord {
             node_version,
             block_output_hash,
         }
+    }
+}
+
+#[derive(bincode::Decode)]
+pub struct OldReplayRecord;
+
+impl From<OldReplayRecord> for ReplayRecord {
+    fn from(_: OldReplayRecord) -> Self {
+        unimplemented!()
     }
 }
 
