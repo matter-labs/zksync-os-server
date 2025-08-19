@@ -12,5 +12,5 @@ pub use commit_watcher::{L1CommitWatcher, L1CommitWatcherError, L1CommitWatcherR
 mod execute_watcher;
 pub use execute_watcher::{L1ExecuteWatcher, L1ExecuteWatcherError, L1ExecuteWatcherResult};
 
-mod util;
+pub mod util;
 mod watcher;

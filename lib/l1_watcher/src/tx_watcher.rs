@@ -7,16 +7,16 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_types::{L1Envelope, L1EnvelopeError};
+use zksync_os_types::{L1EnvelopeError, L1PriorityEnvelope};
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
 pub struct L1TxWatcher {
-    l1_watcher: L1Watcher<L1Envelope>,
+    l1_watcher: L1Watcher<L1PriorityEnvelope>,
     next_l1_priority_id: u64,
     poll_interval: Duration,
-    output: mpsc::Sender<L1Envelope>,
+    output: mpsc::Sender<L1PriorityEnvelope>,
 }
 
 impl L1TxWatcher {
@@ -24,7 +24,7 @@ impl L1TxWatcher {
         config: L1WatcherConfig,
         provider: DynProvider,
         zk_chain_address: Address,
-        output: mpsc::Sender<L1Envelope>,
+        output: mpsc::Sender<L1PriorityEnvelope>,
         next_l1_priority_id: u64,
     ) -> anyhow::Result<Self> {
         tracing::info!(
@@ -119,7 +119,7 @@ async fn find_l1_block_by_priority_id(
     .await
 }
 
-impl WatchedEvent for L1Envelope {
+impl WatchedEvent for L1PriorityEnvelope {
     const NAME: &'static str = "priority_tx";
 
     type SolEvent = NewPriorityRequest;

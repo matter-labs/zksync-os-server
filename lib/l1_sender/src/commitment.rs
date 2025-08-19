@@ -43,8 +43,10 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
             number_of_layer_1_txs: U256::from(value.number_of_layer1_txs),
             priority_operations_hash: Bytes32::from(value.priority_operations_hash.0),
             l2_logs_tree_root: Bytes32::from(value.l2_to_l1_logs_root_hash.0),
-            // TODO: Presumably shouldn't always be zero once we have upgrade transactions
-            upgrade_tx_hash: Default::default(),
+            upgrade_tx_hash: value
+                .upgrade_tx_hash
+                .map(|h| Bytes32::from_array(h.0))
+                .unwrap_or(Bytes32::ZERO),
         };
         let commitment = FixedBytes::from(system_batch_output.hash());
         Self {
@@ -96,6 +98,7 @@ pub struct CommitBatchInfo {
     pub last_block_timestamp: u64,
     pub chain_id: u64,
     pub operator_da_input: Vec<u8>,
+    pub upgrade_tx_hash: Option<B256>,
 }
 
 impl CommitBatchInfo {
@@ -117,6 +120,7 @@ impl CommitBatchInfo {
         let (first_block_output, _, _, _) = *blocks.first().unwrap();
         let (last_block_output, last_block_context, _, last_block_tree) = *blocks.last().unwrap();
 
+        let mut upgrade_tx_hash = None;
         for (block_output, _, transactions, _) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());
 
@@ -129,6 +133,14 @@ impl CommitBatchInfo {
                         number_of_layer1_txs += 1;
                     }
                     ZkEnvelope::L2(_) => {}
+                    ZkEnvelope::Upgrade(_) => {
+                        assert!(
+                            upgrade_tx_hash.is_none(),
+                            "more than one upgrade tx in a batch: first {upgrade_tx_hash:?}, second {}",
+                            tx.hash()
+                        );
+                        upgrade_tx_hash = Some(*tx.hash());
+                    }
                 }
             }
 
@@ -208,6 +220,7 @@ impl CommitBatchInfo {
             last_block_timestamp: last_block_output.header.timestamp,
             chain_id,
             operator_da_input,
+            upgrade_tx_hash,
         }
     }
 }

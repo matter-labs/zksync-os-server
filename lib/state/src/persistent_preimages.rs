@@ -36,11 +36,18 @@ impl PreimagesCF {
 }
 
 impl PersistentPreimages {
-    pub fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
+    pub async fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
         let genesis_needed = rocksdb_block_number(&rocks).is_none();
         let this = Self { rocks };
         if genesis_needed {
-            this.add(0, genesis.inner().preimages.iter().map(|(k, v)| (*k, v)));
+            let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
+            let iter = genesis
+                .state()
+                .preimages
+                .iter()
+                .chain(force_deploy_preimages.iter())
+                .map(|(k, v)| (*k, v));
+            this.add(0, iter);
         }
 
         this

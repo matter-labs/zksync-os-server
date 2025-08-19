@@ -11,6 +11,7 @@ pub mod rpc;
 
 mod transaction;
 pub use transaction::{
-    L1Envelope, L1EnvelopeError, L1TxSerialId, L2Envelope, L2Transaction, TxL1Priority, ZkEnvelope,
-    ZkTransaction, ZkTxType, ZksyncOsEncode,
+    L1Envelope, L1EnvelopeError, L1PriorityEnvelope, L1PriorityTx, L1PriorityTxType, L1Tx,
+    L1TxSerialId, L1TxType, L1UpgradeEnvelope, L1UpgradeTx, L2Envelope, L2Transaction,
+    UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
 };

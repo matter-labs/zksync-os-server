@@ -54,6 +54,7 @@ impl ReplayRecord {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
             ZkEnvelope::L2(_) => None,
+            ZkEnvelope::Upgrade(_) => None,
         });
         if let Some(first_l1_tx_priority_id) = first_l1_tx_priority_id {
             assert_eq!(

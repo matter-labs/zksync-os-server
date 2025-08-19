@@ -149,6 +149,16 @@ alloy::sol! {
            bytes calldata _executeData
        );
     }
+
+    // `IL1GenesisUpgrade.sol`
+    interface IL1GenesisUpgrade {
+        event GenesisUpgrade(
+            address indexed _zkChain,
+            L2CanonicalTransaction _l2Transaction,
+            uint256 indexed _protocolVersion,
+            bytes[] _factoryDeps
+        );
+    }
 }
 
 pub struct Bridgehub<P: Provider> {

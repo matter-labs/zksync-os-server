@@ -1,4 +1,5 @@
-use crate::transaction::l1::{L1Envelope, REAL_L1_PRIORITY_TX_TYPE_ID};
+use crate::transaction::L1TxType;
+use crate::transaction::l1::L1Envelope;
 use crate::transaction::l2::{L2Envelope, L2Transaction};
 use crate::{ZkEnvelope, ZkTransaction};
 use alloy::consensus::Transaction;
@@ -69,11 +70,11 @@ impl TransactionData {
     }
 }
 
-impl From<L1Envelope> for TransactionData {
-    fn from(l1_tx: L1Envelope) -> Self {
+impl<T: L1TxType> From<L1Envelope<T>> for TransactionData {
+    fn from(l1_tx: L1Envelope<T>) -> Self {
         let (l1_tx, _, _) = l1_tx.inner.into_parts();
         TransactionData {
-            tx_type: U256::from(REAL_L1_PRIORITY_TX_TYPE_ID),
+            tx_type: U256::from(T::REAL_TX_TYPE),
             from: l1_tx.from,
             to: l1_tx.to,
             gas_limit: U256::from(l1_tx.gas_limit),
@@ -222,6 +223,7 @@ impl From<ZkTransaction> for TransactionData {
         let (l2_envelope, signer) = value.into_parts();
         match l2_envelope {
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
+            ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.into(),
             ZkEnvelope::L2(l2_envelope) => L2Transaction::new_unchecked(l2_envelope, signer).into(),
         }
     }

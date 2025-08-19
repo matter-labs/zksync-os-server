@@ -162,7 +162,7 @@ impl TransactionBuilder<Zksync> for ZkTransactionRequest {
 
     fn complete_type(&self, ty: <Zksync as Network>::TxType) -> Result<(), Vec<&'static str>> {
         match ty {
-            ZkTxType::L1 => {
+            ZkTxType::L1 | ZkTxType::Upgrade => {
                 unimplemented!()
             }
             ZkTxType::L2(ty) => TransactionBuilder::complete_type(&self.0, ty),

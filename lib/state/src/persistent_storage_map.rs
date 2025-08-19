@@ -57,7 +57,7 @@ impl PersistentStorageMap {
         if rocksdb_block_number.is_none() {
             this.compact_sync(
                 0,
-                genesis.inner().storage_logs.clone().into_iter().collect(),
+                genesis.state().storage_logs.clone().into_iter().collect(),
             );
         }
         this
