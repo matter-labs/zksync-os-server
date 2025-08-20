@@ -61,7 +61,7 @@ pub struct L1Tx<T: L1TxType> {
     /// A scalar value equal to the maximum amount of L2 gas that should be used in executing this
     /// transaction on L2. This is paid up-front before any computation is done and may not be
     /// increased later.
-    #[serde(with = "alloy::serde::quantity")]
+    #[serde(rename = "gas", with = "alloy::serde::quantity")]
     pub gas_limit: u64,
     /// Maximum amount of L2 gas that will cost to publish one byte of pubdata (every piece of data
     /// that will be stored on L1).
