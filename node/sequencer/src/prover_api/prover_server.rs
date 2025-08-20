@@ -113,7 +113,7 @@ async fn submit_fri_proof(
 }
 
 async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
-    match state.proof_storage.get(block) {
+    match state.proof_storage.get(block).await {
         Ok(Some(BatchEnvelope {
             data: FriProof::Real(proof_bytes),
             ..

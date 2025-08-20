@@ -32,7 +32,8 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
         let current_l1_block = provider.get_block_number().await?;
         let last_committed_block = finality.get_finality_status().last_committed_block;
         let last_committed_batch = batch_storage
-            .get_batch_by_block_number(last_committed_block)?
+            .get_batch_by_block_number(last_committed_block)
+            .await?
             .expect("commited batch is missing from proof storage");
         tracing::info!(
             current_l1_block,
@@ -111,7 +112,8 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
                 );
                 let (_, last_committed_block) = self
                     .batch_storage
-                    .get_batch_range_by_number(batch_number)?
+                    .get_batch_range_by_number(batch_number)
+                    .await?
                     .expect("committed batch is missing");
                 self.finality.update_finality_status(|finality| {
                     assert!(

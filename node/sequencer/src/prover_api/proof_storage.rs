@@ -3,102 +3,90 @@
 //!
 
 use alloy::primitives::BlockNumber;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
-use zksync_os_rocksdb::RocksDB;
-use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
-use zksync_os_storage_api::{ReadBatch, ReadBatchResult};
+use zksync_os_object_store::_reexports::BoxedError;
+use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
+use zksync_os_storage_api::ReadBatch;
 
-/// Column family set for proof storage.
-#[derive(Copy, Clone, Debug)]
-pub enum ProofColumnFamily {
-    /// Maps `block_number (u64, BE)` → raw proof bytes.
-    Proofs,
+#[derive(Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum StoredBatch {
+    V1(BatchEnvelope<FriProof>),
 }
 
-impl NamedColumnFamily for ProofColumnFamily {
-    const DB_NAME: &'static str = "proof_storage";
-    const ALL: &'static [Self] = &[ProofColumnFamily::Proofs];
+impl StoredObject for StoredBatch {
+    const BUCKET: Bucket = Bucket("fri_batch_envelopes");
+    type Key<'a> = u64;
 
-    fn name(&self) -> &'static str {
+    fn encode_key(key: Self::Key<'_>) -> String {
+        format!("fri_batch_envelope_{key}.json")
+    }
+
+    fn serialize(&self) -> Result<Vec<u8>, BoxedError> {
+        serde_json::to_vec(self).map_err(From::from)
+    }
+
+    fn deserialize(bytes: Vec<u8>) -> Result<Self, BoxedError> {
+        serde_json::from_slice(&bytes).map_err(From::from)
+    }
+}
+
+impl StoredBatch {
+    pub fn batch_number(&self) -> u64 {
         match self {
-            ProofColumnFamily::Proofs => "proofs",
+            StoredBatch::V1(envelope) => envelope.batch_number(),
+        }
+    }
+
+    pub fn batch_envelope(self) -> BatchEnvelope<FriProof> {
+        match self {
+            StoredBatch::V1(envelope) => envelope,
         }
     }
 }
 
-/// Thin, clonable wrapper around a RocksDB instance.
 #[derive(Clone, Debug)]
 pub struct ProofStorage {
-    db: RocksDB<ProofColumnFamily>,
+    object_store: Arc<dyn ObjectStore>,
 }
 
 impl ProofStorage {
-    pub fn new(db: RocksDB<ProofColumnFamily>) -> Self {
-        Self { db }
+    pub fn new(object_store: Arc<dyn ObjectStore>) -> Self {
+        Self { object_store }
     }
 
     /// Persist a BatchWithProof. Overwrites any existing entry for the same batch.
     /// Doesn't allow gaps - if a proof for batch `n` is missing, then no proof for batch `n+1` is allowed.
-    pub fn save_proof(&self, value: &BatchEnvelope<FriProof>) -> anyhow::Result<()> {
-        let latest_batch_number = self.latest_stored_batch_number().unwrap_or(0);
-        anyhow::ensure!(
-            value.batch_number() <= latest_batch_number + 1,
-            "Attempted to store FRI proofs out of order: previous stored {}, got {}",
-            latest_batch_number,
-            value.batch_number(),
-        );
-
-        if value.batch_number() < latest_batch_number + 1 {
-            tracing::warn!(
-                "Overriding FRI proof for batch {}. Latest stored batch is {}.",
-                value.batch_number(),
-                latest_batch_number,
-            )
-        }
-
-        let key = value.batch_number().to_be_bytes();
-        let mut batch: WriteBatch<'_, ProofColumnFamily> = self.db.new_write_batch();
-        batch.put_cf(
-            ProofColumnFamily::Proofs,
-            &key,
-            serde_json::to_vec(value)?.as_slice(),
-        );
-        self.db.write(batch)?;
+    pub async fn save_proof(&self, value: &StoredBatch) -> anyhow::Result<()> {
+        self.object_store.put(value.batch_number(), value).await?;
         Ok(())
     }
 
-    pub fn latest_stored_batch_number(&self) -> Option<u64> {
-        let max_key = u64::MAX.to_be_bytes();
-
-        let mut iter = self
-            .db
-            .to_iterator_cf(ProofColumnFamily::Proofs, ..=&max_key[..]);
-
-        iter.next().map(|(key, _value)| {
-            assert_eq!(key.len(), 8);
-            u64::from_be_bytes(key[..8].try_into().unwrap())
-        })
-    }
-
     /// Loads a BatchWithProof for `batch_number`, if present.
-    pub fn get(&self, batch_number: u64) -> ReadBatchResult<Option<BatchEnvelope<FriProof>>> {
-        let key = batch_number.to_be_bytes();
-        let bytes = self.db.get_cf(ProofColumnFamily::Proofs, &key)?;
-        let Some(bytes) = bytes else { return Ok(None) };
-        let res = serde_json::from_slice(&bytes).expect("malformed stored batch");
-        Ok(Some(res))
+    pub async fn get(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
+        match self.object_store.get::<StoredBatch>(batch_number).await {
+            Ok(o) => Ok(Some(o.batch_envelope())),
+            Err(ObjectStoreError::KeyNotFound(_)) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 
+#[async_trait::async_trait]
 impl ReadBatch for ProofStorage {
-    fn get_batch_by_block_number(&self, block_number: BlockNumber) -> ReadBatchResult<Option<u64>> {
+    async fn get_batch_by_block_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> anyhow::Result<Option<u64>> {
         // Handle genesis block with a special case as we don't store it in the DB.
         if block_number == 0 {
             return Ok(Some(0));
         }
         // todo: insanely inefficient, to be replaced
         for batch_number in 1..=block_number {
-            if let Some(batch) = self.get(batch_number)? {
+            if let Some(batch) = self.get(batch_number).await? {
                 if batch.batch.first_block_number <= block_number
                     && batch.batch.last_block_number >= block_number
                 {
@@ -111,15 +99,15 @@ impl ReadBatch for ProofStorage {
         Ok(None)
     }
 
-    fn get_batch_range_by_number(
+    async fn get_batch_range_by_number(
         &self,
         batch_number: u64,
-    ) -> ReadBatchResult<Option<(BlockNumber, BlockNumber)>> {
+    ) -> anyhow::Result<Option<(BlockNumber, BlockNumber)>> {
         // Handle genesis block with a special case as we don't store it in the DB.
         if batch_number == 0 {
             return Ok(Some((0, 0)));
         }
-        Ok(self.get(batch_number)?.map(|envelope| {
+        Ok(self.get(batch_number).await?.map(|envelope| {
             (
                 envelope.batch.first_block_number,
                 envelope.batch.last_block_number,
