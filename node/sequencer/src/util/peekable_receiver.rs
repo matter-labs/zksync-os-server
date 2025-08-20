@@ -38,6 +38,26 @@ impl<T> PeekableReceiver<T> {
         self.rx.recv().await
     }
 
+    /// Peek at the next item **without consuming it**, applying `f` to a reference.
+    /// Returns `None` if the channel was closed.
+    pub async fn peek_recv<R, F>(&mut self, f: F) -> Option<R>
+    where
+        F: FnOnce(&T) -> R,
+    {
+        if self.buf.is_empty() {
+            match self.rx.recv().await {
+                Some(v) => self.buf.push_back(v),
+                None => return None, // Channel closed
+            }
+        }
+        self.buf.front().map(f)
+    }
+
+    /// Get the next item from the local buffer
+    pub fn pop_buffer(&mut self) -> Option<T> {
+        self.buf.pop_front()
+    }
+
     /// Try to receive the next item without waiting.
     /// If a buffered item exists, it is returned first.
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
