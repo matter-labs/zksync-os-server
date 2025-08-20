@@ -1,9 +1,6 @@
-name: CI
-
+name: Workflow for building and running unit tests
 on:
-  push:
-    branches: [ main ]
-  pull_request:
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
