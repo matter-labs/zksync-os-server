@@ -5,7 +5,7 @@ mod replay;
 pub use replay::ReadReplay;
 
 mod batch;
-pub use batch::{ReadBatch, ReadBatchError, ReadBatchResult};
+pub use batch::ReadBatch;
 
 pub mod notifications;
 

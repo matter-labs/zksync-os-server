@@ -1,6 +1,6 @@
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::{path::PathBuf, time::Duration};
-
+use zksync_os_object_store::ObjectStoreConfig;
 pub use zksync_os_rpc::RpcConfig;
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -121,6 +121,9 @@ pub struct ProverApiConfig {
     /// Max number of FRI proofs that will be aggregated to a single SNARK job.
     #[config(default_t = 10)]
     pub max_fris_per_snark: usize,
+
+    #[config(nest, default)]
+    pub object_store: ObjectStoreConfig,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
