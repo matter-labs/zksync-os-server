@@ -1,5 +1,3 @@
-#![feature(allocator_api)]
-
 use alloy::consensus::EMPTY_OMMER_ROOT_HASH;
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
 use alloy::network::Ethereum;
