@@ -61,7 +61,7 @@ RUN chmod +x /app/server_app.bin /app/server_app_logging_enabled.bin /app/multib
 USER app
 WORKDIR /
 
-EXPOSE 3050 3124 3312
+EXPOSE 3050 3124 3312 3053
 VOLUME ["/db"]
 
 ENTRYPOINT ["/usr/bin/tini","--","zksync_os_sequencer"]
