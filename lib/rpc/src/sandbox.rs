@@ -1,6 +1,5 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
-use std::mem;
 use zk_ee::system::evm::EvmFrameInterface;
 use zk_ee::system::evm::errors::EvmError;
 use zk_ee::system::tracer::evm_tracer::EvmTracer;
@@ -175,10 +174,11 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                     finished_call.error = Some("Internal error".to_string());
                 }
             }
-
-            finished_call.calls = mem::take(&mut self.finished_calls);
-
-            self.finished_calls.push(finished_call);
+            if let Some(parent_call) = self.unfinished_calls.last_mut() {
+                parent_call.calls.push(finished_call);
+            } else {
+                self.finished_calls.push(finished_call);
+            }
         }
 
         self.current_call_depth -= 1;
@@ -304,7 +304,7 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
         frame_state: &impl EvmFrameInterface<S>,
     ) {
         // Following Geth implementation: https://github.com/ethereum/go-ethereum/blob/2dbb580f51b61d7ff78fceb44b06835827704110/core/vm/instructions.go#L894
-        self.finished_calls.push(CallFrame {
+        let call_frame = CallFrame {
             from: Address::from(frame_state.address().to_be_bytes()),
             gas: Default::default(),
             gas_used: Default::default(),
@@ -325,6 +325,12 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
                 Some(token_value)
             },
             typ: "SELFDESTRUCT".to_string(),
-        })
+        };
+
+        if let Some(parent_call) = self.unfinished_calls.last_mut() {
+            parent_call.calls.push(call_frame);
+        } else {
+            self.finished_calls.push(call_frame);
+        }
     }
 }
