@@ -556,7 +556,7 @@ pub async fn run(
             last_committed_block + 1,
             repositories_persisted_block,
             batcher_config,
-            blocks_for_batcher_receiver,
+            PeekableReceiver::new(blocks_for_batcher_receiver),
             batch_for_proving_sender,
             persistent_tree.clone(),
         );
@@ -770,7 +770,6 @@ pub async fn run(
     );
 
     // ========== Start Sequencer ===========
-
     tasks.spawn(
         replay_server(
             block_replay_storage.clone(),
