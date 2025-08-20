@@ -1,6 +1,6 @@
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::network::{EthereumWallet, TxSigner};
-use alloy::primitives::{U256, address};
+use alloy::primitives::{Address, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::LocalSigner;
@@ -8,22 +8,47 @@ use std::str::FromStr;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Bridgehub address
+    #[arg(short, long)]
+    bridgehub: Address,
+    /// L1 RPC URL
+    #[arg(short, long)]
+    l1_rpc_url: Option<String>,
+    /// Private key for the L1 wallet
+    #[arg(short, long)]
+    private_key: Option<String>,
+    /// Deposit amount in wei
+    #[arg(short, long)]
+    amount: Option<U256>,
+}
+
 /// Submits an L1->L2 deposit transaction to local L1
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let url = "http://localhost:8545";
-    // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
-    let private_key = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
-    // Replace with your Bridgehub address here!
-    let bridgehub_address = address!("0xf8fd5b98e60fd511ce5af1f988e62eafbd4ddb09");
+    let args = Args::parse();
+    let url = args
+        .l1_rpc_url
+        .unwrap_or_else(|| "http://localhost:8545".to_owned());
+    let private_key = args.private_key.unwrap_or_else(|| {
+        // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
+        "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".to_owned()
+    });
+    let bridgehub_address = args.bridgehub;
     // Deposit 10k ETH by default
-    let amount = U256::from(100u128 * 10u128.pow(18));
+    let amount = args
+        .amount
+        .unwrap_or_else(|| U256::from(100u128 * 10u128.pow(18)));
     let l2_chain_id = 270;
 
-    let l1_wallet = EthereumWallet::new(LocalSigner::from_str(private_key).unwrap());
+    let l1_wallet = EthereumWallet::new(LocalSigner::from_str(&private_key).unwrap());
     let l1_provider = ProviderBuilder::new()
         .wallet(l1_wallet.clone())
-        .connect(url)
+        .connect(&url)
         .await
         .unwrap();
 
