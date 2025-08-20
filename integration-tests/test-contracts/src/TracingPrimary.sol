@@ -20,4 +20,11 @@ contract TracingPrimary {
     function shouldRevert() public view returns (uint) {
         return secondary.shouldRevert();
     }
+
+    function multiCalculate(uint256 value, uint256 times) public returns (uint) {
+        for (uint256 i = 0; i < times; i++) {
+            value = secondary.multiply(value);
+        }
+        return value;
+    }
 }
