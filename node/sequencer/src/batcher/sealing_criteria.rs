@@ -39,27 +39,27 @@ impl BatchInfoAccumulator {
             return true;
         }
 
-        if self.tx_count >= batcher_config.transactions_per_batch_limit {
+        if self.tx_count > batcher_config.transactions_per_batch_limit {
             tracing::debug!("Batcher: reached transactions per batch limit");
             return true;
         }
 
-        if self.gas_used >= batcher_config.batch_gas_limit {
+        if self.gas_used > batcher_config.batch_gas_limit {
             tracing::debug!("Batcher: reached gas limit for the batch");
             return true;
         }
 
-        if self.native_cycles >= MAX_NATIVE_COMPUTATIONAL {
+        if self.native_cycles > MAX_NATIVE_COMPUTATIONAL {
             tracing::debug!("Batcher: reached native cycles limit for the batch");
             return true;
         }
 
-        if self.pubdata_bytes >= batcher_config.batch_pubdata_limit_bytes {
+        if self.pubdata_bytes > batcher_config.batch_pubdata_limit_bytes {
             tracing::debug!("Batcher: reached pubdata bytes limit for the batch");
             return true;
         }
 
-        if self.l2_to_l1_logs_count >= MAX_NUMBER_OF_LOGS {
+        if self.l2_to_l1_logs_count > MAX_NUMBER_OF_LOGS {
             tracing::debug!("Batcher: reached max number of L2 to L1 logs");
             return true;
         }
