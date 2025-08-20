@@ -243,7 +243,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 } else {
                     Some(
                         topics
-                            .into_iter()
+                            .iter()
                             .map(|topic| B256::new(topic.as_u8_array()))
                             .collect(),
                     )
