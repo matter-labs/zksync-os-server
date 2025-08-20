@@ -121,11 +121,11 @@ impl RepositoryDb {
 
     fn write_block_inner(
         db: &RocksDB<RepositoryCF>,
-        block: &Block<TxHash>,
+        block: &Sealed<Block<TxHash>>,
         txs: &[Arc<StoredTxData>],
     ) {
         let block_number = block.number;
-        let block_hash = block.hash_slow();
+        let block_hash = block.hash();
         let block_number_bytes = block_number.to_be_bytes();
         let block_hash_bytes = block_hash.to_vec();
 
@@ -156,7 +156,7 @@ impl RepositoryDb {
         db.write(batch).unwrap();
     }
 
-    pub fn write_block(&self, block: &Block<TxHash>, txs: &[Arc<StoredTxData>]) {
+    pub fn write_block(&self, block: &Sealed<Block<TxHash>>, txs: &[Arc<StoredTxData>]) {
         Self::write_block_inner(&self.db, block, txs);
         self.latest_block_number.send_replace(block.number);
     }
