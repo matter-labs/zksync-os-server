@@ -92,6 +92,10 @@ impl ProofStorage {
 
 impl ReadBatch for ProofStorage {
     fn get_batch_by_block_number(&self, block_number: BlockNumber) -> ReadBatchResult<Option<u64>> {
+        // Handle genesis block with a special case as we don't store it in the DB.
+        if block_number == 0 {
+            return Ok(Some(0));
+        }
         // todo: insanely inefficient, to be replaced
         for batch_number in 1..=block_number {
             if let Some(batch) = self.get(batch_number)? {
@@ -111,6 +115,10 @@ impl ReadBatch for ProofStorage {
         &self,
         batch_number: u64,
     ) -> ReadBatchResult<Option<(BlockNumber, BlockNumber)>> {
+        // Handle genesis block with a special case as we don't store it in the DB.
+        if batch_number == 0 {
+            return Ok(Some((0, 0)));
+        }
         Ok(self.get(batch_number)?.map(|envelope| {
             (
                 envelope.batch.first_block_number,
