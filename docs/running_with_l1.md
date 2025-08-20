@@ -93,16 +93,12 @@ WARNING: when you see the tool failing on postgres - it is ok, as the chain got 
 
 After this, you can finally run the sequencer:
 ```
-l1_sender_operator_commit_pk= 
-l1_sender_operator_prove_pk= 
-l1_sender_operator_execute_pk=  
-l1_sender_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c  l1_watcher_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c cargo run --release
+
+sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo run --release
 ```
 
-The operator private key must match value from `$chain_name/configs/wallets.yaml` operator (where chain_name in our example is era1)
 
-bridgehub address must batch `configs/contracts.yaml` bridgehub.proxy address.
-
+the `sequencer_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
 
 ### Restarting
 
@@ -159,25 +155,8 @@ zkstack chain init --deploy-paymaster=false  \
   --server-db-url=postgres://invalid --server-db-name=invalid
 ```
 
-And start the sequencer -- make sure that all the config values are set correctly:
-
-* rpc_chain_id
-* rpc_address
-* sequencer_prometheus_port
-* sequencer_rocks_db_path
-* prover_api_address
-* l1_watcher_rocks_db_path
-* l1_watcher_chain_id
-* l1_sender_chain_id
-
-
-
+And start the sequencer.
 
 ```shell
-genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 sequencer_prometheus_port=3313 l1_sender_operator_commit_pk=0x.. l1_sender_operator_prove_pk=0x.. l1_sender_operator_execute_pk=0x.. l1_sender_bridgehub_address=0x..  l1_watcher_bridgehub_address=0x.. cargo run --release
-
+sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era2 cargo run --release
 ```
-
-Stuff that didn't work:
-* nit: multiple thing has to be defined in many configs
-* there is no spellcheck in config names - consider using file-based configs 

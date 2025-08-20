@@ -57,6 +57,7 @@ vise.workspace = true
 base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+serde_yaml.workspace = true
 semver = { workspace = true, features = ["serde"] }
 
 bincode.workspace = true

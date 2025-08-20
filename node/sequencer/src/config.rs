@@ -59,6 +59,9 @@ pub struct SequencerConfig {
     /// Setting this makes the node into an external node.
     #[config(default_t = None)]
     pub block_replay_download_address: Option<String>,
+
+    /// If set - initialize the configs based off the values from the yaml files from that directory.
+    pub zkstack_cli_config_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
