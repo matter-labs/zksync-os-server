@@ -18,7 +18,7 @@ impl ZkStackConfig {
 
     fn get_yaml_file(&self, file_name: &str) -> anyhow::Result<Value> {
         let cfg_path = std::path::Path::new(&self.config_dir).join(file_name);
-        let text = fs::read_to_string(cfg_path).context(format!("Failed to read {}", file_name))?;
+        let text = fs::read_to_string(cfg_path).context(format!("Failed to read {file_name}"))?;
         let val: Value = serde_yaml::from_str(&text)?;
         Ok(val)
     }
@@ -28,7 +28,7 @@ impl ZkStackConfig {
             .get(name)
             .and_then(|v| v.get("private_key").and_then(Value::as_str))
             .map(|s| s.to_string())
-            .context(format!("Failed to parse {} from entry", name))
+            .context(format!("Failed to parse {name} from entry"))
     }
 
     /// Update the configs based off the values from the yaml files.
@@ -96,7 +96,7 @@ impl ZkStackConfig {
             .and_then(|v| v.get("http_port").and_then(Value::as_u64))
             .ok_or(anyhow!("Failed to get web3_json_rpc port"))?;
 
-        rpc_config.address = format!("0.0.0.0:{}", rpc_port);
+        rpc_config.address = format!("0.0.0.0:{rpc_port}");
 
         let merkle_port = api
             .get("merkle_tree")
@@ -104,14 +104,14 @@ impl ZkStackConfig {
             .ok_or(anyhow!("Failed to get merkle_tree port"))?;
 
         // FIXME: for now, use the merkle port for block replay.
-        sequencer_config.block_replay_server_address = format!("0.0.0.0:{}", merkle_port);
+        sequencer_config.block_replay_server_address = format!("0.0.0.0:{merkle_port}");
 
         let data_handler_port = general_yaml
             .get("data_handler")
             .and_then(|v| v.get("http_port").and_then(Value::as_u64))
             .ok_or(anyhow!("Failed to get data_handler port"))?;
 
-        prover_api_config.address = format!("0.0.0.0:{}", data_handler_port);
+        prover_api_config.address = format!("0.0.0.0:{data_handler_port}");
 
         Ok(())
     }

@@ -183,10 +183,7 @@ fn build_configs() -> (
                 &mut genesis_config,
                 &mut prover_api_config,
             )
-            .expect(&format!(
-                "Failed to load zkstack config from `{}`: ",
-                config_dir
-            ));
+            .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
     }
 
     (
