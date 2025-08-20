@@ -121,9 +121,9 @@ Note that we pass this mnemonic to have `0x36615cf349d7f6344891b1e7ca7c72883f5dc
 
 Then deploy the contracts using legacy tooling (see above). 
 After that, add a deposit transaction to the state - integration and load tests expect that `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` has L2 funds. For this, use `generate-deposit` tool in this repo. 
-Make sure to update the `bridgehub_addres` in the code of the tool with the newly generated one (you can find it in `configs/contracts.yaml`):
+Make sure to provide correct `bridgehub_addres` (you can find it in `configs/contracts.yaml`):
 ```
-> cargo run --bin zksync_os_generate_deposit
+> cargo run --bin zksync_os_generate_deposit -- --bridgehub <BRIDGEHUB_ADDRESS>
 L1 balance: 9879999865731420184000
 Successfully submitted L1->L2 deposit tx with hash '0xb8544a2a9bc55713f1f94acf3711c23d07e02917f44885b05e20b13af1402283'
 
