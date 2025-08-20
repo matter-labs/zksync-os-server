@@ -5,7 +5,6 @@
 
 db/*
 block_dumps/*
-artifacts/*
 
 .DS_Store
 markers.bench

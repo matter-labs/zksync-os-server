@@ -31,7 +31,7 @@ impl ObjectStoreConfig {
     pub fn for_tests() -> Self {
         Self {
             mode: ObjectStoreMode::FileBacked {
-                file_backed_base_path: "./artifacts".into(),
+                file_backed_base_path: "./db/shared".into(),
             },
             max_retries: 5,
             local_mirror_path: None,
