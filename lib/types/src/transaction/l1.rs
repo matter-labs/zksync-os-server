@@ -261,6 +261,7 @@ impl<T: L1TxType> Transaction for L1Tx<T> {
 /// Transaction envelope for L1->L2 transactions. Mostly needed as an intermediary level for `ZkEnvelope`.
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub struct L1Envelope<T: L1TxType> {
+    #[serde(flatten)]
     pub inner: Signed<L1Tx<T>>,
 }
 
