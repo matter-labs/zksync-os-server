@@ -10,7 +10,7 @@ env:
 
 jobs:
   lint:
-    name: Build and Test
+    name: Lint
     runs-on: matterlabs-ci-runner-highmem-long
 
     steps:
