@@ -1,5 +1,6 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
+use alloy::sol_types::{ContractError, GenericRevertReason};
 use zk_ee::system::evm::EvmFrameInterface;
 use zk_ee::system::evm::errors::EvmError;
 use zk_ee::system::tracer::evm_tracer::EvmTracer;
@@ -97,7 +98,8 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                     initial_state.external_call.available_resources.ergs().0 / ERGS_PER_GAS,
                 ),
                 gas_used: U256::ZERO, // will be populated later
-                to: if initial_state.external_call.callee == ruint::aliases::B160::ZERO {
+                to: if initial_state.external_call.modifier == CallModifier::Constructor {
+                    // CREATE/CREATE2 frames don't have a `to` address
                     None
                 } else {
                     Some(Address::from(
@@ -110,14 +112,16 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 revert_reason: None, // can be populated later
                 calls: vec![],       // will be populated later
                 logs: vec![],        // will be populated later
-                value: if initial_state.external_call.nominal_token_value == U256::ZERO {
+                value: if initial_state.external_call.modifier == CallModifier::Static {
+                    // STATICCALL frames don't have `value`
                     None
                 } else {
                     Some(initial_state.external_call.nominal_token_value)
                 },
                 typ: match initial_state.external_call.modifier {
                     CallModifier::NoModifier => "CALL",
-                    CallModifier::Constructor => "",
+                    // fixme: how to distinguish between CREATE and CREATE2?
+                    CallModifier::Constructor => "CREATE",
                     CallModifier::Delegate => "DELEGATECALL",
                     CallModifier::Static => "STATICCALL",
                     // fixme: is this really a custom call type?
@@ -154,8 +158,8 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                             panic!("Should not happen") // ZKsync OS should not call tracer in this case
                         }
                         CallResult::Failed { return_values } => {
-                            // todo: decode error?
-                            finished_call.revert_reason = Some("Unknown reason".to_string());
+                            finished_call.revert_reason =
+                                maybe_revert_reason(return_values.returndata);
                             finished_call.output =
                                 Some(Bytes::copy_from_slice(return_values.returndata));
                         }
@@ -169,9 +173,8 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                     // Some unexpected internal failure happened (maybe out of native resources)
                     // Should revert whole tx
                     finished_call.gas_used = finished_call.gas;
-                    // todo: decode error?
-                    finished_call.revert_reason = Some("Unknown reason".to_string());
-                    finished_call.error = Some("Internal error".to_string());
+                    finished_call.output = None;
+                    finished_call.revert_reason = None;
                 }
             }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
@@ -282,18 +285,14 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     /// Opcode failed for some reason. Note: call frame ends immediately
     fn on_opcode_error(&mut self, error: &EvmError, _frame_state: &impl EvmFrameInterface<S>) {
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
-        current_call.error = Some(format!("{:?}", error));
-        // todo: derive from `error`
-        current_call.revert_reason = Some("Unknown reason".to_string());
+        current_call.error = Some(fmt_error_msg(error));
     }
 
     /// Special cases, when error happens in frame before any opcode is executed (unfortunately we can't provide access to state)
     /// Note: call frame ends immediately
     fn on_call_error(&mut self, error: &EvmError) {
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
-        current_call.error = Some(format!("{:?}", error));
-        // todo: derive from `error`
-        current_call.revert_reason = Some("Unknown reason".to_string());
+        current_call.error = Some(fmt_error_msg(error));
     }
 
     /// We should treat selfdestruct as a special kind of a call
@@ -308,22 +307,18 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
             from: Address::from(frame_state.address().to_be_bytes()),
             gas: Default::default(),
             gas_used: Default::default(),
-            to: if beneficiary == ruint::aliases::B160::ZERO {
-                None
-            } else {
-                Some(Address::from(beneficiary.to_be_bytes()))
-            },
+            // todo: consider returning `None` here as this is only `Some` if a selfdestruct was
+            //       executed and the call is executed before the Cancun hardfork.
+            to: Some(Address::from(beneficiary.to_be_bytes())),
             input: Default::default(),
             output: None,
             error: None,
             revert_reason: None,
             calls: vec![],
             logs: vec![],
-            value: if token_value == U256::ZERO {
-                None
-            } else {
-                Some(token_value)
-            },
+            // todo: consider returning `None` here as this is only `Some` if a selfdestruct was
+            //       executed and the call is executed before the Cancun hardfork.
+            value: Some(token_value),
             typ: "SELFDESTRUCT".to_string(),
         };
 
@@ -333,4 +328,53 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
             self.finished_calls.push(call_frame);
         }
     }
+}
+
+/// Returns a non-empty revert reason if the output is a revert/error.
+fn maybe_revert_reason(output: &[u8]) -> Option<String> {
+    let reason = match GenericRevertReason::decode(output)? {
+        GenericRevertReason::ContractError(err) => {
+            match err {
+                // return the raw revert reason and don't use the revert's display message
+                ContractError::Revert(revert) => revert.reason,
+                err => err.to_string(),
+            }
+        }
+        GenericRevertReason::RawString(err) => err,
+    };
+    if reason.is_empty() {
+        None
+    } else {
+        Some(reason)
+    }
+}
+
+/// Converts [`EvmError`] to a geth-style error message.
+///
+/// See also <https://github.com/ethereum/go-ethereum/blob/34d507215951fb3f4a5983b65e127577989a6db8/eth/tracers/native/call_flat.go#L39-L55>
+fn fmt_error_msg(error: &EvmError) -> String {
+    let msg = match error {
+        // Geth-style errors
+        EvmError::Revert => "Reverted",
+        EvmError::OutOfGas => "Out of gas",
+        EvmError::InvalidJump => "Bad jump destination",
+        EvmError::InvalidOpcode(_) => "Bad instruction",
+        EvmError::StackOverflow => "Out of stack",
+        EvmError::InsufficientBalance => "Insufficient balance for transfer",
+        // Custom errors
+        EvmError::ReturnDataOutOfBounds => "Return data out of bounds",
+        EvmError::StackUnderflow => "Stack underflow",
+        EvmError::CallNotAllowedInsideStatic => "Call not allowed inside static call",
+        EvmError::StateChangeDuringStaticCall => "State change during static call",
+        EvmError::MemoryLimitOOG => "Memory limit out of gas",
+        EvmError::InvalidOperandOOG => "Invalid operand out of gas",
+        EvmError::CodeStoreOutOfGas => "Code store out of gas",
+        EvmError::CallTooDeep => "Call too deep",
+        EvmError::CreateCollision => "Create collision",
+        EvmError::NonceOverflow => "Nonce overflow",
+        EvmError::CreateContractSizeLimit => "Create contract size limit",
+        EvmError::CreateInitcodeSizeLimit => "Create initcode size limit",
+        EvmError::CreateContractStartingWithEF => "Create contract starting with EF",
+    };
+    msg.to_string()
 }
