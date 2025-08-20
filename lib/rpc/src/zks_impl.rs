@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::zks::ZksApiServer;
-use zksync_os_storage_api::{ReadBatchError, RepositoryError};
+use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 use zksync_os_types::rpc::L2ToL1LogProof;
 
@@ -38,14 +38,16 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         let Some(batch_number) = self
             .storage
             .batch()
-            .get_batch_by_block_number(tx_meta.block_number)?
+            .get_batch_by_block_number(tx_meta.block_number)
+            .await?
         else {
             return Err(ZksError::NotBatchedYet);
         };
         let Some((from_block, to_block)) = self
             .storage
             .batch()
-            .get_batch_range_by_number(batch_number)?
+            .get_batch_range_by_number(batch_number)
+            .await?
         else {
             // This should never happen
             tracing::error!(
@@ -162,7 +164,7 @@ pub enum ZksError {
     IndexOutOfBounds(usize, usize),
 
     #[error(transparent)]
-    Batch(#[from] ReadBatchError),
+    Batch(#[from] anyhow::Error),
     #[error(transparent)]
     Repository(#[from] RepositoryError),
 }
