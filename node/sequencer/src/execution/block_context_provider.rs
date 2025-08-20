@@ -121,10 +121,7 @@ impl BlockContextProvider {
                 for tx in &record.transactions {
                     match tx.envelope() {
                         ZkEnvelope::L1(l1_tx) => {
-                            assert_eq!(
-                                self.l1_transactions.recv().await.unwrap().priority_id(),
-                                l1_tx.priority_id()
-                            );
+                            assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
                         }
                         ZkEnvelope::L2(_) => {}
                         ZkEnvelope::Upgrade(_) => {}
