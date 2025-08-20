@@ -192,7 +192,7 @@ impl From<HttpError> for ObjectStoreError {
 impl ObjectStore for GoogleCloudStore {
     async fn get_raw(&self, bucket: Bucket, key: &str) -> Result<Vec<u8>, ObjectStoreError> {
         let _permit = self.semaphore.acquire().await?;
-        let filename = Self::filename(bucket.as_str(), key);
+        let filename = Self::filename(bucket.0, key);
         tracing::trace!(
             "Fetching data from GCS for key {filename} from bucket {}",
             self.bucket_prefix
@@ -216,7 +216,7 @@ impl ObjectStore for GoogleCloudStore {
         value: Vec<u8>,
     ) -> Result<(), ObjectStoreError> {
         let _permit = self.semaphore.acquire().await?;
-        let filename = Self::filename(bucket.as_str(), key);
+        let filename = Self::filename(bucket.0, key);
         tracing::trace!(
             "Storing data to GCS for key {filename} from bucket {}",
             self.bucket_prefix
@@ -235,7 +235,7 @@ impl ObjectStore for GoogleCloudStore {
 
     async fn remove_raw(&self, bucket: Bucket, key: &str) -> Result<(), ObjectStoreError> {
         let _permit = self.semaphore.acquire().await?;
-        let filename = Self::filename(bucket.as_str(), key);
+        let filename = Self::filename(bucket.0, key);
         tracing::trace!(
             "Removing data from GCS for key {filename} from bucket {}",
             self.bucket_prefix
@@ -254,7 +254,7 @@ impl ObjectStore for GoogleCloudStore {
         format!(
             "https://storage.googleapis.com/{}/{}",
             self.bucket_prefix.clone(),
-            bucket.as_str()
+            bucket.0
         )
     }
 }

@@ -103,6 +103,8 @@ mod tests {
     use super::*;
     use crate::MockObjectStore;
 
+    const BUCKET: Bucket = Bucket("mirror_bucket");
+
     #[tokio::test]
     async fn mirroring_basics() {
         let dir = TempDir::new().unwrap();
@@ -110,50 +112,41 @@ mod tests {
 
         let mock_store = MockObjectStore::default();
         mock_store
-            .put_raw(Bucket::FriBatchEnvelopes, "test", vec![1, 2, 3])
+            .put_raw(BUCKET, "test", vec![1, 2, 3])
             .await
             .unwrap();
         let mirroring_store = MirroringObjectStore::new(mock_store, path).await.unwrap();
 
-        let object = mirroring_store
-            .get_raw(Bucket::FriBatchEnvelopes, "test")
-            .await
-            .unwrap();
+        let object = mirroring_store.get_raw(BUCKET, "test").await.unwrap();
         assert_eq!(object, [1, 2, 3]);
         // Check that the object got mirrored.
         let object_in_mirror = mirroring_store
             .mirror_store
-            .get_raw(Bucket::FriBatchEnvelopes, "test")
+            .get_raw(BUCKET, "test")
             .await
             .unwrap();
         assert_eq!(object_in_mirror, [1, 2, 3]);
-        let object = mirroring_store
-            .get_raw(Bucket::FriBatchEnvelopes, "test")
-            .await
-            .unwrap();
+        let object = mirroring_store.get_raw(BUCKET, "test").await.unwrap();
         assert_eq!(object, [1, 2, 3]);
 
         let err = mirroring_store
-            .get_raw(Bucket::FriBatchEnvelopes, "missing")
+            .get_raw(BUCKET, "missing")
             .await
             .unwrap_err();
         assert_matches!(err, ObjectStoreError::KeyNotFound(_));
 
         mirroring_store
-            .put_raw(Bucket::FriBatchEnvelopes, "other", vec![3, 2, 1])
+            .put_raw(BUCKET, "other", vec![3, 2, 1])
             .await
             .unwrap();
         // Check that the object got mirrored.
         let object_in_mirror = mirroring_store
             .mirror_store
-            .get_raw(Bucket::FriBatchEnvelopes, "other")
+            .get_raw(BUCKET, "other")
             .await
             .unwrap();
         assert_eq!(object_in_mirror, [3, 2, 1]);
-        let object = mirroring_store
-            .get_raw(Bucket::FriBatchEnvelopes, "other")
-            .await
-            .unwrap();
+        let object = mirroring_store.get_raw(BUCKET, "other").await.unwrap();
         assert_eq!(object, [3, 2, 1]);
     }
 }

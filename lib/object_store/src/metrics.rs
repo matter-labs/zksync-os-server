@@ -22,11 +22,11 @@ pub(crate) struct ObjectStoreMetrics {
 
 impl ObjectStoreMetrics {
     pub fn start_fetch(&self, bucket: Bucket) -> LatencyObserver<'_> {
-        self.fetching_time[&bucket.as_str()].start()
+        self.fetching_time[&bucket.0].start()
     }
 
     pub fn start_store(&self, bucket: Bucket) -> LatencyObserver<'_> {
-        self.storing_time[&bucket.as_str()].start()
+        self.storing_time[&bucket.0].start()
     }
 }
 

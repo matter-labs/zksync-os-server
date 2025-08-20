@@ -17,7 +17,7 @@ pub enum StoredBatch {
 }
 
 impl StoredObject for StoredBatch {
-    const BUCKET: Bucket = Bucket::FriBatchEnvelopes;
+    const BUCKET: Bucket = Bucket("fri_batch_envelopes");
     type Key<'a> = u64;
 
     fn encode_key(key: Self::Key<'_>) -> String {

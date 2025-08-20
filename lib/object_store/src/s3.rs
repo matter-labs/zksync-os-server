@@ -159,7 +159,7 @@ where
 #[async_trait]
 impl ObjectStore for S3Store {
     async fn get_raw(&self, bucket: Bucket, key: &str) -> Result<Vec<u8>, ObjectStoreError> {
-        let filename = Self::filename(bucket.as_str(), key);
+        let filename = Self::filename(bucket.0, key);
         tracing::trace!(
             "Fetching data from S3 for key {filename} from bucket {}",
             self.bucket_prefix
@@ -181,7 +181,7 @@ impl ObjectStore for S3Store {
         key: &str,
         value: Vec<u8>,
     ) -> Result<(), ObjectStoreError> {
-        let filename = Self::filename(bucket.as_str(), key);
+        let filename = Self::filename(bucket.0, key);
         tracing::trace!(
             "Storing data to S3 for key {filename} from bucket {}",
             self.bucket_prefix
@@ -200,7 +200,7 @@ impl ObjectStore for S3Store {
     }
 
     async fn remove_raw(&self, bucket: Bucket, key: &str) -> Result<(), ObjectStoreError> {
-        let filename = Self::filename(bucket.as_str(), key);
+        let filename = Self::filename(bucket.0, key);
         tracing::trace!(
             "Removing data from S3 for key {filename} from bucket {}",
             self.bucket_prefix
@@ -220,7 +220,7 @@ impl ObjectStore for S3Store {
             "{}/{}/{}",
             self.endpoint.clone(),
             self.bucket_prefix.clone(),
-            bucket.as_str()
+            bucket.0
         )
     }
 }

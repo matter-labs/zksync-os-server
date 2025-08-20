@@ -6,26 +6,11 @@ use std::{error, fmt};
 
 /// Bucket for [`ObjectStore`] in which objects can be placed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Bucket {
-    FriBatchEnvelopes,
-}
-
-impl Bucket {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FriBatchEnvelopes => "fri_batch_envelopes",
-        }
-    }
-
-    pub fn all() -> &'static [Bucket] {
-        &[Self::FriBatchEnvelopes]
-    }
-}
+pub struct Bucket(pub &'static str);
 
 impl fmt::Display for Bucket {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+        formatter.write_str(self.0)
     }
 }
 

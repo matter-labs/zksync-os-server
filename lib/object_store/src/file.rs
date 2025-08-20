@@ -1,6 +1,7 @@
-use std::{fmt::Debug, path::PathBuf};
-
 use async_trait::async_trait;
+use std::collections::HashSet;
+use std::sync::RwLock;
+use std::{fmt::Debug, path::PathBuf};
 use tokio::{fs, io};
 
 use crate::traits::{Bucket, ObjectStore, ObjectStoreError};
@@ -21,6 +22,7 @@ impl From<io::Error> for ObjectStoreError {
 #[derive(Debug)]
 pub struct FileBackedObjectStore {
     base_dir: PathBuf,
+    initialized_buckets: RwLock<HashSet<Bucket>>,
 }
 
 impl FileBackedObjectStore {
@@ -30,11 +32,11 @@ impl FileBackedObjectStore {
     ///
     /// Propagates I/O errors.
     pub async fn new(base_dir: PathBuf) -> Result<Self, ObjectStoreError> {
-        for bucket in Bucket::all() {
-            let bucket_path = base_dir.join(bucket.to_string());
-            fs::create_dir_all(&bucket_path).await?;
-        }
-        Ok(FileBackedObjectStore { base_dir })
+        fs::create_dir_all(&base_dir).await?;
+        Ok(FileBackedObjectStore {
+            base_dir,
+            initialized_buckets: RwLock::new(HashSet::new()),
+        })
     }
 
     fn filename(&self, bucket: Bucket, key: &str) -> PathBuf {
@@ -55,6 +57,11 @@ impl ObjectStore for FileBackedObjectStore {
         key: &str,
         value: Vec<u8>,
     ) -> Result<(), ObjectStoreError> {
+        if !self.initialized_buckets.read().unwrap().contains(&bucket) {
+            fs::create_dir_all(self.storage_prefix_raw(bucket)).await?;
+            self.initialized_buckets.write().unwrap().insert(bucket);
+        }
+
         let filename = self.filename(bucket, key);
         fs::write(filename, value).await.map_err(From::from)
     }
@@ -79,6 +86,8 @@ mod test {
 
     use super::*;
 
+    const BUCKET: Bucket = Bucket("some_bucket");
+
     #[tokio::test]
     async fn test_get() {
         let dir = TempDir::new().unwrap();
@@ -86,13 +95,10 @@ mod test {
         let object_store = FileBackedObjectStore::new(path).await.unwrap();
         let expected = vec![9, 0, 8, 9, 0, 7];
         object_store
-            .put_raw(Bucket::FriBatchEnvelopes, "test-key.bin", expected.clone())
+            .put_raw(BUCKET, "test-key.bin", expected.clone())
             .await
             .unwrap();
-        let bytes = object_store
-            .get_raw(Bucket::FriBatchEnvelopes, "test-key.bin")
-            .await
-            .unwrap();
+        let bytes = object_store.get_raw(BUCKET, "test-key.bin").await.unwrap();
         assert_eq!(expected, bytes, "expected didn't match");
     }
 
@@ -103,7 +109,7 @@ mod test {
         let object_store = FileBackedObjectStore::new(path).await.unwrap();
         let bytes = vec![9, 0, 8, 9, 0, 7];
         object_store
-            .put_raw(Bucket::FriBatchEnvelopes, "test-key.bin", bytes)
+            .put_raw(BUCKET, "test-key.bin", bytes)
             .await
             .unwrap();
     }
@@ -114,11 +120,11 @@ mod test {
         let path = dir.path().to_owned();
         let object_store = FileBackedObjectStore::new(path).await.unwrap();
         object_store
-            .put_raw(Bucket::FriBatchEnvelopes, "test-key.bin", vec![0, 1])
+            .put_raw(BUCKET, "test-key.bin", vec![0, 1])
             .await
             .unwrap();
         object_store
-            .remove_raw(Bucket::FriBatchEnvelopes, "test-key.bin")
+            .remove_raw(BUCKET, "test-key.bin")
             .await
             .unwrap();
     }
