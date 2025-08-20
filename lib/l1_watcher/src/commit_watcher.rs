@@ -35,6 +35,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
             .get_batch_by_block_number(last_committed_block)?
             .expect("commited batch is missing from proof storage");
         tracing::info!(
+            current_l1_block,
             last_committed_batch,
             config.max_blocks_to_process,
             ?config.poll_interval,

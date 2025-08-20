@@ -35,6 +35,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
             .get_batch_by_block_number(last_executed_block)?
             .expect("executed batch is missing from proof storage");
         tracing::info!(
+            current_l1_block,
             last_executed_batch,
             config.max_blocks_to_process,
             ?config.poll_interval,
