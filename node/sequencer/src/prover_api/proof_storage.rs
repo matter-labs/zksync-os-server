@@ -43,6 +43,10 @@ impl ReadBatch for ProofStorage {
         &self,
         block_number: BlockNumber,
     ) -> anyhow::Result<Option<u64>> {
+        // Handle genesis block with a special case as we don't store it in the DB.
+        if block_number == 0 {
+            return Ok(Some(0));
+        }
         // todo: insanely inefficient, to be replaced
         for batch_number in 1..=block_number {
             if let Some(batch) = self.get(batch_number).await? {
@@ -62,6 +66,10 @@ impl ReadBatch for ProofStorage {
         &self,
         batch_number: u64,
     ) -> anyhow::Result<Option<(BlockNumber, BlockNumber)>> {
+        // Handle genesis block with a special case as we don't store it in the DB.
+        if batch_number == 0 {
+            return Ok(Some((0, 0)));
+        }
         Ok(self.get(batch_number).await?.map(|envelope| {
             (
                 envelope.batch.first_block_number,
