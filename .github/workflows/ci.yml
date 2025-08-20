@@ -20,6 +20,10 @@ jobs:
     name: CI for integration tests
     uses: ./.github/workflows/ci-integration-tests.yaml
 
+  ci-lint:
+    name: CI for linting
+    uses: ./.github/workflows/ci-lint.yaml
+
   ci-success:
     name: Github Status Check
     runs-on: ubuntu-latest
@@ -28,6 +32,7 @@ jobs:
       [
         ci-build-and-unit-tests,
         ci-integration-tests,
+        ci-lint,
       ]
     steps:
       - name: Status
