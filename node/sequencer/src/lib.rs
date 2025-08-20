@@ -15,6 +15,7 @@ mod replay_transport;
 pub mod reth_state;
 pub mod tree_manager;
 mod util;
+pub mod zkstack_config;
 
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
