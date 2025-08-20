@@ -10,6 +10,7 @@ use zksync_os_sequencer::config::{
     RpcConfig, SequencerConfig,
 };
 use zksync_os_sequencer::run;
+use zksync_os_sequencer::zkstack_config::ZkStackConfig;
 
 #[tokio::main]
 pub async fn main() {
@@ -115,13 +116,13 @@ fn build_configs() -> (
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
-    let genesis_config = repo
+    let mut genesis_config = repo
         .single::<GenesisConfig>()
         .expect("Failed to load genesis config")
         .parse()
         .expect("Failed to parse genesis config");
 
-    let rpc_config = repo
+    let mut rpc_config = repo
         .single::<RpcConfig>()
         .expect("Failed to load rpc config")
         .parse()
@@ -133,13 +134,13 @@ fn build_configs() -> (
         .parse()
         .expect("Failed to parse mempool config");
 
-    let sequencer_config = repo
+    let mut sequencer_config = repo
         .single::<SequencerConfig>()
         .expect("Failed to load sequencer config")
         .parse()
         .expect("Failed to parse sequencer config");
 
-    let l1_sender_config = repo
+    let mut l1_sender_config = repo
         .single::<L1SenderConfig>()
         .expect("Failed to load L1 sender config")
         .parse()
@@ -163,11 +164,28 @@ fn build_configs() -> (
         .parse()
         .expect("Failed to parse ProverInputGenerator config");
 
-    let prover_api_config = repo
+    let mut prover_api_config = repo
         .single::<ProverApiConfig>()
         .expect("Failed to load prover api config")
         .parse()
         .expect("Failed to parse prover api config");
+
+    if let Some(config_dir) = sequencer_config.zkstack_cli_config_dir.clone() {
+        // If set, then update the configs based off the values from the yaml files.
+        // This is a temporary measure until we update zkstack cli (or create a new tool) to create
+        // configs that are specific to the new sequencer.
+        let config = ZkStackConfig::new(config_dir.clone());
+        config
+            .update(
+                &mut sequencer_config,
+                &mut rpc_config,
+                &mut l1_sender_config,
+                &mut genesis_config,
+                &mut prover_api_config,
+            )
+            .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
+    }
+
     (
         genesis_config,
         rpc_config,
