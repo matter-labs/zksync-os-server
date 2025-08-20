@@ -10052,6 +10052,7 @@ version = "0.1.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
+ "clap",
  "tokio",
  "zksync_os_contract_interface",
 ]
