@@ -9,7 +9,7 @@ use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
 use aws_sdk_s3::{Client, error::SdkError, primitives::ByteStreamError};
 use http::StatusCode;
 
-use crate::raw::{Bucket, ObjectStore, ObjectStoreError};
+use crate::traits::{Bucket, ObjectStore, ObjectStoreError};
 
 /// [`ObjectStore`] implementation based on AWS S3.
 pub struct S3Store {

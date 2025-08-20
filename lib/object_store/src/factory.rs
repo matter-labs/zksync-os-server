@@ -8,7 +8,7 @@ use crate::{
     file::FileBackedObjectStore,
     gcs::{GoogleCloudStore, GoogleCloudStoreAuthMode},
     mirror::MirroringObjectStore,
-    raw::{ObjectStore, ObjectStoreError},
+    traits::{ObjectStore, ObjectStoreError},
     retries::StoreWithRetries,
     s3::{S3Store, S3StoreAuthMode},
 };

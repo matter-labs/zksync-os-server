@@ -19,7 +19,7 @@ use google_cloud_storage::{
 use http::StatusCode;
 use tokio::sync::{AcquireError, Semaphore};
 
-use crate::raw::{Bucket, ObjectStore, ObjectStoreError};
+use crate::traits::{Bucket, ObjectStore, ObjectStoreError};
 
 /// Default maximum number of concurrent requests to GCS.
 /// Consider this a throttle to prevent overwhelming GCS or network card.

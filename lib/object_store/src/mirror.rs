@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::{Bucket, ObjectStoreError, file::FileBackedObjectStore, raw::ObjectStore};
+use crate::{Bucket, ObjectStoreError, file::FileBackedObjectStore, traits::ObjectStore};
 
 #[derive(Debug)]
 pub(crate) struct MirroringObjectStore<S> {

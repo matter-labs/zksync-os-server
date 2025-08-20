@@ -5,7 +5,7 @@ use rand::Rng;
 
 use crate::{
     metrics::OBJECT_STORE_METRICS,
-    raw::{Bucket, ObjectStore, ObjectStoreError},
+    traits::{Bucket, ObjectStore, ObjectStoreError},
 };
 
 /// Information about request added to logs.

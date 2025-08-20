@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use crate::raw::{Bucket, ObjectStore, ObjectStoreError};
+use crate::traits::{Bucket, ObjectStore, ObjectStoreError};
 
 type BucketMap = HashMap<String, Vec<u8>>;
 

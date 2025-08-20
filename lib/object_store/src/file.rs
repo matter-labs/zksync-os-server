@@ -3,7 +3,7 @@ use std::{fmt::Debug, path::PathBuf};
 use async_trait::async_trait;
 use tokio::{fs, io};
 
-use crate::raw::{Bucket, ObjectStore, ObjectStoreError};
+use crate::traits::{Bucket, ObjectStore, ObjectStoreError};
 
 impl From<io::Error> for ObjectStoreError {
     fn from(err: io::Error) -> Self {

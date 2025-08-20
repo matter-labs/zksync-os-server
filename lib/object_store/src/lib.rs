@@ -30,17 +30,16 @@ mod gcs;
 mod metrics;
 mod mirror;
 mod mock;
-mod objects;
-mod raw;
 mod retries;
 mod s3;
+mod traits;
 
 // Re-export `bincode` crate so that client binaries can conveniently use it.
 pub use bincode;
 
 #[doc(hidden)] // used by the `serialize_using_bincode!` macro
 pub mod _reexports {
-    pub use crate::raw::BoxedError;
+    pub use crate::traits::BoxedError;
 }
 
 pub use self::{
@@ -49,6 +48,5 @@ pub use self::{
     file::FileBackedObjectStore,
     gcs::{GoogleCloudStore, GoogleCloudStoreAuthMode},
     mock::MockObjectStore,
-    objects::StoredObject,
-    raw::{Bucket, ObjectStore, ObjectStoreError},
+    traits::{Bucket, ObjectStore, ObjectStoreError, StoredObject},
 };
