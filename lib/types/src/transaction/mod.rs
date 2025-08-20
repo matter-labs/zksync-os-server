@@ -63,7 +63,7 @@ pub struct ZkTransaction {
     pub inner: Recovered<ZkEnvelope>,
 }
 
-impl bincode::enc::Encode for ZkTransaction {
+impl bincode::Encode for ZkTransaction {
     fn encode<E: bincode::enc::Encoder>(
         &self,
         encoder: &mut E,
@@ -72,7 +72,7 @@ impl bincode::enc::Encode for ZkTransaction {
     }
 }
 
-impl<Context> bincode::de::Decode<Context> for ZkTransaction {
+impl<Context> bincode::Decode<Context> for ZkTransaction {
     fn decode<D: bincode::de::Decoder>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
@@ -91,22 +91,12 @@ impl<Context> bincode::de::Decode<Context> for ZkTransaction {
     }
 }
 
-impl<'de, Context> bincode::de::BorrowDecode<'de, Context> for ZkTransaction {
+impl<'de, Context> bincode::BorrowDecode<'de, Context> for ZkTransaction {
     fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        let bytes = Vec::<u8>::borrow_decode(decoder)?;
-        let envelope = ZkEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|_| {
-            bincode::error::DecodeError::OtherString(
-                "Failed to decode 2718 transaction".to_string(),
-            )
-        })?;
-        let recovered = envelope.try_into_recovered().map_err(|_| {
-            bincode::error::DecodeError::OtherString(
-                "Failed to recover transaction's signer".to_string(),
-            )
-        })?;
-        Ok(recovered)
+        use bincode::de::Decode;
+        Self::decode(decoder)
     }
 }
 
