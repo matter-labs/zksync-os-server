@@ -3,10 +3,49 @@
 //!
 
 use alloy::primitives::BlockNumber;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
-use zksync_os_object_store::{ObjectStore, ObjectStoreError};
+use zksync_os_object_store::_reexports::BoxedError;
+use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
 use zksync_os_storage_api::ReadBatch;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum StoredBatch {
+    V1(BatchEnvelope<FriProof>),
+}
+
+impl StoredObject for StoredBatch {
+    const BUCKET: Bucket = Bucket::FriBatchEnvelopes;
+    type Key<'a> = u64;
+
+    fn encode_key(key: Self::Key<'_>) -> String {
+        format!("fri_batch_envelope_{key}.json")
+    }
+
+    fn serialize(&self) -> Result<Vec<u8>, BoxedError> {
+        serde_json::to_vec(self).map_err(From::from)
+    }
+
+    fn deserialize(bytes: Vec<u8>) -> Result<Self, BoxedError> {
+        serde_json::from_slice(&bytes).map_err(From::from)
+    }
+}
+
+impl StoredBatch {
+    pub fn batch_number(&self) -> u64 {
+        match self {
+            StoredBatch::V1(envelope) => envelope.batch_number(),
+        }
+    }
+
+    pub fn batch_envelope(self) -> BatchEnvelope<FriProof> {
+        match self {
+            StoredBatch::V1(envelope) => envelope,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ProofStorage {
@@ -20,17 +59,15 @@ impl ProofStorage {
 
     /// Persist a BatchWithProof. Overwrites any existing entry for the same batch.
     /// Doesn't allow gaps - if a proof for batch `n` is missing, then no proof for batch `n+1` is allowed.
-    pub async fn save_proof(&self, value: &BatchEnvelope<FriProof>) -> anyhow::Result<()> {
-        self.object_store
-            .put(value.batch.commit_batch_info.batch_number, value)
-            .await?;
+    pub async fn save_proof(&self, value: &StoredBatch) -> anyhow::Result<()> {
+        self.object_store.put(value.batch_number(), value).await?;
         Ok(())
     }
 
     /// Loads a BatchWithProof for `batch_number`, if present.
     pub async fn get(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
-        match self.object_store.get(batch_number).await {
-            Ok(o) => Ok(Some(o)),
+        match self.object_store.get::<StoredBatch>(batch_number).await {
+            Ok(o) => Ok(Some(o.batch_envelope())),
             Err(ObjectStoreError::KeyNotFound(_)) => Ok(None),
             Err(err) => Err(err.into()),
         }

@@ -10115,7 +10115,6 @@ dependencies = [
  "itertools 0.14.0",
  "ruint",
  "serde",
- "serde_json",
  "smart-config",
  "time",
  "tokio",
@@ -10125,7 +10124,6 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
- "zksync_os_object_store",
  "zksync_os_observability",
  "zksync_os_types",
 ]

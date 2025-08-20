@@ -8,9 +8,9 @@ use crate::{
     file::FileBackedObjectStore,
     gcs::{GoogleCloudStore, GoogleCloudStoreAuthMode},
     mirror::MirroringObjectStore,
-    traits::{ObjectStore, ObjectStoreError},
     retries::StoreWithRetries,
     s3::{S3Store, S3StoreAuthMode},
+    traits::{ObjectStore, ObjectStoreError},
 };
 
 /// Factory of [`ObjectStore`]s that caches the store instance once it's created. Used mainly for legacy reasons.
