@@ -22,6 +22,9 @@ struct Args {
     /// Private key for the L1 wallet
     #[arg(short, long)]
     private_key: Option<String>,
+    /// Deposit amount in wei
+    #[arg(short, long)]
+    amount: Option<U256>,
 }
 
 /// Submits an L1->L2 deposit transaction to local L1
@@ -37,7 +40,9 @@ async fn main() -> anyhow::Result<()> {
     });
     let bridgehub_address = args.bridgehub;
     // Deposit 10k ETH by default
-    let amount = U256::from(100u128 * 10u128.pow(18));
+    let amount = args
+        .amount
+        .unwrap_or_else(|| U256::from(100u128 * 10u128.pow(18)));
     let l2_chain_id = 270;
 
     let l1_wallet = EthereumWallet::new(LocalSigner::from_str(&private_key).unwrap());
