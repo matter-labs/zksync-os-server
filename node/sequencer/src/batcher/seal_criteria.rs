@@ -5,33 +5,28 @@ use zk_os_forward_system::run::BlockOutput;
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
     // Accumulated values
-    pub gas_used: u64,
     pub native_cycles: u64,
     pub pubdata_bytes: u64,
     pub l2_to_l1_logs_count: u64,
 
     // Limits
     pub blocks_per_batch_limit: usize,
-    pub batch_gas_limit: u64,
     pub batch_pubdata_limit_bytes: u64,
 }
 
 impl BatchInfoAccumulator {
     pub fn new(
         blocks_per_batch_limit: usize,
-        batch_gas_limit: u64,
         batch_pubdata_limit_bytes: u64,
     ) -> Self {
         Self {
             blocks_per_batch_limit,
-            batch_gas_limit,
             batch_pubdata_limit_bytes,
             ..Default::default()
         }
     }
 
     pub fn add(&mut self, block_output: &BlockOutput) -> &Self {
-        self.gas_used += block_output.header.gas_used;
         self.native_cycles += block_output.computaional_native_used;
         self.pubdata_bytes += block_output.pubdata.len() as u64;
         self.l2_to_l1_logs_count += block_output
@@ -48,11 +43,6 @@ impl BatchInfoAccumulator {
     pub fn is_batch_limit_reached(&self, blocks_len: usize) -> bool {
         if blocks_len > self.blocks_per_batch_limit {
             tracing::debug!("Batcher: reached blocks per batch limit");
-            return true;
-        }
-
-        if self.gas_used > self.batch_gas_limit {
-            tracing::debug!("Batcher: reached gas limit for the batch");
             return true;
         }
 

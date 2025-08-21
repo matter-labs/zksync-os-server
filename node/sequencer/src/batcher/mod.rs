@@ -28,7 +28,6 @@ pub struct Batcher {
     last_persisted_block: u64,
 
     // == config ==
-    gas_limit: u64,
     pubdata_limit_bytes: u64,
     batcher_config: BatcherConfig,
 
@@ -50,7 +49,6 @@ impl Batcher {
         last_persisted_block: u64,
 
         // == config ==
-        gas_limit: u64,
         pubdata_limit_bytes: u64,
         batcher_config: BatcherConfig,
 
@@ -63,7 +61,6 @@ impl Batcher {
             chain_id,
             first_block_to_process,
             last_persisted_block,
-            gas_limit,
             pubdata_limit_bytes,
             batcher_config,
             block_receiver,
@@ -104,7 +101,6 @@ impl Batcher {
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
         let mut accumulator = BatchInfoAccumulator::new(
             self.batcher_config.blocks_per_batch_limit,
-            self.gas_limit,
             self.pubdata_limit_bytes,
         );
 
