@@ -9,7 +9,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
-use zksync_os_observability::ComponentStateLatencyTracker;
+use zksync_os_observability::ComponentStateHandle;
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
@@ -22,7 +22,7 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
-    latency_tracker: &mut ComponentStateLatencyTracker<SequencerState>,
+    latency_tracker: &ComponentStateHandle<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
