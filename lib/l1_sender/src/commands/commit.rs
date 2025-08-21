@@ -1,6 +1,7 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
+use crate::config::BatchDaInputMode;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
@@ -11,11 +12,15 @@ use zksync_os_contract_interface::IExecutor;
 #[derive(Debug)]
 pub struct CommitCommand {
     input: BatchEnvelope<FriProof>,
+    da_input_mode: BatchDaInputMode,
 }
 
 impl CommitCommand {
-    pub fn new(input: BatchEnvelope<FriProof>) -> Self {
-        Self { input }
+    pub fn new(input: BatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode) -> Self {
+        Self {
+            input,
+            da_input_mode,
+        }
     }
 }
 
@@ -72,8 +77,12 @@ impl CommitCommand {
 
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
-        let commit_batch_info =
-            IExecutor::CommitBoojumOSBatchInfo::from(self.input.batch.commit_batch_info.clone());
+        let commit_batch_info = self
+            .input
+            .batch
+            .commit_batch_info
+            .clone()
+            .into_l1_commit_data(self.da_input_mode);
         tracing::debug!(
             last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
             last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,

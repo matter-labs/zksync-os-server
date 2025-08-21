@@ -1,3 +1,4 @@
+use crate::config::BatchDaInputMode;
 use alloy::primitives::{Address, B256, Bytes, FixedBytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
@@ -225,20 +226,30 @@ impl CommitBatchInfo {
     }
 }
 
-impl From<CommitBatchInfo> for zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo {
-    fn from(value: CommitBatchInfo) -> Self {
-        Self::from((
-            value.batch_number,
-            value.new_state_commitment,
-            U256::from(value.number_of_layer1_txs),
-            value.priority_operations_hash,
-            value.l2_to_l1_logs_root_hash,
-            Address::from(value.l2_da_validator.0),
-            value.da_commitment,
-            value.first_block_timestamp,
-            value.last_block_timestamp,
-            U256::from(value.chain_id),
-            Bytes::from(value.operator_da_input),
+impl CommitBatchInfo {
+    /// `CommitBatchInfo` has full da input - even for validium chains
+    /// we only drop `operator_da_input` field when we are actually committing the batch
+    /// this way, we don't need to consider the DA mode in advance - it's only known to the l1-sender.
+    pub fn into_l1_commit_data(
+        self,
+        mode: BatchDaInputMode,
+    ) -> zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo {
+        let operator_da_input = match mode {
+            BatchDaInputMode::Rollup => self.operator_da_input,
+            BatchDaInputMode::Validium => U256::ZERO.to_be_bytes_vec(),
+        };
+        zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo::from((
+            self.batch_number,
+            self.new_state_commitment,
+            U256::from(self.number_of_layer1_txs),
+            self.priority_operations_hash,
+            self.l2_to_l1_logs_root_hash,
+            Address::from(self.l2_da_validator.0),
+            self.da_commitment,
+            self.first_block_timestamp,
+            self.last_block_timestamp,
+            U256::from(self.chain_id),
+            Bytes::from(operator_da_input),
         ))
     }
 }
