@@ -10,7 +10,7 @@ use zk_ee::system::{
     SystemTypes,
 };
 use zk_ee::types_config::SystemIOTypesConfig;
-use zk_os_evm_interpreter::ERGS_PER_GAS;
+use zk_os_evm_interpreter::{ERGS_PER_GAS, STACK_SIZE};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::{BlockContext, simulate_tx};
@@ -349,32 +349,46 @@ fn maybe_revert_reason(output: &[u8]) -> Option<String> {
     }
 }
 
-/// Converts [`EvmError`] to a geth-style error message.
-///
-/// See also <https://github.com/ethereum/go-ethereum/blob/34d507215951fb3f4a5983b65e127577989a6db8/eth/tracers/native/call_flat.go#L39-L55>
+/// Converts [`EvmError`] to a geth-style error message (if possible).
 fn fmt_error_msg(error: &EvmError) -> String {
-    let msg = match error {
-        // Geth-style errors
-        EvmError::Revert => "Reverted",
-        EvmError::OutOfGas => "Out of gas",
-        EvmError::InvalidJump => "Bad jump destination",
-        EvmError::InvalidOpcode(_) => "Bad instruction",
-        EvmError::StackOverflow => "Out of stack",
-        EvmError::InsufficientBalance => "Insufficient balance for transfer",
-        // Custom errors
-        EvmError::ReturnDataOutOfBounds => "Return data out of bounds",
-        EvmError::StackUnderflow => "Stack underflow",
-        EvmError::CallNotAllowedInsideStatic => "Call not allowed inside static call",
-        EvmError::StateChangeDuringStaticCall => "State change during static call",
-        EvmError::MemoryLimitOOG => "Memory limit out of gas",
-        EvmError::InvalidOperandOOG => "Invalid operand out of gas",
-        EvmError::CodeStoreOutOfGas => "Code store out of gas",
-        EvmError::CallTooDeep => "Call too deep",
-        EvmError::CreateCollision => "Create collision",
-        EvmError::NonceOverflow => "Nonce overflow",
-        EvmError::CreateContractSizeLimit => "Create contract size limit",
-        EvmError::CreateInitcodeSizeLimit => "Create initcode size limit",
-        EvmError::CreateContractStartingWithEF => "Create contract starting with EF",
-    };
-    msg.to_string()
+    match error {
+        //
+        // geth-style errors as taken from
+        // https://github.com/ethereum/go-ethereum/blob/9ce40d19a8240844be24b9692c639dff45d13d68/core/vm/errors.go#L26-L45
+        //
+        EvmError::Revert => "execution reverted".to_string(),
+        EvmError::OutOfGas => "out of gas".to_string(),
+        EvmError::InvalidJump => "invalid jump destination".to_string(),
+        EvmError::ReturnDataOutOfBounds => "return data out of bounds".to_string(),
+        EvmError::InvalidOpcode(opcode) => format!("invalid opcode: {opcode}"),
+        EvmError::StackUnderflow => "stack underflow".to_string(),
+        EvmError::StackOverflow => {
+            format!("stack limit reached {} ({})", STACK_SIZE, STACK_SIZE - 1)
+        }
+        // todo: check that both variants below accurately map to `ErrWriteProtection` from geth
+        EvmError::CallNotAllowedInsideStatic => "write protection".to_string(),
+        EvmError::StateChangeDuringStaticCall => "write protection".to_string(),
+        EvmError::CodeStoreOutOfGas => "contract creation code storage out of gas".to_string(),
+        EvmError::CallTooDeep => "max call depth exceeded".to_string(),
+        EvmError::InsufficientBalance => "insufficient balance for transfer".to_string(),
+        EvmError::CreateCollision => "contract address collision".to_string(),
+        EvmError::NonceOverflow => "nonce uint64 overflow".to_string(),
+        EvmError::CreateContractSizeLimit => "max code size exceeded".to_string(),
+        EvmError::CreateInitcodeSizeLimit => "max initcode size exceeded".to_string(),
+        EvmError::CreateContractStartingWithEF => {
+            "invalid code: must not begin with 0xef".to_string()
+        }
+        // todo: missing equivalents of geth errors:
+        //       - `ErrGasUintOverflow`: likely not propagated during tx decoding
+
+        //
+        // Custom errors specific to zksync-os
+        //
+
+        // geth/reth treat this as unrealistic error to happen hence no existing error message
+        EvmError::MemoryLimitOOG => format!("memory limit reached {} (out of gas)", u32::MAX - 31),
+        // todo: I believe geth just ignores non-u64 part of operands and hence doesn't have this
+        //       error type; confirm this is intended behavior on our side
+        EvmError::InvalidOperandOOG => "invalid operand (out of gas)".to_string(),
+    }
 }
