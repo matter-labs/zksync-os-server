@@ -274,7 +274,7 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     #[inline(always)]
     fn before_evm_interpreter_execution_step(
         &mut self,
-        opcode: u8,
+        _opcode: u8,
         _interpreter_state: &impl EvmFrameInterface<S>,
     ) {
     }
