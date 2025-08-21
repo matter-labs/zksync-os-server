@@ -120,21 +120,18 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 },
                 typ: match initial_state.external_call.modifier {
                     CallModifier::NoModifier => "CALL",
-                    // fixme: how to distinguish between CREATE and CREATE2?
-                    CallModifier::Constructor => "CREATE",
-                    CallModifier::Delegate => "DELEGATECALL",
+                    // Assume CREATE2 by default but can change to CREATE if we encounter CREATE opcode
+                    CallModifier::Constructor => "CREATE2",
+                    CallModifier::Delegate | CallModifier::DelegateStatic => "DELEGATECALL",
                     CallModifier::Static => "STATICCALL",
-                    // fixme: is this really a custom call type?
-                    CallModifier::DelegateStatic => "DELEGATESTATICCALL",
+                    CallModifier::EVMCallcode | CallModifier::EVMCallcodeStatic => "CALLCODE",
+                    // Call types below are unused and are not expected to be present in the trace
                     CallModifier::ZKVMSystem => {
                         panic!("unexpected call type: ZKVMSystem")
                     }
                     CallModifier::ZKVMSystemStatic => {
                         panic!("unexpected call type: ZKVMSystemStatic")
                     }
-                    CallModifier::EVMCallcode => "CALLCODE",
-                    // fixme: is this really a custom call type?
-                    CallModifier::EVMCallcodeStatic => "CALLCODESTATIC",
                 }
                 .to_string(),
             })
@@ -277,9 +274,13 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     #[inline(always)]
     fn after_evm_interpreter_execution_step(
         &mut self,
-        _opcode: u8,
+        opcode: u8,
         _interpreter_state: &impl EvmFrameInterface<S>,
     ) {
+        if opcode == zk_os_evm_interpreter::opcodes::CREATE {
+            let current_call = self.unfinished_calls.last_mut().expect("Should exist");
+            current_call.typ = "CREATE".to_string();
+        }
     }
 
     /// Opcode failed for some reason. Note: call frame ends immediately
