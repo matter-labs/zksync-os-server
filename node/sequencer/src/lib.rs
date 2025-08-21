@@ -46,6 +46,7 @@ use futures::FutureExt;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
 use ruint::aliases::U256;
+use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -599,6 +600,7 @@ pub async fn run(
             batch_with_proof_receiver,
             proof_storage.clone(),
             batch_for_commit_sender,
+            l1_sender_config.da_input_mode,
         );
 
         tasks.spawn(
@@ -867,6 +869,16 @@ fn run_l1_senders(
     impl Future<Output = Result<()>> + 'static,
     impl Future<Output = Result<()>> + 'static,
 ) {
+    if l1_sender_config.operator_commit_pk.expose_secret()
+        == l1_sender_config.operator_prove_pk.expose_secret()
+        || l1_sender_config.operator_prove_pk.expose_secret()
+            == l1_sender_config.operator_execute_pk.expose_secret()
+        || l1_sender_config.operator_execute_pk.expose_secret()
+            == l1_sender_config.operator_commit_pk.expose_secret()
+    {
+        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
+        panic!("Operator addresses for commit, prove and execute must be different");
+    }
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
         batch_for_snark_sender,
