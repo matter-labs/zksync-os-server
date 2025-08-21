@@ -98,14 +98,9 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                     initial_state.external_call.available_resources.ergs().0 / ERGS_PER_GAS,
                 ),
                 gas_used: U256::ZERO, // will be populated later
-                to: if initial_state.external_call.modifier == CallModifier::Constructor {
-                    // CREATE/CREATE2 frames don't have a `to` address
-                    None
-                } else {
-                    Some(Address::from(
-                        initial_state.external_call.callee.to_be_bytes(),
-                    ))
-                },
+                to: Some(Address::from(
+                    initial_state.external_call.callee.to_be_bytes(),
+                )),
                 input: Bytes::copy_from_slice(initial_state.external_call.input),
                 output: None,        // will be populated later
                 error: None,         // can be populated later
@@ -120,8 +115,8 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 },
                 typ: match initial_state.external_call.modifier {
                     CallModifier::NoModifier => "CALL",
-                    // Assume CREATE2 by default but can change to CREATE if we encounter CREATE opcode
-                    CallModifier::Constructor => "CREATE2",
+                    // Assume CREATE by default but can change to CREATE2 if we encounter CREATE2 opcode
+                    CallModifier::Constructor => "CREATE",
                     CallModifier::Delegate | CallModifier::DelegateStatic => "DELEGATECALL",
                     CallModifier::Static => "STATICCALL",
                     CallModifier::EVMCallcode | CallModifier::EVMCallcodeStatic => "CALLCODE",
@@ -159,10 +154,19 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                                 maybe_revert_reason(return_values.returndata);
                             finished_call.output =
                                 Some(Bytes::copy_from_slice(return_values.returndata));
+                            if finished_call.typ == "CREATE" || finished_call.typ == "CREATE2" {
+                                // Clear `to` field as no contract was created
+                                finished_call.to = None;
+                            }
                         }
                         CallResult::Successful { return_values } => {
-                            finished_call.output =
-                                Some(Bytes::copy_from_slice(return_values.returndata));
+                            if finished_call.typ == "CREATE" || finished_call.typ == "CREATE2" {
+                                // todo: should contain deployed contract bytecode instead of input
+                                finished_call.output = Some(finished_call.input.clone());
+                            } else {
+                                finished_call.output =
+                                    Some(Bytes::copy_from_slice(return_values.returndata));
+                            }
                         }
                     };
                 }
@@ -172,6 +176,10 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                     finished_call.gas_used = finished_call.gas;
                     finished_call.output = None;
                     finished_call.revert_reason = None;
+                    if finished_call.typ == "CREATE" || finished_call.typ == "CREATE2" {
+                        // Clear `to` field as no contract was created
+                        finished_call.to = None;
+                    }
                 }
             }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
@@ -266,7 +274,7 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     #[inline(always)]
     fn before_evm_interpreter_execution_step(
         &mut self,
-        _opcode: u8,
+        opcode: u8,
         _interpreter_state: &impl EvmFrameInterface<S>,
     ) {
     }
@@ -277,9 +285,10 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
         opcode: u8,
         _interpreter_state: &impl EvmFrameInterface<S>,
     ) {
-        if opcode == zk_os_evm_interpreter::opcodes::CREATE {
+        // fixme: this doesn't actually get called
+        if opcode == zk_os_evm_interpreter::opcodes::CREATE2 {
             let current_call = self.unfinished_calls.last_mut().expect("Should exist");
-            current_call.typ = "CREATE".to_string();
+            current_call.typ = "CREATE2".to_string();
         }
     }
 
