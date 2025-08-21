@@ -15,10 +15,7 @@ pub(crate) struct BatchInfoAccumulator {
 }
 
 impl BatchInfoAccumulator {
-    pub fn new(
-        blocks_per_batch_limit: usize,
-        batch_pubdata_limit_bytes: u64,
-    ) -> Self {
+    pub fn new(blocks_per_batch_limit: usize, batch_pubdata_limit_bytes: u64) -> Self {
         Self {
             blocks_per_batch_limit,
             batch_pubdata_limit_bytes,
