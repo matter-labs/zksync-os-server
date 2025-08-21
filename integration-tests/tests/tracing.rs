@@ -1,10 +1,13 @@
+use alloy::network::Ethereum;
 use alloy::primitives::{Address, Bytes, U256};
+use alloy::providers::PendingTransactionBuilder;
 use alloy::rpc::types::trace::geth::CallFrame;
 use alloy::sol_types::{Revert, SolCall, SolError};
 use std::collections::HashMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::contracts::{TracingPrimary, TracingSecondary};
+use zksync_os_integration_tests::contracts::{EventEmitter, TracingPrimary, TracingSecondary};
+use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 
 #[test_log::test(tokio::test)]
 async fn call_trace_transaction() -> anyhow::Result<()> {
@@ -132,56 +135,54 @@ async fn call_trace_transaction() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn check_equivalency<
+    Fut: Future<Output = anyhow::Result<PendingTransactionBuilder<Ethereum>>>,
+>(
+    name: &str,
+    tester: &Tester,
+    f: impl Fn(EthDynProvider) -> Fut,
+) -> anyhow::Result<()> {
+    tracing::info!(name, "checking trace equivalence");
+    let l1_call_frame = f(tester.l1_provider.clone())
+        .await?
+        .expect_call_trace()
+        .await?;
+    let l2_call_frame = f(tester.l2_provider.clone())
+        .await?
+        .expect_call_trace()
+        .await?;
+    assert_eq_call_frames(&l1_call_frame, &l2_call_frame);
+    tracing::info!(name, "successful trace equivalence");
+    Ok(())
+}
+
 #[test_log::test(tokio::test)]
 async fn call_trace_transaction_equivalency() -> anyhow::Result<()> {
     // Test that the node call traces are equivalent to L1 traces (produced by anvil).
     let tester = Tester::setup().await?;
-    let l1_alice = tester.l1_wallet.default_signer().address();
-    let l2_alice = tester.l2_wallet.default_signer().address();
     // Init data for `TracingSecondary`
     let secondary_data = U256::from(42);
     // Call value for `TracingPrimary::multiCalculate`
     let calculate_value = U256::from(24);
     let times = U256::from(10);
 
-    let l1_secondary_contract =
-        TracingSecondary::deploy(tester.l1_provider.clone(), secondary_data).await?;
-    let l1_primary_contract =
-        TracingPrimary::deploy(tester.l1_provider.clone(), *l1_secondary_contract.address())
-            .await?;
-    let mut l1_call_frame = l1_primary_contract
-        .multiCalculate(calculate_value, times)
-        .send()
-        .await?
-        .expect_call_trace()
-        .await?;
+    check_equivalency("multi-subcall", &tester, |provider| async move {
+        let secondary_contract = TracingSecondary::deploy(provider.clone(), secondary_data).await?;
+        let primary_contract =
+            TracingPrimary::deploy(provider, *secondary_contract.address()).await?;
+        anyhow::Ok(
+            primary_contract
+                .multiCalculate(calculate_value, times)
+                .send()
+                .await?,
+        )
+    })
+    .await?;
 
-    let l2_secondary_contract =
-        TracingSecondary::deploy(tester.l2_provider.clone(), secondary_data).await?;
-    let l2_primary_contract =
-        TracingPrimary::deploy(tester.l2_provider.clone(), *l2_secondary_contract.address())
-            .await?;
-    let l2_call_frame = l2_primary_contract
-        .multiCalculate(calculate_value, times)
-        .send()
-        .await?
-        .expect_call_trace()
-        .await?;
-    convert_l1_call_frame_addresses(
-        &mut l1_call_frame,
-        &HashMap::from_iter([
-            (l1_alice, l2_alice),
-            (
-                *l1_secondary_contract.address(),
-                *l2_secondary_contract.address(),
-            ),
-            (
-                *l1_primary_contract.address(),
-                *l2_primary_contract.address(),
-            ),
-        ]),
-    );
-    assert_eq_call_frames(&l1_call_frame, &l2_call_frame);
+    check_equivalency("create", &tester, |provider| async move {
+        Ok(EventEmitter::deploy_builder(provider).send().await?)
+    })
+    .await?;
 
     Ok(())
 }
@@ -189,16 +190,44 @@ async fn call_trace_transaction_equivalency() -> anyhow::Result<()> {
 /// Asserts that two call frame trees are equivalent. Specifically excludes some fields that we do
 /// not assert L1-L2 equivalency for (e.g., `gas`, `gasUsed`).
 fn assert_eq_call_frames(l1_call_frame: &CallFrame, l2_call_frame: &CallFrame) {
-    let l1_call_frame_stripped = strip_call_frame(l1_call_frame);
-    let l2_call_frame_stripped = strip_call_frame(l2_call_frame);
-    assert_eq!(l1_call_frame_stripped, l2_call_frame_stripped);
+    assert_eq_call_frames_internal(l1_call_frame, l2_call_frame, &mut HashMap::new());
+}
+
+fn assert_eq_call_frames_internal(
+    l1_call_frame: &CallFrame,
+    l2_call_frame: &CallFrame,
+    address_mapping: &mut HashMap<Address, Address>,
+) {
+    let mut l1_call_frame = strip_call_frame(l1_call_frame);
+    let l2_call_frame = strip_call_frame(l2_call_frame);
+    if l1_call_frame.from != l2_call_frame.from {
+        let mapped = address_mapping
+            .entry(l1_call_frame.from)
+            .or_insert(l2_call_frame.from);
+        assert_eq!(
+            mapped, &l2_call_frame.from,
+            "L1 `from` address does not match mapped L2 `from` address"
+        );
+        l1_call_frame.from = *mapped;
+    }
+    if let Some(l1_to) = l1_call_frame.to
+        && let Some(l2_to) = l2_call_frame.to
+    {
+        let mapped = address_mapping.entry(l1_to).or_insert(l2_to);
+        assert_eq!(
+            mapped, &l2_to,
+            "L1 `to` address does not match mapped L2 `to` address"
+        );
+        l1_call_frame.to = Some(*mapped);
+    }
+    assert_eq!(l1_call_frame, l2_call_frame);
     assert_eq!(
         l1_call_frame.calls.len(),
         l2_call_frame.calls.len(),
         "call frames have different subcalls length"
     );
     for (l1, l2) in l1_call_frame.calls.iter().zip(l2_call_frame.calls.iter()) {
-        assert_eq_call_frames(l1, l2);
+        assert_eq_call_frames_internal(l1, l2, address_mapping);
     }
 }
 
@@ -208,22 +237,7 @@ fn strip_call_frame(call_frame: &CallFrame) -> CallFrame {
     call_frame.gas = U256::ZERO;
     call_frame.gas_used = U256::ZERO;
     call_frame.calls = vec![];
+    // todo: temporary workaround while we don't preserve CREATE output
+    call_frame.output = Some(Bytes::new());
     call_frame
-}
-
-/// Converts `from`/`to` addresses in L1 call frame tree to the corresponding L2 addresses.
-fn convert_l1_call_frame_addresses(
-    call_frame: &mut CallFrame,
-    address_mapping: &HashMap<Address, Address>,
-) {
-    call_frame.from = address_mapping
-        .get(&call_frame.from)
-        .copied()
-        .unwrap_or(call_frame.from);
-    call_frame.to = call_frame
-        .to
-        .map(|addr| address_mapping.get(&addr).copied().unwrap_or(addr));
-    for call in &mut call_frame.calls {
-        convert_l1_call_frame_addresses(call, address_mapping);
-    }
 }
