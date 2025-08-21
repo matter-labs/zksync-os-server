@@ -1,4 +1,4 @@
-use crate::batcher::sealing_criteria::BatchInfoAccumulator;
+use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
 use crate::util::peekable_receiver::PeekableReceiver;
 use std::pin::Pin;
@@ -12,7 +12,7 @@ use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutpu
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
-mod sealing_criteria;
+mod seal_criteria;
 pub mod util;
 
 /// This component handles batching logic - receives blocks and prepares batch data.
@@ -28,6 +28,7 @@ pub struct Batcher {
     last_persisted_block: u64,
 
     // == config ==
+    pubdata_limit_bytes: u64,
     batcher_config: BatcherConfig,
 
     // == plumbing ==
@@ -40,6 +41,7 @@ pub struct Batcher {
 }
 
 impl Batcher {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         // == initial state ==
         chain_id: u64,
@@ -47,6 +49,7 @@ impl Batcher {
         last_persisted_block: u64,
 
         // == config ==
+        pubdata_limit_bytes: u64,
         batcher_config: BatcherConfig,
 
         // == plumbing ==
@@ -58,6 +61,7 @@ impl Batcher {
             chain_id,
             first_block_to_process,
             last_persisted_block,
+            pubdata_limit_bytes,
             batcher_config,
             block_receiver,
             batch_data_sender,
@@ -95,7 +99,10 @@ impl Batcher {
 
         let batch_number = prev_batch_info.batch_number + 1;
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
-        let mut accumulator = BatchInfoAccumulator::default();
+        let mut accumulator = BatchInfoAccumulator::new(
+            self.batcher_config.blocks_per_batch_limit,
+            self.pubdata_limit_bytes,
+        );
 
         loop {
             tokio::select! {
@@ -112,7 +119,7 @@ impl Batcher {
                 /* ---------- collect blocks ---------- */
                 should_seal = self.block_receiver.peek_recv(|(block_output, _, _)| {
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output).is_batch_limit_reached(&self.batcher_config, blocks.len())
+                    accumulator.clone().add(block_output).is_batch_limit_reached(blocks.len())
                 }) => {
                     match should_seal {
                         Some(true) => {
