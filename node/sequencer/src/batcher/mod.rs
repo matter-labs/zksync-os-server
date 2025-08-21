@@ -1,6 +1,8 @@
+use crate::batcher::sealing_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
+use crate::util::peekable_receiver::PeekableReceiver;
 use std::pin::Pin;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
 use tracing;
 use zk_os_forward_system::run::BlockOutput;
@@ -10,6 +12,7 @@ use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutpu
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
+mod sealing_criteria;
 pub mod util;
 
 /// This component handles batching logic - receives blocks and prepares batch data.
@@ -29,7 +32,7 @@ pub struct Batcher {
 
     // == plumbing ==
     // inbound
-    block_receiver: Receiver<(BlockOutput, ReplayRecord, ProverInput)>,
+    block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput)>,
     // outbound
     batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
     // dependencies
@@ -47,7 +50,7 @@ impl Batcher {
         batcher_config: BatcherConfig,
 
         // == plumbing ==
-        block_receiver: Receiver<(BlockOutput, ReplayRecord, ProverInput)>,
+        block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput)>,
         batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
@@ -92,6 +95,7 @@ impl Batcher {
 
         let batch_number = prev_batch_info.batch_number + 1;
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
+        let mut accumulator = BatchInfoAccumulator::default();
 
         loop {
             tokio::select! {
@@ -106,9 +110,20 @@ impl Batcher {
                 }
 
                 /* ---------- collect blocks ---------- */
-                maybe_block = self.block_receiver.recv() => {
-                    match maybe_block {
-                        Some((block_output, replay_record, prover_input)) => {
+                should_seal = self.block_receiver.peek_recv(|(block_output, _, _)| {
+                    // determine if the block fits into the current batch
+                    accumulator.clone().add(block_output).is_batch_limit_reached(&self.batcher_config, blocks.len())
+                }) => {
+                    match should_seal {
+                        Some(true) => {
+                            // some of the limits was reached, start sealing the batch
+                            break;
+                        }
+                        Some(false) => {
+                            let Some((block_output, replay_record, prover_input)) = self.block_receiver.pop_buffer() else {
+                                anyhow::bail!("No block received in buffer after peeking")
+                            };
+
                             let block_number = replay_record.block_context.block_number;
 
                             // skip the blocks from already committed batches (on server restart we replay some historical blocks - they are already batched and committed, so no action is needed here)
@@ -130,10 +145,13 @@ impl Batcher {
 
                             let (root_hash, leaf_count) = tree.root_info()?;
 
-                            let tree_output = zksync_os_merkle_tree::TreeBatchOutput {
+                            let tree_output = TreeBatchOutput {
                                 root_hash,
                                 leaf_count,
                             };
+
+                            // ---------- accumulate batch data ----------
+                            accumulator.add(&block_output);
 
                             blocks.push((
                                 block_output,
@@ -146,11 +164,6 @@ impl Batcher {
                             // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
                             if deadline.is_none() && block_number >= self.last_persisted_block {
                                 deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
-                            }
-
-                            if self.should_seal_by_content(&blocks).await {
-                                tracing::info!(batch_number, "Content limit reached, sealing batch.");
-                                break;
                             }
                         }
                         None => {
@@ -168,14 +181,5 @@ impl Batcher {
             batch_number,
             self.chain_id,
         )
-    }
-
-    /// Checks if the batch should be sealed based on the content of the blocks.
-    /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
-    async fn should_seal_by_content(
-        &self,
-        blocks: &[(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)],
-    ) -> bool {
-        blocks.len() >= self.batcher_config.blocks_per_batch_limit
     }
 }

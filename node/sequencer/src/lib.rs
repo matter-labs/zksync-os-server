@@ -15,6 +15,7 @@ mod replay_transport;
 pub mod reth_state;
 pub mod tree_manager;
 mod util;
+pub mod zkstack_config;
 
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
@@ -31,7 +32,7 @@ use crate::metadata::NODE_VERSION;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
-use crate::prover_api::proof_storage::{ProofColumnFamily, ProofStorage};
+use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
@@ -62,6 +63,7 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1WatcherConfig};
+use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::ComponentStateLatencyTracker;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rocksdb::RocksDB;
@@ -73,7 +75,6 @@ use zksync_os_storage_api::{FinalityStatus, ReadReplay, ReadRepository, ReplayRe
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
-const PROOF_STORAGE_DB_NAME: &str = "proofs";
 const REPOSITORY_DB_NAME: &str = "repository";
 
 #[allow(clippy::too_many_arguments)]
@@ -290,13 +291,14 @@ pub async fn run(
         sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
     );
-    let proof_storage_db = RocksDB::<ProofColumnFamily>::new(
-        &sequencer_config.rocks_db_path.join(PROOF_STORAGE_DB_NAME),
-    )
-    .expect("Failed to open ProofStorageDB");
 
     tracing::info!("Initializing ProofStorage");
-    let proof_storage = ProofStorage::new(proof_storage_db);
+    let proof_storage = ProofStorage::new(
+        ObjectStoreFactory::new(prover_api_config.object_store)
+            .create_store()
+            .await
+            .unwrap(),
+    );
 
     tracing::info!("Initializing mempools");
     let l2_mempool = zksync_os_mempool::in_memory(
@@ -436,6 +438,7 @@ pub async fn run(
             } else {
                 let batch_metadata = proof_storage
                     .get(l1_state.last_committed_batch)
+                    .await
                     .expect("Failed to get last committed block from proof storage")
                     .map(|proof| proof.batch)
                     .expect("Committed batch is not present in proof storage");
@@ -446,16 +449,16 @@ pub async fn run(
             };
         let last_proved_block = proof_storage
             .get(l1_state.last_proved_batch)
+            .await
             .expect("failed to load last proved batch")
             .map(|batch_envelope| batch_envelope.batch.last_block_number)
             .unwrap_or(0);
         let last_executed_block = proof_storage
             .get(l1_state.last_executed_batch)
+            .await
             .expect("failed to load last executed batch")
             .map(|batch_envelope| batch_envelope.batch.last_block_number)
             .unwrap_or(0);
-
-        let last_stored_batch_with_proof = proof_storage.latest_stored_batch_number().unwrap_or(0);
 
         tracing::info!(
             storage_map_compacted_block,
@@ -468,7 +471,6 @@ pub async fn run(
             last_committed_block,
             last_proved_block,
             last_executed_block,
-            last_stored_batch_with_proof,
             "▶ Sequencer will start from block {}. Batcher will start from block {} and batch {}",
             storage_map_compacted_block + 1,
             last_committed_block + 1,
@@ -490,8 +492,12 @@ pub async fn run(
             "Inconsistent block numbers: storage is compacted ahead of a needed block."
         );
 
+        let committed_batch_proof = proof_storage
+            .get(l1_state.last_committed_batch)
+            .await
+            .expect("failed to load proof for last_committed_batch");
         assert!(
-            last_stored_batch_with_proof >= l1_state.last_committed_batch,
+            l1_state.last_committed_batch == 0 || committed_batch_proof.is_some(),
             "Inconsistent batch numbers: committed batch not found in proof storage."
         );
 
@@ -550,7 +556,7 @@ pub async fn run(
             last_committed_block + 1,
             repositories_persisted_block,
             batcher_config,
-            blocks_for_batcher_receiver,
+            PeekableReceiver::new(blocks_for_batcher_receiver),
             batch_for_proving_sender,
             persistent_tree.clone(),
         );
@@ -649,6 +655,7 @@ pub async fn run(
 
         let last_executed_block = proof_storage
             .get(l1_state.last_executed_batch)
+            .await
             .expect("failed to load last executed batch")
             .map(|batch_envelope| batch_envelope.batch.last_block_number)
             .unwrap_or(0);
@@ -763,7 +770,6 @@ pub async fn run(
     );
 
     // ========== Start Sequencer ===========
-
     tasks.spawn(
         replay_server(
             block_replay_storage.clone(),
@@ -904,7 +910,8 @@ async fn get_committed_not_proven_batches(
     let mut batches_to_reschedule = Vec::new();
     while batch_to_prove <= l1_state.last_committed_batch {
         let batch_with_proof = proof_storage
-            .get(batch_to_prove)?
+            .get(batch_to_prove)
+            .await?
             .context("Failed to get batch")?;
         batches_to_reschedule.push(batch_with_proof);
         batch_to_prove += 1;
@@ -944,7 +951,8 @@ async fn get_proven_not_executed_batches(
     let mut batches_to_reschedule = Vec::new();
     while batch_to_execute <= l1_state.last_proved_batch {
         let batch_with_proof = proof_storage
-            .get(batch_to_execute)?
+            .get(batch_to_execute)
+            .await?
             .context("Failed to get batch")?;
         batches_to_reschedule.push(batch_with_proof);
         batch_to_execute += 1;

@@ -61,7 +61,7 @@ pub struct L1Tx<T: L1TxType> {
     /// A scalar value equal to the maximum amount of L2 gas that should be used in executing this
     /// transaction on L2. This is paid up-front before any computation is done and may not be
     /// increased later.
-    #[serde(with = "alloy::serde::quantity")]
+    #[serde(rename = "gas", with = "alloy::serde::quantity")]
     pub gas_limit: u64,
     /// Maximum amount of L2 gas that will cost to publish one byte of pubdata (every piece of data
     /// that will be stored on L1).
@@ -261,6 +261,7 @@ impl<T: L1TxType> Transaction for L1Tx<T> {
 /// Transaction envelope for L1->L2 transactions. Mostly needed as an intermediary level for `ZkEnvelope`.
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub struct L1Envelope<T: L1TxType> {
+    #[serde(flatten)]
     pub inner: Signed<L1Tx<T>>,
 }
 

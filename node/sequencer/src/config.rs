@@ -1,6 +1,6 @@
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::{path::PathBuf, time::Duration};
-
+use zksync_os_object_store::ObjectStoreConfig;
 pub use zksync_os_rpc::RpcConfig;
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -59,6 +59,9 @@ pub struct SequencerConfig {
     /// Setting this makes the node into an external node.
     #[config(default_t = None)]
     pub block_replay_download_address: Option<String>,
+
+    /// If set - initialize the configs based off the values from the yaml files from that directory.
+    pub zkstack_cli_config_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -75,6 +78,18 @@ pub struct BatcherConfig {
     /// Max number of blocks per batch
     #[config(default_t = 5)]
     pub blocks_per_batch_limit: usize,
+
+    /// Max number of transactions per batch
+    #[config(default_t = 1000)]
+    pub transactions_per_batch_limit: u64,
+
+    /// Max gas used per batch
+    #[config(default_t = 100_000_000_000)]
+    pub batch_gas_limit: u64,
+
+    /// Max pubdata bytes per batch
+    #[config(default_t = 1_100_000)] // 9 blobs is 1_179_648 bytes, subtract some for overheads
+    pub batch_pubdata_limit_bytes: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -121,6 +136,9 @@ pub struct ProverApiConfig {
     /// Max number of FRI proofs that will be aggregated to a single SNARK job.
     #[config(default_t = 10)]
     pub max_fris_per_snark: usize,
+
+    #[config(nest, default)]
+    pub object_store: ObjectStoreConfig,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

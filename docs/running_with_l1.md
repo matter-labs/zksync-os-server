@@ -93,16 +93,12 @@ WARNING: when you see the tool failing on postgres - it is ok, as the chain got 
 
 After this, you can finally run the sequencer:
 ```
-l1_sender_operator_commit_pk= 
-l1_sender_operator_prove_pk= 
-l1_sender_operator_execute_pk=  
-l1_sender_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c  l1_watcher_bridgehub_address=0xa5e73c27a3aaeb816257393a19a7565ec3f5c74c cargo run --release
+
+sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo run --release
 ```
 
-The operator private key must match value from `$chain_name/configs/wallets.yaml` operator (where chain_name in our example is era1)
 
-bridgehub address must batch `configs/contracts.yaml` bridgehub.proxy address.
-
+the `sequencer_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
 
 ### Restarting
 
@@ -121,9 +117,9 @@ Note that we pass this mnemonic to have `0x36615cf349d7f6344891b1e7ca7c72883f5dc
 
 Then deploy the contracts using legacy tooling (see above). 
 After that, add a deposit transaction to the state - integration and load tests expect that `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` has L2 funds. For this, use `generate-deposit` tool in this repo. 
-Make sure to update the `bridgehub_addres` in the code of the tool with the newly generated one (you can find it in `configs/contracts.yaml`):
+Make sure to provide correct `bridgehub_addres` (you can find it in `configs/contracts.yaml`):
 ```
-> cargo run --bin zksync_os_generate_deposit
+> cargo run --bin zksync_os_generate_deposit -- --bridgehub <BRIDGEHUB_ADDRESS>
 L1 balance: 9879999865731420184000
 Successfully submitted L1->L2 deposit tx with hash '0xb8544a2a9bc55713f1f94acf3711c23d07e02917f44885b05e20b13af1402283'
 
@@ -159,25 +155,8 @@ zkstack chain init --deploy-paymaster=false  \
   --server-db-url=postgres://invalid --server-db-name=invalid
 ```
 
-And start the sequencer -- make sure that all the config values are set correctly:
-
-* rpc_chain_id
-* rpc_address
-* sequencer_prometheus_port
-* sequencer_rocks_db_path
-* prover_api_address
-* l1_watcher_rocks_db_path
-* l1_watcher_chain_id
-* l1_sender_chain_id
-
-
-
+And start the sequencer.
 
 ```shell
-genesis_chain_id=271 l1_sender_chain_id=271 l1_watcher_chain_id=271 l1_watcher_rocks_db_path=db/node2 sequencer_rocks_db_path=db/node2 rpc_chain_id=271 rpc_address=0.0.0.0:3055 prover_api_address=0.0.0.0:3125 sequencer_prometheus_port=3313 l1_sender_operator_commit_pk=0x.. l1_sender_operator_prove_pk=0x.. l1_sender_operator_execute_pk=0x.. l1_sender_bridgehub_address=0x..  l1_watcher_bridgehub_address=0x.. cargo run --release
-
+sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era2 cargo run --release
 ```
-
-Stuff that didn't work:
-* nit: multiple thing has to be defined in many configs
-* there is no spellcheck in config names - consider using file-based configs 

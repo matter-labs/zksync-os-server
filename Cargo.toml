@@ -20,6 +20,7 @@ members = [
     "integration-tests",
     "tools/generate-deposit",
     "lib/observability",
+    "lib/object_store",
 ]
 resolver = "3"
 default-members = ["node/sequencer"]
@@ -114,6 +115,15 @@ num_cpus = "1.17.0"
 rocksdb = "0.23.0"
 thread_local = "1.1.9"
 pin-project = "1.1.10"
+aws-config = { version = "1.1.7", default-features = false, features = [
+    "behavior-version-latest",
+] }
+aws-runtime = "1.5.5"
+aws-sdk-s3 = "1.103.0"
+google-cloud-auth = "0.16.0"
+google-cloud-storage = "0.20.0"
+assert_matches = "1.5"
+serde_yaml = "0.9"
 
 # Reth dependencies
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
@@ -143,6 +153,7 @@ zksync_os_storage = { path = "lib/storage" }
 zksync_os_storage_api = { path = "lib/storage_api" }
 zksync_os_types = { path = "lib/types" }
 zksync_os_genesis = { path = "lib/genesis" }
+zksync_os_object_store = { path = "lib/object_store" }
 
 zksync_os_sequencer = { path = "node/sequencer" }
 
