@@ -48,14 +48,14 @@ pub async fn replay_server(
 pub async fn replay_receiver(
     starting_block: BlockNumber,
     address: impl ToSocketAddrs,
-) -> BoxStream<'static, BlockCommand> {
-    let mut socket = TcpStream::connect(address).await.unwrap();
+) -> anyhow::Result<BoxStream<'static, BlockCommand>> {
+    let mut socket = TcpStream::connect(address).await?;
 
-    socket.write_u64(starting_block).await.unwrap();
+    socket.write_u64(starting_block).await?;
 
-    Framed::new(socket, BlockReplayCodec::new())
+    Ok(Framed::new(socket, BlockReplayCodec::new())
         .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
-        .boxed()
+        .boxed())
 }
 
 struct BlockReplayCodec(LengthDelimitedCodec);

@@ -801,7 +801,13 @@ pub async fn run(
             let block_stream = if let Some(replay_download_address) =
                 &sequencer_config.block_replay_download_address
             {
-                replay_receiver(starting_block, replay_download_address).await
+                match replay_receiver(starting_block, replay_download_address).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        tracing::error!("Failed to connect to replay server: {e}");
+                        return;
+                    }
+                }
             } else {
                 command_source(
                     &block_replay_storage,
