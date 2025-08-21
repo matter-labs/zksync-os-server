@@ -313,7 +313,7 @@ pub async fn run(
     // ======= Initialize async channels  ===========
 
     // Channel between `BlockExecutor` and `ProverInputGenerator`
-    let (blocks_for_prover_input_generator_sender, blocks_for_prover_input_generator_receiver) =
+    let (blocks_for_prover_input_generator_sender, mut blocks_for_prover_input_generator_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
 
     // Channel between `BlockExecutor` and `TreeManager`
@@ -364,6 +364,14 @@ pub async fn run(
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
     let finality_storage = if is_external_node {
+        tokio::spawn(async move {
+            while blocks_for_prover_input_generator_receiver
+                .recv()
+                .await
+                .is_some()
+            {}
+        });
+
         Finality::new(FinalityStatus {
             last_committed_block: 0,
             last_executed_block: 0,
