@@ -9,6 +9,7 @@ use std::{
 };
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::StorageWrite;
+use zksync_os_storage_api::{StateError, StateResult};
 
 #[derive(Debug, Clone)]
 pub struct StorageMap {
@@ -50,7 +51,7 @@ impl Diff {
 }
 
 impl StorageMap {
-    pub fn view_at(&self, block_number: u64) -> anyhow::Result<StorageMapView> {
+    pub fn view_at(&self, block_number: u64) -> StateResult<StorageMapView> {
         let latest_block = self.latest_block.load(Ordering::Relaxed);
         let persistent_block_upper_bound = self
             .persistent_storage_map
@@ -71,20 +72,11 @@ impl StorageMap {
         // we cannot provide keys for block N when it's already compacted
         // because view_at(N) should return view immediately after block N
         if block_number < persistent_block_upper_bound {
-            return Err(anyhow::anyhow!(
-                "Cannot create StorageView for potentially compacted block {} (potentially compacted until {}, at least until {})",
-                block_number,
-                persistent_block_upper_bound,
-                persistent_block_lower_bound
-            ));
+            return Err(StateError::Compacted(block_number));
         }
 
         if block_number > latest_block {
-            return Err(anyhow::anyhow!(
-                "Cannot create StorageView for block {} - latest known block number is {}",
-                block_number,
-                latest_block
-            ));
+            return Err(StateError::NotFound(block_number));
         }
 
         Ok(StorageMapView {

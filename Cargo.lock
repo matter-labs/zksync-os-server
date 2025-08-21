@@ -10296,7 +10296,6 @@ dependencies = [
  "zksync_os_mempool",
  "zksync_os_mini_merkle_tree",
  "zksync_os_rpc_api",
- "zksync_os_state",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -10387,8 +10386,8 @@ dependencies = [
 name = "zksync_os_state"
 version = "0.1.1-non-semver-compat"
 dependencies = [
+ "alloy",
  "anyhow",
- "basic_system",
  "dashmap",
  "forward_system",
  "ruint",
@@ -10399,6 +10398,7 @@ dependencies = [
  "zk_ee",
  "zksync_os_genesis",
  "zksync_os_rocksdb",
+ "zksync_os_storage_api",
 ]
 
 [[package]]
@@ -10425,6 +10425,7 @@ dependencies = [
  "alloy-rlp",
  "anyhow",
  "async-trait",
+ "basic_system",
  "bincode 2.0.1",
  "forward_system",
  "futures",
@@ -10434,6 +10435,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "zk_ee",
  "zksync_os_rocksdb",
  "zksync_os_types",
 ]
