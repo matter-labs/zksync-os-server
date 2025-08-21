@@ -2,12 +2,10 @@ use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
 use std::fmt::Display;
-use vise::{Counter, LabeledFamily};
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
 
@@ -31,10 +29,6 @@ impl L1SenderCommand for ProofCommand {
     const NAME: &'static str = "prove";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
-
-    fn state_metric() -> &'static LabeledFamily<L1SenderState, Counter<f64>> {
-        &L1_SENDER_METRICS.prove_state
-    }
 
     fn solidity_call(&self) -> impl SolCall {
         proveBatchesSharedBridgeCall::new((

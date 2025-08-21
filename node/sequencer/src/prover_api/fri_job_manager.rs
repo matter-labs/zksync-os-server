@@ -27,7 +27,9 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
-use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
+use zksync_os_observability::{
+    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
+};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -49,7 +51,6 @@ pub struct JobState {
 
 /// Thread-safe queue for FRI prover work.
 /// Holds up to `max_assigned_batch_range` batches in `assigned_jobs`.
-#[derive(Debug)]
 pub struct FriJobManager {
     // == state ==
     assigned_jobs: ProverJobMap,
@@ -61,7 +62,7 @@ pub struct FriJobManager {
     // == config ==
     max_assigned_batch_range: usize,
     // == metrics ==
-    latency_tracker: std::sync::Mutex<ComponentStateLatencyTracker>,
+    latency_tracker: ComponentStateHandle<GenericComponentState>,
 }
 
 impl FriJobManager {
@@ -73,17 +74,14 @@ impl FriJobManager {
         max_assigned_batch_range: usize,
     ) -> Self {
         let jobs = ProverJobMap::new(assignment_timeout);
-        let latency_tracker = ComponentStateLatencyTracker::new(
-            "fri_job_manager",
-            GenericComponentState::Processing,
-            None,
-        );
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("fri_job_manager", GenericComponentState::Processing);
         Self {
             assigned_jobs: jobs,
             inbound: Mutex::new(PeekableReceiver::new(batches_for_prove_receiver)),
             batches_with_proof_sender,
             max_assigned_batch_range,
-            latency_tracker: std::sync::Mutex::new(latency_tracker),
+            latency_tracker,
         }
     }
 
@@ -269,6 +267,15 @@ impl FriJobManager {
     }
 
     fn set_status(&self, status: GenericComponentState) {
-        self.latency_tracker.lock().unwrap().enter_state(status);
+        self.latency_tracker.enter_state(status);
+    }
+}
+
+impl std::fmt::Debug for FriJobManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FriJobManager")
+            .field("assigned_jobs_len", &self.assigned_jobs.len())
+            .field("max_assigned_batch_range", &self.max_assigned_batch_range)
+            .finish()
     }
 }

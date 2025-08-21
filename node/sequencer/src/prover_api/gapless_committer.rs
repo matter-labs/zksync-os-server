@@ -5,7 +5,9 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::config::BatchDaInputMode;
-use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
+use zksync_os_observability::{
+    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
+};
 
 /// Receives Batches with proofs - potentially out of order;
 /// Fixes the order (by filling in the `buffer` field);  
@@ -25,7 +27,7 @@ pub struct GaplessCommitter {
     // outbound
     proof_storage: ProofStorage,
     commit_batch_sender: mpsc::Sender<CommitCommand>,
-    latency_tracker: ComponentStateLatencyTracker,
+    latency_tracker: ComponentStateHandle<GenericComponentState>,
     //  == config ==
     da_input_mode: BatchDaInputMode,
 }
@@ -38,11 +40,8 @@ impl GaplessCommitter {
         commit_batch_sender: mpsc::Sender<CommitCommand>,
         da_input_mode: BatchDaInputMode,
     ) -> Self {
-        let latency_tracker = ComponentStateLatencyTracker::new(
-            "gapless_committer",
-            GenericComponentState::WaitingRecv,
-            None,
-        );
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("gapless_committer", GenericComponentState::WaitingRecv);
         GaplessCommitter {
             buffer: Default::default(),
             next_expected,
