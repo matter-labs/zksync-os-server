@@ -556,6 +556,7 @@ pub async fn run(
             genesis_config.chain_id,
             last_committed_block + 1,
             repositories_persisted_block,
+            sequencer_config.block_pubdata_limit_bytes,
             batcher_config,
             PeekableReceiver::new(blocks_for_batcher_receiver),
             batch_for_proving_sender,
@@ -767,6 +768,8 @@ pub async fn run(
         block_hashes_for_next_block,
         previous_block_timestamp,
         genesis_config.chain_id,
+        sequencer_config.block_gas_limit,
+        sequencer_config.block_pubdata_limit_bytes,
         node_version,
         genesis,
     );

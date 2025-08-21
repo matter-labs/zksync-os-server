@@ -40,6 +40,8 @@ pub struct BlockContextProvider {
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
     chain_id: u64,
+    gas_limit: u64,
+    pubdata_limit: u64,
     node_version: semver::Version,
     genesis: Genesis,
 }
@@ -53,6 +55,8 @@ impl BlockContextProvider {
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
         chain_id: u64,
+        gas_limit: u64,
+        pubdata_limit: u64,
         node_version: semver::Version,
         genesis: Genesis,
     ) -> Self {
@@ -63,6 +67,8 @@ impl BlockContextProvider {
             block_hashes_for_next_block,
             previous_block_timestamp,
             chain_id,
+            gas_limit,
+            pubdata_limit,
             node_version,
             genesis,
         }
@@ -85,8 +91,6 @@ impl BlockContextProvider {
                 // - L1 transactions first, then L2 transactions.
                 let best_txs =
                     best_transactions(&self.l2_mempool, &mut self.l1_transactions, upgrade_tx);
-                let gas_limit = 100_000_000;
-                let pubdata_limit = 100_000_000;
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
@@ -97,8 +101,8 @@ impl BlockContextProvider {
                     chain_id: self.chain_id,
                     coinbase: Default::default(),
                     block_hashes: self.block_hashes_for_next_block,
-                    gas_limit,
-                    pubdata_limit,
+                    gas_limit: self.gas_limit,
+                    pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                 };
