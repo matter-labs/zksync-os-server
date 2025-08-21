@@ -12,12 +12,12 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
-use zksync_os_sequencer::config::{
+use zksync_os_bin::config::{
     BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GenesisConfig, MempoolConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
+use zksync_os_l1_sender::config::L1SenderConfig;
+use zksync_os_l1_watcher::L1WatcherConfig;
 
 pub mod assert_traits;
 pub mod contracts;
@@ -129,7 +129,7 @@ impl Tester {
         };
 
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run(
+            zksync_os_bin::run(
                 stop_receiver,
                 GenesisConfig {
                     genesis_input_path: "../genesis/genesis.json".into(),

@@ -10,8 +10,7 @@ use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
 use zksync_os_observability::ComponentStateLatencyTracker;
-use zksync_os_state::StateHandle;
-use zksync_os_storage_api::ReplayRecord;
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -21,7 +20,7 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 
 pub async fn execute_block(
     mut command: PreparedBlockCommand<'_>,
-    state: StateHandle,
+    state: impl ReadStateHistory,
     latency_tracker: &mut ComponentStateLatencyTracker<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     latency_tracker.enter_state(SequencerState::InitializingVm);
@@ -29,7 +28,7 @@ pub async fn execute_block(
 
     /* ---------- VM & state ----------------------------------------- */
     let state_view = state
-        .state_view_at_block(ctx.block_number - 1)
+        .state_view_at(ctx.block_number - 1)
         .map_err(|e| BlockDump {
             ctx,
             txs: Vec::new(),

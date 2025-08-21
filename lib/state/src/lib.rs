@@ -23,7 +23,7 @@ pub use config::StateConfig;
 pub use persistent_storage_map::{PersistentStorageMap, StorageMapCF};
 pub use storage_map::{Diff, StorageMap};
 use zksync_os_genesis::Genesis;
-use zksync_os_storage_api::{ReadStateHistory, StateResult};
+use zksync_os_storage_api::{ReadStateHistory, StateResult, WriteState};
 
 const STATE_STORAGE_DB_NAME: &str = "state";
 const PREIMAGES_STORAGE_DB_NAME: &str = "preimages";
@@ -93,22 +93,6 @@ impl StateHandle {
         })
     }
 
-    /// Adds a block result to the state components
-    /// No atomicity guarantees
-    /// PreimageType is currently ignored
-    pub fn add_block_result<'a, J>(
-        &self,
-        block_number: u64,
-        storage_diffs: Vec<StorageWrite>,
-        new_preimages: J,
-    ) -> anyhow::Result<()>
-    where
-        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
-    {
-        self.storage_map.add_diff(block_number, storage_diffs);
-        self.persistent_preimages.add(block_number, new_preimages);
-        Ok(())
-    }
     pub async fn collect_state_metrics(&self, period: Duration) {
         let mut ticker = tokio::time::interval(period);
         let state_handle = self.clone();
@@ -173,5 +157,18 @@ impl ReadStateHistory for StateHandle {
             storage_map_view: self.storage_map.view_at(block_number)?,
             preimages: self.persistent_preimages.clone(),
         })
+    }
+}
+
+impl WriteState for StateHandle {
+    fn add_block_result<'a>(
+        &self,
+        block_number: BlockNumber,
+        storage_diffs: Vec<StorageWrite>,
+        new_preimages: impl IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
+    ) -> StateResult<()> {
+        self.storage_map.add_diff(block_number, storage_diffs);
+        self.persistent_preimages.add(block_number, new_preimages);
+        Ok(())
     }
 }

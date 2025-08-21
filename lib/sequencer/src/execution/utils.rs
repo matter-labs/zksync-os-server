@@ -31,7 +31,7 @@ pub struct BlockDump {
     pub error: String,
 }
 
-pub(crate) fn save_dump(path: PathBuf, dump: BlockDump) -> anyhow::Result<()> {
+pub fn save_dump(path: PathBuf, dump: BlockDump) -> anyhow::Result<()> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Incorrect system time")

@@ -1,4 +1,3 @@
-use crate::execution::metrics::EXECUTION_METRICS;
 use anyhow::Context;
 use std::ops::Div;
 use std::path::Path;
@@ -15,6 +14,7 @@ use zksync_os_merkle_tree::{
 };
 use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
+use zksync_os_sequencer::execution::metrics::EXECUTION_METRICS;
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
 pub struct TreeManager {

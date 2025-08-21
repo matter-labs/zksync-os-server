@@ -1,6 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
-use crate::reth_state::ZkClient;
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash};
 use reth_execution_types::ChangedAccount;
@@ -17,8 +16,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_genesis::Genesis;
 use zksync_os_mempool::{
-    CanonicalStateUpdate, PoolUpdateKind, ReplayTxStream, RethPool, RethTransactionPool,
-    RethTransactionPoolExt, best_transactions,
+    CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
@@ -33,10 +31,10 @@ use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 /// Note: unlike other components, this one doesn't tolerate replaying blocks -
 ///  it doesn't tolerate jumps in L1 priority IDs.
 ///  this is easily fixable if needed.
-pub struct BlockContextProvider {
+pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
-    l2_mempool: RethPool<ZkClient>,
+    l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
     chain_id: u64,
@@ -46,12 +44,12 @@ pub struct BlockContextProvider {
     genesis: Genesis,
 }
 
-impl BlockContextProvider {
+impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         next_l1_priority_id: u64,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
-        l2_mempool: RethPool<ZkClient>,
+        l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
         chain_id: u64,

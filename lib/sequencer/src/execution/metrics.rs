@@ -71,8 +71,8 @@ pub struct BlockReplayRocksDBMetrics {
 }
 
 #[vise::register]
-pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
+pub static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
 
 #[vise::register]
-pub(crate) static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
+pub static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
     vise::Global::new();

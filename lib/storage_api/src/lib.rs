@@ -2,7 +2,7 @@ mod model;
 pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
 
 mod replay;
-pub use replay::ReadReplay;
+pub use replay::{ReadReplay, WriteReplay};
 
 mod batch;
 pub use batch::ReadBatch;
@@ -13,7 +13,9 @@ mod finality;
 pub use finality::{ReadFinality, WriteFinality};
 
 mod repository;
-pub use repository::{ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult};
+pub use repository::{
+    ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult, WriteRepository,
+};
 
 mod state;
-pub use state::{ReadStateHistory, StateError, StateResult, ViewState};
+pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};

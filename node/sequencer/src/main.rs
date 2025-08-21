@@ -2,15 +2,16 @@ use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
+use zksync_os_bin::config::{
+    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RpcConfig,
+};
+use zksync_os_bin::run;
+use zksync_os_bin::zkstack_config::ZkStackConfig;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
-use zksync_os_sequencer::config::{
-    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
-    RpcConfig, SequencerConfig,
-};
-use zksync_os_sequencer::run;
-use zksync_os_sequencer::zkstack_config::ZkStackConfig;
+use zksync_os_sequencer::config::SequencerConfig;
 
 #[tokio::main]
 pub async fn main() {

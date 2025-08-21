@@ -1,5 +1,3 @@
-use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
-use crate::model::blocks::BlockCommand;
 use alloy::primitives::{B256, BlockNumber};
 use futures::Stream;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -14,7 +12,9 @@ use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
-use zksync_os_storage_api::{ReadReplay, ReplayRecord};
+use zksync_os_sequencer::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
+use zksync_os_sequencer::model::blocks::BlockCommand;
+use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:
@@ -101,25 +101,6 @@ impl BlockReplayStorage {
             })
         }
         this
-    }
-
-    /// Appends a replay command (context + raw transactions) to the WAL.
-    /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
-    pub fn append_replay(&self, record: ReplayRecord) {
-        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
-        assert!(!record.transactions.is_empty());
-
-        let current_latest_block = self.latest_block().unwrap_or(0);
-
-        if record.block_context.block_number <= current_latest_block {
-            tracing::debug!(
-                "Not appending block {}: already exists in WAL",
-                record.block_context.block_number
-            );
-            return;
-        }
-        self.append_replay_unchecked(record);
-        latency_observer.observe();
     }
 
     fn append_replay_unchecked(&self, record: ReplayRecord) {
@@ -313,5 +294,24 @@ impl ReadReplay for BlockReplayStorage {
             (None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
+    }
+}
+
+impl WriteReplay for BlockReplayStorage {
+    fn append(&self, record: ReplayRecord) {
+        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
+        assert!(!record.transactions.is_empty());
+
+        let current_latest_block = self.latest_block().unwrap_or(0);
+
+        if record.block_context.block_number <= current_latest_block {
+            tracing::debug!(
+                "Not appending block {}: already exists in WAL",
+                record.block_context.block_number
+            );
+            return;
+        }
+        self.append_replay_unchecked(record);
+        latency_observer.observe();
     }
 }

@@ -1,3 +1,4 @@
+use crate::block_replay_storage::BlockReplayStorage;
 use alloy::primitives::BlockNumber;
 use futures::{SinkExt, StreamExt, stream::BoxStream};
 use tokio::net::ToSocketAddrs;
@@ -6,9 +7,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_util::codec::{self, Framed, LengthDelimitedCodec};
+use zksync_os_sequencer::model::blocks::BlockCommand;
 use zksync_os_storage_api::ReplayRecord;
-
-use crate::{block_replay_storage::BlockReplayStorage, model::blocks::BlockCommand};
 
 pub async fn replay_server(
     block_replays: BlockReplayStorage,
