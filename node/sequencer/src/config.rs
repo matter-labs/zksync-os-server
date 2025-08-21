@@ -88,7 +88,7 @@ pub struct BatcherConfig {
     pub batch_gas_limit: u64,
 
     /// Max pubdata bytes per batch
-    #[config(default_t = 1_100_000)] // 9 blobs is 1_179_648 bytes, subtract some for overheads
+    #[config(default_t = 100_000)] // should be less than 128kb - blob and calldata limit.
     pub batch_pubdata_limit_bytes: u64,
 }
 
