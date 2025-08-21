@@ -18,16 +18,28 @@ pub async fn replay_server(
 
     loop {
         let (mut socket, _) = listener.accept().await?;
-        let starting_block = socket.read_u64().await.unwrap();
-
-        let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
 
         let block_replays = block_replays.clone();
         tokio::spawn(async move {
+            let starting_block = match socket.read_u64().await {
+                Ok(block_number) => block_number,
+                Err(e) => {
+                    tracing::error!("Error reading start block for replays: {}", e);
+                    return;
+                }
+            };
+
+            let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
             let mut stream = block_replays.replay_commands_forever(starting_block);
             loop {
                 let replay = stream.next().await.unwrap();
-                replay_sender.send(replay).await.unwrap();
+                match replay_sender.send(replay).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("Error sending replay: {}", e);
+                        return;
+                    }
+                };
             }
         });
     }
