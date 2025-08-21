@@ -50,4 +50,12 @@ pub struct SequencerConfig {
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+
+    /// Max gas used per block
+    #[config(default_t = 100_000_000)]
+    pub block_gas_limit: u64,
+
+    /// Max pubdata bytes per block
+    #[config(default_t = 110_000)]
+    pub block_pubdata_limit_bytes: u64,
 }
