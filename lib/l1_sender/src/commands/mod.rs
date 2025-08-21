@@ -1,10 +1,8 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
-use crate::metrics::L1SenderState;
 use alloy::sol_types::SolCall;
 use itertools::Itertools;
 use std::fmt::Display;
-use vise::{Counter, LabeledFamily};
 
 pub mod commit;
 pub mod execute;
@@ -19,14 +17,6 @@ pub trait L1SenderCommand:
     const NAME: &'static str;
     const SENT_STAGE: BatchExecutionStage;
     const MINED_STAGE: BatchExecutionStage;
-
-    /// Returns a reference to a static `LabeledFamily` instance that tracks metrics
-    /// for different states of an `L1Sender`.
-    ///
-    /// All implementations are expected to point one of the [`L1_SENDER_METRICS`]'s fields. This
-    /// cannot be a const trait field as `vise::Global` cannot be dereferenced in const context.
-    fn state_metric() -> &'static LabeledFamily<L1SenderState, Counter<f64>>;
-
     fn solidity_call(&self) -> impl SolCall;
 
     /// Only used for logging - as we send commands in bulk, it's natural to print a single range
