@@ -9,7 +9,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
-use zksync_os_observability::ComponentStateLatencyTracker;
+use zksync_os_observability::ComponentStateHandle;
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
@@ -22,7 +22,7 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
-    latency_tracker: &mut ComponentStateLatencyTracker<SequencerState>,
+    latency_tracker: &ComponentStateHandle<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
@@ -207,10 +207,21 @@ pub async fn execute_block(
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
     EXECUTION_METRICS.seal_reason[&seal_reason].inc();
+    EXECUTION_METRICS.gas_per_block.observe(cumulative_gas_used);
+    EXECUTION_METRICS
+        .pubdata_per_block
+        .observe(output.pubdata.len() as u64);
+    EXECUTION_METRICS
+        .transactions_per_block
+        .observe(executed_txs.len() as u64);
+    EXECUTION_METRICS
+        .computational_native_used_per_block
+        .observe(output.computaional_native_used);
 
     tracing::info!(
         block_number = output.header.number,

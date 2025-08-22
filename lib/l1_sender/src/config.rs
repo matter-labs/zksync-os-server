@@ -1,5 +1,4 @@
 use alloy::consensus::constants::GWEI_TO_WEI;
-use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use smart_config::Serde;
 use smart_config::value::SecretString;
@@ -10,10 +9,6 @@ use smart_config::{DescribeConfig, DeserializeConfig};
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct L1SenderConfig {
-    /// L1's JSON RPC API.
-    #[config(default_t = "http://localhost:8545".into())]
-    pub l1_api_url: String,
-
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
@@ -32,12 +27,6 @@ pub struct L1SenderConfig {
     #[config(default_t = "0xb30d0d1025f7170c77a4ea9825cc60b308787dfc76b6f16deaa1486a726734f2".into())]
     pub operator_execute_pk: SecretString,
 
-    /// L1 address of `Bridgehub` contract. This is an entrypoint into L1 discoverability so most
-    /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x3091286df2aa845ef1fd6e6eedf4f7c520915585".parse().unwrap())]
-    pub bridgehub_address: Address,
-
     /// Max fee per gas we are willing to spend (in gwei).
     // 100 gwei was chosen as a reasonable threshold on Sepolia. In the observed period of 2024/07 to
     // 2025/07 it was exceeded twice:
@@ -45,7 +34,7 @@ pub struct L1SenderConfig {
     // * 2244 gwei from 2024/09/25 to 2024/10/07 (long spike with an average of ~200 gwei)
     //
     // Additionally, on Ethereum mainnet, gas price never exceeded 52 gwei over the same period of time.
-    #[config(default_t = 100)]
+    #[config(default_t = 101)]
     pub max_fee_per_gas_gwei: u64,
 
     /// Max priority fee per gas we are willing to spend (in gwei).
