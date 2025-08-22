@@ -29,6 +29,6 @@ jobs:
     needs: [setup]
     uses: ./.github/workflows/build-reusable.yaml
     secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN_: ${{ secrets.GITHUB_TOKEN }}
     with:
       IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
