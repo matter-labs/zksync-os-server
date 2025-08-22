@@ -6,6 +6,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
 use tracing;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
@@ -73,6 +74,9 @@ impl Batcher {
     pub async fn run_loop(mut self, mut prev_batch_info: StoredBatchInfo) -> anyhow::Result<()> {
         loop {
             let batch_envelope = self.create_batch(&prev_batch_info).await?;
+            BATCHER_METRICS
+                .transactions_per_batch
+                .observe(batch_envelope.batch.tx_count as u64);
             prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
             tracing::info!(
@@ -180,7 +184,10 @@ impl Batcher {
                 }
             }
         }
-
+        BATCHER_METRICS
+            .blocks_per_batch
+            .observe(blocks.len() as u64);
+        accumulator.report_accumulated_resources_to_metrics();
         /* ---------- seal the batch ---------- */
         batch_builder::seal_batch(
             &blocks,

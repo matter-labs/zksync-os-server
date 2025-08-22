@@ -34,7 +34,7 @@ pub struct L1SenderConfig {
     // * 2244 gwei from 2024/09/25 to 2024/10/07 (long spike with an average of ~200 gwei)
     //
     // Additionally, on Ethereum mainnet, gas price never exceeded 52 gwei over the same period of time.
-    #[config(default_t = 100)]
+    #[config(default_t = 101)]
     pub max_fee_per_gas_gwei: u64,
 
     /// Max priority fee per gas we are willing to spend (in gwei).
