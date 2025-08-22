@@ -26,7 +26,7 @@ pub async fn replay_server(
             let starting_block = match socket.read_u64().await {
                 Ok(block_number) => block_number,
                 Err(e) => {
-                    tracing::info!("Error reading start block for replays: {}", e);
+                    tracing::info!("Could not read start block for replays: {}", e);
                     return;
                 }
             };
@@ -43,7 +43,7 @@ pub async fn replay_server(
                 match replay_sender.send(replay).await {
                     Ok(_) => {}
                     Err(e) => {
-                        tracing::info!("Error sending replay: {}", e);
+                        tracing::info!("Failed to send replay: {}", e);
                         return;
                     }
                 };
