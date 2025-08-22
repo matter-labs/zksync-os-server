@@ -788,7 +788,7 @@ pub async fn run(
                 match replay_receiver(starting_block, replay_download_address).await {
                     Ok(stream) => stream,
                     Err(e) => {
-                        tracing::error!("Failed to connect to replay server: {e}");
+                        tracing::error!("Failed to connect to main node to receive blocks: {e}");
                         return;
                     }
                 }
