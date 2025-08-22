@@ -207,10 +207,21 @@ pub async fn execute_block(
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
     EXECUTION_METRICS.seal_reason[&seal_reason].inc();
+    EXECUTION_METRICS.gas_per_block.observe(cumulative_gas_used);
+    EXECUTION_METRICS
+        .pubdata_per_block
+        .observe(output.pubdata.len() as u64);
+    EXECUTION_METRICS
+        .transactions_per_block
+        .observe(executed_txs.len() as u64);
+    EXECUTION_METRICS
+        .computational_native_used_per_block
+        .observe(output.computaional_native_used);
 
     tracing::info!(
         block_number = output.header.number,
