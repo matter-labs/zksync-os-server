@@ -41,7 +41,7 @@ jobs:
       shell: bash
       run: ci_up
 
-      # This can be removed once zksync-airbender-prover is public.
+    # This can be removed once zksync-airbender-prover is public.
     - name: Configure Git for private repos
       run: |
         ci_run git config --global --add url."https://${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}:x-oauth-basic@github.com/".insteadOf ssh://git@github.com/
