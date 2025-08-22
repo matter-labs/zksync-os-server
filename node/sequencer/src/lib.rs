@@ -46,6 +46,7 @@ use futures::FutureExt;
 use futures::stream::{BoxStream, StreamExt};
 use model::blocks::{BlockCommand, ProduceCommand};
 use ruint::aliases::U256;
+use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -555,6 +556,7 @@ pub async fn run(
             genesis_config.chain_id,
             last_committed_block + 1,
             repositories_persisted_block,
+            sequencer_config.block_pubdata_limit_bytes,
             batcher_config,
             PeekableReceiver::new(blocks_for_batcher_receiver),
             batch_for_proving_sender,
@@ -599,6 +601,7 @@ pub async fn run(
             batch_with_proof_receiver,
             proof_storage.clone(),
             batch_for_commit_sender,
+            l1_sender_config.da_input_mode,
         );
 
         tasks.spawn(
@@ -765,6 +768,8 @@ pub async fn run(
         block_hashes_for_next_block,
         previous_block_timestamp,
         genesis_config.chain_id,
+        sequencer_config.block_gas_limit,
+        sequencer_config.block_pubdata_limit_bytes,
         node_version,
         genesis,
     );
@@ -867,6 +872,16 @@ fn run_l1_senders(
     impl Future<Output = Result<()>> + 'static,
     impl Future<Output = Result<()>> + 'static,
 ) {
+    if l1_sender_config.operator_commit_pk.expose_secret()
+        == l1_sender_config.operator_prove_pk.expose_secret()
+        || l1_sender_config.operator_prove_pk.expose_secret()
+            == l1_sender_config.operator_execute_pk.expose_secret()
+        || l1_sender_config.operator_execute_pk.expose_secret()
+            == l1_sender_config.operator_commit_pk.expose_secret()
+    {
+        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
+        panic!("Operator addresses for commit, prove and execute must be different");
+    }
     let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
         batch_for_snark_sender,
