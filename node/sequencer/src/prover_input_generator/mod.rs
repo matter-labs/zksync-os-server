@@ -13,6 +13,7 @@ use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::ZksyncOsEncode;
@@ -73,6 +74,8 @@ impl ProverInputGenerator {
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> Result<()> {
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("prover_input_generator", GenericComponentState::Processing);
         ReceiverStream::new(self.block_receiver)
             // wait for tree to have processed block for each replay record
             .then(|(block_output, replay_record)| {
@@ -110,10 +113,11 @@ impl ProverInputGenerator {
             .buffered(self.maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(|(block_output, replay_record, prover_input)| async {
+                latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 self.blocks_for_batcher_sender
                     .send((block_output, replay_record, prover_input))
                     .await?;
-
+                latency_tracker.enter_state(GenericComponentState::Processing);
                 Ok(())
             })
             .await

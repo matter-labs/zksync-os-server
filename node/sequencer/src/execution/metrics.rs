@@ -5,8 +5,6 @@ use vise::{Counter, EncodeLabelValue};
 use zksync_os_observability::{GenericComponentState, StateLabel};
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
-const STORAGE_WRITES: Buckets = Buckets::exponential(1.0..=1000.0, 1.7);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "state", rename_all = "snake_case")]
 pub enum SequencerState {
@@ -61,18 +59,27 @@ pub struct ExecutionMetrics {
     #[metrics(labels = ["stage"])]
     pub block_number: LabeledFamily<&'static str, Gauge<u64>>,
 
+    #[metrics(labels = ["seal_reason"])]
+    pub seal_reason: LabeledFamily<SealReason, Counter>,
+
+    #[metrics(buckets = Buckets::exponential(1.0..=10_000.0, 2.0))]
+    pub transactions_per_block: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(10_000.0..=1_000_000_000.0, 4.0))]
+    pub computational_native_used_per_block: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(10_000.0..=100_000_000.0, 4.0))]
+    pub gas_per_block: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(1_000.0..=500_000.0, 4.0))]
+    pub pubdata_per_block: Histogram<u64>,
+
     pub executed_transactions: Counter,
 
-    #[metrics(labels = ["state"])]
-    pub block_execution_stages: LabeledFamily<SequencerState, Counter<f64>>,
-
-    #[metrics(buckets = STORAGE_WRITES)]
+    #[metrics(buckets = Buckets::exponential(1.0..=1_000.0, 1.7))]
     pub storage_writes_per_block: Histogram<u64>,
 
     pub next_l1_priority_id: Gauge<u64>,
-
-    #[metrics(labels = ["seal_reason"])]
-    pub seal_reason: LabeledFamily<SealReason, Counter>,
 }
 
 #[derive(Debug, Metrics)]

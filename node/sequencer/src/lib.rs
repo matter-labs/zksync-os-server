@@ -176,7 +176,7 @@ pub async fn run_sequencer_actor(
 
         EXECUTION_METRICS.block_number[&"execute"].set(block_number);
 
-        tracing::info!(block_number, "Block fully processed");
+        tracing::debug!(block_number, "Block fully processed");
     }
 }
 

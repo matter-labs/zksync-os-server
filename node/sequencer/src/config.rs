@@ -92,7 +92,7 @@ pub struct BatcherConfig {
     pub batch_timeout: Duration,
 
     /// Max number of blocks per batch
-    #[config(default_t = 1000)]
+    #[config(default_t = 100)]
     pub blocks_per_batch_limit: usize,
 }
 

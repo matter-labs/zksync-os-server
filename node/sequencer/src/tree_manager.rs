@@ -112,7 +112,7 @@ impl TreeManager {
                         continue;
                     }
 
-                    tracing::info!(
+                    tracing::debug!(
                         "Processing {} storage writes in tree for block {}",
                         block_output.storage_writes.len(),
                         block_number
@@ -141,7 +141,7 @@ impl TreeManager {
                     // Send the latest processed block number to watchers
                     let _ = self.latest_block_sender.send(block_number);
 
-                    tracing::info!(
+                    tracing::debug!(
                         block_number = block_number,
                         next_free_slot = output.leaf_count,
                         "Processed {} entries in tree, output: {:?}",
