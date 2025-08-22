@@ -1,0 +1,34 @@
+name: Build images for staging
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: [ubuntu-latest]
+    outputs:
+      image_tag: ${{ steps.generate-tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Generate image tag
+        id: generate-tag
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          ts=$(date +%s%N | cut -b1-13)
+          echo "image_tag=${sha}-${ts}" >> $GITHUB_OUTPUT
+
+  build-images:
+    name: Build and Push Docker Images
+    needs: [setup]
+    uses: ./.github/workflows/build-reusable.yaml
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
