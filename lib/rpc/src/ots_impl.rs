@@ -16,7 +16,7 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::ots::OtsApiServer;
-use zksync_os_storage_api::StoredTxData;
+use zksync_os_storage_api::{StoredTxData, ViewState};
 use zksync_os_types::ZkEnvelope;
 use zksync_os_types::rpc::RpcBlockConvert;
 
@@ -61,11 +61,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
-        let mut view = self
-            .storage
-            .state()
-            .state_view_at_block(block_number)
-            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
+        let mut view = self.storage.state_view_at(block_number)?;
         let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
             return Ok(false);
         };

@@ -6,14 +6,15 @@ use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, Transaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{BlockNumber, Bytes, Signature, TxKind, U256};
+use alloy::primitives::{Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use ruint::aliases::B160;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
-use zksync_os_storage_api::RepositoryError;
+use zksync_os_storage_api::ViewState;
+use zksync_os_storage_api::{RepositoryError, StateError};
 use zksync_os_types::{L2Envelope, L2Transaction};
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -67,9 +68,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             nonce
         } else {
             self.storage
-                .state()
-                .state_view_at_block(block_context.block_number)
-                .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
+                .state_view_at(block_context.block_number)?
                 .get_account(B160::from_be_bytes(from.unwrap_or_default().into_array()))
                 .as_ref()
                 .map(get_nonce)
@@ -175,12 +174,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .ok_or(EthCallError::BlockNotFound(block_id))?;
         let tx = self.create_tx_from_request(request, &block_context)?;
 
-        let storage_view = self
-            .storage
-            .state()
-            .state_view_at_block(block_number)
-            // todo: introduce error hierarchy for `zksync_os_state`
-            .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
+        let storage_view = self.storage.state_view_at(block_number)?;
 
         let res = execute(tx, block_context, storage_view)
             .map_err(EthCallError::ForwardSubsystemError)?
@@ -206,7 +200,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .storage
             .replay_storage()
             .get_context(block_number)
-            .ok_or(EthCallError::BlockStateNotAvailable(block_number))?;
+            .ok_or(EthCallError::BlockNotFound(block_id))?;
 
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:
@@ -239,9 +233,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         {
             let balance = self
                 .storage
-                .state()
-                .state_view_at_block(block_context.block_number)
-                .map_err(|_| EthCallError::BlockStateNotAvailable(block_context.block_number))?
+                .state_view_at(block_context.block_number)?
                 .get_account(B160::from_be_bytes(
                     request.from.unwrap_or_default().into_array(),
                 ))
@@ -278,12 +270,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         );
         let tx = self.create_tx_from_request(request, &block_context)?;
 
-        let storage_view = self
-            .storage
-            .state()
-            .state_view_at_block(block_number)
-            // todo: introduce error hierarchy for `zksync_os_state`
-            .map_err(|_| EthCallError::BlockStateNotAvailable(block_number))?;
+        let storage_view = self.storage.state_view_at(block_number)?;
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
@@ -457,10 +444,6 @@ pub enum EthCallError {
     /// Block could not be found by its id (hash/number/tag).
     #[error("block not found")]
     BlockNotFound(BlockId),
-    // todo: consider moving this to `zksync_os_state` crate
-    /// Block has been compacted.
-    #[error("state for block {0} is not available")]
-    BlockStateNotAvailable(BlockNumber),
 
     /// Error while decoding or validating transaction request fees.
     #[error(transparent)]
@@ -484,5 +467,7 @@ pub enum EthCallError {
     InvalidTransaction(InvalidTransaction),
 
     #[error(transparent)]
-    RepositoryError(#[from] RepositoryError),
+    Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    State(#[from] StateError),
 }

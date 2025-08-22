@@ -11,7 +11,7 @@ use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::BlockResponse;
 use alloy::network::primitives::BlockTransactions;
-use alloy::primitives::{Address, B256, BlockNumber, Bytes, TxHash, U64, U256};
+use alloy::primitives::{Address, B256, Bytes, TxHash, U64, U256};
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
@@ -29,7 +29,7 @@ use zk_os_api::helpers::{get_balance, get_code, get_nonce};
 use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
-use zksync_os_storage_api::{RepositoryError, TxMeta};
+use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_types::rpc::{
     RpcBlockConvert, ZkBlock, ZkHeader, ZkTransaction, ZkTransactionReceipt,
 };
@@ -233,9 +233,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         };
         Ok(self
             .storage
-            .state()
-            .state_view_at_block(block_number)
-            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
+            .state_view_at(block_number)?
             .get_account(B160::from_be_bytes(address.into_array()))
             .as_ref()
             .map(get_balance)
@@ -258,9 +256,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             &B160::from_be_bytes(address.into_array()),
             &Bytes32::from(key.as_b256().0),
         );
-        let Ok(mut state) = self.storage.state().state_view_at_block(block_number) else {
-            return Err(EthError::BlockStateNotAvailable(block_number));
-        };
+        let mut state = self.storage.state_view_at(block_number)?;
         Ok(B256::from(
             state.read(flat_key).unwrap_or_default().as_u8_array(),
         ))
@@ -280,9 +276,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let nonce = self
             .storage
-            .state()
-            .state_view_at_block(block_number)
-            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?
+            .state_view_at(block_number)?
             .get_account(B160::from_be_bytes(address.into_array()))
             .as_ref()
             .map(get_nonce)
@@ -298,11 +292,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         };
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
-        let mut view = self
-            .storage
-            .state()
-            .state_view_at_block(block_number)
-            .map_err(|_| EthError::BlockStateNotAvailable(block_number))?;
+        let mut view = self.storage.state_view_at(block_number)?;
         let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
             return Ok(Bytes::default());
         };
@@ -723,11 +713,9 @@ pub enum EthError {
     /// Block could not be found by its id (hash/number/tag).
     #[error("block not found")]
     BlockNotFound(BlockId),
-    // todo: consider moving this to `zksync_os_state` crate
-    /// Block has been compacted.
-    #[error("state for block {0} is not available")]
-    BlockStateNotAvailable(BlockNumber),
 
     #[error(transparent)]
-    RepositoryError(#[from] RepositoryError),
+    Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    State(#[from] StateError),
 }

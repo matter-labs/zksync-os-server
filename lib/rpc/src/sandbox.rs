@@ -3,13 +3,13 @@ use zk_ee::system::tracer::NopTracer;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::{BlockContext, simulate_tx};
-use zksync_os_state::StateView;
+use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZksyncOsEncode};
 
 pub fn execute(
     tx: L2Transaction,
     mut block_context: BlockContext,
-    state_view: StateView,
+    state_view: impl ViewState,
 ) -> Result<TxResult, Box<ForwardSubsystemError>> {
     // tracing::info!(
     //     "Executing transaction: {:?} in block: {:?}",

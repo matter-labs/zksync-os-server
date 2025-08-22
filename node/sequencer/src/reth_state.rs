@@ -21,7 +21,7 @@ use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_state::StateHandle;
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::ReadRepository;
+use zksync_os_storage_api::{ReadRepository, ViewState};
 
 #[derive(Debug)]
 pub struct ZkClient {
