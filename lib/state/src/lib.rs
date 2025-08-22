@@ -6,15 +6,11 @@ pub mod storage_map;
 mod storage_map_view;
 mod storage_metrics;
 
-use ruint::aliases::B160;
+use alloy::primitives::BlockNumber;
 use std::fs;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
-use zk_os_basic_system::system_implementation::flat_storage_model::{
-    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
-};
 use zk_os_forward_system::run::{
     LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
 };
@@ -27,6 +23,7 @@ pub use config::StateConfig;
 pub use persistent_storage_map::{PersistentStorageMap, StorageMapCF};
 pub use storage_map::{Diff, StorageMap};
 use zksync_os_genesis::Genesis;
+use zksync_os_storage_api::{ReadStateHistory, StateResult};
 
 const STATE_STORAGE_DB_NAME: &str = "state";
 const PREIMAGES_STORAGE_DB_NAME: &str = "preimages";
@@ -167,14 +164,14 @@ impl ReadStorageTree for StateView {
     }
 }
 
-impl StateView {
-    pub fn get_account(&mut self, address: B160) -> Option<AccountProperties> {
-        let key = derive_flat_storage_key(
-            &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
-            &address_into_special_storage_key(&address),
-        );
-        self.read(key).map(|hash| {
-            AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
+impl ReadStateHistory for StateHandle {
+    fn state_view_at(
+        &self,
+        block_number: BlockNumber,
+    ) -> StateResult<impl ReadStorageTree + PreimageSource + Clone> {
+        Ok(StateView {
+            storage_map_view: self.storage_map.view_at(block_number)?,
+            preimages: self.persistent_preimages.clone(),
         })
     }
 }
