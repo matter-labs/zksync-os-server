@@ -309,7 +309,7 @@ pub async fn run(
     // ======= Initialize async channels  ===========
 
     // Channel between `BlockExecutor` and `ProverInputGenerator`
-    let (blocks_for_prover_input_generator_sender, blocks_for_prover_input_generator_receiver) =
+    let (blocks_for_prover_input_generator_sender, mut blocks_for_prover_input_generator_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(10);
 
     // Channel between `BlockExecutor` and `TreeManager`
@@ -359,6 +359,16 @@ pub async fn run(
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
     let finality_storage = if is_external_node {
+        // As external node doesn't run the end of the node feeding the provers,
+        // it has to drain this channel to not get stuck when it fills up.
+        tokio::spawn(async move {
+            while blocks_for_prover_input_generator_receiver
+                .recv()
+                .await
+                .is_some()
+            {}
+        });
+
         Finality::new(FinalityStatus {
             last_committed_block: 0,
             last_executed_block: 0,
@@ -774,7 +784,13 @@ pub async fn run(
             let block_stream = if let Some(replay_download_address) =
                 &sequencer_config.block_replay_download_address
             {
-                replay_receiver(starting_block, replay_download_address).await
+                match replay_receiver(starting_block, replay_download_address).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        tracing::error!("Failed to connect to main node to receive blocks: {e}");
+                        return;
+                    }
+                }
             } else {
                 command_source(
                     &block_replay_storage,

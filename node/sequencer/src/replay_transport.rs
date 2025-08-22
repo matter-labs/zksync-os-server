@@ -1,5 +1,7 @@
 use alloy::primitives::BlockNumber;
+use backon::{ConstantBuilder, Retryable};
 use futures::{SinkExt, StreamExt, stream::BoxStream};
+use std::time::Duration;
 use tokio::net::ToSocketAddrs;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -18,16 +20,33 @@ pub async fn replay_server(
 
     loop {
         let (mut socket, _) = listener.accept().await?;
-        let starting_block = socket.read_u64().await.unwrap();
-
-        let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
 
         let block_replays = block_replays.clone();
         tokio::spawn(async move {
+            let starting_block = match socket.read_u64().await {
+                Ok(block_number) => block_number,
+                Err(e) => {
+                    tracing::info!("Could not read start block for replays: {}", e);
+                    return;
+                }
+            };
+            tracing::info!(
+                "Streaming replays to {} starting from {}",
+                socket.peer_addr().unwrap(),
+                starting_block
+            );
+
+            let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
             let mut stream = block_replays.replay_commands_forever(starting_block);
             loop {
                 let replay = stream.next().await.unwrap();
-                replay_sender.send(replay).await.unwrap();
+                match replay_sender.send(replay).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::info!("Failed to send replay: {}", e);
+                        return;
+                    }
+                };
             }
         });
     }
@@ -36,14 +55,23 @@ pub async fn replay_server(
 pub async fn replay_receiver(
     starting_block: BlockNumber,
     address: impl ToSocketAddrs,
-) -> BoxStream<'static, BlockCommand> {
-    let mut socket = TcpStream::connect(address).await.unwrap();
+) -> anyhow::Result<BoxStream<'static, BlockCommand>> {
+    let mut socket = (|| TcpStream::connect(&address))
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err, dur| {
+            tracing::warn!(?err, ?dur, "retrying connection to main node");
+        })
+        .await?;
 
-    socket.write_u64(starting_block).await.unwrap();
+    socket.write_u64(starting_block).await?;
 
-    Framed::new(socket, BlockReplayCodec::new())
+    Ok(Framed::new(socket, BlockReplayCodec::new())
         .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
-        .boxed()
+        .boxed())
 }
 
 struct BlockReplayCodec(LengthDelimitedCodec);
