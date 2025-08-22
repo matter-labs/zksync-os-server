@@ -15,14 +15,18 @@ jobs:
   ci-build-and-unit-tests:
     name: CI for build and unit tests
     uses: ./.github/workflows/ci-build-and-unit-tests.yaml
+  secrets:
+    GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
   ci-integration-tests:
     name: CI for integration tests
     uses: ./.github/workflows/ci-integration-tests.yaml
+    GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
   ci-lint:
     name: CI for linting
     uses: ./.github/workflows/ci-lint.yaml
+    GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
   ci-success:
     name: Github Status Check

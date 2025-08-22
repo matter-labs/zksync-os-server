@@ -42,7 +42,7 @@ jobs:
       # This can be removed once zksync-airbender-prover is public.
       - name: Configure Git for private repos
         run: |
-          ci_run git config --global url."https://${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+          ci_run git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
 
       - name: Start sccache server
         shell: bash
