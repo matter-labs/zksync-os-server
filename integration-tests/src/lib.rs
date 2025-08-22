@@ -153,7 +153,7 @@ impl Tester {
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            tokio::task::spawn(zkos_prover::run(zkos_prover::Args {
+            tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
                 app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),

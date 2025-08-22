@@ -9996,23 +9996,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zkos_prover"
-version = "20.2.0"
-source = "git+https://github.com/matter-labs/zksync-era.git?branch=zksync-os-integration#21fcbbb01f9f7669ffa4a7bb1a83b74cea8a05c4"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bincode 1.3.3",
- "clap",
- "cli",
- "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "zksync_os_api"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.10#56ca0f2585543fa2b57cde80bbd5a7afe7efbf99"
@@ -10044,6 +10027,23 @@ dependencies = [
  "alloy",
  "blake2",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "zksync_os_fri_prover"
+version = "0.1.0"
+source = "git+ssh://git@github.com/matter-labs/zksync-airbender-prover.git?branch=main#5faad264a0602fcdb00bacad960b5c9aeae6b8bd"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bincode 1.3.3",
+ "clap",
+ "cli",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -10094,8 +10094,8 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
- "zkos_prover",
  "zksync_os_contract_interface",
+ "zksync_os_fri_prover",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_sequencer",
