@@ -362,6 +362,8 @@ pub async fn run(
     let storage_map_compacted_block = state_handle.compacted_block_number();
 
     let finality_storage = if is_external_node {
+        // As external node doesn't run the end of the node feeding the provers,
+        // it has to drain this channel to not get stuck when it fills up.
         tokio::spawn(async move {
             while blocks_for_prover_input_generator_receiver
                 .recv()
