@@ -65,7 +65,7 @@ use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1WatcherConfig};
 use zksync_os_object_store::ObjectStoreFactory;
-use zksync_os_observability::ComponentStateLatencyTracker;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
@@ -91,11 +91,8 @@ pub async fn run_sequencer_actor(
     repositories: RepositoryManager,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
-    let mut latency_tracker = ComponentStateLatencyTracker::new(
-        "sequencer",
-        SequencerState::WaitingForUpstreamCommand,
-        Some(&EXECUTION_METRICS.block_execution_stages),
-    );
+    let latency_tracker = ComponentStateReporter::global()
+        .handle_for("sequencer", SequencerState::WaitingForUpstreamCommand);
     loop {
         latency_tracker.enter_state(SequencerState::WaitingForUpstreamCommand);
 
@@ -120,7 +117,7 @@ pub async fn run_sequencer_actor(
         );
 
         let (block_output, replay_record, purged_txs) =
-            execute_block(prepared_command, state.clone(), &mut latency_tracker)
+            execute_block(prepared_command, state.clone(), &latency_tracker)
                 .await
                 .map_err(|dump| {
                     let error = anyhow::anyhow!("{}", dump.error);
@@ -179,7 +176,7 @@ pub async fn run_sequencer_actor(
 
         EXECUTION_METRICS.block_number[&"execute"].set(block_number);
 
-        tracing::info!(block_number, "Block fully processed");
+        tracing::debug!(block_number, "Block fully processed");
     }
 }
 
