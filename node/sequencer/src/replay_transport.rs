@@ -24,10 +24,15 @@ pub async fn replay_server(
             let starting_block = match socket.read_u64().await {
                 Ok(block_number) => block_number,
                 Err(e) => {
-                    tracing::error!("Error reading start block for replays: {}", e);
+                    tracing::info!("Error reading start block for replays: {}", e);
                     return;
                 }
             };
+            tracing::info!(
+                "Streaming replays to {} starting from {}",
+                socket.peer_addr().unwrap(),
+                starting_block
+            );
 
             let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
             let mut stream = block_replays.replay_commands_forever(starting_block);
@@ -36,7 +41,7 @@ pub async fn replay_server(
                 match replay_sender.send(replay).await {
                     Ok(_) => {}
                     Err(e) => {
-                        tracing::error!("Error sending replay: {}", e);
+                        tracing::info!("Error sending replay: {}", e);
                         return;
                     }
                 };
