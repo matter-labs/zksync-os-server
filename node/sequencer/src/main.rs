@@ -6,8 +6,8 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
-    RpcConfig, SequencerConfig,
+    BatcherConfig, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 use zksync_os_sequencer::run;
 use zksync_os_sequencer::zkstack_config::ZkStackConfig;
@@ -24,6 +24,7 @@ pub async fn main() {
 
     // =========== load configs ===========
     let (
+        general_config,
         genesis_config,
         rpc_config,
         mempool_config,
@@ -36,7 +37,7 @@ pub async fn main() {
     ) = build_configs();
 
     let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(sequencer_config.prometheus_port);
+        PrometheusExporterConfig::pull(general_config.prometheus_port);
 
     // =========== init interruption channel ===========
 
@@ -48,6 +49,7 @@ pub async fn main() {
         // ── Main task ───────────────────────────────────────────────
         _ = run(
             stop_receiver.clone(),
+            general_config,
             genesis_config,
             rpc_config,
             mempool_config,
@@ -71,6 +73,7 @@ pub async fn main() {
 }
 
 fn build_configs() -> (
+    GeneralConfig,
     GenesisConfig,
     RpcConfig,
     MempoolConfig,
@@ -83,6 +86,9 @@ fn build_configs() -> (
 ) {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
+    schema
+        .insert(&GenesisConfig::DESCRIPTION, "general")
+        .expect("Failed to insert general config");
     schema
         .insert(&GenesisConfig::DESCRIPTION, "genesis")
         .expect("Failed to insert genesis config");
@@ -115,6 +121,12 @@ fn build_configs() -> (
         .expect("Failed to insert prover api config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
+
+    let mut general_config = repo
+        .single::<GeneralConfig>()
+        .expect("Failed to load general config")
+        .parse()
+        .expect("Failed to parse general config");
 
     let mut genesis_config = repo
         .single::<GenesisConfig>()
@@ -170,13 +182,14 @@ fn build_configs() -> (
         .parse()
         .expect("Failed to parse prover api config");
 
-    if let Some(config_dir) = sequencer_config.zkstack_cli_config_dir.clone() {
+    if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
         // configs that are specific to the new sequencer.
         let config = ZkStackConfig::new(config_dir.clone());
         config
             .update(
+                &mut general_config,
                 &mut sequencer_config,
                 &mut rpc_config,
                 &mut l1_sender_config,
@@ -187,6 +200,7 @@ fn build_configs() -> (
     }
 
     (
+        general_config,
         genesis_config,
         rpc_config,
         mempool_config,
