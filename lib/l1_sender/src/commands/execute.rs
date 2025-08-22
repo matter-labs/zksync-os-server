@@ -2,11 +2,9 @@ use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use vise::{Counter, LabeledFamily};
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 
@@ -33,10 +31,6 @@ impl L1SenderCommand for ExecuteCommand {
     const NAME: &'static str = "execute";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
-
-    fn state_metric() -> &'static LabeledFamily<L1SenderState, Counter<f64>> {
-        &L1_SENDER_METRICS.execute_state
-    }
 
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::executeBatchesSharedBridgeCall::new((

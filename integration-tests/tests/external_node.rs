@@ -40,6 +40,43 @@ async fn transaction_replay() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// It is easy to write to a channel that the EN doesn't need
+/// which leads to the EN getting stuck when the channel is full.
+#[test_log::test(tokio::test)]
+async fn does_not_get_stuck() -> anyhow::Result<()> {
+    let main_node = Tester::setup().await?;
+    let en1 = main_node.launch_external_node().await?;
+
+    let (send, mut recv) = tokio::sync::mpsc::channel(100);
+
+    const REPEATS: usize = 200;
+
+    tokio::spawn(async move {
+        for _ in 0..REPEATS {
+            let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+                .send()
+                .await
+                .unwrap()
+                .expect_successful_receipt()
+                .await
+                .unwrap();
+
+            let contract_address = deploy_tx_receipt
+                .contract_address()
+                .expect("no contract deployed");
+
+            send.send(contract_address).await.unwrap();
+        }
+    });
+
+    for _ in 0..REPEATS {
+        let contract_address = recv.recv().await.unwrap();
+        check_contract_present(&en1, contract_address).await?;
+    }
+
+    Ok(())
+}
+
 async fn check_contract_present(en: &Tester, contract_address: Address) -> anyhow::Result<()> {
     (|| async {
         let latest_code = en.l2_provider.get_code_at(contract_address).await?;
