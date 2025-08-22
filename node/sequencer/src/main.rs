@@ -87,7 +87,7 @@ fn build_configs() -> (
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
     schema
-        .insert(&GenesisConfig::DESCRIPTION, "general")
+        .insert(&GeneralConfig::DESCRIPTION, "general")
         .expect("Failed to insert general config");
     schema
         .insert(&GenesisConfig::DESCRIPTION, "genesis")
