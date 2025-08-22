@@ -360,12 +360,11 @@ fn maybe_revert_reason(output: &[u8]) -> Option<String> {
 }
 
 /// Converts [`EvmError`] to a geth-style error message (if possible).
+///
+/// See https://github.com/ethereum/go-ethereum/blob/9ce40d19a8240844be24b9692c639dff45d13d68/core/vm/errors.go#L26-L45
 fn fmt_error_msg(error: &EvmError) -> String {
     match error {
-        //
-        // geth-style errors as taken from
-        // https://github.com/ethereum/go-ethereum/blob/9ce40d19a8240844be24b9692c639dff45d13d68/core/vm/errors.go#L26-L45
-        //
+        // todo: missing `ErrGasUintOverflow`: likely not propagated during tx decoding
         EvmError::Revert => "execution reverted".to_string(),
         EvmError::OutOfGas => "out of gas".to_string(),
         EvmError::InvalidJump => "invalid jump destination".to_string(),
@@ -378,6 +377,10 @@ fn fmt_error_msg(error: &EvmError) -> String {
         // todo: check that both variants below accurately map to `ErrWriteProtection` from geth
         EvmError::CallNotAllowedInsideStatic => "write protection".to_string(),
         EvmError::StateChangeDuringStaticCall => "write protection".to_string(),
+        // geth returns "out of gas", we provide a more fine-grained error
+        EvmError::MemoryLimitOOG => format!("out of gas (memory limit reached {}))", u32::MAX - 31),
+        // geth returns "out of gas", we provide a more fine-grained error
+        EvmError::InvalidOperandOOG => "out of gas (invalid operand)".to_string(),
         EvmError::CodeStoreOutOfGas => "contract creation code storage out of gas".to_string(),
         EvmError::CallTooDeep => "max call depth exceeded".to_string(),
         EvmError::InsufficientBalance => "insufficient balance for transfer".to_string(),
@@ -388,17 +391,5 @@ fn fmt_error_msg(error: &EvmError) -> String {
         EvmError::CreateContractStartingWithEF => {
             "invalid code: must not begin with 0xef".to_string()
         }
-        // todo: missing equivalents of geth errors:
-        //       - `ErrGasUintOverflow`: likely not propagated during tx decoding
-
-        //
-        // Custom errors specific to zksync-os
-        //
-
-        // geth/reth treat this as unrealistic error to happen hence no existing error message
-        EvmError::MemoryLimitOOG => format!("memory limit reached {} (out of gas)", u32::MAX - 31),
-        // todo: I believe geth just ignores non-u64 part of operands and hence doesn't have this
-        //       error type; confirm this is intended behavior on our side
-        EvmError::InvalidOperandOOG => "invalid operand (out of gas)".to_string(),
     }
 }
