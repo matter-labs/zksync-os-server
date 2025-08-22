@@ -25,6 +25,12 @@ jobs:
       run: |
         git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
 
+    # Needed for above step, otherwise it will not use the override
+    - name: Set Cargo config for SSH
+      run: |
+        # Tell Cargo to use the external Git CLI for all fetches
+        cargo config set net.git-fetch-with-cli true
+
     - name: Setup misc environment variables
       shell: bash
       run: |
