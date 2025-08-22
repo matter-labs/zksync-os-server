@@ -20,17 +20,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # This can be removed once zksync-airbender-prover is public.
-    - name: Configure Git for private repos
-      run: |
-        git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
-
-    # Needed for above step, otherwise it will not use the override
-    - name: Set Cargo config for SSH
-      run: |
-        # Tell Cargo to use the external Git CLI for all fetches
-        cargo config set net.git-fetch-with-cli true
-
     - name: Setup misc environment variables
       shell: bash
       run: |
@@ -51,6 +40,16 @@ jobs:
     - name: Start CI Docker
       shell: bash
       run: ci_up
+
+      # This can be removed once zksync-airbender-prover is public.
+    - name: Configure Git for private repos
+      run: |
+        ci_run git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
+
+      # Tell Cargo to use the external Git CLI for all fetches, won't be necessary after repo is public
+    - name: Set Cargo config for SSH
+      run: |
+        ci_run cargo config set net.git-fetch-with-cli true
 
     - name: Start sccache server
       shell: bash
