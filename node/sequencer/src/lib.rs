@@ -21,8 +21,8 @@ use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::{BlockReplayColumnFamily, BlockReplayStorage};
 use crate::config::{
-    BatcherConfig, GenesisConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig,
-    RpcConfig, SequencerConfig,
+    BatcherConfig, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
@@ -220,6 +220,7 @@ fn command_source(
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     _stop_receiver: watch::Receiver<bool>,
+    general_config: GeneralConfig,
     genesis_config: GenesisConfig,
     rpc_config: RpcConfig,
     mempool_config: MempoolConfig,
@@ -235,7 +236,7 @@ pub async fn run(
 
     let l1_provider = DynProvider::new(
         ProviderBuilder::new()
-            .connect(&l1_sender_config.l1_api_url)
+            .connect(&general_config.l1_rpc_url)
             .await
             .expect("failed to connect to L1 api"),
     );
@@ -243,7 +244,7 @@ pub async fn run(
     tracing::info!("reading L1 state");
     let l1_state = get_l1_state(
         &l1_provider,
-        l1_sender_config.clone(),
+        genesis_config.bridgehub_address,
         genesis_config.chain_id,
     )
     .await
@@ -259,9 +260,7 @@ pub async fn run(
     // =========== Boilerplate - initialize components that don't need state recovery or channels ===========
     tracing::info!("Initializing BlockReplayStorage");
     let block_replay_storage_rocks_db = RocksDB::<BlockReplayColumnFamily>::new(
-        &sequencer_config
-            .rocks_db_path
-            .join(BLOCK_REPLAY_WAL_DB_NAME),
+        &general_config.rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME),
     )
     .expect("Failed to open BlockReplayWAL")
     .with_sync_writes();
@@ -273,14 +272,14 @@ pub async fn run(
 
     tracing::info!("Initializing StateHandle");
 
-    if sequencer_config.replay_all_blocks_unsafe {
+    if general_config.replay_all_blocks_unsafe {
         tracing::warn!("!!! Replay all blocks mode is enabled. Starting from block zero.");
     }
     let state_handle = StateHandle::new(
         StateConfig {
-            erase_storage_on_start_unsafe: sequencer_config.replay_all_blocks_unsafe,
-            blocks_to_retain_in_memory: sequencer_config.blocks_to_retain_in_memory,
-            rocks_db_path: sequencer_config.rocks_db_path.clone(),
+            erase_storage_on_start_unsafe: general_config.replay_all_blocks_unsafe,
+            blocks_to_retain_in_memory: general_config.blocks_to_retain_in_memory,
+            rocks_db_path: general_config.rocks_db_path.clone(),
         },
         &genesis,
     )
@@ -288,8 +287,8 @@ pub async fn run(
 
     tracing::info!("Initializing RepositoryManager");
     let repositories = RepositoryManager::new(
-        sequencer_config.blocks_to_retain_in_memory,
-        sequencer_config.rocks_db_path.join(REPOSITORY_DB_NAME),
+        general_config.blocks_to_retain_in_memory,
+        general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
     );
 
@@ -353,9 +352,8 @@ pub async fn run(
 
     // =========== Start TreeManager ========
     tracing::info!("Initializing TreeManager");
-    let tree_wrapper = TreeManager::tree_wrapper(Path::new(
-        &sequencer_config.rocks_db_path.join(TREE_DB_NAME),
-    ));
+    let tree_wrapper =
+        TreeManager::tree_wrapper(Path::new(&general_config.rocks_db_path.join(TREE_DB_NAME)));
     let (tree_manager, persistent_tree) =
         TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis);
 
@@ -544,21 +542,6 @@ pub async fn run(
 
         // ========== Start proving end ===========
 
-        if !batcher_config.subsystem_enabled {
-            tracing::error!(
-                "!!! Batcher subsystem disabled via configuration. This mode is only recommended for running tree loadtest."
-            );
-            unimplemented!("Running without batcher is not supported at the moment.");
-            // let mut blocks_receiver = blocks_for_batcher_receiver;
-            // async move {
-            //     while blocks_receiver.recv().await.is_some() {
-            //         // Drop messages silently to prevent backpressure
-            //     }
-            //     Ok::<(), anyhow::Error>(())
-            // }
-            // .boxed()
-        }
-
         tracing::info!("Initializing Batcher");
         let batcher = Batcher::new(
             genesis_config.chain_id,
@@ -672,6 +655,7 @@ pub async fn run(
             .unwrap_or(0);
         let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
             l1_sender_config,
+            general_config.l1_rpc_url.clone(),
             batch_for_commit_receiver,
             batch_for_snark_sender,
             batch_for_l1_proving_receiver,
@@ -870,6 +854,7 @@ fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T,
 #[allow(clippy::too_many_arguments)]
 fn run_l1_senders(
     l1_sender_config: L1SenderConfig,
+    l1_rpc_url: String,
 
     batch_for_commit_receiver: Receiver<CommitCommand>,
     batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
@@ -901,7 +886,7 @@ fn run_l1_senders(
         batch_for_snark_sender,
         l1_state.validator_timelock,
         l1_sender_config.operator_commit_pk.clone(),
-        l1_sender_config.l1_api_url.clone(),
+        l1_rpc_url.clone(),
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
@@ -912,7 +897,7 @@ fn run_l1_senders(
         batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
         l1_sender_config.operator_prove_pk.clone(),
-        l1_sender_config.l1_api_url.clone(),
+        l1_rpc_url.clone(),
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
@@ -923,7 +908,7 @@ fn run_l1_senders(
         fully_processed_batch_sender,
         l1_state.diamond_proxy,
         l1_sender_config.operator_execute_pk.clone(),
-        l1_sender_config.l1_api_url.clone(),
+        l1_rpc_url.clone(),
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,

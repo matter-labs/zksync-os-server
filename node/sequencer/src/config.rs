@@ -1,4 +1,5 @@
-use smart_config::{DescribeConfig, DeserializeConfig};
+use alloy::primitives::Address;
+use smart_config::{DescribeConfig, DeserializeConfig, Serde};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_object_store::ObjectStoreConfig;
 pub use zksync_os_rpc::RpcConfig;
@@ -14,9 +15,16 @@ pub struct MempoolConfig {
     pub max_tx_input_bytes: usize,
 }
 
+/// "Umbrella" config for the node.
+/// If variable is shared i.e. used by multiple components OR does not belong to any specific component (e.g. `zkstack_cli_config_dir`)
+/// then it should belong here.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
-pub struct SequencerConfig {
+pub struct GeneralConfig {
+    /// L1's JSON RPC API.
+    #[config(default_t = "http://localhost:8545".into())]
+    pub l1_rpc_url: String,
+
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
@@ -30,6 +38,22 @@ pub struct SequencerConfig {
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
 
+    /// If set to true, the server will replay all blocks starting from genesis.
+    /// Useful when there are inconsistencies in saved block numbers.
+    #[config(default_t = false)]
+    pub replay_all_blocks_unsafe: bool,
+
+    /// Prometheus address to listen on.
+    #[config(default_t = 3312)]
+    pub prometheus_port: u16,
+
+    /// If set - initialize the configs based off the values from the yaml files from that directory.
+    pub zkstack_cli_config_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct SequencerConfig {
     /// Defines the block time for the sequencer.
     #[config(default_t = Duration::from_millis(100))]
     pub block_time: Duration,
@@ -42,15 +66,6 @@ pub struct SequencerConfig {
     #[config(default_t = "./block_dumps".into())]
     pub block_dump_path: PathBuf,
 
-    /// If set to true, the server will replay all blocks starting from genesis.
-    /// Useful when there are inconsistencies in saved block numbers.
-    #[config(default_t = false)]
-    pub replay_all_blocks_unsafe: bool,
-
-    /// Prometheus address to listen on.
-    #[config(default_t = 3312)]
-    pub prometheus_port: u16,
-
     /// Where to serve block replays
     #[config(default_t = "0.0.0.0:3053".into())]
     pub block_replay_server_address: String,
@@ -59,9 +74,6 @@ pub struct SequencerConfig {
     /// Setting this makes the node into an external node.
     #[config(default_t = None)]
     pub block_replay_download_address: Option<String>,
-
-    /// If set - initialize the configs based off the values from the yaml files from that directory.
-    pub zkstack_cli_config_dir: Option<String>,
 
     /// Max gas used per block
     #[config(default_t = 100_000_000)]
@@ -75,10 +87,6 @@ pub struct SequencerConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct BatcherConfig {
-    /// Whether to run the batcher subsystem or not
-    #[config(default_t = true)]
-    pub subsystem_enabled: bool,
-
     /// How long to keep a batch open before sealing it.
     #[config(default_t = Duration::from_secs(3))]
     pub batch_timeout: Duration,
@@ -171,12 +179,15 @@ pub struct FakeSnarkProversConfig {
     pub max_batch_age: Duration,
 }
 
-// todo/consider: I'm not sure we need this as an external config.
-// maybe we should have an L1Config with minimal set of needed info,
-// and recover everything from there.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct GenesisConfig {
+    /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
+    /// other contracts should be discoverable through it.
+    // TODO: Pre-configured value, to be removed
+    #[config(with = Serde![str], default_t = "0x3091286df2aa845ef1fd6e6eedf4f7c520915585".parse().unwrap())]
+    pub bridgehub_address: Address,
+
     /// Chain ID of the chain node operates on.
     #[config(default_t = 270)]
     pub chain_id: u64,
