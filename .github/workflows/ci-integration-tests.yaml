@@ -20,6 +20,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # This can be removed once zksync-airbender-prover is public.
     - name: Configure Git for private repos
       run: |
         git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
