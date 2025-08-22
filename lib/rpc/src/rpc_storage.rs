@@ -1,18 +1,18 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
-use zksync_os_state::StateHandle;
+use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
-    ReadBatch, ReadFinality, ReadReplay, ReadRepository, RepositoryBlock, RepositoryResult,
+    ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
+    RepositoryResult, StateResult,
 };
 
-pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
+pub trait ReadRpcStorage: ReadStateHistory + Clone {
     fn repository(&self) -> &dyn ReadRepository;
     fn block_subscriptions(&self) -> &dyn SubscribeToBlocks;
     fn replay_storage(&self) -> &dyn ReadReplay;
     fn finality(&self) -> &dyn ReadFinality;
     fn batch(&self) -> &dyn ReadBatch;
-    fn state(&self) -> &StateHandle;
 
     /// Get sealed block with transaction hashes by its hash OR number.
     fn get_block_by_hash_or_number(
@@ -80,21 +80,23 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
 }
 
 #[derive(Clone)]
-pub struct RpcStorage<Repository, Replay, Finality, Batch> {
+pub struct RpcStorage<Repository, Replay, Finality, Batch, StateHistory> {
     repository: Repository,
     replay_storage: Replay,
     finality: Finality,
     batch: Batch,
-    state: StateHandle,
+    state: StateHistory,
 }
 
-impl<Repository, Replay, Finality, Batch> RpcStorage<Repository, Replay, Finality, Batch> {
+impl<Repository, Replay, Finality, Batch, StateHistory>
+    RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
     pub fn new(
         repository: Repository,
         replay_storage: Replay,
         finality: Finality,
         batch: Batch,
-        state: StateHandle,
+        state: StateHistory,
     ) -> Self {
         Self {
             repository,
@@ -111,7 +113,8 @@ impl<
     Replay: ReadReplay + Clone,
     Finality: ReadFinality + Clone,
     Batch: ReadBatch + Clone,
-> ReadRpcStorage for RpcStorage<Repository, Replay, Finality, Batch>
+    StateHistory: ReadStateHistory + Clone,
+> ReadRpcStorage for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
 {
     fn repository(&self) -> &dyn ReadRepository {
         &self.repository
@@ -128,11 +131,24 @@ impl<
     fn finality(&self) -> &dyn ReadFinality {
         &self.finality
     }
+
     fn batch(&self) -> &dyn ReadBatch {
         &self.batch
     }
+}
 
-    fn state(&self) -> &StateHandle {
-        &self.state
+impl<
+    Repository: ReadRepository + SubscribeToBlocks + Clone,
+    Replay: ReadReplay + Clone,
+    Finality: ReadFinality + Clone,
+    Batch: ReadBatch + Clone,
+    StateHistory: ReadStateHistory + Clone,
+> ReadStateHistory for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
+    fn state_view_at(
+        &self,
+        block_number: BlockNumber,
+    ) -> StateResult<impl ReadStorageTree + PreimageSource + Clone> {
+        self.state.state_view_at(block_number)
     }
 }

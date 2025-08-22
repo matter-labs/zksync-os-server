@@ -14,3 +14,6 @@ pub use finality::{ReadFinality, WriteFinality};
 
 mod repository;
 pub use repository::{ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult};
+
+mod state;
+pub use state::{ReadStateHistory, StateError, StateResult, ViewState};
