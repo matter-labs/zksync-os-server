@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, TxNonce, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
 use zk_ee::system::evm::EvmFrameInterface;
@@ -42,6 +42,7 @@ pub fn call_trace(
     state_view: StateView,
     call_config: CallConfig,
 ) -> Result<CallFrame, Box<ForwardSubsystemError>> {
+    let nonce = tx.nonce();
     let encoded_tx = tx.encode();
 
     block_context.eip1559_basefee = U256::from(0);
@@ -49,6 +50,7 @@ pub fn call_trace(
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
+        nonce,
     );
     let _ = simulate_tx(
         encoded_tx,
@@ -66,16 +68,17 @@ pub fn call_trace(
 
 #[derive(Default)]
 pub struct CallTracer {
-    pub transactions: Vec<CallFrame>,
-    pub unfinished_calls: Vec<CallFrame>,
-    pub finished_calls: Vec<CallFrame>,
-    pub current_call_depth: usize,
-    pub collect_logs: bool,
-    pub only_top_call: bool,
+    transactions: Vec<CallFrame>,
+    unfinished_calls: Vec<CallFrame>,
+    finished_calls: Vec<CallFrame>,
+    current_call_depth: usize,
+    collect_logs: bool,
+    only_top_call: bool,
+    nonce: TxNonce,
 }
 
 impl CallTracer {
-    pub fn new_with_config(collect_logs: bool, only_top_call: bool) -> Self {
+    pub fn new_with_config(collect_logs: bool, only_top_call: bool, nonce: TxNonce) -> Self {
         Self {
             transactions: vec![],
             unfinished_calls: vec![],
@@ -83,6 +86,7 @@ impl CallTracer {
             current_call_depth: 0,
             collect_logs,
             only_top_call,
+            nonce,
         }
     }
 }
@@ -92,15 +96,15 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
         self.current_call_depth += 1;
 
         if !self.only_top_call || self.current_call_depth == 1 {
+            let from = Address::from(initial_state.external_call.caller.to_be_bytes());
+            let to = Address::from(initial_state.external_call.callee.to_be_bytes());
             self.unfinished_calls.push(CallFrame {
-                from: Address::from(initial_state.external_call.caller.to_be_bytes()),
+                from,
                 gas: U256::from(
                     initial_state.external_call.available_resources.ergs().0 / ERGS_PER_GAS,
                 ),
                 gas_used: U256::ZERO, // will be populated later
-                to: Some(Address::from(
-                    initial_state.external_call.callee.to_be_bytes(),
-                )),
+                to: Some(to),
                 input: Bytes::copy_from_slice(initial_state.external_call.input),
                 output: None,        // will be populated later
                 error: None,         // can be populated later
@@ -115,8 +119,15 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 },
                 typ: match initial_state.external_call.modifier {
                     CallModifier::NoModifier => "CALL",
-                    // Assume CREATE by default but can change to CREATE2 if we encounter CREATE2 opcode
-                    CallModifier::Constructor => "CREATE",
+                    CallModifier::Constructor => {
+                        // Decide whether this is CREATE of CREATE2 based on address derivation scheme
+                        // todo: replace with a system hook once available
+                        if from.create(self.nonce) == to {
+                            "CREATE"
+                        } else {
+                            "CREATE2"
+                        }
+                    }
                     CallModifier::Delegate | CallModifier::DelegateStatic => "DELEGATECALL",
                     CallModifier::Static => "STATICCALL",
                     CallModifier::EVMCallcode | CallModifier::EVMCallcodeStatic => "CALLCODE",
@@ -282,14 +293,9 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     #[inline(always)]
     fn after_evm_interpreter_execution_step(
         &mut self,
-        opcode: u8,
+        _opcode: u8,
         _interpreter_state: &impl EvmFrameInterface<S>,
     ) {
-        // fixme: this doesn't actually get called
-        if opcode == zk_os_evm_interpreter::opcodes::CREATE2 {
-            let current_call = self.unfinished_calls.last_mut().expect("Should exist");
-            current_call.typ = "CREATE2".to_string();
-        }
     }
 
     /// Opcode failed for some reason. Note: call frame ends immediately
