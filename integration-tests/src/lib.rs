@@ -15,8 +15,8 @@ use tokio::task::JoinHandle;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GenesisConfig, MempoolConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
+    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 
 pub mod assert_traits;
@@ -101,8 +101,12 @@ impl Tester {
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
         let replay_url = format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port);
-        let sequencer_config = SequencerConfig {
+        let general_config = GeneralConfig {
             rocks_db_path: rocksdb_path.path().to_path_buf(),
+            l1_rpc_url: l1_address.clone(),
+            ..Default::default()
+        };
+        let sequencer_config = SequencerConfig {
             block_replay_server_address: replay_url.clone(),
             block_replay_download_address: main_node_replay_url,
             ..Default::default()
@@ -124,13 +128,13 @@ impl Tester {
             ..Default::default()
         };
         let l1_sender_config = L1SenderConfig {
-            l1_api_url: l1_address.clone(),
             ..Default::default()
         };
 
         let main_task = tokio::task::spawn(async move {
             zksync_os_sequencer::run(
                 stop_receiver,
+                general_config,
                 GenesisConfig {
                     genesis_input_path: "../genesis/genesis.json".into(),
                     ..Default::default()
