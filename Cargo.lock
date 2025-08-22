@@ -10032,7 +10032,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_fri_prover"
 version = "0.1.0"
-source = "git+ssh://git@github.com/matter-labs/zksync-airbender-prover.git?branch=main#5faad264a0602fcdb00bacad960b5c9aeae6b8bd"
+source = "git+ssh://git@github.com/matter-labs/zksync-airbender-prover.git?branch=main#60d5bd3158c862b9004802a4b59b054e6dcdff31"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
