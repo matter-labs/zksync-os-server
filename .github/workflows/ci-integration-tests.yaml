@@ -1,6 +1,10 @@
 name: Workflow for running integration tests
 on:
   workflow_call:
+    secrets:
+      GH_TOKEN:
+        description: "Token for cloning private repositories"
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
