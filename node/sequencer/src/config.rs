@@ -62,6 +62,14 @@ pub struct SequencerConfig {
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+
+    /// Max gas used per block
+    #[config(default_t = 100_000_000)]
+    pub block_gas_limit: u64,
+
+    /// Max pubdata bytes per block
+    #[config(default_t = 110_000)]
+    pub block_pubdata_limit_bytes: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -76,20 +84,8 @@ pub struct BatcherConfig {
     pub batch_timeout: Duration,
 
     /// Max number of blocks per batch
-    #[config(default_t = 5)]
-    pub blocks_per_batch_limit: usize,
-
-    /// Max number of transactions per batch
     #[config(default_t = 1000)]
-    pub transactions_per_batch_limit: u64,
-
-    /// Max gas used per batch
-    #[config(default_t = 100_000_000_000)]
-    pub batch_gas_limit: u64,
-
-    /// Max pubdata bytes per batch
-    #[config(default_t = 1_100_000)] // 9 blobs is 1_179_648 bytes, subtract some for overheads
-    pub batch_pubdata_limit_bytes: u64,
+    pub blocks_per_batch_limit: usize,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
