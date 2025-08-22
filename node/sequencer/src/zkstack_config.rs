@@ -5,7 +5,7 @@ use serde_yaml::Value;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_rpc::RpcConfig;
 
-use crate::config::{GenesisConfig, ProverApiConfig, SequencerConfig};
+use crate::config::{GeneralConfig, GenesisConfig, ProverApiConfig, SequencerConfig};
 
 pub struct ZkStackConfig {
     pub config_dir: String,
@@ -34,6 +34,7 @@ impl ZkStackConfig {
     /// Update the configs based off the values from the yaml files.
     pub fn update(
         &self,
+        general_config: &mut GeneralConfig,
         sequencer_config: &mut SequencerConfig,
         rpc_config: &mut RpcConfig,
         l1_sender_config: &mut L1SenderConfig,
@@ -42,7 +43,7 @@ impl ZkStackConfig {
     ) -> anyhow::Result<()> {
         let zkstack_yaml = self.get_yaml_file("ZkStack.yaml")?;
 
-        sequencer_config.rocks_db_path = Path::new(&self.config_dir).join("db");
+        general_config.rocks_db_path = Path::new(&self.config_dir).join("db");
 
         let chain_id = zkstack_yaml
             .get("chain_id")
@@ -74,7 +75,7 @@ impl ZkStackConfig {
             .map(|s| s.to_string())
             .context("Failed to parse bridgehub address")?;
 
-        l1_sender_config.bridgehub_address =
+        genesis_config.bridgehub_address =
             alloy::primitives::Address::from_str(&bridgehub_address)?;
 
         // ports
@@ -89,7 +90,7 @@ impl ZkStackConfig {
             .and_then(|v| v.get("listener_port").and_then(Value::as_u64))
             .ok_or(anyhow!("Failed to get prometheus port"))?;
 
-        sequencer_config.prometheus_port = prometheus_port as u16;
+        general_config.prometheus_port = prometheus_port as u16;
 
         let rpc_port = api
             .get("web3_json_rpc")
