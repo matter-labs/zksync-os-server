@@ -46,11 +46,6 @@ jobs:
       run: |
         ci_run git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
 
-      # Tell Cargo to use the external Git CLI for all fetches, won't be necessary after repo is public
-    - name: Set Cargo config for SSH
-      run: |
-        ci_run cargo config set net.git-fetch-with-cli true
-
     - name: Start sccache server
       shell: bash
       run: ci_run sccache --start-server
@@ -70,6 +65,8 @@ jobs:
 
     - name: Run integration tests (prover)
       if: matrix.filterset == 'prover'
+      env:
+        CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       # Run prover tests. They need to be compiled in release mode for efficiency and to avoid stack overflow errors.
       # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
       # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
