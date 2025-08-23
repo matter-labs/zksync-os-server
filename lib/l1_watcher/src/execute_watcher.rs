@@ -104,12 +104,6 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
                     "skipping already processed executed batch",
                 );
             } else {
-                tracing::debug!(
-                    batch_number,
-                    ?batch_hash,
-                    ?batch_commitment,
-                    "discovered executed batch"
-                );
                 let (_, last_executed_block) = self
                     .batch_storage
                     .get_batch_range_by_number(batch_number)
@@ -122,6 +116,13 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
                     );
                     finality.last_executed_block = last_executed_block;
                 });
+                tracing::debug!(
+                    batch_number,
+                    ?batch_hash,
+                    ?batch_commitment,
+                    last_executed_block,
+                    "discovered executed batch"
+                );
             }
         }
 

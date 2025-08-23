@@ -23,12 +23,6 @@ pub struct ObjectStoreConfig {
 
 impl Default for ObjectStoreConfig {
     fn default() -> Self {
-        Self::for_tests()
-    }
-}
-
-impl ObjectStoreConfig {
-    pub fn for_tests() -> Self {
         Self {
             mode: ObjectStoreMode::FileBacked {
                 file_backed_base_path: "./db/shared".into(),
