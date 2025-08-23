@@ -116,6 +116,7 @@ impl Batcher {
                         d.as_mut().await
                     }
                 }, if deadline.is_some() => {
+                    BATCHER_METRICS.seal_reason[&"timeout"].inc();
                     tracing::debug!(batch_number, "Timeout reached, sealing the batch.");
                     break;
                 }
