@@ -591,7 +591,7 @@ pub async fn run(
             batch_with_proof_receiver,
             proof_storage.clone(),
             batch_for_commit_sender,
-            l1_sender_config.da_input_mode,
+            l1_state.da_input_mode,
         );
 
         tasks.spawn(

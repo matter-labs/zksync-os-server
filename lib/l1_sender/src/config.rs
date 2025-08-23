@@ -1,6 +1,5 @@
 use alloy::consensus::constants::GWEI_TO_WEI;
 use serde::{Deserialize, Serialize};
-use smart_config::Serde;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig};
 
@@ -47,14 +46,6 @@ pub struct L1SenderConfig {
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
-
-    /// Commitment mode - rollup or validium
-    /// In the future we want to determine this from L1 - needs to be consistent for now,
-    /// otherwise L1 commit will fail.
-    /// Can be changed dynamically - that is, one can change this config to recover from failed commit.
-    #[config(default_t = BatchDaInputMode::Rollup)]
-    #[config(with = Serde![str])]
-    pub da_input_mode: BatchDaInputMode,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
