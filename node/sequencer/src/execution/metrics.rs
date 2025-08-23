@@ -3,15 +3,18 @@ use std::time::Duration;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use vise::{Counter, EncodeLabelValue};
 use zksync_os_observability::{GenericComponentState, StateLabel};
+use zksync_os_storage_api::StateAccessLabel;
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "state", rename_all = "snake_case")]
 pub enum SequencerState {
-    WaitingForUpstreamCommand,
+    WaitingForCommand,
 
     WaitingForTx,
-    VmAndStorage,
+    Execution,
+    ReadStorage,
+    ReadPreimage,
     Sealing,
 
     AddingToState,
@@ -20,26 +23,24 @@ pub enum SequencerState {
     AddingToWal,
     SendingToBatcher,
     SendingToTree,
-    PreparingBlockCommand,
+    BlockContextTxs,
     InitializingVm,
 }
 impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            SequencerState::WaitingForUpstreamCommand => GenericComponentState::WaitingRecv,
-            SequencerState::WaitingForTx => GenericComponentState::WaitingRecv,
-
-            SequencerState::SendingToBatcher => GenericComponentState::WaitingSend,
-            SequencerState::SendingToTree => GenericComponentState::WaitingSend,
-
+            Self::WaitingForCommand | Self::WaitingForTx => GenericComponentState::WaitingRecv,
+            Self::SendingToBatcher | Self::SendingToTree => GenericComponentState::WaitingSend,
             _ => GenericComponentState::Processing,
         }
     }
     fn specific(&self) -> &'static str {
         match self {
-            SequencerState::WaitingForUpstreamCommand => "waiting_for_upstream_command",
+            SequencerState::WaitingForCommand => "waiting_for_command",
             SequencerState::WaitingForTx => "waiting_for_tx",
-            SequencerState::VmAndStorage => "vm_and_storage",
+            SequencerState::Execution => "execution",
+            SequencerState::ReadStorage => "read_storage",
+            SequencerState::ReadPreimage => "read_preimage",
             SequencerState::Sealing => "sealing",
             SequencerState::AddingToState => "adding_to_state",
             SequencerState::AddingToRepos => "adding_to_repos",
@@ -47,9 +48,21 @@ impl StateLabel for SequencerState {
             SequencerState::AddingToWal => "adding_to_wal",
             SequencerState::SendingToBatcher => "sending_to_batcher",
             SequencerState::SendingToTree => "sending_to_tree",
-            SequencerState::PreparingBlockCommand => "preparing_block_command",
+            SequencerState::BlockContextTxs => "block_context_txs",
             SequencerState::InitializingVm => "initializing_vm",
         }
+    }
+}
+
+impl StateAccessLabel for SequencerState {
+    fn read_storage_state() -> Self {
+        Self::ReadStorage
+    }
+    fn read_preimage_state() -> Self {
+        Self::ReadPreimage
+    }
+    fn default_execution_state() -> Self {
+        Self::Execution
     }
 }
 

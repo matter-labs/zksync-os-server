@@ -10438,6 +10438,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "zk_ee",
+ "zksync_os_observability",
  "zksync_os_rocksdb",
  "zksync_os_types",
 ]
