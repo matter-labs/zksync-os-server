@@ -252,7 +252,8 @@ impl Heartbeat {
                 base_fee_per_gas,
                 mined_pending_txs,
                 remaining_pending_txs,
-                "received new L1 block"
+                "{}: received new L1 block",
+                Input::NAME
             );
         }
         Ok(complete)
