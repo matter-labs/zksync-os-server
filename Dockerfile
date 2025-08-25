@@ -35,9 +35,9 @@ COPY --chown=app rust-toolchain* ./
 RUN rustup set profile minimal
 
 # ---- setup cargo to use git config ----
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+# ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
-RUN git config -l
+# RUN git config -l
 
 # ---- copy src & build ----
 COPY --chown=app . .
