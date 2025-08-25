@@ -55,9 +55,6 @@ jobs:
     - name: Build project
       run: ci_run cargo build --verbose --all-targets --workspace --exclude zksync_os_integration_tests
 
-    - name: Check ReplayRecord versioning
-      run: ci_run bash .github/scripts/check_replayrecord_version.sh
-
     - name: Run unit tests
       run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
 
@@ -66,3 +63,43 @@ jobs:
       run: |
         ci_run sccache --show-stats || true
         ci_run cat /tmp/sccache_log.txt || true
+
+  replayrecord-version-check:
+    name: Check ReplayRecord versioning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR tip
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build and get ReplayRecord TypeHash and Version (PR tip)
+        id: prtip
+        run: |
+          cd lib/storage_api
+          cargo build --examples
+          echo "hash=$(cargo run --quiet --example print_replayrecord_typehash)" >> $GITHUB_OUTPUT
+          echo "version=$(cargo run --quiet --example print_replayrecord_version)" >> $GITHUB_OUTPUT
+
+      - name: Checkout PR parent (merge base)
+        run: |
+          BASE_SHA=$(git rev-parse ${{ github.event.pull_request.base.sha }})
+          git checkout $BASE_SHA
+
+      - name: Build and get ReplayRecord TypeHash and Version (PR parent)
+        id: prparent
+        run: |
+          cd lib/storage_api
+          cargo build --examples
+          echo "hash=$(cargo run --quiet --example print_replayrecord_typehash)" >> $GITHUB_OUTPUT
+          echo "version=$(cargo run --quiet --example print_replayrecord_version)" >> $GITHUB_OUTPUT
+
+      - name: Compare ReplayRecord TypeHash and Version
+        run: |
+          echo "Old hash: ${{ steps.prparent.outputs.hash }}, New hash: ${{ steps.prtip.outputs.hash }}"
+          echo "Old version: ${{ steps.prparent.outputs.version }}, New version: ${{ steps.prtip.outputs.version }}"
+          if [ "${{ steps.prparent.outputs.hash }}" != "${{ steps.prtip.outputs.hash }}" ] && [ "${{ steps.prparent.outputs.version }}" = "${{ steps.prtip.outputs.version }}" ]; then
+            echo "ReplayRecord changed but CURRENT_REPLAY_VERSION was not incremented!"
+            exit 1
+          fi
+          echo "ReplayRecord versioning check passed."
