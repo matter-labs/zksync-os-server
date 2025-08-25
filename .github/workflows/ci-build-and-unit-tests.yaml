@@ -73,6 +73,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # This can be removed once zksync-airbender-prover is public.
+      - name: Configure Git for private repos
+        run: |
+          ci_run git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+
       - name: Build and get ReplayRecord TypeHash and Version (PR tip)
         id: prtip
         run: |
