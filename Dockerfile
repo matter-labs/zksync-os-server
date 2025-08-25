@@ -18,6 +18,10 @@ RUN apt-get update && \
 ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib
 ENV LD_LIBRARY_PATH=${LIBCLANG_PATH}:${LD_LIBRARY_PATH}
 
+# ---- setup git config ----
+RUN --mount=type=secret,id=GH_TOKEN \
+    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+
 # ---- non-root builder user ----
 ARG UID=10001
 RUN useradd -m -u ${UID} app
@@ -29,8 +33,6 @@ COPY --chown=app rust-toolchain* ./
 RUN rustup set profile minimal
 
 # ---- setup cargo to use git config ----
-RUN --mount=type=secret,id=GH_TOKEN \
-    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # ---- copy src & build ----
