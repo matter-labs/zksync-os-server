@@ -73,6 +73,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup misc environment variables
+        shell: bash
+        run: |
+          echo $(pwd)/.github/scripts >> $GITHUB_PATH
+          echo ZKSYNC_OS_HOME=$(pwd) >> $GITHUB_ENV
+
+      - name: Setup sccache for building Rust code inside Docker
+        shell: bash
+        run: |
+          echo SCCACHE_CACHE_SIZE=50G >> .github/.env
+          echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> .github/.env
+          echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> .github/.env
+          echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> .github/.env
+          echo SCCACHE_GCS_RW_MODE=READ_WRITE >> .github/.env
+          echo RUSTC_WRAPPER=sccache >> .github/.env
+          echo DOCKER_PWD=$(pwd) >> .github/.env
+
+      - name: Start CI Docker
+        shell: bash
+        run: ci_up
+
       # This can be removed once zksync-airbender-prover is public.
       - name: Configure Git for private repos
         run: |
