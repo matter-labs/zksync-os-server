@@ -103,8 +103,8 @@ jobs:
         id: prtip
         run: |
           cd lib/storage_api
-          HASH=$(ci_run cargo run --quiet --example print_replayrecord_typehash)
-          VERSION=$(ci_run cargo run --quiet --example print_replayrecord_version)
+          HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
+          VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
@@ -117,8 +117,8 @@ jobs:
         id: prparent
         run: |
           cd lib/storage_api
-          HASH=$(ci_run cargo run --quiet --example print_replayrecord_typehash)
-          VERSION=$(ci_run cargo run --quiet --example print_replayrecord_version)
+          HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
+          VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
