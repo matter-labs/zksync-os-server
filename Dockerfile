@@ -28,6 +28,10 @@ WORKDIR /app
 COPY --chown=app rust-toolchain* ./
 RUN rustup set profile minimal
 
+# ---- setup git config ----
+RUN --mount=type=secret,id=GH_TOKEN \
+    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+
 # ---- copy src & build ----
 COPY --chown=app . .
 RUN cargo build --release --bin zksync_os_sequencer

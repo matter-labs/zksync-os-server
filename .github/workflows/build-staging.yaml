@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - evl-troubleshoot-docker-image-build
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
