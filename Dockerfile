@@ -8,7 +8,7 @@ FROM rust:slim AS builder
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential pkg-config libssl-dev ca-certificates git \
-        clang-19 llvm-19-dev libclang-19-dev && \
+        clang-19 llvm-19-dev libclang-19-dev  openssh-client && \
     # ---------- ensure bindgen can find libclang ----------
     LLVM_LIBDIR="$(llvm-config-19 --libdir)" && \
     ln -sf "${LLVM_LIBDIR}/libclang.so.1"  "${LLVM_LIBDIR}/libclang.so" && \
