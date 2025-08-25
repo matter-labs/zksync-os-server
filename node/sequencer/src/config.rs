@@ -63,7 +63,7 @@ pub struct SequencerConfig {
     pub max_transactions_in_block: usize,
 
     /// Path to the directory where block dumps for unexpected failures will be saved.
-    #[config(default_t = "./block_dumps".into())]
+    #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
 
     /// Where to serve block replays
