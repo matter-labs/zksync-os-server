@@ -58,74 +58,40 @@ jobs:
     - name: Run unit tests
       run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
 
+    # Check that ReplayRecord version has been updated correctly
+    - name: Build and get ReplayRecord TypeHash and Version (PR tip)
+      id: prtip
+      run: |
+        HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
+        VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
+        echo "hash=$HASH" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Checkout PR parent (merge base)
+      run: |
+        BASE_SHA=$(git rev-parse ${{ github.event.pull_request.base.sha }})
+        git checkout $BASE_SHA
+
+    - name: Build and get ReplayRecord TypeHash and Version (PR parent)
+      id: prparent
+      run: |
+        HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash || echo "missing")
+        VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version || echo "missing")
+        echo "hash=$HASH" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Compare ReplayRecord TypeHash and Version
+      run: |
+        echo "Old hash: ${{ steps.prparent.outputs.hash }}, New hash: ${{ steps.prtip.outputs.hash }}"
+        echo "Old version: ${{ steps.prparent.outputs.version }}, New version: ${{ steps.prtip.outputs.version }}"
+        if [ "${{ steps.prparent.outputs.hash }}" != "${{ steps.prtip.outputs.hash }}" ] && [ "${{ steps.prparent.outputs.version }}" = "${{ steps.prtip.outputs.version }}" ]; then
+          echo "ReplayRecord changed but CURRENT_REPLAY_VERSION was not incremented!"
+          exit 1
+        fi
+        echo "ReplayRecord versioning check passed."
+
     - name: Show sccache logs
       if: always()
       run: |
         ci_run sccache --show-stats || true
         ci_run cat /tmp/sccache_log.txt || true
-
-  replayrecord-version-check:
-    name: Check ReplayRecord versioning
-    runs-on: matterlabs-ci-runner
-    steps:
-      - name: Checkout PR tip
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup misc environment variables
-        shell: bash
-        run: |
-          echo $(pwd)/.github/scripts >> $GITHUB_PATH
-          echo ZKSYNC_OS_HOME=$(pwd) >> $GITHUB_ENV
-
-      - name: Setup sccache for building Rust code inside Docker
-        shell: bash
-        run: |
-          echo SCCACHE_CACHE_SIZE=50G >> .github/.env
-          echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> .github/.env
-          echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> .github/.env
-          echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> .github/.env
-          echo SCCACHE_GCS_RW_MODE=READ_WRITE >> .github/.env
-          echo RUSTC_WRAPPER=sccache >> .github/.env
-          echo DOCKER_PWD=$(pwd) >> .github/.env
-
-      - name: Start CI Docker
-        shell: bash
-        run: ci_up
-
-      # This can be removed once zksync-airbender-prover is public.
-      - name: Configure Git for private repos
-        run: |
-          ci_run git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
-
-      - name: Build and get ReplayRecord TypeHash and Version (PR tip)
-        id: prtip
-        run: |
-          HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
-          VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Checkout PR parent (merge base)
-        run: |
-          BASE_SHA=$(git rev-parse ${{ github.event.pull_request.base.sha }})
-          git checkout $BASE_SHA
-
-      - name: Build and get ReplayRecord TypeHash and Version (PR parent)
-        id: prparent
-        run: |
-          HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash || echo "missing")
-          VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version || echo "missing")
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Compare ReplayRecord TypeHash and Version
-        run: |
-          echo "Old hash: ${{ steps.prparent.outputs.hash }}, New hash: ${{ steps.prtip.outputs.hash }}"
-          echo "Old version: ${{ steps.prparent.outputs.version }}, New version: ${{ steps.prtip.outputs.version }}"
-          if [ "${{ steps.prparent.outputs.hash }}" != "${{ steps.prtip.outputs.hash }}" ] && [ "${{ steps.prparent.outputs.version }}" = "${{ steps.prtip.outputs.version }}" ]; then
-            echo "ReplayRecord changed but CURRENT_REPLAY_VERSION was not incremented!"
-            exit 1
-          fi
-          echo "ReplayRecord versioning check passed."
