@@ -19,7 +19,6 @@ jobs:
     name: Build and Push Docker Images
     env:
       IMAGE_TAG: ${{ inputs.IMAGE_TAG }}
-      CARGO_NET_GIT_FETCH_WITH_CLI: true
     runs-on: [matterlabs-ci-runner-high-performance]
     permissions:
       packages: write
@@ -53,6 +52,8 @@ jobs:
           context: .
           load: true
           file: ./Dockerfile
+          secrets: |
+            GH_TOKEN=${{ secrets.GH_TOKEN }}
           build-args: |
             SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage
             SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com
