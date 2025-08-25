@@ -30,3 +30,4 @@ tracing.workspace = true
 semver = { workspace = true, features = ["serde"] }
 async-trait.workspace = true
 anyhow.workspace = true
+type_hash.workspace = true

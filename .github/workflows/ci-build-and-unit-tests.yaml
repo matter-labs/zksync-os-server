@@ -55,6 +55,9 @@ jobs:
     - name: Build project
       run: ci_run cargo build --verbose --all-targets --workspace --exclude zksync_os_integration_tests
 
+    - name: Check ReplayRecord versioning
+      run: ci_run bash .github/scripts/check_replayrecord_version.sh
+
     - name: Run unit tests
       run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
 
