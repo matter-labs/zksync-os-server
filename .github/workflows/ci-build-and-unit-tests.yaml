@@ -66,7 +66,7 @@ jobs:
 
   replayrecord-version-check:
     name: Check ReplayRecord versioning
-    runs-on: ubuntu-latest
+    runs-on: matterlabs-ci-runner
     steps:
       - name: Checkout PR tip
         uses: actions/checkout@v4
@@ -103,9 +103,8 @@ jobs:
         id: prtip
         run: |
           cd lib/storage_api
-          cargo build --examples
-          echo "hash=$(cargo run --quiet --example print_replayrecord_typehash)" >> $GITHUB_OUTPUT
-          echo "version=$(cargo run --quiet --example print_replayrecord_version)" >> $GITHUB_OUTPUT
+          echo "hash=$(ci_run cargo run --quiet --example print_replayrecord_typehash)" >> $GITHUB_OUTPUT
+          echo "version=$(ci_run cargo run --quiet --example print_replayrecord_version)" >> $GITHUB_OUTPUT
 
       - name: Checkout PR parent (merge base)
         run: |
@@ -116,9 +115,8 @@ jobs:
         id: prparent
         run: |
           cd lib/storage_api
-          cargo build --examples
-          echo "hash=$(cargo run --quiet --example print_replayrecord_typehash)" >> $GITHUB_OUTPUT
-          echo "version=$(cargo run --quiet --example print_replayrecord_version)" >> $GITHUB_OUTPUT
+          echo "hash=$(ci_run cargo run --quiet --example print_replayrecord_typehash)" >> $GITHUB_OUTPUT
+          echo "version=$(ci_run cargo run --quiet --example print_replayrecord_version)" >> $GITHUB_OUTPUT
 
       - name: Compare ReplayRecord TypeHash and Version
         run: |
