@@ -31,6 +31,7 @@ pub struct StoredTxData {
 pub const CURRENT_REPLAY_VERSION: u32 = 1;
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
+/// blah blah
 ///
 /// When you changes this struct or any of its dependencies, you must increment [CURRENT_REPLAY_VERSION],
 /// move the current struct into [OldReplayRecord] and implement conversion to the new version.
