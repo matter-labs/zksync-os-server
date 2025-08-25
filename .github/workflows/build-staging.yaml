@@ -30,5 +30,6 @@ jobs:
     uses: ./.github/workflows/build-reusable.yaml
     secrets:
       GITHUB_TOKEN_: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
     with:
       IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
