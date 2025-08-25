@@ -8,7 +8,7 @@ FROM rust:slim AS builder
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential pkg-config libssl-dev ca-certificates git \
-        clang-19 llvm-19-dev libclang-19-dev  openssh-client && \
+        clang-19 llvm-19-dev libclang-19-dev && \
     # ---------- ensure bindgen can find libclang ----------
     LLVM_LIBDIR="$(llvm-config-19 --libdir)" && \
     ln -sf "${LLVM_LIBDIR}/libclang.so.1"  "${LLVM_LIBDIR}/libclang.so" && \
@@ -20,7 +20,9 @@ ENV LD_LIBRARY_PATH=${LIBCLANG_PATH}:${LD_LIBRARY_PATH}
 
 # ---- setup git config ----
 RUN --mount=type=secret,id=GH_TOKEN \
-    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/" && \
+    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "git@github.com:" && \
+    git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://github.com/"
 
 # ---- non-root builder user ----
 ARG UID=10001
@@ -35,9 +37,11 @@ RUN rustup set profile minimal
 # ---- setup cargo to use git config ----
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
+RUN git config -l
+
 # ---- copy src & build ----
 COPY --chown=app . .
-RUN cargo build --release --bin zksync_os_sequencer
+RUN cargo build --release --bin zksync_os_sequencer -vv
 
 #################################
 # -------- Runtime -------------#
