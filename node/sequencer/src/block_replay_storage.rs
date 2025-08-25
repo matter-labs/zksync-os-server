@@ -98,6 +98,7 @@ impl BlockReplayStorage {
                 previous_block_timestamp: 0,
                 node_version,
                 block_output_hash: B256::ZERO,
+                what_a_field: (),
             })
         }
         this
@@ -309,6 +310,7 @@ impl ReadReplay for BlockReplayStorage {
                     })
                     .unwrap_or_else(|| semver::Version::new(0, 1, 0)),
                 block_output_hash: B256::from_slice(&bytes_block_output_hash),
+                what_a_field: (),
             }),
             (None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),

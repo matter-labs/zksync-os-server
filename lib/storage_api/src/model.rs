@@ -56,6 +56,8 @@ pub struct ReplayRecord {
     #[bincode(with_serde)]
     #[type_hash(foreign_type)]
     pub block_output_hash: B256,
+
+    pub what_a_field: (),
 }
 
 impl ReplayRecord {
@@ -89,6 +91,7 @@ impl ReplayRecord {
             previous_block_timestamp,
             node_version,
             block_output_hash,
+            what_a_field: (),
         }
     }
 }
