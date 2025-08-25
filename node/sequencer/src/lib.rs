@@ -323,6 +323,9 @@ pub async fn run(
     // Channel between `L1Watcher` and `BlockContextProvider`
     let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(10);
 
+    // Channel between `L1Watcher` and `BlockContextProvider`
+    let (interop_roots_sender, interop_roots) = tokio::sync::mpsc::channel(10);
+
     // Channel between `GaplessCommitter` and `L1Committer`
     let (batch_for_commit_sender, batch_for_commit_receiver) =
         tokio::sync::mpsc::channel::<CommitCommand>(10);
@@ -493,6 +496,19 @@ pub async fn run(
         .run()
         .map(report_exit("L1 transaction watcher")),
     );
+    
+    tasks.spawn(
+        L1InteropRootWatcher::new(
+            l1_watcher_config.clone(),
+            l1_provider.clone(),
+            l1_state.diamond_proxy,
+            interop_roots_sender,
+        )
+        .await
+        .expect("failed to start L1 interop roots watcher")
+        .run()
+        .map(report_exit("L1 interop roots")),
+    );
 
     let finality_storage = Finality::new(FinalityStatus {
         last_committed_block,
@@ -560,6 +576,7 @@ pub async fn run(
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions,
+        interop_roots,
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,

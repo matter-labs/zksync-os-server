@@ -1,3 +1,4 @@
+mod interop_root;
 mod log;
 mod receipt;
 mod transaction;
@@ -8,3 +9,5 @@ pub use transaction::{
     L1Envelope, L1EnvelopeError, L1TxSerialId, L2Envelope, L2Transaction, TxL1Priority, ZkEnvelope,
     ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
+
+pub use interop_root::{InteropRoot, InteropRootError};

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use zk_ee::common_structs::PreimageType;
-use zk_ee::system::metadata::BlockHashes;
+use zk_ee::system::metadata::{BlockHashes, InteropRoot};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
@@ -35,6 +35,7 @@ use zksync_os_types::{L1Envelope, L2Envelope, ZkEnvelope};
 pub struct BlockContextProvider {
     next_l1_priority_id: u64,
     l1_transactions: mpsc::Receiver<L1Envelope>,
+    interop_roots: mpsc::Receiver<InteropRoot>,
     l2_mempool: RethPool<ZkClient>,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -46,6 +47,7 @@ impl BlockContextProvider {
     pub fn new(
         next_l1_priority_id: u64,
         l1_transactions: mpsc::Receiver<L1Envelope>,
+        interop_roots: mpsc::Receiver<InteropRoot>,
         l2_mempool: RethPool<ZkClient>,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -55,6 +57,7 @@ impl BlockContextProvider {
         Self {
             next_l1_priority_id,
             l1_transactions,
+            interop_roots,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
