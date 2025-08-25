@@ -37,8 +37,7 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # ---- copy src & build ----
 COPY --chown=app . .
-# CMD ["sleep", "infinity"]
-RUN cargo build --release --bin zksync_os_sequencer -vv
+RUN cargo build --release --bin zksync_os_sequencer
 
 #################################
 # -------- Runtime -------------#
