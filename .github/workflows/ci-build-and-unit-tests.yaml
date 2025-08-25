@@ -102,7 +102,6 @@ jobs:
       - name: Build and get ReplayRecord TypeHash and Version (PR tip)
         id: prtip
         run: |
-          cd lib/storage_api
           HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
           VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
           echo "hash=$HASH" >> $GITHUB_OUTPUT
@@ -116,9 +115,8 @@ jobs:
       - name: Build and get ReplayRecord TypeHash and Version (PR parent)
         id: prparent
         run: |
-          cd lib/storage_api
-          HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
-          VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
+          HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash || echo "missing")
+          VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version || echo "missing")
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
