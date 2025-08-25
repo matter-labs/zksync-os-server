@@ -10306,7 +10306,9 @@ name = "zksync_os_rpc_api"
 version = "0.1.1-non-semver-compat"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "jsonrpsee",
+ "serde",
  "zksync_os_types",
 ]
 
