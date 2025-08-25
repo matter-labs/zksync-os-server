@@ -28,9 +28,10 @@ WORKDIR /app
 COPY --chown=app rust-toolchain* ./
 RUN rustup set profile minimal
 
-# ---- setup git config ----
+# ---- setup cargo to use git config ----
 RUN --mount=type=secret,id=GH_TOKEN \
     git config --global url."https://$(cat /run/secrets/GH_TOKEN):x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # ---- copy src & build ----
 COPY --chown=app . .
