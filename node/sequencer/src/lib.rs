@@ -40,7 +40,9 @@ use crate::replay_transport::{replay_receiver, replay_server};
 use crate::reth_state::ZkClient;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
-use alloy::providers::{DynProvider, ProviderBuilder};
+use alloy::network::EthereumWallet;
+use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
+use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::stream::{BoxStream, StreamExt};
@@ -231,12 +233,13 @@ pub async fn run(
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
     let is_external_node = sequencer_config.block_replay_download_address.is_some();
 
-    let l1_provider = DynProvider::new(
-        ProviderBuilder::new()
-            .connect(&general_config.l1_rpc_url)
-            .await
-            .expect("failed to connect to L1 api"),
-    );
+    // This is the only place where we initialize L1 provider, every component shares the same
+    // cloned provider.
+    let l1_provider = ProviderBuilder::new()
+        .wallet(EthereumWallet::new(PrivateKeySigner::random()))
+        .connect(&general_config.l1_rpc_url)
+        .await
+        .expect("failed to connect to L1 api");
 
     tracing::info!("reading L1 state");
     let l1_state = get_l1_state(
@@ -250,7 +253,7 @@ pub async fn run(
 
     let genesis = Genesis::new(
         genesis_config.genesis_input_path,
-        l1_provider.clone(),
+        l1_provider.clone().erased(),
         l1_state.diamond_proxy,
     );
 
@@ -514,7 +517,7 @@ pub async fn run(
         tasks.spawn(
             L1CommitWatcher::new(
                 l1_watcher_config.clone(),
-                l1_provider.clone(),
+                l1_provider.clone().erased(),
                 l1_state.diamond_proxy,
                 finality_storage.clone(),
                 proof_storage.clone(),
@@ -528,7 +531,7 @@ pub async fn run(
         tasks.spawn(
             L1ExecuteWatcher::new(
                 l1_watcher_config.clone(),
-                l1_provider.clone(),
+                l1_provider.clone().erased(),
                 l1_state.diamond_proxy,
                 finality_storage.clone(),
                 proof_storage.clone(),
@@ -654,7 +657,7 @@ pub async fn run(
             .unwrap_or(0);
         let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
             l1_sender_config,
-            general_config.l1_rpc_url.clone(),
+            l1_provider.clone(),
             batch_for_commit_receiver,
             batch_for_snark_sender,
             batch_for_l1_proving_receiver,
@@ -701,7 +704,7 @@ pub async fn run(
     tasks.spawn(
         L1TxWatcher::new(
             l1_watcher_config,
-            l1_provider,
+            l1_provider.erased(),
             l1_state.diamond_proxy,
             l1_transactions_sender,
             next_l1_priority_id,
@@ -853,7 +856,7 @@ fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T,
 #[allow(clippy::too_many_arguments)]
 fn run_l1_senders(
     l1_sender_config: L1SenderConfig,
-    l1_rpc_url: String,
+    provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
 
     batch_for_commit_receiver: Receiver<CommitCommand>,
     batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
@@ -885,10 +888,11 @@ fn run_l1_senders(
         batch_for_snark_sender,
         l1_state.validator_timelock,
         l1_sender_config.operator_commit_pk.clone(),
-        l1_rpc_url.clone(),
+        provider.clone(),
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_sender_config.poll_interval,
     );
 
     let l1_proof_submitter = run_l1_sender(
@@ -896,10 +900,11 @@ fn run_l1_senders(
         batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
         l1_sender_config.operator_prove_pk.clone(),
-        l1_rpc_url.clone(),
+        provider.clone(),
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_sender_config.poll_interval,
     );
 
     let l1_executor = run_l1_sender(
@@ -907,10 +912,11 @@ fn run_l1_senders(
         fully_processed_batch_sender,
         l1_state.diamond_proxy,
         l1_sender_config.operator_execute_pk.clone(),
-        l1_rpc_url.clone(),
+        provider,
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_sender_config.poll_interval,
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }

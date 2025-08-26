@@ -10,21 +10,25 @@ use std::time::Duration;
 /// Maximum number of retries for fetching a block.
 const MAX_RETRIES: usize = 3;
 
-/// Poll interval to use for fetching the latest block number.
-const POLL_INTERVAL: Duration = Duration::from_millis(1000);
-
 /// Streams new blocks from the provider.
 pub(crate) struct NewBlocks {
     provider: DynProvider,
     /// The next block to yield.
     next_yield: BlockNumber,
+    /// Poll interval to use for fetching the latest block number.
+    poll_interval: Duration,
 }
 
 impl NewBlocks {
-    pub(crate) fn new(provider: DynProvider, next_yield: BlockNumber) -> Self {
+    pub(crate) fn new(
+        provider: DynProvider,
+        next_yield: BlockNumber,
+        poll_interval: Duration,
+    ) -> Self {
         Self {
             provider,
             next_yield,
+            poll_interval,
         }
     }
 
@@ -33,7 +37,7 @@ impl NewBlocks {
     ) -> impl Stream<Item = TransportResult<Block>> + 'static {
         let mut numbers_stream =
             PollerBuilder::<NoParams, U64>::new(self.provider.weak_client(), "eth_blockNumber", [])
-                .with_poll_interval(POLL_INTERVAL)
+                .with_poll_interval(self.poll_interval)
                 .into_stream()
                 .map(|n| n.to());
 
