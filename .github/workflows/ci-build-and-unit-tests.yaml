@@ -64,7 +64,7 @@ jobs:
         ci_run sccache --show-stats || true
         ci_run cat /tmp/sccache_log.txt || true
 
-check-replay-wire-format-version:
+  check-replay-wire-format-version:
     name: Check replay wire format version
     runs-on: ubuntu-latest
     steps:
