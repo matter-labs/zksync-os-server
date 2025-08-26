@@ -31,6 +31,12 @@ alloy::sol! {
         bytes reservedDynamic;
     }
 
+    // `ZKChainStorage.sol`
+    enum PubdataPricingMode {
+        Rollup,
+        Validium
+    }
+
     // `IMailbox.sol`
     interface IMailbox {
         event NewPriorityRequest(
@@ -88,6 +94,7 @@ alloy::sol! {
         function getTotalBatchesVerified() external view returns (uint256);
         function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
+        function getPubdataPricingMode() external view returns (PubdataPricingMode);
     }
 
     // Taken from `IExecutor.sol`
@@ -320,6 +327,10 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .map(|n| n.saturating_to())
+    }
+
+    pub async fn get_pubdata_pricing_mode(&self) -> alloy::contract::Result<PubdataPricingMode> {
+        self.instance.getPubdataPricingMode().call().await
     }
 
     /// Returns true iff the contract has non-empty code at `block_id`.

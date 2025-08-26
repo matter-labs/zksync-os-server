@@ -28,7 +28,7 @@ use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use tokio::sync::mpsc::{Receiver, Sender};
-use zksync_os_observability::ComponentStateLatencyTracker;
+use zksync_os_observability::ComponentStateReporter;
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -64,11 +64,8 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     max_priority_fee_per_gas: u128,
     command_limit: usize,
 ) -> anyhow::Result<()> {
-    let mut latency_tracker = ComponentStateLatencyTracker::new(
-        Input::NAME,
-        L1SenderState::WaitingRecv,
-        Some(Input::state_metric()),
-    );
+    let latency_tracker =
+        ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
 
     let provider = build_provider::<Input>(from_address_pk, l1_api_url).await?;
     let mut heartbeat = Heartbeat::new(provider.clone()).await?;
@@ -255,7 +252,8 @@ impl Heartbeat {
                 base_fee_per_gas,
                 mined_pending_txs,
                 remaining_pending_txs,
-                "received new L1 block"
+                "{}: received new L1 block",
+                Input::NAME
             );
         }
         Ok(complete)

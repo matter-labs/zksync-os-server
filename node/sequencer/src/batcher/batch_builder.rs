@@ -60,7 +60,6 @@ pub(crate) fn seal_batch(
         batch_prover_input,
     )
     .with_stage(BatchExecutionStage::Sealed);
-
     tracing::debug!(
         ?batch_envelope.batch,
         "Batch details",

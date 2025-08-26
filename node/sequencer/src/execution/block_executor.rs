@@ -9,7 +9,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
-use zksync_os_observability::ComponentStateLatencyTracker;
+use zksync_os_observability::ComponentStateHandle;
 use zksync_os_state::StateHandle;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
@@ -22,7 +22,7 @@ use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 pub async fn execute_block(
     mut command: PreparedBlockCommand<'_>,
     state: StateHandle,
-    latency_tracker: &mut ComponentStateLatencyTracker<SequencerState>,
+    latency_tracker: &ComponentStateHandle<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
@@ -33,7 +33,7 @@ pub async fn execute_block(
         .map_err(|e| BlockDump {
             ctx,
             txs: Vec::new(),
-            error: e.to_string(),
+            error: e.context("state.state_view_at_block()").to_string(),
         })?;
     let mut runner = VmWrapper::new(ctx, state_view);
 
@@ -113,7 +113,7 @@ pub async fn execute_block(
                                             BlockDump {
                                                 ctx,
                                                 txs: all_processed_txs.clone(),
-                                                error: format!("invalid {} tx: {e:?}", tx.tx_type()),
+                                                error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
                                             }
                                         )
                                     }
@@ -142,7 +142,7 @@ pub async fn execute_block(
                                                 BlockDump {
                                                     ctx,
                                                     txs: all_processed_txs.clone(),
-                                                    error: format!("invalid l2 tx: {e:?}"),
+                                                    error: format!("invalid l2 tx: {e:?} ({})", tx.hash()),
                                                 }
                                             )
                                     }
@@ -159,6 +159,11 @@ pub async fn execute_block(
                                 ctx.block_number,
                                 cumulative_gas_used + tx.inner.gas_limit(),
                                 ctx.gas_limit
+                            );
+                            let partial_seal_block_result = runner.seal_block().await;
+                            tracing::error!(
+                                ?partial_seal_block_result,
+                                error
                             );
                             return Err(
                                 BlockDump {
@@ -207,10 +212,21 @@ pub async fn execute_block(
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);
     EXECUTION_METRICS.seal_reason[&seal_reason].inc();
+    EXECUTION_METRICS.gas_per_block.observe(cumulative_gas_used);
+    EXECUTION_METRICS
+        .pubdata_per_block
+        .observe(output.pubdata.len() as u64);
+    EXECUTION_METRICS
+        .transactions_per_block
+        .observe(executed_txs.len() as u64);
+    EXECUTION_METRICS
+        .computational_native_used_per_block
+        .observe(output.computaional_native_used);
 
     tracing::info!(
         block_number = output.header.number,
@@ -225,6 +241,8 @@ pub async fn execute_block(
         "Block sealed in block executor"
     );
 
+    tracing::debug!(?output, "Block output");
+
     let block_hash_output = hash_block_output(&output);
 
     // Check if the block output matches the expected hash.
@@ -235,6 +253,7 @@ pub async fn execute_block(
             "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
             ctx.block_number,
         );
+        tracing::error!(?output, error);
         return Err(BlockDump {
             ctx,
             txs: all_processed_txs.clone(),

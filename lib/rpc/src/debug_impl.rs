@@ -52,8 +52,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         };
         let state_view = self
             .storage
-            .state()
-            .state_view_at_block(block_number)
+            .state_view_at(block_number)
             .map_err(|_| DebugError::BlockNotAvailable(block_number))?;
         // todo: execute previous transactions from current block before simulating requested transaction
         match sandbox::call_trace(tx, block_context, state_view, call_config) {

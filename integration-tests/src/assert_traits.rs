@@ -82,7 +82,7 @@ impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
             let executed_block = provider
                 .get_block_number_by_id(BlockId::finalized())
                 .await?
-                .unwrap();
+                .unwrap_or(0);
             if executed_block >= expected_block {
                 tracing::debug!(executed_block, "expected block was executed");
                 return Ok(receipt);

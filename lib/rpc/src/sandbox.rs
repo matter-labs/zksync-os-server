@@ -14,13 +14,13 @@ use zk_os_evm_interpreter::{ERGS_PER_GAS, STACK_SIZE};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::{BlockContext, simulate_tx};
-use zksync_os_state::StateView;
+use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
 
 pub fn execute(
     tx: L2Transaction,
     mut block_context: BlockContext,
-    state_view: StateView,
+    state_view: impl ViewState,
 ) -> Result<TxResult, Box<ForwardSubsystemError>> {
     let encoded_tx = tx.encode();
 
@@ -39,7 +39,7 @@ pub fn execute(
 pub fn call_trace(
     tx: ZkTransaction,
     mut block_context: BlockContext,
-    state_view: StateView,
+    state_view: impl ViewState,
     call_config: CallConfig,
 ) -> Result<CallFrame, Box<ForwardSubsystemError>> {
     let encoded_tx = tx.encode();

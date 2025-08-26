@@ -6,7 +6,9 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
+use zksync_os_observability::{
+    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
+};
 
 /// Job manager for SNARK proving.
 ///
@@ -47,7 +49,7 @@ pub struct SnarkJobManager {
     // config
     max_fris_per_snark: usize,
     // metrics
-    latency_tracker: std::sync::Mutex<ComponentStateLatencyTracker>,
+    latency_tracker: ComponentStateHandle<GenericComponentState>,
 }
 
 impl SnarkJobManager {
@@ -60,17 +62,14 @@ impl SnarkJobManager {
         // config
         max_fris_per_snark: usize,
     ) -> Self {
-        let latency_tracker = ComponentStateLatencyTracker::new(
-            "snark_job_manager",
-            GenericComponentState::Processing,
-            None,
-        );
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("snark_job_manager", GenericComponentState::Processing);
         let committed_batch_receiver = Mutex::new(committed_batch_receiver);
         Self {
             committed_batch_receiver,
             prove_batches_sender,
             max_fris_per_snark,
-            latency_tracker: std::sync::Mutex::new(latency_tracker),
+            latency_tracker,
         }
     }
 
@@ -243,13 +242,9 @@ impl SnarkJobManager {
 
     async fn send_downstream(&self, proof_command: ProofCommand) -> anyhow::Result<()> {
         self.latency_tracker
-            .lock()
-            .unwrap()
             .enter_state(GenericComponentState::WaitingSend);
         self.prove_batches_sender.send(proof_command).await?;
         self.latency_tracker
-            .lock()
-            .unwrap()
             .enter_state(GenericComponentState::Processing);
         Ok(())
     }

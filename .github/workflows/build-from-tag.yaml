@@ -1,0 +1,42 @@
+name: Build images from tag
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag of an image to built"
+        type: string
+        required: true
+  push:
+    tags:
+      - v**
+
+concurrency: docker-tag-build
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: [ubuntu-latest]
+    outputs:
+      image_tag: ${{ steps.set.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Generate output with git tag
+        id: set
+        run: |
+          git_tag=""
+          if [[ -z "${{ inputs.tag_name }}" ]]; then
+            git_tag="${GITHUB_REF#refs/*/}"
+          else
+            git_tag="${{ inputs.tag_name }}"
+          fi
+          echo "image_tag=${git_tag}" >> $GITHUB_OUTPUT
+
+  build-images:
+    name: Build and Push Docker Images
+    needs: [setup]
+    uses: ./.github/workflows/build-reusable.yaml
+    secrets:
+      GITHUB_TOKEN_: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
+    with:
+      IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
