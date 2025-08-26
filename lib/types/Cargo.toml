@@ -17,4 +17,3 @@ alloy-rlp.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
-type_hash.workspace = true

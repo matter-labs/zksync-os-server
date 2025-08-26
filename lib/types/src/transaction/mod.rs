@@ -6,7 +6,6 @@ pub use encode::*;
 pub use l1::*;
 pub use l2::*;
 use std::fmt;
-use type_hash::TypeHash;
 
 use alloy::consensus::crypto::RecoveryError;
 use alloy::consensus::transaction::{Recovered, SignerRecoverable};
@@ -59,9 +58,8 @@ impl ZkEnvelope {
 /// ZKsync OS transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth
 /// we mostly operate on this type as ZKsync OS expects signer to be provided externally (e.g., from
 /// the sequencer). This could change in the future.
-#[derive(Clone, Debug, Serialize, Deserialize, TypeHash)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkTransaction {
-    #[type_hash(foreign_type)]
     pub inner: Recovered<ZkEnvelope>,
 }
 

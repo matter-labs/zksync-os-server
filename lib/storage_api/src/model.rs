@@ -2,7 +2,6 @@ use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use type_hash::TypeHash;
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
@@ -34,10 +33,9 @@ pub const CURRENT_REPLAY_VERSION: u32 = 1;
 ///
 /// When you changes this struct or any of its dependencies, you must increment [CURRENT_REPLAY_VERSION],
 /// move the current struct into [OldReplayRecord] and implement conversion to the new version.
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, TypeHash)]
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct ReplayRecord {
     #[bincode(with_serde)]
-    #[type_hash(foreign_type)] // TODO derive TypeHash in zksync-os
     pub block_context: BlockContext,
     /// L1 transaction serial id (0-based) expected at the beginning of this block.
     /// If `l1_transactions` is non-empty, equals to the first tx id in this block
@@ -49,11 +47,9 @@ pub struct ReplayRecord {
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
     #[bincode(with_serde)]
-    #[type_hash(foreign_type)]
     pub node_version: semver::Version,
     /// Hash of the block output.
     #[bincode(with_serde)]
-    #[type_hash(foreign_type)]
     pub block_output_hash: B256,
 }
 
