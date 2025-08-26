@@ -10,6 +10,9 @@ use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
+use zksync_os_observability::{
+    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
+};
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
@@ -72,8 +75,12 @@ impl Batcher {
 
     /// Main processing loop for the batcher
     pub async fn run_loop(mut self, mut prev_batch_info: StoredBatchInfo) -> anyhow::Result<()> {
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("batcher", GenericComponentState::WaitingRecv);
         loop {
-            let batch_envelope = self.create_batch(&prev_batch_info).await?;
+            let batch_envelope = self
+                .create_batch(&prev_batch_info, &latency_tracker)
+                .await?;
             BATCHER_METRICS
                 .transactions_per_batch
                 .observe(batch_envelope.batch.tx_count as u64);
@@ -87,6 +94,7 @@ impl Batcher {
                 new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                 "Batch created"
             );
+            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             self.batch_data_sender
                 .send(batch_envelope)
                 .await
@@ -97,6 +105,7 @@ impl Batcher {
     async fn create_batch(
         &mut self,
         prev_batch_info: &StoredBatchInfo,
+        latency_tracker: &ComponentStateHandle<GenericComponentState>,
     ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
         // will be set to `Some` when we process the first block that the batch can be sealed after
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
@@ -109,6 +118,7 @@ impl Batcher {
         );
 
         loop {
+            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
                 /* ---------- check for timeout ---------- */
                 _ = async {
@@ -126,6 +136,7 @@ impl Batcher {
                     // determine if the block fits into the current batch
                     accumulator.clone().add(block_output).is_batch_limit_reached(blocks.len())
                 }) => {
+                    latency_tracker.enter_state(GenericComponentState::Processing);
                     match should_seal {
                         Some(true) => {
                             // some of the limits was reached, start sealing the batch

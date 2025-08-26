@@ -74,8 +74,10 @@ impl ProverInputGenerator {
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
     pub async fn run_loop(self) -> Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("prover_input_generator", GenericComponentState::Processing);
+        let latency_tracker = ComponentStateReporter::global().handle_for(
+            "prover_input_generator",
+            GenericComponentState::ProcessingOrWaitingRecv,
+        );
         ReceiverStream::new(self.block_receiver)
             // wait for tree to have processed block for each replay record
             .then(|(block_output, replay_record)| {
@@ -117,7 +119,7 @@ impl ProverInputGenerator {
                 self.blocks_for_batcher_sender
                     .send((block_output, replay_record, prover_input))
                     .await?;
-                latency_tracker.enter_state(GenericComponentState::Processing);
+                latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 Ok(())
             })
             .await

@@ -11,7 +11,7 @@ use zk_os_forward_system::run::{
     BlockContext, BlockOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
     run_block,
 };
-use zksync_os_state::StateView;
+use zksync_os_storage_api::ViewState;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)
@@ -24,7 +24,7 @@ pub struct VmWrapper {
 
 impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
-    pub fn new(context: BlockContext, state_view: StateView) -> Self {
+    pub fn new(context: BlockContext, state_view: impl ViewState) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBlock).
         let (tx_sender, tx_receiver) = channel(1);
         // Channel for receiving per‐tx execution results.

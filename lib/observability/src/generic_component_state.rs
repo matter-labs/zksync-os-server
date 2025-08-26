@@ -7,6 +7,10 @@ pub enum GenericComponentState {
     WaitingRecv,
     Processing,
     WaitingSend,
+    // for multithreaded components,
+    // we cannot effectively distinguish between Processing and Waiting for input,
+    // as both happen simultaneously
+    ProcessingOrWaitingRecv,
 }
 
 impl StateLabel for GenericComponentState {
@@ -19,6 +23,7 @@ impl StateLabel for GenericComponentState {
             GenericComponentState::WaitingRecv => "waiting_recv",
             GenericComponentState::Processing => "processing",
             GenericComponentState::WaitingSend => "waiting_send",
+            GenericComponentState::ProcessingOrWaitingRecv => "processing_or_waiting_send",
         }
     }
 }

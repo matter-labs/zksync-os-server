@@ -7,7 +7,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
 
 /// Read-only view on a state from a specific block.
-pub trait ViewState: ReadStorageTree + PreimageSource + Clone {
+pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
     fn get_account(&mut self, address: B160) -> Option<AccountProperties> {
         let key = derive_flat_storage_key(
             &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
@@ -19,7 +19,7 @@ pub trait ViewState: ReadStorageTree + PreimageSource + Clone {
     }
 }
 
-impl<T: ReadStorageTree + PreimageSource + Clone> ViewState for T {}
+impl<T: ReadStorageTree + PreimageSource + Send + Clone> ViewState for T {}
 
 /// Read-only history of state views.
 pub trait ReadStateHistory: Send + Sync + 'static {

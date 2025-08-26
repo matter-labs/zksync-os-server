@@ -62,8 +62,10 @@ impl SnarkJobManager {
         // config
         max_fris_per_snark: usize,
     ) -> Self {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("snark_job_manager", GenericComponentState::Processing);
+        let latency_tracker = ComponentStateReporter::global().handle_for(
+            "snark_job_manager",
+            GenericComponentState::ProcessingOrWaitingRecv,
+        );
         let committed_batch_receiver = Mutex::new(committed_batch_receiver);
         Self {
             committed_batch_receiver,
@@ -245,7 +247,7 @@ impl SnarkJobManager {
             .enter_state(GenericComponentState::WaitingSend);
         self.prove_batches_sender.send(proof_command).await?;
         self.latency_tracker
-            .enter_state(GenericComponentState::Processing);
+            .enter_state(GenericComponentState::ProcessingOrWaitingRecv);
         Ok(())
     }
 

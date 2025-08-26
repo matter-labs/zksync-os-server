@@ -74,8 +74,10 @@ impl FriJobManager {
         max_assigned_batch_range: usize,
     ) -> Self {
         let jobs = ProverJobMap::new(assignment_timeout);
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("fri_job_manager", GenericComponentState::Processing);
+        let latency_tracker = ComponentStateReporter::global().handle_for(
+            "fri_job_manager",
+            GenericComponentState::ProcessingOrWaitingRecv,
+        );
         Self {
             assigned_jobs: jobs,
             inbound: Mutex::new(PeekableReceiver::new(batches_for_prove_receiver)),
@@ -252,7 +254,7 @@ impl FriJobManager {
     ) -> Result<Permit<BatchEnvelope<FriProof>>, SubmitError> {
         Ok(match self.batches_with_proof_sender.try_reserve() {
             Ok(permit) => {
-                self.set_status(GenericComponentState::Processing);
+                self.set_status(GenericComponentState::ProcessingOrWaitingRecv);
                 permit
             }
             Err(TrySendError::Full(_)) => {
