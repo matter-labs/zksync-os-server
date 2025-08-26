@@ -30,10 +30,10 @@ use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
-    RpcBlockConvert, ZkApiBlock, ZkApiTransaction, convert_envelope_to_api,
+    RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
+    convert_envelope_to_api,
 };
 use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
-use zksync_os_types::rpc::{ZkHeader, ZkTransactionReceipt};
 use zksync_os_types::{L2Envelope, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {

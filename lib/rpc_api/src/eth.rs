@@ -1,7 +1,7 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/core.rs
 
-use crate::types::{ZkApiBlock, ZkApiTransaction};
+use crate::types::{ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt};
 use alloy::consensus::Account;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -15,7 +15,6 @@ use alloy::rpc::types::{
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use zksync_os_types::rpc::{ZkHeader, ZkTransactionReceipt};
 
 /// Eth rpc interface: <https://ethereum.github.io/execution-apis/docs/reference/json-rpc-api>
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "eth"))]
