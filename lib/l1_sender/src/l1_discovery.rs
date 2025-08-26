@@ -1,7 +1,7 @@
 use crate::config::BatchDaInputMode;
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
-use alloy::providers::DynProvider;
+use alloy::providers::Provider;
 use zksync_os_contract_interface::{Bridgehub, PubdataPricingMode};
 
 #[derive(Debug, Clone)]
@@ -16,7 +16,7 @@ pub struct L1State {
 }
 
 pub async fn get_l1_state(
-    provider: &DynProvider,
+    provider: impl Provider + Clone,
     bridgehub_address: Address,
     chain_id: u64,
 ) -> anyhow::Result<L1State> {

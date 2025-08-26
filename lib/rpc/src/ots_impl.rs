@@ -10,15 +10,15 @@ use alloy::rpc::types::trace::otterscan::{
     BlockDetails, ContractCreator, InternalOperation, OtsBlock, OtsBlockTransactions, OtsReceipt,
     OtsSlimBlock, OtsTransactionReceipt, TraceEntry, TransactionsWithReceipts,
 };
-use alloy::rpc::types::{Header, Transaction};
+use alloy::rpc::types::{Header, Log};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::ots::OtsApiServer;
+use zksync_os_rpc_api::types::{RpcBlockConvert, ZkApiTransaction};
 use zksync_os_storage_api::{StoredTxData, ViewState};
-use zksync_os_types::ZkEnvelope;
-use zksync_os_types::rpc::RpcBlockConvert;
+use zksync_os_types::ZkReceiptEnvelope;
 
 /// Max Otterscan API level we support.
 const API_LEVEL: u64 = 8;
@@ -101,7 +101,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
         block_number: LenientBlockNumberOrTag,
         page_number: usize,
         page_size: usize,
-    ) -> EthResult<OtsBlockTransactions<Transaction<ZkEnvelope>>> {
+    ) -> EthResult<OtsBlockTransactions<ZkApiTransaction>> {
         let block_id = block_number.into();
         let block = self
             .storage
@@ -132,7 +132,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
                 .ok_or(EthError::BlockNotFound(block_id))?;
 
             let receipt = build_api_receipt(tx_hash, receipt, &tx, &meta).map_inner(|receipt| {
-                let r#type = receipt.tx_type().ty();
+                let r#type = api_receipt_type(&receipt);
                 // Report logs/logs_bloom as `null` here to avoid unnecessary network traffic.
                 // See https://docs.otterscan.io/api-docs/ots-api#ots_getblocktransactions
                 OtsReceipt {
@@ -164,11 +164,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
         address: Address,
         block_number_iter: impl IntoIterator<Item = BlockNumber>,
         page_size: usize,
-    ) -> EthResult<(
-        Vec<Transaction<ZkEnvelope>>,
-        Vec<OtsTransactionReceipt>,
-        bool,
-    )> {
+    ) -> EthResult<(Vec<ZkApiTransaction>, Vec<OtsTransactionReceipt>, bool)> {
         let mut txs = Vec::with_capacity(page_size);
         let mut receipts = Vec::with_capacity(page_size);
         let mut has_more = false;
@@ -198,7 +194,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
                 let receipt =
                     build_api_receipt(tx_hash, receipt, &tx, &meta).map_inner(|receipt| {
                         let logs_bloom = Some(*receipt.logs_bloom());
-                        let r#type = receipt.tx_type().ty();
+                        let r#type = api_receipt_type(&receipt);
                         OtsReceipt {
                             status: receipt.status(),
                             cumulative_gas_used: receipt.cumulative_gas_used(),
@@ -223,7 +219,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
         address: Address,
         block_number: LenientBlockNumberOrTag,
         page_size: usize,
-    ) -> EthResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>> {
+    ) -> EthResult<TransactionsWithReceipts<ZkApiTransaction>> {
         let block_id = block_number.into();
         let mut upper_block_number = self
             .storage
@@ -252,7 +248,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
         address: Address,
         block_number: LenientBlockNumberOrTag,
         page_size: usize,
-    ) -> EthResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>> {
+    ) -> EthResult<TransactionsWithReceipts<ZkApiTransaction>> {
         let block_id = block_number.into();
         // Logic below uses inclusive lower bound so we add +1 here to adjust the boundary
         let lower_block_number = self
@@ -357,7 +353,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
         block_number: LenientBlockNumberOrTag,
         page_number: usize,
         page_size: usize,
-    ) -> RpcResult<OtsBlockTransactions<Transaction<ZkEnvelope>>> {
+    ) -> RpcResult<OtsBlockTransactions<ZkApiTransaction>> {
         self.get_block_transactions_impl(block_number, page_number, page_size)
             .to_rpc_result()
     }
@@ -367,7 +363,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
         address: Address,
         block_number: LenientBlockNumberOrTag,
         page_size: usize,
-    ) -> RpcResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>> {
+    ) -> RpcResult<TransactionsWithReceipts<ZkApiTransaction>> {
         self.search_transactions_before_impl(address, block_number, page_size)
             .to_rpc_result()
     }
@@ -377,7 +373,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
         address: Address,
         block_number: LenientBlockNumberOrTag,
         page_size: usize,
-    ) -> RpcResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>> {
+    ) -> RpcResult<TransactionsWithReceipts<ZkApiTransaction>> {
         self.search_transactions_after_impl(address, block_number, page_size)
             .to_rpc_result()
     }
@@ -393,5 +389,13 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
 
     async fn get_contract_creator(&self, address: Address) -> RpcResult<Option<ContractCreator>> {
         self.get_contract_creator_impl(address).to_rpc_result()
+    }
+}
+
+fn api_receipt_type(receipt: &ZkReceiptEnvelope<Log>) -> u8 {
+    match receipt {
+        ZkReceiptEnvelope::Upgrade(_) => 0xfe,
+        ZkReceiptEnvelope::L1(_) => 0xff,
+        r => r.tx_type().ty(),
     }
 }

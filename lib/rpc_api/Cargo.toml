@@ -13,7 +13,9 @@ categories.workspace = true
 zksync_os_types.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rpc-types-trace", "genesis"] }
+alloy-rlp.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
+serde.workspace = true
 
 [features]
 server = ["jsonrpsee/server"]
