@@ -1,8 +1,8 @@
+use crate::types::L2ToL1LogProof;
 use alloy::primitives::{Address, TxHash};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use zksync_os_types::rpc::L2ToL1LogProof;
 
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "zks"))]
 #[cfg_attr(feature = "server", rpc(server, client, namespace = "zks"))]

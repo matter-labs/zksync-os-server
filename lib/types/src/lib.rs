@@ -7,8 +7,6 @@ pub use log::{L2_TO_L1_TREE_SIZE, L2ToL1Log};
 mod receipt;
 pub use receipt::{ZkReceipt, ZkReceiptEnvelope};
 
-pub mod rpc;
-
 mod transaction;
 pub use transaction::{
     L1Envelope, L1EnvelopeError, L1PriorityEnvelope, L1PriorityTx, L1PriorityTxType, L1Tx,

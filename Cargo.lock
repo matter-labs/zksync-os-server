@@ -10099,6 +10099,7 @@ dependencies = [
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_object_store",
+ "zksync_os_rpc_api",
  "zksync_os_sequencer",
  "zksync_os_types",
 ]
@@ -10306,7 +10307,9 @@ name = "zksync_os_rpc_api"
 version = "0.1.1-non-semver-compat"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "jsonrpsee",
+ "serde",
  "zksync_os_types",
 ]
 

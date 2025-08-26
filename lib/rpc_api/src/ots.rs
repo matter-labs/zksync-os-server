@@ -1,16 +1,16 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-api/src/otterscan.rs
 
+use crate::types::ZkApiTransaction;
 use alloy::eips::eip1898::LenientBlockNumberOrTag;
 use alloy::primitives::{Address, BlockHash, Bytes, TxHash};
+use alloy::rpc::types::Header;
 use alloy::rpc::types::trace::otterscan::{
     BlockDetails, ContractCreator, InternalOperation, OtsBlockTransactions, TraceEntry,
     TransactionsWithReceipts,
 };
-use alloy::rpc::types::{Header, Transaction};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use zksync_os_types::ZkEnvelope;
 
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "ots"))]
 #[cfg_attr(feature = "server", rpc(server, client, namespace = "ots"))]
@@ -75,7 +75,7 @@ pub trait OtsApi {
         block_number: LenientBlockNumberOrTag,
         page_number: usize,
         page_size: usize,
-    ) -> RpcResult<OtsBlockTransactions<Transaction<ZkEnvelope>>>;
+    ) -> RpcResult<OtsBlockTransactions<ZkApiTransaction>>;
 
     /// Gets paginated inbound/outbound transaction calls for a certain address.
     #[method(name = "searchTransactionsBefore")]
@@ -84,7 +84,7 @@ pub trait OtsApi {
         address: Address,
         block_number: LenientBlockNumberOrTag,
         page_size: usize,
-    ) -> RpcResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>>;
+    ) -> RpcResult<TransactionsWithReceipts<ZkApiTransaction>>;
 
     /// Gets paginated inbound/outbound transaction calls for a certain address.
     #[method(name = "searchTransactionsAfter")]
@@ -93,7 +93,7 @@ pub trait OtsApi {
         address: Address,
         block_number: LenientBlockNumberOrTag,
         page_size: usize,
-    ) -> RpcResult<TransactionsWithReceipts<Transaction<ZkEnvelope>>>;
+    ) -> RpcResult<TransactionsWithReceipts<ZkApiTransaction>>;
 
     /// Gets the transaction hash for a certain sender address, given its nonce.
     #[method(name = "getTransactionBySenderAndNonce")]

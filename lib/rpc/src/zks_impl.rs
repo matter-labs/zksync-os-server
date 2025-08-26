@@ -5,10 +5,9 @@ use alloy::rpc::types::Index;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_rpc_api::zks::ZksApiServer;
+use zksync_os_rpc_api::{types::L2ToL1LogProof, zks::ZksApiServer};
 use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
-use zksync_os_types::rpc::L2ToL1LogProof;
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
 
