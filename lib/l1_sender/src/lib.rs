@@ -26,6 +26,7 @@ use futures::{StreamExt, TryStreamExt};
 use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use zksync_os_observability::ComponentStateReporter;
 
@@ -62,13 +63,14 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     command_limit: usize,
+    poll_interval: Duration,
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
 
     let operator_address = register_operator::<_, Input>(&mut provider, from_address_pk).await?;
     let provider = provider.erased();
-    let mut heartbeat = Heartbeat::new(provider.clone()).await?;
+    let mut heartbeat = Heartbeat::new(provider.clone(), poll_interval).await?;
     let mut cmd_buffer = Vec::with_capacity(command_limit);
 
     loop {
@@ -201,9 +203,9 @@ struct Heartbeat {
 }
 
 impl Heartbeat {
-    async fn new(provider: DynProvider) -> anyhow::Result<Self> {
+    async fn new(provider: DynProvider, poll_interval: Duration) -> anyhow::Result<Self> {
         let current_block = provider.get_block_number().await?;
-        let new_blocks = NewBlocks::new(provider, current_block + 1);
+        let new_blocks = NewBlocks::new(provider, current_block + 1, poll_interval);
         let l1_block_stream = new_blocks.into_block_stream().boxed();
         Ok(Self {
             last_l1_block_number: None,

@@ -1,7 +1,9 @@
 use alloy::consensus::constants::GWEI_TO_WEI;
 use serde::{Deserialize, Serialize};
+use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig};
+use std::time::Duration;
 
 /// Configuration of L1 sender.
 /// todo: consider renaming to L1Config and using in L1Watcher as well.
@@ -46,6 +48,10 @@ pub struct L1SenderConfig {
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
+
+    /// How often to poll L1 for new blocks.
+    #[config(default_t = 1000 * TimeUnit::Millis)]
+    pub poll_interval: Duration,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

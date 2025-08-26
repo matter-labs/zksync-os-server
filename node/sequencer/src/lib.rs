@@ -892,6 +892,7 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_sender_config.poll_interval,
     );
 
     let l1_proof_submitter = run_l1_sender(
@@ -903,6 +904,7 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_sender_config.poll_interval,
     );
 
     let l1_executor = run_l1_sender(
@@ -914,6 +916,7 @@ fn run_l1_senders(
         l1_sender_config.max_fee_per_gas(),
         l1_sender_config.max_priority_fee_per_gas(),
         l1_sender_config.command_limit,
+        l1_sender_config.poll_interval,
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }
