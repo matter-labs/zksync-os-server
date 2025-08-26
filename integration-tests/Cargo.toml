@@ -18,6 +18,7 @@ zksync_os_sequencer.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_types.workspace = true
 zksync_os_object_store.workspace = true
+zksync_os_rpc_api.workspace = true
 
 zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "main", package = "zksync_os_fri_prover", optional = true }
 
