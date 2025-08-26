@@ -76,14 +76,10 @@ jobs:
       - name: Check that replay wire format version is set correctly
         shell: bash
         run: |
-          echo "A"
           FILE=lib/storage_api/src/replay_wire_format.rs
-          echo "B"
           echo $(pwd)
-          TAG=$(git tag --list --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -2 | tail -1)
-          echo "C"
+          TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
           git fetch --depth=1 origin tag "$TAG"
-          echo "D"
           if git show "$TAG:$FILE" > /tmp/old_wire_format.rs 2>/dev/null; then
             OLD_VERSION=$(grep 'REPLAY_WIRE_FORMAT_VERSION' /tmp/old_wire_format.rs | grep -oE '= *[0-9]+' | grep -oE '[0-9]+')
           else
