@@ -84,19 +84,26 @@ impl ReadBatch for ProofStorage {
         if block_number == 0 {
             return Ok(Some(0));
         }
-        // todo: insanely inefficient, to be replaced
-        for batch_number in 1..=block_number {
-            if let Some(batch) = self.get(batch_number).await? {
-                if batch.batch.first_block_number <= block_number
-                    && batch.batch.last_block_number >= block_number
-                {
-                    return Ok(Some(batch_number));
+        // todo(#259): we binsearch for the batch temporarily, to be replaced with something more efficient
+        // Worst-case scenario: we have 1 batch = 1 block.
+        let (mut lo, mut hi) = (1, block_number);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if let Some(batch) = self.get(mid).await? {
+                if batch.batch.first_block_number > block_number {
+                    hi = mid;
+                } else if batch.batch.last_block_number < block_number {
+                    lo = mid + 1;
+                } else {
+                    return Ok(Some(mid));
                 }
             } else {
-                return Ok(None);
+                // Batch with this number doesn't exist
+                hi = mid;
             }
         }
-        Ok(None)
+        // Check that `lo` actually exists
+        Ok(self.get(lo).await?.map(|_| lo))
     }
 
     async fn get_batch_range_by_number(
