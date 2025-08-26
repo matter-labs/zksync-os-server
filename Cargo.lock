@@ -10032,11 +10032,11 @@ dependencies = [
 [[package]]
 name = "zksync_os_fri_prover"
 version = "0.1.0"
-source = "git+ssh://git@github.com/matter-labs/zksync-airbender-prover.git?branch=main#60d5bd3158c862b9004802a4b59b054e6dcdff31"
+source = "git+ssh://git@github.com/matter-labs/zksync-airbender-prover.git?branch=main#a206961ba5f0ecfc23df8ffac749bd2c9ec4471e"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "bincode 1.3.3",
+ "bincode 2.0.1",
  "clap",
  "cli",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.3.3)",
@@ -10336,7 +10336,6 @@ dependencies = [
  "backon",
  "base64 0.22.1",
  "basic_system",
- "bincode 1.3.3",
  "bincode 2.0.1",
  "blake2",
  "cli",

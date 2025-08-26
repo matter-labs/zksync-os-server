@@ -1,7 +1,7 @@
 use crate::prover_api::fri_job_manager::{FriJobManager, SubmitError};
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::snark_job_manager::SnarkJobManager;
-use axum::extract::Path;
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -219,7 +219,9 @@ pub async fn run(
         .route("/prover-jobs/FRI/:block", get(get_fri_proof))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
-        .with_state(app_state);
+        .with_state(app_state)
+        // Set the request body limit to 10MiB
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
 
     let bind_address: SocketAddr = bind_address.parse()?;
     info!("starting proof data server on {bind_address}");
