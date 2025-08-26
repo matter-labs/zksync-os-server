@@ -457,7 +457,6 @@ fn fmt_error_msg(error: &EvmError) -> String {
         EvmError::StackOverflow => {
             format!("stack limit reached {} ({})", STACK_SIZE, STACK_SIZE - 1)
         }
-        // todo: check that both variants below accurately map to `ErrWriteProtection` from geth
         EvmError::CallNotAllowedInsideStatic => "write protection".to_string(),
         EvmError::StateChangeDuringStaticCall => "write protection".to_string(),
         // geth returns "out of gas", we provide a more fine-grained error
