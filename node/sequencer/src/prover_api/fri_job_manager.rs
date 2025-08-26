@@ -38,7 +38,7 @@ pub enum SubmitError {
     #[error("batch {0} is not known to the server")]
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
-    DeserializationFailed(bincode_v1::Error),
+    DeserializationFailed(bincode::error::DecodeError),
     #[error("internal error: {0}")]
     Other(String),
 }
@@ -163,10 +163,13 @@ impl FriJobManager {
         };
 
         // Deserialize and verify using metadata from the batch.
-        let program_proof = bincode_v1::deserialize(&proof_bytes).map_err(|err| {
-            tracing::warn!(batch_number, "failed to deserialize proof: {err}");
-            SubmitError::DeserializationFailed(err)
-        })?;
+        let program_proof =
+            bincode::serde::decode_from_slice(&proof_bytes, bincode::config::standard())
+                .map_err(|err| {
+                    tracing::warn!(batch_number, "failed to deserialize proof: {err}");
+                    SubmitError::DeserializationFailed(err)
+                })?
+                .0;
 
         if let Err(err) = fri_proof_verifier::verify_fri_proof(
             batch_metadata.previous_stored_batch_info.state_commitment,

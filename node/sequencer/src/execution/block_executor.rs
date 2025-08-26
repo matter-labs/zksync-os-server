@@ -33,7 +33,7 @@ pub async fn execute_block(
         .map_err(|e| BlockDump {
             ctx,
             txs: Vec::new(),
-            error: e.to_string(),
+            error: e.context("state.state_view_at_block()").to_string(),
         })?;
     let metered_state_view = MeteredViewState {
         component_state_tracker: latency_tracker.clone(),
@@ -117,7 +117,7 @@ pub async fn execute_block(
                                             BlockDump {
                                                 ctx,
                                                 txs: all_processed_txs.clone(),
-                                                error: format!("invalid {} tx: {e:?}", tx.tx_type()),
+                                                error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
                                             }
                                         )
                                     }
@@ -146,7 +146,7 @@ pub async fn execute_block(
                                                 BlockDump {
                                                     ctx,
                                                     txs: all_processed_txs.clone(),
-                                                    error: format!("invalid l2 tx: {e:?}"),
+                                                    error: format!("invalid l2 tx: {e:?} ({})", tx.hash()),
                                                 }
                                             )
                                     }
@@ -163,6 +163,11 @@ pub async fn execute_block(
                                 ctx.block_number,
                                 cumulative_gas_used + tx.inner.gas_limit(),
                                 ctx.gas_limit
+                            );
+                            let partial_seal_block_result = runner.seal_block().await;
+                            tracing::error!(
+                                ?partial_seal_block_result,
+                                error
                             );
                             return Err(
                                 BlockDump {
@@ -240,6 +245,8 @@ pub async fn execute_block(
         "Block sealed in block executor"
     );
 
+    tracing::debug!(?output, "Block output");
+
     let block_hash_output = hash_block_output(&output);
 
     // Check if the block output matches the expected hash.
@@ -250,6 +257,7 @@ pub async fn execute_block(
             "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
             ctx.block_number,
         );
+        tracing::error!(?output, error);
         return Err(BlockDump {
             ctx,
             txs: all_processed_txs.clone(),
