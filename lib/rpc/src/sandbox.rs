@@ -383,12 +383,16 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
         frame_state: &impl EvmFrameInterface<S>,
     ) {
         // Following Geth implementation: https://github.com/ethereum/go-ethereum/blob/2dbb580f51b61d7ff78fceb44b06835827704110/core/vm/instructions.go#L894
+        //
+        // It's debatable whether post-Cancun SELFDESTRUCT invocation should create a "SELFDESTURCT"
+        // frame for "old" contracts that cannot be destroyed.
+        // * reth treats such calls as "CALL" frames
+        // * geth treats such calls as "SELFDESTRUCT" frames, but there is an issue that debates
+        //   this behavior (https://github.com/ethereum/go-ethereum/issues/32376)
         let call_frame = CallFrame {
             from: Address::from(frame_state.address().to_be_bytes()),
             gas: Default::default(),
             gas_used: Default::default(),
-            // todo: consider returning `None` here as this is only `Some` if a selfdestruct was
-            //       executed and the call is executed before the Cancun hardfork.
             to: Some(Address::from(beneficiary.to_be_bytes())),
             input: Default::default(),
             output: None,
@@ -396,8 +400,6 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
             revert_reason: None,
             calls: vec![],
             logs: vec![],
-            // todo: consider returning `None` here as this is only `Some` if a selfdestruct was
-            //       executed and the call is executed before the Cancun hardfork.
             value: Some(token_value),
             typ: "SELFDESTRUCT".to_string(),
         };
