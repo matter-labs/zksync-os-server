@@ -1,6 +1,5 @@
 use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
@@ -25,17 +24,9 @@ pub struct StoredTxData {
     pub meta: TxMeta,
 }
 
-/// Used to figure out what type replay to deserialize in external node.
-/// Must be incremented when [ReplayRecord] is changed.
-pub const CURRENT_REPLAY_VERSION: u32 = 1;
-
 /// Full data needed to replay a block - assuming storage is already in the correct state.
-///
-/// When you changes this struct or any of its dependencies, you must increment [CURRENT_REPLAY_VERSION],
-/// move the current struct into [OldReplayRecord] and implement conversion to the new version.
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
-    #[bincode(with_serde)]
     pub block_context: BlockContext,
     /// L1 transaction serial id (0-based) expected at the beginning of this block.
     /// If `l1_transactions` is non-empty, equals to the first tx id in this block
@@ -46,10 +37,8 @@ pub struct ReplayRecord {
     /// Will be moved to the BlockContext at some point
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
-    #[bincode(with_serde)]
     pub node_version: semver::Version,
     /// Hash of the block output.
-    #[bincode(with_serde)]
     pub block_output_hash: B256,
 }
 
@@ -85,15 +74,6 @@ impl ReplayRecord {
             node_version,
             block_output_hash,
         }
-    }
-}
-
-#[derive(bincode::Decode)]
-pub struct OldReplayRecord;
-
-impl From<OldReplayRecord> for ReplayRecord {
-    fn from(_: OldReplayRecord) -> Self {
-        unimplemented!()
     }
 }
 

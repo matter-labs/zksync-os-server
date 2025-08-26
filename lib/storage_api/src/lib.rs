@@ -1,6 +1,9 @@
 mod model;
-pub use model::{
-    CURRENT_REPLAY_VERSION, FinalityStatus, OldReplayRecord, ReplayRecord, StoredTxData, TxMeta,
+mod replay_wire_format;
+mod replay_wire_format_conversion;
+pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
+pub use replay_wire_format::{
+    PreviousReplayWireFormat, REPLAY_WIRE_FORMAT_VERSION, ReplayWireFormat,
 };
 
 mod replay;

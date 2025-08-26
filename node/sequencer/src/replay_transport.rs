@@ -8,7 +8,9 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_util::codec::{self, Framed, LengthDelimitedCodec};
-use zksync_os_storage_api::{CURRENT_REPLAY_VERSION, OldReplayRecord, ReplayRecord};
+use zksync_os_storage_api::{
+    PreviousReplayWireFormat, REPLAY_WIRE_FORMAT_VERSION, ReplayRecord, ReplayWireFormat,
+};
 
 use crate::{block_replay_storage::BlockReplayStorage, model::blocks::BlockCommand};
 
@@ -30,7 +32,7 @@ pub async fn replay_server(
                     return;
                 }
             };
-            if let Err(e) = socket.write_u32(CURRENT_REPLAY_VERSION).await {
+            if let Err(e) = socket.write_u32(REPLAY_WIRE_FORMAT_VERSION).await {
                 tracing::info!("Could not write replay version: {}", e);
                 return;
             }
@@ -75,11 +77,11 @@ pub async fn replay_receiver(
     socket.write_u64(starting_block).await?;
     let replay_version = socket.read_u32().await?;
 
-    Ok(if replay_version == CURRENT_REPLAY_VERSION {
+    Ok(if replay_version == REPLAY_WIRE_FORMAT_VERSION {
         Framed::new(socket, BlockReplayCodec::new())
             .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
             .boxed()
-    } else if replay_version == CURRENT_REPLAY_VERSION - 1 {
+    } else if replay_version == REPLAY_WIRE_FORMAT_VERSION - 1 {
         Framed::new(socket, OldReplayCodec::new())
             .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
             .boxed()
@@ -106,9 +108,11 @@ impl codec::Decoder for BlockReplayCodec {
     ) -> Result<Option<Self::Item>, Self::Error> {
         self.0.decode(src).map(|inner| {
             inner.map(|bytes| {
-                bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
-                    .unwrap()
-                    .0
+                let replay: ReplayWireFormat =
+                    bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
+                        .unwrap()
+                        .0;
+                replay.into()
             })
         })
     }
@@ -123,7 +127,7 @@ impl codec::Encoder<ReplayRecord> for BlockReplayCodec {
         dst: &mut alloy::rlp::BytesMut,
     ) -> Result<(), Self::Error> {
         self.0.encode(
-            bincode::encode_to_vec(item, bincode::config::standard())
+            bincode::encode_to_vec(ReplayWireFormat::from(item), bincode::config::standard())
                 .unwrap()
                 .into(),
             dst,
@@ -149,7 +153,7 @@ impl codec::Decoder for OldReplayCodec {
     ) -> Result<Option<Self::Item>, Self::Error> {
         self.0.decode(src).map(|inner| {
             inner.map(|bytes| {
-                let old_replay: OldReplayRecord =
+                let old_replay: PreviousReplayWireFormat =
                     bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
                         .unwrap()
                         .0;
