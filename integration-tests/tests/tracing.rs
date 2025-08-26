@@ -237,7 +237,5 @@ fn strip_call_frame(call_frame: &CallFrame) -> CallFrame {
     call_frame.gas = U256::ZERO;
     call_frame.gas_used = U256::ZERO;
     call_frame.calls = vec![];
-    // todo: temporary workaround while we don't preserve CREATE output
-    call_frame.output = Some(Bytes::new());
     call_frame
 }

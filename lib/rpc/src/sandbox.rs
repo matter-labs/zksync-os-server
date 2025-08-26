@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, Bytes, TxNonce, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
 use zk_ee::system::evm::EvmFrameInterface;
@@ -42,7 +42,6 @@ pub fn call_trace(
     state_view: StateView,
     call_config: CallConfig,
 ) -> Result<CallFrame, Box<ForwardSubsystemError>> {
-    let nonce = tx.nonce();
     let encoded_tx = tx.encode();
 
     block_context.eip1559_basefee = U256::from(0);
@@ -50,7 +49,6 @@ pub fn call_trace(
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
-        nonce,
     );
     let _ = simulate_tx(
         encoded_tx,
@@ -74,11 +72,18 @@ pub struct CallTracer {
     current_call_depth: usize,
     collect_logs: bool,
     only_top_call: bool,
-    nonce: TxNonce,
+
+    create_operation_requested: Option<CreateType>,
+}
+
+#[derive(Debug)]
+enum CreateType {
+    Create,
+    Create2,
 }
 
 impl CallTracer {
-    pub fn new_with_config(collect_logs: bool, only_top_call: bool, nonce: TxNonce) -> Self {
+    pub fn new_with_config(collect_logs: bool, only_top_call: bool) -> Self {
         Self {
             transactions: vec![],
             unfinished_calls: vec![],
@@ -86,7 +91,7 @@ impl CallTracer {
             current_call_depth: 0,
             collect_logs,
             only_top_call,
-            nonce,
+            create_operation_requested: None,
         }
     }
 }
@@ -96,15 +101,23 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
         self.current_call_depth += 1;
 
         if !self.only_top_call || self.current_call_depth == 1 {
-            let from = Address::from(initial_state.external_call.caller.to_be_bytes());
-            let to = Address::from(initial_state.external_call.callee.to_be_bytes());
+            // Top-level deployment (initiated by EOA) won't trigger `on_create_request` hook
+            // This is always a CREATE
+            if self.current_call_depth == 1
+                && initial_state.external_call.modifier == CallModifier::Constructor
+            {
+                self.create_operation_requested = Some(CreateType::Create);
+            }
+
             self.unfinished_calls.push(CallFrame {
-                from,
+                from: Address::from(initial_state.external_call.caller.to_be_bytes()),
                 gas: U256::from(
                     initial_state.external_call.available_resources.ergs().0 / ERGS_PER_GAS,
                 ),
                 gas_used: U256::ZERO, // will be populated later
-                to: Some(to),
+                to: Some(Address::from(
+                    initial_state.external_call.callee.to_be_bytes(),
+                )),
                 input: Bytes::copy_from_slice(initial_state.external_call.input),
                 output: None,        // will be populated later
                 error: None,         // can be populated later
@@ -120,12 +133,13 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 typ: match initial_state.external_call.modifier {
                     CallModifier::NoModifier => "CALL",
                     CallModifier::Constructor => {
-                        // Decide whether this is CREATE of CREATE2 based on address derivation scheme
-                        // todo: replace with a system hook once available
-                        if from.create(self.nonce) == to {
-                            "CREATE"
-                        } else {
-                            "CREATE2"
+                        match self
+                            .create_operation_requested
+                            .as_ref()
+                            .expect("Should exist")
+                        {
+                            CreateType::Create => "CREATE",
+                            CreateType::Create2 => "CREATE2",
                         }
                     }
                     CallModifier::Delegate | CallModifier::DelegateStatic => "DELEGATECALL",
@@ -141,6 +155,11 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 }
                 .to_string(),
             })
+        }
+
+        // Reset flag, required data is consumed
+        if self.create_operation_requested.is_some() {
+            self.create_operation_requested = None;
         }
     }
 
@@ -172,8 +191,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                         }
                         CallResult::Successful { return_values } => {
                             if finished_call.typ == "CREATE" || finished_call.typ == "CREATE2" {
-                                // todo: should contain deployed contract bytecode instead of input
-                                finished_call.output = Some(finished_call.input.clone());
+                                // output should be already populated in `on_bytecode_change` hook
                             } else {
                                 finished_call.output =
                                     Some(Bytes::copy_from_slice(return_values.returndata));
@@ -201,16 +219,27 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
         }
 
         self.current_call_depth -= 1;
+
+        // Reset flag in case if frame terminated due to out-of-native / other internal ZKsync OS error
+        if self.create_operation_requested.is_some() {
+            self.create_operation_requested = None;
+        }
     }
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
         self.current_call_depth = 0;
+
+        // Sanity check
+        assert!(self.create_operation_requested.is_none());
     }
 
     fn finish_tx(&mut self) {
         assert_eq!(self.current_call_depth, 0);
         assert!(self.unfinished_calls.is_empty());
         assert_eq!(self.finished_calls.len(), 1);
+
+        // Sanity check
+        assert!(self.create_operation_requested.is_none());
 
         self.transactions
             .push(self.finished_calls.pop().expect("Should exist"));
@@ -238,7 +267,6 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     ) {
     }
 
-    #[inline(always)]
     fn on_event(
         &mut self,
         _ee_type: zk_ee::execution_environment_type::ExecutionEnvironmentType,
@@ -275,6 +303,34 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
         }
     }
 
+    fn on_bytecode_change(
+        &mut self,
+        _ee_type: zk_ee::execution_environment_type::ExecutionEnvironmentType,
+        address: <S::IOTypes as SystemIOTypesConfig>::Address,
+        new_bytecode: Option<&[u8]>,
+        _new_bytecode_hash: <S::IOTypes as SystemIOTypesConfig>::BytecodeHashValue,
+        new_observable_bytecode_length: u32,
+    ) {
+        let call = self.unfinished_calls.last_mut().expect("Should exist");
+
+        if call.typ == "CREATE" || call.typ == "CREATE2" {
+            assert_eq!(
+                Address::from(address.to_be_bytes()),
+                call.to.expect("Should exist")
+            );
+            let deployed_raw_bytecode = new_bytecode.expect("Should be present");
+
+            assert!(deployed_raw_bytecode.len() >= new_observable_bytecode_length as usize);
+
+            // raw bytecode may include internal artifacts (jumptable), so we need to trim it
+            call.output = Some(Bytes::copy_from_slice(
+                &deployed_raw_bytecode[..new_observable_bytecode_length as usize],
+            ));
+        } else {
+            // should not happen now (system hooks currently do not trigger this hook)
+        }
+    }
+
     #[inline(always)]
     fn evm_tracer(&mut self) -> &mut impl EvmTracer<S> {
         self
@@ -302,6 +358,11 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     fn on_opcode_error(&mut self, error: &EvmError, _frame_state: &impl EvmFrameInterface<S>) {
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
+
+        // In case we fail after `on_create_request` hook, but before `on_new_execution_frame` hook
+        if self.create_operation_requested.is_some() {
+            self.create_operation_requested = None;
+        }
     }
 
     /// Special cases, when error happens in frame before any opcode is executed (unfortunately we can't provide access to state)
@@ -309,6 +370,9 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     fn on_call_error(&mut self, error: &EvmError) {
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
+
+        // Sanity check
+        assert!(self.create_operation_requested.is_none());
     }
 
     /// We should treat selfdestruct as a special kind of a call
@@ -343,6 +407,17 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
         } else {
             self.finished_calls.push(call_frame);
         }
+    }
+
+    fn on_create_request(&mut self, is_create2: bool) {
+        // Can't be some - `on_new_execution_frame` or `on_opcode_error` should reset flag
+        assert!(self.create_operation_requested.is_none());
+
+        self.create_operation_requested = if is_create2 {
+            Some(CreateType::Create)
+        } else {
+            Some(CreateType::Create2)
+        };
     }
 }
 
