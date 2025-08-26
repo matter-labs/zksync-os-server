@@ -22,6 +22,31 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Check that replay wire format is version is set correctly
+      shell: bash
+      run: |
+        FILE=lib/storage_api/src/replay_wire_format.rs
+        TAG=$(git tag --list --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -2 | tail -1)
+        git fetch --depth=1 origin tag "$TAG"
+        if git show "$TAG:$FILE" > /tmp/old_wire_format.rs 2>/dev/null; then
+          OLD_VERSION=$(grep 'REPLAY_WIRE_FORMAT_VERSION' /tmp/old_wire_format.rs | grep -oE '= *[0-9]+' | grep -oE '[0-9]+')
+        else
+          echo "File did not exist in previous version, treating as empty and version 0."
+          echo -n "" > /tmp/old_wire_format.rs
+          OLD_VERSION=0
+        fi
+        cp "$FILE" /tmp/new_wire_format.rs
+        if ! diff -q /tmp/old_wire_format.rs /tmp/new_wire_format.rs; then
+          NEW_VERSION=$(grep 'REPLAY_WIRE_FORMAT_VERSION' /tmp/new_wire_format.rs | grep -oE '= *[0-9]+' | grep -oE '[0-9]+')
+          if [ "$NEW_VERSION" -ne $((OLD_VERSION + 1)) ]; then
+            echo "Wire format changed, but REPLAY_WIRE_FORMAT_VERSION is not exactly one higher! ($OLD_VERSION -> $NEW_VERSION)"
+            exit 1
+          fi
+          echo "Wire format changed and version incremented correctly ($OLD_VERSION -> $NEW_VERSION)."
+        else
+          echo "Wire format did not change."
+        fi
+
     - name: Setup misc environment variables
       shell: bash
       run: |
@@ -43,7 +68,7 @@ jobs:
       shell: bash
       run: ci_up
 
-    # This can be removed once zksync-airbender-prover is public.
+    # This can be removed once zksync-airbender-prover is public.r
     - name: Configure Git for private repos
       run: |
         ci_run git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
@@ -57,38 +82,6 @@ jobs:
 
     - name: Run unit tests
       run: ci_run cargo test --verbose --workspace --exclude zksync_os_integration_tests
-
-    # Check that ReplayRecord version has been updated correctly
-    - name: Build and get ReplayRecord TypeHash and Version (PR tip)
-      id: prtip
-      run: |
-        HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash)
-        VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version)
-        echo "hash=$HASH" >> $GITHUB_OUTPUT
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-    - name: Checkout PR parent (merge base)
-      run: |
-        BASE_SHA=$(git rev-parse ${{ github.event.pull_request.base.sha }})
-        git checkout $BASE_SHA
-
-    - name: Build and get ReplayRecord TypeHash and Version (PR parent)
-      id: prparent
-      run: |
-        HASH=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_typehash || echo "missing")
-        VERSION=$(ci_run cargo run -p zksync_os_storage_api --example print_replayrecord_version || echo "missing")
-        echo "hash=$HASH" >> $GITHUB_OUTPUT
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-    - name: Compare ReplayRecord TypeHash and Version
-      run: |
-        echo "Old hash: ${{ steps.prparent.outputs.hash }}, New hash: ${{ steps.prtip.outputs.hash }}"
-        echo "Old version: ${{ steps.prparent.outputs.version }}, New version: ${{ steps.prtip.outputs.version }}"
-        if [ "${{ steps.prparent.outputs.hash }}" != "${{ steps.prtip.outputs.hash }}" ] && [ "${{ steps.prparent.outputs.version }}" = "${{ steps.prtip.outputs.version }}" ]; then
-          echo "ReplayRecord changed but CURRENT_REPLAY_VERSION was not incremented!"
-          exit 1
-        fi
-        echo "ReplayRecord versioning check passed."
 
     - name: Show sccache logs
       if: always()
