@@ -20,7 +20,7 @@ zksync_os_types.workspace = true
 zksync_os_object_store.workspace = true
 zksync_os_rpc_api.workspace = true
 
-zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "main", package = "zksync_os_fri_prover", optional = true }
+zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "di/bincode-v2", package = "zksync_os_fri_prover", optional = true }
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
