@@ -93,10 +93,10 @@ pub async fn run_sequencer_actor(
     repositories: RepositoryManager,
     sequencer_config: SequencerConfig,
 ) -> Result<()> {
-    let latency_tracker = ComponentStateReporter::global()
-        .handle_for("sequencer", SequencerState::WaitingForUpstreamCommand);
+    let latency_tracker =
+        ComponentStateReporter::global().handle_for("sequencer", SequencerState::WaitingForCommand);
     loop {
-        latency_tracker.enter_state(SequencerState::WaitingForUpstreamCommand);
+        latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
         let Some(cmd) = block_stream.next().await else {
             anyhow::bail!("inbound channel closed");
@@ -108,7 +108,7 @@ pub async fn run_sequencer_actor(
             cmd = cmd.to_string(),
             "starting command. Turning into PreparedCommand.."
         );
-        latency_tracker.enter_state(SequencerState::PreparingBlockCommand);
+        latency_tracker.enter_state(SequencerState::BlockContextTxs);
 
         let prepared_command = command_block_context_provider.prepare_command(cmd).await?;
 
