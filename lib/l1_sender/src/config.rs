@@ -1,6 +1,5 @@
 use alloy::consensus::constants::GWEI_TO_WEI;
 use serde::{Deserialize, Serialize};
-use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig};
 use std::time::Duration;
@@ -50,7 +49,7 @@ pub struct L1SenderConfig {
     pub command_limit: usize,
 
     /// How often to poll L1 for new blocks.
-    #[config(default_t = 1000 * TimeUnit::Millis)]
+    #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
 }
 
