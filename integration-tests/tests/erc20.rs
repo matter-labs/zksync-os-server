@@ -1,15 +1,18 @@
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::network::TxSigner;
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, B256, U256, address};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{PendingTransactionBuilder, Provider};
+use alloy::rpc::types::TransactionReceipt;
+use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::SolValue;
-use std::str::FromStr;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::contracts::TestERC20;
+use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
+use zksync_os_integration_tests::contracts::{IL2AssetRouter, TestERC20};
+use zksync_os_integration_tests::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
 use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_types::{L2ToL1Log, ZkTxType};
 
@@ -20,14 +23,8 @@ async fn erc20_deposit() -> anyhow::Result<()> {
 
     // Mint ERC20 tokens on L1 for Alice
     let mint_amount = U256::from(100u64);
-    let deposit_amount = U256::from(50u64);
-    let l1_erc20 = TestERC20::deploy(tester.l1_provider.clone()).await?;
-    l1_erc20
-        .mint(alice, mint_amount)
-        .send()
-        .await?
-        .expect_successful_receipt()
-        .await?;
+    let deposit_amount = U256::from(40u64);
+    let l1_erc20 = deploy_l1_token_and_mint(&tester, mint_amount).await?;
 
     let alice_l1_initial_balance = l1_erc20.balanceOf(alice).call().await?;
     assert_eq!(
@@ -35,6 +32,105 @@ async fn erc20_deposit() -> anyhow::Result<()> {
         "Unexpected initial L1 balance"
     );
 
+    // Send deposit.
+    let l1_deposit_receipt = deposit_erc20(&tester, &l1_erc20, alice, deposit_amount).await?;
+
+    // Check that the L2 part of the deposit was successful.
+    assert_successful_deposit_l2_part(&tester, l1_deposit_receipt).await?;
+
+    let l2_erc20_address = l2_token_address(&tester, *l1_erc20.address()).await?;
+    // `l2_erc20` is not exactly `TestERC20`, but it implements standard `ERC20` interface.
+    let l2_erc20 = TestERC20::new(l2_erc20_address, tester.l2_provider.clone());
+    // Check Alice's L2 balance.
+    let l2_balance = l2_erc20.balanceOf(alice).call().await?;
+
+    assert_eq!(
+        l2_balance, deposit_amount,
+        "Unexpected L2 balance after deposit"
+    );
+
+    // Check Alice's L1 balance.
+    let l1_balance = l1_erc20.balanceOf(alice).call().await?;
+    assert_eq!(
+        l1_balance,
+        mint_amount - deposit_amount,
+        "Unexpected L1 balance after deposit"
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn erc20_transfer() -> anyhow::Result<()> {
+    let mut tester = Tester::setup().await?;
+
+    tester
+        .l2_provider
+        .wallet_mut()
+        .register_signer(tester.l1_provider.wallet().default_signer());
+    let alice = tester.l1_wallet.default_signer().address();
+    let bob_signer = PrivateKeySigner::random();
+    let bob = bob_signer.address();
+
+    // Deposit some ERC20 tokens to L2 for Alice to be able to transfer them.
+    let mint_amount = U256::from(100u64);
+    let deposit_amount = U256::from(100u64);
+    let l1_erc20 = deploy_l1_token_and_mint(&tester, mint_amount).await?;
+    let l1_deposit_receipt = deposit_erc20(&tester, &l1_erc20, alice, deposit_amount).await?;
+    assert_successful_deposit_l2_part(&tester, l1_deposit_receipt).await?;
+
+    let l2_erc20_address = l2_token_address(&tester, *l1_erc20.address()).await?;
+    // `l2_erc20` is not exactly `TestERC20`, but it implements standard `ERC20` interface.
+    let l2_erc20 = TestERC20::new(l2_erc20_address, tester.l2_provider.clone());
+
+    // Transfer some tokens from Alice to Bob on L2.
+    let transfer_amount = U256::from(40u64);
+    l2_erc20
+        .transfer(bob, transfer_amount)
+        .from(alice)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Check balances.
+    let alice_l2_balance = l2_erc20.balanceOf(alice).call().await?;
+    let bob_l2_balance = l2_erc20.balanceOf(bob).call().await?;
+
+    assert_eq!(
+        alice_l2_balance,
+        deposit_amount - transfer_amount,
+        "Unexpected Alice's L2 balance after transfer"
+    );
+
+    assert_eq!(
+        bob_l2_balance, transfer_amount,
+        "Unexpected Bob's L2 balance after transfer"
+    );
+
+    Ok(())
+}
+
+async fn deploy_l1_token_and_mint(
+    tester: &Tester,
+    mint_amount: U256,
+) -> anyhow::Result<TestERC20Instance<EthDynProvider>> {
+    let l1_erc20 = TestERC20::deploy(tester.l1_provider.clone()).await?;
+    l1_erc20
+        .mint(tester.l1_wallet.default_signer().address(), mint_amount)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    Ok(l1_erc20)
+}
+
+async fn deposit_erc20(
+    tester: &Tester,
+    l1_erc20: &TestERC20Instance<EthDynProvider>,
+    to: Address,
+    amount: U256,
+) -> anyhow::Result<TransactionReceipt> {
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
@@ -54,7 +150,7 @@ async fn erc20_deposit() -> anyhow::Result<()> {
         .await?;
     let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
 
-    let l2_gas_limit = U256::from(500_000);
+    let l2_gas_limit = U256::from(1_500_000);
     let l2_gas_per_pubdata = U256::from(800);
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
@@ -64,12 +160,11 @@ async fn erc20_deposit() -> anyhow::Result<()> {
         )
         .await?;
     let shared_bridge_address = bridgehub.shared_bridge_address().await?;
-    let second_bridge_calldata = (*l1_erc20.address(), deposit_amount, alice).abi_encode();
+    let second_bridge_calldata = (*l1_erc20.address(), amount, to).abi_encode();
 
     // Approve the bridge to spend Alice's L1 tokens.
     l1_erc20
-        .approve(shared_bridge_address, deposit_amount)
-        .from(alice)
+        .approve(shared_bridge_address, amount)
         .max_fee_per_gas(max_fee_per_gas)
         .max_priority_fee_per_gas(max_priority_fee_per_gas)
         .send()
@@ -84,7 +179,7 @@ async fn erc20_deposit() -> anyhow::Result<()> {
             U256::ZERO,
             l2_gas_limit,
             l2_gas_per_pubdata,
-            alice,
+            to,
             shared_bridge_address,
             U256::ZERO,
             second_bridge_calldata,
@@ -101,6 +196,15 @@ async fn erc20_deposit() -> anyhow::Result<()> {
         .await?
         .expect_successful_receipt()
         .await?;
+
+    Ok(l1_deposit_receipt)
+}
+
+async fn assert_successful_deposit_l2_part(
+    tester: &Tester,
+    l1_deposit_receipt: TransactionReceipt,
+) -> anyhow::Result<()> {
+    // Find the L1->L2 transaction hash in the deposit receipt logs.
     let l1_to_l2_tx_log = l1_deposit_receipt
         .logs()
         .iter()
@@ -132,7 +236,7 @@ async fn erc20_deposit() -> anyhow::Result<()> {
             l2_shard_id: 0,
             is_service: true,
             tx_number_in_block: receipt.transaction_index.unwrap() as u16,
-            sender: Address::from_str("0x0000000000000000000000000000000000008001").unwrap(),
+            sender: address!("0x0000000000000000000000000000000000008001"),
             // Canonical tx hash
             key: l2_tx_hash,
             // Successful
@@ -142,4 +246,14 @@ async fn erc20_deposit() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+async fn l2_token_address(tester: &Tester, l1_token: Address) -> anyhow::Result<Address> {
+    let l2_asset_router_address = address!("0x0000000000000000000000000000000000010003");
+    let l2_asset_router = IL2AssetRouter::new(l2_asset_router_address, tester.l2_provider.clone());
+    // FIXME: `L2AssetRouter` code mentions that `l2TokenAddress` is legacy but JS SDK uses it.
+    //   Should we use some other method to get the L2 token address?
+    let l2_erc20_address = l2_asset_router.l2TokenAddress(l1_token).call().await?;
+
+    Ok(l2_erc20_address)
 }

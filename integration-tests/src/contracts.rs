@@ -55,6 +55,11 @@ alloy::sol! {
     interface IL1Messenger {
         event L1MessageSent(address indexed _sender, bytes32 indexed _hash, bytes _message);
     }
+
+    #[sol(rpc)]
+    interface IL2AssetRouter {
+        function l2TokenAddress(address _l1Token) public view returns (address);
+    }
 }
 
 const L1_MESSENGER_ADDRESS: Address = address!("0000000000000000000000000000000000008008");

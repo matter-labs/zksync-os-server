@@ -1,6 +1,9 @@
 pub mod models;
 
-use crate::IBridgehub::{IBridgehubInstance, L2TransactionRequestDirect, requestL2TransactionDirectCall, L2TransactionRequestTwoBridgesOuter, requestL2TransactionTwoBridgesCall};
+use crate::IBridgehub::{
+    IBridgehubInstance, L2TransactionRequestDirect, L2TransactionRequestTwoBridgesOuter,
+    requestL2TransactionDirectCall, requestL2TransactionTwoBridgesCall,
+};
 use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
