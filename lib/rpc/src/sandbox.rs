@@ -13,7 +13,8 @@ use zk_ee::types_config::SystemIOTypesConfig;
 use zk_os_evm_interpreter::{ERGS_PER_GAS, STACK_SIZE};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
-use zk_os_forward_system::run::{BlockContext, simulate_tx};
+use zk_os_forward_system::run::test_impl::{NoopTxCallback, TxListSource};
+use zk_os_forward_system::run::{BlockContext, run_block, simulate_tx};
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
 
@@ -37,31 +38,31 @@ pub fn execute(
 }
 
 pub fn call_trace(
-    tx: ZkTransaction,
+    txs: Vec<ZkTransaction>,
     mut block_context: BlockContext,
     state_view: impl ViewState,
     call_config: CallConfig,
 ) -> Result<CallFrame, Box<ForwardSubsystemError>> {
-    let encoded_tx = tx.encode();
-
     block_context.eip1559_basefee = U256::from(0);
 
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
     );
-    let _ = simulate_tx(
-        encoded_tx,
+
+    let tx_source = TxListSource {
+        transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
+    };
+    let _ = run_block(
         block_context,
         state_view.clone(),
         state_view,
+        tx_source,
+        NoopTxCallback,
         &mut tracer,
-    )
-    .map_err(Box::new)?;
-    Ok(tracer
-        .transactions
-        .pop()
-        .expect("tracer should have at least one transaction"))
+    )?;
+
+    Ok(std::mem::take(tracer.transactions.last_mut().unwrap()))
 }
 
 #[derive(Default)]
@@ -98,6 +99,7 @@ impl CallTracer {
 
 impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     fn on_new_execution_frame(&mut self, initial_state: &ExecutionEnvironmentLaunchParams<S>) {
+        println!("NEW FRAME");
         self.current_call_depth += 1;
 
         if !self.only_top_call || self.current_call_depth == 1 {
@@ -164,6 +166,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     }
 
     fn after_execution_frame_completed(&mut self, result: Option<(&S::Resources, &CallResult<S>)>) {
+        println!("FINISHED FRAME");
         assert_ne!(self.current_call_depth, 0);
 
         if !self.only_top_call || self.current_call_depth == 1 {

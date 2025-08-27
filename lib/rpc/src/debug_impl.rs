@@ -2,7 +2,7 @@ use crate::result::{ToRpcResult, unimplemented_rpc_err};
 use crate::{ReadRpcStorage, sandbox};
 use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::genesis::ChainConfig;
-use alloy::primitives::{B256, BlockHash, BlockNumber, Bytes, TxHash};
+use alloy::primitives::{B256, BlockHash, Bytes, TxHash};
 use alloy::rpc::types::trace::geth::{
     GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
     GethDebugTracingOptions, GethTrace, TraceResult,
@@ -11,7 +11,7 @@ use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_rpc_api::debug::DebugApiServer;
-use zksync_os_storage_api::RepositoryError;
+use zksync_os_storage_api::{RepositoryError, StateError};
 
 pub struct DebugNamespace<RpcStorage> {
     storage: RpcStorage,
@@ -26,7 +26,7 @@ impl<RpcStorage> DebugNamespace<RpcStorage> {
 impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
     fn debug_trace_transaction_impl(
         &self,
-        tx_hash: TxHash,
+        requested_tx_hash: TxHash,
         opts: Option<GethDebugTracingOptions>,
     ) -> DebugResult<GethTrace> {
         let opts = opts.unwrap_or_default();
@@ -40,25 +40,48 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             .tracer_config
             .into_call_config()
             .map_err(|_| DebugError::InvalidTracerConfig)?;
-        let Some(tx) = self.storage.repository().get_transaction(tx_hash)? else {
-            return Err(DebugError::TransactionNotFound);
-        };
-        let Some(tx_meta) = self.storage.repository().get_transaction_meta(tx_hash)? else {
-            return Err(DebugError::TransactionNotFound);
-        };
-        let block_number = tx_meta.block_number - 1;
-        let Some(block_context) = self.storage.replay_storage().get_context(block_number) else {
-            return Err(DebugError::BlockNotAvailable(block_number));
-        };
-        let state_view = self
+        let Some(tx_meta) = self
             .storage
-            .state_view_at(block_number)
-            .map_err(|_| DebugError::BlockNotAvailable(block_number))?;
-        // todo: execute previous transactions from current block before simulating requested transaction
-        match sandbox::call_trace(tx, block_context, state_view, call_config) {
+            .repository()
+            .get_transaction_meta(requested_tx_hash)?
+        else {
+            return Err(DebugError::TransactionNotFound);
+        };
+        let block_number = tx_meta.block_number;
+        let prev_block_number = block_number - 1;
+        let Some(prev_block_context) = self.storage.replay_storage().get_context(prev_block_number)
+        else {
+            tracing::error!(prev_block_number, "could not load previous block's context");
+            return Err(DebugError::InternalError);
+        };
+        let Some(block) = self
+            .storage
+            .repository()
+            .get_block_by_number(block_number)?
+        else {
+            tracing::error!(block_number, "could not load block containing transaction");
+            return Err(DebugError::InternalError);
+        };
+        let mut txs = Vec::new();
+        for tx_hash in &block.body.transactions {
+            let Some(tx) = self.storage.repository().get_transaction(*tx_hash)? else {
+                tracing::error!(
+                    ?tx_hash,
+                    block_number,
+                    "could not find transaction that was included in block"
+                );
+                return Err(DebugError::InternalError);
+            };
+            txs.push(tx);
+            if tx_hash == &requested_tx_hash {
+                break;
+            }
+        }
+        let prev_state_view = self.storage.state_view_at(prev_block_number)?;
+        match sandbox::call_trace(txs, prev_block_context, prev_state_view, call_config) {
             Ok(call) => Ok(GethTrace::CallTracer(call)),
             Err(err) => {
-                tracing::error!(?tx_hash, ?err, "failed to trace transaction");
+                tracing::error!(?err, "failed to trace transaction");
                 Err(DebugError::InternalError)
             }
         }
@@ -170,13 +193,12 @@ pub enum DebugError {
     /// Thrown when a requested transaction is not found
     #[error("transaction not found")]
     TransactionNotFound,
-    /// Block is no longer available (e.g., it was compacted)
-    #[error("block {0} is not available")]
-    BlockNotAvailable(BlockNumber),
     /// Internal server error not exposed to user
     #[error("internal error")]
     InternalError,
 
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    State(#[from] StateError),
 }
