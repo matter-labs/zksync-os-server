@@ -398,7 +398,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await;
     } else {
         // External Node
-        run_batcher_channel_drain(_stop_receiver.clone(), blocks_for_batcher_subsystem_receiver).await;
+        run_batcher_channel_drain(
+            _stop_receiver.clone(),
+            blocks_for_batcher_subsystem_receiver,
+        )
+        .await;
     };
     tasks.join_next().await;
 }
