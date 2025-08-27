@@ -117,6 +117,39 @@ impl Batcher {
             self.pubdata_limit_bytes,
         );
 
+        // skip the blocks from already committed batches
+        // when the server restarts some historical blocks are replayed - they are already batched and committed
+        loop {
+            match self
+                .block_receiver
+                .peek_recv(|(_, replay_record, _)| {
+                    replay_record.block_context.block_number < self.first_block_to_process
+                })
+                .await
+            {
+                Some(true) => {
+                    // the block is before the first block to process, skip it
+                    let Some((_, replay_record, _)) = self.block_receiver.pop_buffer() else {
+                        anyhow::bail!("No block in buffer after peeking")
+                    };
+                    tracing::debug!(
+                        block_number = replay_record.block_context.block_number,
+                        "Skipping block before the first block to process",
+                    );
+                }
+                Some(false) => {
+                    // the block is within the range to process, proceed to batching
+                    break;
+                }
+                None => {
+                    anyhow::bail!("Batcher's block receiver channel closed unexpectedly");
+                }
+            }
+        }
+        tracing::info!(
+            self.first_block_to_process,
+            "Received the first block after the last committed one."
+        );
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
@@ -149,21 +182,10 @@ impl Batcher {
 
                             let block_number = replay_record.block_context.block_number;
 
-                            // skip the blocks from already committed batches (on server restart we replay some historical blocks - they are already batched and committed, so no action is needed here)
-                            if block_number < self.first_block_to_process {
-                                tracing::debug!(
-                                    "Skipping block {} (batcher starting block is {})",
-                                    replay_record.block_context.block_number,
-                                    self.first_block_to_process
-                                );
-
-                                continue;
-                            }
-
                             /* ---------- process block ---------- */
                             let tree = self.persistent_tree
                                 .clone()
-                                .get_at_block(replay_record.block_context.block_number)
+                                .get_at_block(block_number)
                                 .await;
 
                             let (root_hash, leaf_count) = tree.root_info()?;
