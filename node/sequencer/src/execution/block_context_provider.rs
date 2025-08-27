@@ -105,7 +105,7 @@ impl BlockContextProvider {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    interop_roots: Default::default()
+                    interop_roots: Default::default(),
                 };
                 PreparedBlockCommand {
                     block_context,

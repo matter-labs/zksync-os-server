@@ -1,4 +1,4 @@
-use alloy::primitives::{B256, keccak256, U256};
+use alloy::primitives::{B256, U256, keccak256};
 use blake2::{Blake2s256, Digest};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};

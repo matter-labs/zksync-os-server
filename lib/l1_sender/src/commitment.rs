@@ -49,7 +49,7 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
                 .upgrade_tx_hash
                 .map(|h| Bytes32::from_array(h.0))
                 .unwrap_or(Bytes32::ZERO),
-            interop_root_rolling_hash:Bytes32::from(value.dependency_roots_rolling_hash.0),
+            interop_root_rolling_hash: Bytes32::from(value.dependency_roots_rolling_hash.0),
         };
         let commitment = FixedBytes::from(system_batch_output.hash());
         Self {
