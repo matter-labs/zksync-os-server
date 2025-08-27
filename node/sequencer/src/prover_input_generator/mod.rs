@@ -179,7 +179,7 @@ fn compute_prover_input(
     prover_input
 }
 
-const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
+const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover_input_generator")]
 pub struct ProverInputGeneratorMetrics {

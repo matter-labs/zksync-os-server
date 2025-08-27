@@ -194,7 +194,11 @@ impl Batcher {
                                 if block_number >= self.last_persisted_block {
                                     deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
                                 } else {
-                                    tracing::debug!(block_number, self.last_persisted_block, "received block with number lower than `last_persisted_block`. Not enabling the deadline seal criteria yet.")
+                                    tracing::debug!(
+                                        block_number,
+                                        self.last_persisted_block,
+                                        "received block with number lower than `last_persisted_block`. Not enabling the deadline seal criteria yet."
+                                    )
                                 }
                             }
                         }

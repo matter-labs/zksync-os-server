@@ -140,7 +140,7 @@ impl ReadStateHistory for StateHandle {
     }
 
     fn block_range_available(&self) -> RangeInclusive<u64> {
-        self.compacted_block_number()..=self.compacted_block_number()
+        self.compacted_block_number()..=self.storage_map.latest_block.load(Ordering::Relaxed)
     }
 }
 
