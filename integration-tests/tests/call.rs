@@ -1,5 +1,4 @@
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::Bytes;
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::state::StateOverride;
@@ -120,8 +119,6 @@ async fn call_deploy() -> anyhow::Result<()> {
     let result = EventEmitter::deploy_builder(tester.l2_provider.clone())
         .call()
         .await?;
-    // todo: should return deployed bytecode but returns empty bytes for now
-    assert_eq!(result, Bytes::new());
-    // assert_eq!(result, EventEmitter::DEPLOYED_BYTECODE);
+    assert_eq!(result, EventEmitter::DEPLOYED_BYTECODE);
     Ok(())
 }
