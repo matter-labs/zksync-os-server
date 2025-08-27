@@ -45,10 +45,17 @@ pub struct GeneralConfig {
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
     ///
-    /// Currently, it affects both the storage logs (see `state` crate)
+    /// Currently, it affects both the storage logs (for Compacted state impl - see `state` crate for details)
     /// and repositories (see `repositories` package in this crate)
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
+
+    /// Min number of blocks to replay on restart
+    /// Depending on L1/persistence state, we may need to replay more blocks than this number
+    /// In some cases, we need to replay the whole blockchain (e.g. switching state backends) -
+    /// in such cases a warning is logged.
+    #[config(default_t = 10)]
+    pub min_blocks_to_replay: usize,
 
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]

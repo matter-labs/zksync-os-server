@@ -5,18 +5,13 @@ use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::system::BatchOutput;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
-use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::ReadRepository;
+use zksync_os_storage_api::RepositoryBlock;
 
 pub async fn load_genesis_stored_batch_info(
-    repository_manager: &RepositoryManager,
+    genesis_block: RepositoryBlock,
     tree: MerkleTreeForReading<RocksDBWrapper>,
     chain_id: u64,
 ) -> StoredBatchInfo {
-    let genesis_block = repository_manager
-        .get_block_by_number(0)
-        .expect("Failed to read genesis block from repositories")
-        .expect("Missing genesis block in repositories");
     let genesis_root_info = tree
         .get_at_block(0)
         .await

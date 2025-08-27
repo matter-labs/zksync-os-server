@@ -6,7 +6,7 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
+    BatcherConfig, Config, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
     ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig,
 };
 use zksync_os_sequencer::run;
@@ -25,21 +25,10 @@ pub async fn main() {
         .init();
 
     // =========== load configs ===========
-    let (
-        general_config,
-        genesis_config,
-        rpc_config,
-        mempool_config,
-        sequencer_config,
-        l1_sender_config,
-        l1_watcher_config,
-        batcher_config,
-        prover_input_generator_config,
-        prover_api_config,
-    ) = build_configs();
+    let config = build_configs();
 
     let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(general_config.prometheus_port);
+        PrometheusExporterConfig::pull(config.general_config.prometheus_port);
 
     // =========== init interruption channel ===========
 
@@ -49,39 +38,9 @@ pub async fn main() {
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
     let main_task = async move {
-        match general_config.state_backend {
-            StateBackendConfig::FullDiffs => {
-                run::<FullDiffsState>(
-                    main_stop.clone(),
-                    general_config,
-                    genesis_config,
-                    rpc_config,
-                    mempool_config,
-                    sequencer_config,
-                    l1_sender_config,
-                    l1_watcher_config,
-                    batcher_config,
-                    prover_input_generator_config,
-                    prover_api_config,
-                )
-                .await
-            }
-            StateBackendConfig::Compacted => {
-                run::<StateHandle>(
-                    main_stop.clone(),
-                    general_config,
-                    genesis_config,
-                    rpc_config,
-                    mempool_config,
-                    sequencer_config,
-                    l1_sender_config,
-                    l1_watcher_config,
-                    batcher_config,
-                    prover_input_generator_config,
-                    prover_api_config,
-                )
-                .await
-            }
+        match config.general_config.state_backend {
+            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
+            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
         }
     };
 
@@ -96,18 +55,7 @@ pub async fn main() {
     }
 }
 
-fn build_configs() -> (
-    GeneralConfig,
-    GenesisConfig,
-    RpcConfig,
-    MempoolConfig,
-    SequencerConfig,
-    L1SenderConfig,
-    L1WatcherConfig,
-    BatcherConfig,
-    ProverInputGeneratorConfig,
-    ProverApiConfig,
-) {
+fn build_configs() -> Config {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
     schema
@@ -223,7 +171,7 @@ fn build_configs() -> (
             .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
     }
 
-    (
+    Config {
         general_config,
         genesis_config,
         rpc_config,
@@ -234,5 +182,5 @@ fn build_configs() -> (
         batcher_config,
         prover_input_generator_config,
         prover_api_config,
-    )
+    }
 }
