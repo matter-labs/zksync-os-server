@@ -166,8 +166,10 @@ impl Batcher {
 
                 /* ---------- collect blocks ---------- */
                 should_seal = self.block_receiver.peek_recv(|(block_output, _, _)| {
+                    // don't try to seal batches that are already processed
+                    block_output.header.number >= self.first_block_to_process &&
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output).is_batch_limit_reached(blocks.len())
+                        accumulator.clone().add(block_output).is_batch_limit_reached(blocks.len())
                 }) => {
                     latency_tracker.enter_state(GenericComponentState::Processing);
                     match should_seal {
