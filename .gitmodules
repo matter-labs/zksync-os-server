@@ -1,0 +1,3 @@
+[submodule "integration-tests/test-contracts/lib/openzeppelin-contracts"]
+	path = integration-tests/test-contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts

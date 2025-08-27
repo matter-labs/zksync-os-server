@@ -18,6 +18,13 @@ alloy::sol!(
     "test-contracts/out/EventEmitter.sol/EventEmitter.json"
 );
 
+alloy::sol!(
+    /// Simple ERC20 with permissionless mint.
+    #[sol(rpc)]
+    TestERC20,
+    "test-contracts/out/TestERC20.sol/TestERC20.json"
+);
+
 alloy::sol! {
     #[sol(rpc)]
     interface IBaseToken {

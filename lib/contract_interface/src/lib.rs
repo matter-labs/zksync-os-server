@@ -1,8 +1,6 @@
 pub mod models;
 
-use crate::IBridgehub::{
-    IBridgehubInstance, L2TransactionRequestDirect, requestL2TransactionDirectCall,
-};
+use crate::IBridgehub::{IBridgehubInstance, L2TransactionRequestDirect, requestL2TransactionDirectCall, L2TransactionRequestTwoBridgesOuter, requestL2TransactionTwoBridgesCall};
 use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
@@ -75,8 +73,24 @@ alloy::sol! {
             address refundRecipient;
         }
 
+        struct L2TransactionRequestTwoBridgesOuter {
+            uint256 chainId;
+            uint256 mintValue;
+            uint256 l2Value;
+            uint256 l2GasLimit;
+            uint256 l2GasPerPubdataByteLimit;
+            address refundRecipient;
+            address secondBridgeAddress;
+            uint256 secondBridgeValue;
+            bytes secondBridgeCalldata;
+        }
+
         function requestL2TransactionDirect(
             L2TransactionRequestDirect calldata _request
+        ) external payable returns (bytes32 canonicalTxHash);
+
+        function requestL2TransactionTwoBridges(
+            L2TransactionRequestTwoBridgesOuter calldata _request
         ) external payable returns (bytes32 canonicalTxHash);
 
         function l2TransactionBaseCost(
@@ -236,6 +250,32 @@ impl<P: Provider + Clone> Bridgehub<P> {
                 l2GasPerPubdataByteLimit: l2_gas_per_pubdata_byte_limit,
                 factoryDeps: vec![],
                 refundRecipient: refund_recipient,
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_l2_transaction_two_bridges(
+        &self,
+        mint_value: U256,
+        l2_value: U256,
+        l2_gas_limit: U256,
+        l2_gas_per_pubdata_byte_limit: U256,
+        refund_recipient: Address,
+        second_bridge_address: Address,
+        second_bridge_value: U256,
+        second_bridge_calldata: Vec<u8>,
+    ) -> SolCallBuilder<&P, requestL2TransactionTwoBridgesCall> {
+        self.instance
+            .requestL2TransactionTwoBridges(L2TransactionRequestTwoBridgesOuter {
+                chainId: U256::try_from(self.l2_chain_id).unwrap(),
+                mintValue: mint_value,
+                l2Value: l2_value,
+                l2GasLimit: l2_gas_limit,
+                l2GasPerPubdataByteLimit: l2_gas_per_pubdata_byte_limit,
+                refundRecipient: refund_recipient,
+                secondBridgeAddress: second_bridge_address,
+                secondBridgeValue: second_bridge_value,
+                secondBridgeCalldata: second_bridge_calldata.into(),
             })
     }
 
