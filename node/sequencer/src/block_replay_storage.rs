@@ -1,3 +1,4 @@
+use crate::BLOCK_REPLAY_WAL_DB_NAME;
 use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
 use crate::model::blocks::BlockCommand;
 use alloy::primitives::{B256, BlockNumber};
@@ -6,6 +7,7 @@ use futures::stream::{self, BoxStream, StreamExt};
 use pin_project::pin_project;
 use ruint::aliases::U256;
 use std::convert::TryInto;
+use std::path::PathBuf;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::pin;
@@ -68,11 +70,12 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub fn new(
-        db: RocksDB<BlockReplayColumnFamily>,
-        chain_id: u64,
-        node_version: semver::Version,
-    ) -> Self {
+    pub fn new(rocks_db_path: PathBuf, chain_id: u64, node_version: semver::Version) -> Self {
+        let db =
+            RocksDB::<BlockReplayColumnFamily>::new(&rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME))
+                .expect("Failed to open BlockReplayWAL")
+                .with_sync_writes();
+
         let this = Self { db };
         if this.latest_block().is_none() {
             tracing::info!(

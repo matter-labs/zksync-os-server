@@ -115,6 +115,10 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
             .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(|(block_output, replay_record, prover_input)| async {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
+                tracing::debug!(
+                    block_number = block_output.header.number,
+                    "sending block with prover input to batcher",
+                );
                 self.blocks_for_batcher_sender
                     .send((block_output, replay_record, prover_input))
                     .await?;
@@ -175,7 +179,7 @@ fn compute_prover_input(
     prover_input
 }
 
-const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
+const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover_input_generator")]
 pub struct ProverInputGeneratorMetrics {

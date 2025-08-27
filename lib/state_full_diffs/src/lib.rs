@@ -107,8 +107,8 @@ impl ReadStateHistory for FullDiffsState {
         })
     }
 
-    fn last_available_block_number(&self) -> u64 {
-        self.storage.latest_block()
+    fn block_range_available(&self) -> std::ops::RangeInclusive<u64> {
+        0..=self.storage.latest_block()
     }
 }
 

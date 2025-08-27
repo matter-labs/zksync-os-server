@@ -1,5 +1,6 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
+use std::ops::RangeInclusive;
 use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
@@ -160,7 +161,7 @@ impl<
         self.state.state_view_at(block_number)
     }
 
-    fn last_available_block_number(&self) -> u64 {
-        self.state.last_available_block_number()
+    fn block_range_available(&self) -> RangeInclusive<u64> {
+        self.state.block_range_available()
     }
 }

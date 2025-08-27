@@ -28,8 +28,10 @@ pub trait ReadStateHistory: Debug + Send + Sync + 'static {
     /// Get a view on state from the given block.
     fn state_view_at(&self, block_number: BlockNumber) -> StateResult<impl ViewState>;
 
-    /// Last block added to this state - this number plus one is the next expected block to add
-    fn last_available_block_number(&self) -> u64;
+    /// Block numbers whose state diffs are available in state.
+    /// Note that the block numbers that can be **run** against this state implementation are
+    /// `(block_range_available.min + 1)..=(block_range_available.max + 1)`
+    fn block_range_available(&self) -> std::ops::RangeInclusive<u64>;
 }
 
 pub trait WriteState: Send + Sync + 'static {

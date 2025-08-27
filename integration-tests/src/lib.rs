@@ -8,16 +8,15 @@ use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_sequencer::config::{
-    BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
-    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -52,6 +51,7 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     l1_address: String,
     replay_url: String,
+    object_store_path: PathBuf,
 }
 
 impl Tester {
@@ -70,6 +70,7 @@ impl Tester {
             self.l1_wallet.clone(),
             false,
             Some(self.replay_url.clone()),
+            Some(self.object_store_path.clone()),
         )
         .await
     }
@@ -80,6 +81,7 @@ impl Tester {
         l1_wallet: EthereumWallet,
         enable_prover: bool,
         main_node_replay_url: Option<String>,
+        object_store_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         (|| async {
             // Wait for L1 node to get up and be able to respond.
@@ -103,6 +105,9 @@ impl Tester {
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
         let replay_url = format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port);
+        let object_store_path =
+            object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
+
         let general_config = GeneralConfig {
             rocks_db_path: rocksdb_path.path().to_path_buf(),
             l1_rpc_url: l1_address.clone(),
@@ -129,34 +134,33 @@ impl Tester {
             address: format!("0.0.0.0:{}", prover_api_locked_port.port),
             object_store: ObjectStoreConfig {
                 mode: ObjectStoreMode::FileBacked {
-                    file_backed_base_path: rocksdb_path.path().to_path_buf(),
+                    file_backed_base_path: object_store_path.clone(),
                 },
                 max_retries: 1,
                 local_mirror_path: None,
             },
             ..Default::default()
         };
+        let config = Config {
+            general_config,
+            genesis_config: GenesisConfig {
+                genesis_input_path: "../genesis/genesis.json".into(),
+                ..Default::default()
+            },
+            rpc_config,
+            mempool_config: Default::default(),
+            sequencer_config,
+            l1_sender_config: Default::default(),
+            l1_watcher_config: Default::default(),
+            batcher_config: Default::default(),
+            prover_input_generator_config: ProverInputGeneratorConfig {
+                logging_enabled: enable_prover,
+                ..Default::default()
+            },
+            prover_api_config,
+        };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run::<FullDiffsState>(
-                stop_receiver,
-                general_config,
-                GenesisConfig {
-                    genesis_input_path: "../genesis/genesis.json".into(),
-                    ..Default::default()
-                },
-                rpc_config,
-                MempoolConfig::default(),
-                sequencer_config,
-                L1SenderConfig::default(),
-                L1WatcherConfig::default(),
-                BatcherConfig::default(),
-                ProverInputGeneratorConfig {
-                    logging_enabled: enable_prover,
-                    ..Default::default()
-                },
-                prover_api_config,
-            )
-            .await;
+            zksync_os_sequencer::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
@@ -232,6 +236,7 @@ impl Tester {
             main_task,
             l1_address,
             replay_url,
+            object_store_path,
         })
     }
 }
@@ -273,6 +278,7 @@ impl TesterBuilder {
             EthDynProvider::new(l1_provider),
             l1_wallet,
             self.enable_prover,
+            None,
             None,
         )
         .await
