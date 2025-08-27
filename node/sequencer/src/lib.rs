@@ -13,6 +13,7 @@ pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
 pub mod reth_state;
+mod state_initializer;
 pub mod tree_manager;
 mod util;
 pub mod zkstack_config;
@@ -38,6 +39,7 @@ use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::{replay_receiver, replay_server};
 use crate::reth_state::ZkClient;
+use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::network::EthereumWallet;
@@ -71,24 +73,25 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
-use zksync_os_state::{StateConfig, StateHandle};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{FinalityStatus, ReadReplay, ReadRepository, ReplayRecord};
+use zksync_os_storage_api::{
+    FinalityStatus, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord, WriteState,
+};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const TREE_DB_NAME: &str = "tree";
 const REPOSITORY_DB_NAME: &str = "repository";
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run_sequencer_actor(
+pub async fn run_sequencer_actor<State: ReadStateHistory + WriteState + Clone>(
     mut block_stream: BoxStream<'_, BlockCommand>,
 
     prover_input_generator_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
-    mut command_block_context_provider: BlockContextProvider,
-    state: StateHandle,
+    mut command_block_context_provider: BlockContextProvider<State>,
+    state: State,
     wal: BlockReplayStorage,
     repositories: RepositoryManager,
     sequencer_config: SequencerConfig,
@@ -217,7 +220,7 @@ fn command_source(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run(
+pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     _stop_receiver: watch::Receiver<bool>,
     general_config: GeneralConfig,
     genesis_config: GenesisConfig,
@@ -272,18 +275,7 @@ pub async fn run(
 
     tracing::info!("Initializing StateHandle");
 
-    if general_config.replay_all_blocks_unsafe {
-        tracing::warn!("!!! Replay all blocks mode is enabled. Starting from block zero.");
-    }
-    let state_handle = StateHandle::new(
-        StateConfig {
-            erase_storage_on_start_unsafe: general_config.replay_all_blocks_unsafe,
-            blocks_to_retain_in_memory: general_config.blocks_to_retain_in_memory,
-            rocks_db_path: general_config.rocks_db_path.clone(),
-        },
-        &genesis,
-    )
-    .await;
+    let state_handle = State::new(&general_config, &genesis).await;
 
     tracing::info!("Initializing RepositoryManager");
     let repositories = RepositoryManager::new(
@@ -359,9 +351,10 @@ pub async fn run(
 
     // =========== Recover block number to start from and assert that it's consistent with other components ===========
 
-    let storage_map_compacted_block = state_handle.compacted_block_number();
+    let storage_map_compacted_block = state_handle.last_available_block_number();
 
-    let finality_storage = if is_external_node {
+    // todo: need to need to refactor this file to properly init ENs
+    let (finality_storage, starting_block) = if is_external_node {
         // As external node doesn't run the end of the node feeding the provers,
         // it has to drain this channel to not get stuck when it fills up.
         tokio::spawn(async move {
@@ -371,11 +364,15 @@ pub async fn run(
                 .is_some()
             {}
         });
-
-        Finality::new(FinalityStatus {
-            last_committed_block: 0,
-            last_executed_block: 0,
-        })
+        // todo: this is temporary - need to refactor this file to properly init ENs
+        let starting_block = 1;
+        (
+            Finality::new(FinalityStatus {
+                last_committed_block: 0,
+                last_executed_block: 0,
+            }),
+            starting_block,
+        )
     } else {
         // ========== Ensure consistency between L1 and node state =========
         // External nodes do not need to worry about this, as they do not commit batches.
@@ -468,7 +465,15 @@ pub async fn run(
             .expect("failed to load last executed batch")
             .map(|batch_envelope| batch_envelope.batch.last_block_number)
             .unwrap_or(0);
-
+        let starting_block = vec![
+            storage_map_compacted_block + 1,
+            repositories_persisted_block + 1,
+            last_committed_block + 1,
+            tree_last_processed_block + 1,
+        ]
+        .into_iter()
+        .min()
+        .unwrap();
         tracing::info!(
             storage_map_compacted_block,
             wal_block,
@@ -492,13 +497,6 @@ pub async fn run(
                 && wal_block >= tree_last_processed_block
                 && wal_block >= repositories_persisted_block,
             "Inconsistent block numbers: there is a block ahead of wal."
-        );
-
-        assert!(
-            last_committed_block >= storage_map_compacted_block
-                && repositories_persisted_block >= storage_map_compacted_block
-                && tree_last_processed_block >= storage_map_compacted_block,
-            "Inconsistent block numbers: storage is compacted ahead of a needed block."
         );
 
         let committed_batch_proof = proof_storage
@@ -682,10 +680,8 @@ pub async fn run(
             .map(report_exit("Priority tree manager")),
         );
 
-        finality_storage
+        (finality_storage, starting_block)
     };
-
-    let starting_block = storage_map_compacted_block + 1;
 
     tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
 
@@ -823,16 +819,9 @@ pub async fn run(
             .map(report_exit("batch_sink")),
     );
 
-    let state_handle_clone = state_handle.clone();
-    tasks.spawn(async move {
-        state_handle_clone
-            .collect_state_metrics(Duration::from_secs(2))
-            .map(|_| tracing::warn!("collect_state_metrics unexpectedly exited"))
-            .await
-    });
     tasks.spawn(async move {
         state_handle
-            .compact_periodically(Duration::from_millis(100))
+            .compact_periodically_optional()
             .map(|_| tracing::warn!("compact_periodically unexpectedly exited"))
             .await
     });

@@ -21,6 +21,7 @@ members = [
     "tools/generate-deposit",
     "lib/observability",
     "lib/object_store",
+    "lib/state_full_diffs",
 ]
 resolver = "3"
 default-members = ["node/sequencer"]
@@ -146,6 +147,7 @@ zksync_os_rocksdb = { path = "lib/rocksdb" }
 zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
 zksync_os_state = { path = "lib/state" }
+zksync_os_state_full_diffs = { path = "lib/state_full_diffs" }
 zksync_os_storage = { path = "lib/storage" }
 zksync_os_storage_api = { path = "lib/storage_api" }
 zksync_os_types = { path = "lib/types" }

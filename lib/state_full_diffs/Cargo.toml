@@ -1,0 +1,28 @@
+[package]
+name = "zksync_os_state_full_diffs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_rocksdb.workspace = true
+zksync_os_genesis.workspace = true
+zksync_os_storage_api.workspace = true
+
+zk_os_forward_system.workspace = true
+zk_ee.workspace = true
+
+alloy = { workspace = true, default-features = false }
+anyhow.workspace = true
+ruint.workspace = true
+tracing.workspace = true
+vise.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
