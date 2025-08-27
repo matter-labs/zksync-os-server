@@ -11,7 +11,7 @@ use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
-use zksync_os_integration_tests::contracts::{IL2AssetRouter, TestERC20};
+use zksync_os_integration_tests::contracts::{IL2AssetRouter, L1AssetRouter, TestERC20};
 use zksync_os_integration_tests::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
 use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_types::{L2ToL1Log, ZkTxType};
@@ -74,13 +74,11 @@ async fn erc20_transfer() -> anyhow::Result<()> {
 
     // Deposit some ERC20 tokens to L2 for Alice to be able to transfer them.
     let mint_amount = U256::from(100u64);
-    let deposit_amount = U256::from(100u64);
     let l1_erc20 = deploy_l1_token_and_mint(&tester, mint_amount).await?;
-    let l1_deposit_receipt = deposit_erc20(&tester, &l1_erc20, alice, deposit_amount).await?;
+    let l1_deposit_receipt = deposit_erc20(&tester, &l1_erc20, alice, mint_amount).await?;
     assert_successful_deposit_l2_part(&tester, l1_deposit_receipt).await?;
 
     let l2_erc20_address = l2_token_address(&tester, *l1_erc20.address()).await?;
-    // `l2_erc20` is not exactly `TestERC20`, but it implements standard `ERC20` interface.
     let l2_erc20 = TestERC20::new(l2_erc20_address, tester.l2_provider.clone());
 
     // Transfer some tokens from Alice to Bob on L2.
@@ -99,13 +97,63 @@ async fn erc20_transfer() -> anyhow::Result<()> {
 
     assert_eq!(
         alice_l2_balance,
-        deposit_amount - transfer_amount,
+        mint_amount - transfer_amount,
         "Unexpected Alice's L2 balance after transfer"
     );
 
     assert_eq!(
         bob_l2_balance, transfer_amount,
         "Unexpected Bob's L2 balance after transfer"
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn erc20_withdrawal() -> anyhow::Result<()> {
+    let tester = Tester::setup().await?;
+    // We use L2 wallet's default signer as Alice because it already has L2 ETH.
+    let alice = tester.l2_wallet.default_signer().address();
+
+    // Deposit some ERC20 tokens to L2.
+    let mint_amount = U256::from(100u64);
+    let l1_erc20 = deploy_l1_token_and_mint(&tester, mint_amount).await?;
+    let l1_deposit_receipt = deposit_erc20(&tester, &l1_erc20, alice, mint_amount).await?;
+    assert_successful_deposit_l2_part(&tester, l1_deposit_receipt).await?;
+
+    let l2_erc20_address = l2_token_address(&tester, *l1_erc20.address()).await?;
+    let l2_erc20 = TestERC20::new(l2_erc20_address, tester.l2_provider.clone());
+    let l2_asset_router_address = address!("0x0000000000000000000000000000000000010003");
+    let l2_asset_router =
+        IL2AssetRouter::new(l2_asset_router_address, tester.l2_zk_provider.clone());
+
+    // Request withdrawal on L2.
+    let withdraw_amount = U256::from(40u64);
+    let l2_receipt = l2_asset_router
+        .withdraw(alice, l2_erc20_address, withdraw_amount)
+        .send()
+        .await?
+        .expect_to_execute()
+        .await?;
+    // Finalize withdrawal on L1.
+    let l1_asset_router =
+        L1AssetRouter::new(tester.l1_provider.clone(), tester.l2_zk_provider.clone()).await?;
+    let l1_nullifier = l1_asset_router.l1_nullifier().await?;
+    l1_nullifier.finalize_withdrawal(l2_receipt).await?;
+
+    // Check balances.
+    let l1_balance = l1_erc20.balanceOf(alice).call().await?;
+    let l2_balance = l2_erc20.balanceOf(alice).call().await?;
+
+    assert_eq!(
+        l1_balance, withdraw_amount,
+        "Unexpected Alice's L1 balance after withdrawal"
+    );
+
+    assert_eq!(
+        l2_balance,
+        mint_amount - withdraw_amount,
+        "Unexpected Alice's L2 balance after withdrawal"
     );
 
     Ok(())
@@ -251,8 +299,6 @@ async fn assert_successful_deposit_l2_part(
 async fn l2_token_address(tester: &Tester, l1_token: Address) -> anyhow::Result<Address> {
     let l2_asset_router_address = address!("0x0000000000000000000000000000000000010003");
     let l2_asset_router = IL2AssetRouter::new(l2_asset_router_address, tester.l2_provider.clone());
-    // FIXME: `L2AssetRouter` code mentions that `l2TokenAddress` is legacy but JS SDK uses it.
-    //   Should we use some other method to get the L2 token address?
     let l2_erc20_address = l2_asset_router.l2TokenAddress(l1_token).call().await?;
 
     Ok(l2_erc20_address)

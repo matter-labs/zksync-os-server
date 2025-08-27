@@ -59,6 +59,7 @@ alloy::sol! {
     #[sol(rpc)]
     interface IL2AssetRouter {
         function l2TokenAddress(address _l1Token) public view returns (address);
+        function withdraw(address _l1Receiver, address _l2Token, uint256 _amount);
     }
 }
 
