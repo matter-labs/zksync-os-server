@@ -52,6 +52,7 @@ fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32
 }
 
 fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16] {
+    // Once new version of airbender is integrated, these functions should be changed to the ones from execution_utils.
     let (metadata, proof_list) = proof_list_and_metadata_from_program_proof(input_program_proof);
 
     let oracle_data = generate_oracle_data_from_metadata_and_proof_list(&metadata, &proof_list);
@@ -62,7 +63,7 @@ fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16]
 
     let it = oracle_data.into_iter();
 
-    verifier_common::prover::nd_source_std::set_iterator(it);
+    full_statement_verifier::verifier_common::prover::nd_source_std::set_iterator(it);
 
     // Assume that program proof has only recursion proofs.
     tracing::debug!("Running continue recursive");
@@ -71,7 +72,7 @@ fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16]
     let final_register_values = full_statement_verifier::verify_recursion_layer();
 
     assert!(
-        verifier_common::prover::nd_source_std::try_read_word().is_none(),
+        full_statement_verifier::verifier_common::prover::nd_source_std::try_read_word().is_none(),
         "Expected that all words from CSR were consumed"
     );
     final_register_values
