@@ -115,6 +115,10 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
             .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(|(block_output, replay_record, prover_input)| async {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
+                tracing::debug!(
+                    block_number = block_output.header.number,
+                    "sending block with prover input to batcher",
+                );
                 self.blocks_for_batcher_sender
                     .send((block_output, replay_record, prover_input))
                     .await?;

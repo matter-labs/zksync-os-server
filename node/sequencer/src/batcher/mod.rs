@@ -147,6 +147,11 @@ impl Batcher {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
+                            tracing::debug!(
+                                batch_number,
+                                block_number = replay_record.block_context.block_number,
+                                "Adding block to a pending batch."
+                            );
                             let block_number = replay_record.block_context.block_number;
 
                             // skip the blocks from already committed batches (on server restart we replay some historical blocks - they are already batched and committed, so no action is needed here)
@@ -185,8 +190,12 @@ impl Batcher {
 
                             // arm the timer after we process the block number that's more or equal
                             // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
-                            if deadline.is_none() && block_number >= self.last_persisted_block {
-                                deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
+                            if deadline.is_none() {
+                                if block_number >= self.last_persisted_block {
+                                    deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
+                                } else {
+                                    tracing::debug!(block_number, self.last_persisted_block, "received block with number lower than `last_persisted_block`. Not enabling the deadline seal criteria yet.")
+                                }
                             }
                         }
                         None => {

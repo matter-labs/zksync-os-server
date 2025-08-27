@@ -12,12 +12,11 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_sequencer::config::{
-    BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
-    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
+    GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -136,27 +135,26 @@ impl Tester {
             },
             ..Default::default()
         };
+        let config = Config {
+            general_config,
+            genesis_config: GenesisConfig {
+                genesis_input_path: "../genesis/genesis.json".into(),
+                ..Default::default()
+            },
+            rpc_config,
+            mempool_config: Default::default(),
+            sequencer_config,
+            l1_sender_config: Default::default(),
+            l1_watcher_config: Default::default(),
+            batcher_config: Default::default(),
+            prover_input_generator_config: ProverInputGeneratorConfig {
+                logging_enabled: enable_prover,
+                ..Default::default()
+            },
+            prover_api_config,
+        };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run::<FullDiffsState>(
-                stop_receiver,
-                general_config,
-                GenesisConfig {
-                    genesis_input_path: "../genesis/genesis.json".into(),
-                    ..Default::default()
-                },
-                rpc_config,
-                MempoolConfig::default(),
-                sequencer_config,
-                L1SenderConfig::default(),
-                L1WatcherConfig::default(),
-                BatcherConfig::default(),
-                ProverInputGeneratorConfig {
-                    logging_enabled: enable_prover,
-                    ..Default::default()
-                },
-                prover_api_config,
-            )
-            .await;
+            zksync_os_sequencer::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);

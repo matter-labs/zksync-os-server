@@ -6,6 +6,7 @@ mod storage_map_view;
 mod storage_metrics;
 
 use alloy::primitives::BlockNumber;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -138,8 +139,8 @@ impl ReadStateHistory for StateHandle {
         })
     }
 
-    fn last_available_block_number(&self) -> u64 {
-        self.compacted_block_number()
+    fn block_range_available(&self) -> RangeInclusive<u64> {
+        self.compacted_block_number()..=self.compacted_block_number()
     }
 }
 
