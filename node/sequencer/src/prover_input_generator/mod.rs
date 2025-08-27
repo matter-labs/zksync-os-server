@@ -14,12 +14,11 @@ use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_state::StateHandle;
-use zksync_os_storage_api::ReplayRecord;
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
 
 /// This component generates prover input from batch replay data
-pub struct ProverInputGenerator {
+pub struct ProverInputGenerator<ReadState> {
     // == config ==
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
@@ -33,10 +32,10 @@ pub struct ProverInputGenerator {
 
     // dependencies
     persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
-    state_handle: StateHandle,
+    read_state: ReadState,
 }
 
-impl ProverInputGenerator {
+impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         // == config ==
@@ -49,7 +48,7 @@ impl ProverInputGenerator {
 
         // == dependencies ==
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
-        state_handle: StateHandle,
+        read_state: ReadState,
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
         let bin_path = if enable_logging {
@@ -67,7 +66,7 @@ impl ProverInputGenerator {
             persistent_tree,
             bin_path,
             maximum_in_flight_blocks,
-            state_handle,
+            read_state,
         }
     }
 
@@ -99,12 +98,12 @@ impl ProverInputGenerator {
                     block_number,
                     replay_record.transactions.len(),
                 );
-                let state_handle = self.state_handle.clone();
+                let read_state = self.read_state.clone();
 
                 tokio::task::spawn_blocking(move || {
                     let prover_input = compute_prover_input(
                         &replay_record,
-                        state_handle,
+                        read_state,
                         tree,
                         self.bin_path,
                         replay_record.previous_block_timestamp,
@@ -128,7 +127,7 @@ impl ProverInputGenerator {
 
 fn compute_prover_input(
     replay_record: &ReplayRecord,
-    state_handle: StateHandle,
+    state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
     bin_path: &'static str,
     last_block_timestamp: u64,
@@ -141,7 +140,7 @@ fn compute_prover_input(
         next_free_slot: leaf_count,
     };
 
-    let state_view = state_handle.state_view_at_block(block_number - 1).unwrap();
+    let state_view = state_handle.state_view_at(block_number - 1).unwrap();
 
     let transactions = replay_record
         .transactions
