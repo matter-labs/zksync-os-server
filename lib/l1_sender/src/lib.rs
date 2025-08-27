@@ -266,10 +266,16 @@ impl Heartbeat {
         command: &Input,
         tx_hash: TxHash,
     ) -> anyhow::Result<()> {
-        let receipt = provider
-            .get_transaction_receipt(tx_hash)
-            .await?
-            .context("mined transaction receipt is missing")?;
+        let receipt = loop {
+            let maybe_res = provider.get_transaction_receipt(tx_hash).await?;
+            if let Some(res) = maybe_res {
+                break res;
+            }
+            tracing::info!(
+                "L1 transaction receipt for a mined block is not available yet. Retrying..."
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
         if receipt.status() {
             // We could also look at tx receipt's logs for a corresponding
             // `BlockCommit` / `BlockProve`/ etc event but
