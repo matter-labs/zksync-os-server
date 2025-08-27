@@ -30,7 +30,6 @@ zk_os_api.workspace = true
 
 air-compiler-cli.workspace = true
 execution_utils.workspace = true
-verifier_common.workspace = true
 full_statement_verifier.workspace = true
 
 reth-chainspec = { workspace = true }
