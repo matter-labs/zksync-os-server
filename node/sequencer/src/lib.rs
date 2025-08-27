@@ -474,6 +474,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .into_iter()
         .min()
         .unwrap();
+        let starting_block = (starting_block - 1).max(1);
         tracing::info!(
             storage_map_compacted_block,
             wal_block,
