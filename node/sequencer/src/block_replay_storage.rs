@@ -92,6 +92,7 @@ impl BlockReplayStorage {
                     gas_limit: 100_000_000,
                     pubdata_limit: 100_000_000,
                     mix_hash: Default::default(),
+                    interop_roots: Default::default(),
                 },
                 starting_l1_priority_id: 0,
                 transactions: vec![],

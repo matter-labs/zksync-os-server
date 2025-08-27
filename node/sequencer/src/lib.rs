@@ -437,12 +437,7 @@ pub async fn run(
             if l1_state.last_committed_batch == 0 {
                 (
                     0,
-                    load_genesis_stored_batch_info(
-                        &repositories,
-                        persistent_tree.clone(),
-                        genesis_config.chain_id,
-                    )
-                    .await,
+                    load_genesis_stored_batch_info(&repositories, persistent_tree.clone()).await,
                 )
             } else {
                 let batch_metadata = proof_storage
@@ -547,6 +542,7 @@ pub async fn run(
         tracing::info!("Initializing Batcher");
         let batcher = Batcher::new(
             genesis_config.chain_id,
+            l1_state.diamond_proxy,
             last_committed_block + 1,
             repositories_persisted_block,
             sequencer_config.block_pubdata_limit_bytes,

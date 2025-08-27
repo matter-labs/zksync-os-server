@@ -5,7 +5,7 @@ use crate::commitment::StoredBatchInfo;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use zksync_os_contract_interface::IExecutor;
+use zksync_os_contract_interface::{IExecutor, InteropRoot};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 
 #[derive(Debug)]
@@ -34,7 +34,12 @@ impl L1SenderCommand for ExecuteCommand {
 
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::executeBatchesSharedBridgeCall::new((
-            U256::from(0),
+            self.batches
+                .first()
+                .unwrap()
+                .batch
+                .commit_batch_info
+                .chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),
@@ -86,9 +91,10 @@ impl ExecuteCommand {
             .cloned()
             .map(IExecutor::PriorityOpsBatchInfo::from)
             .collect::<Vec<_>>();
-        let encoded_data = (stored_batch_infos, priority_ops).abi_encode_params();
+        let interop_roots: Vec<Vec<InteropRoot>> = vec![vec![]; self.batches.len()];
+        let encoded_data = (stored_batch_infos, priority_ops, interop_roots).abi_encode_params();
 
-        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+        const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         // Prefixed by current encoding version as expected by protocol
         [vec![SUPPORTED_ENCODING_VERSION], encoded_data]
