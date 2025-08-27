@@ -146,7 +146,7 @@ impl Batcher {
                 }
             }
         }
-
+        tracing::info!(self.first_block_to_process, "Received the first block after the last committed one.");
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
