@@ -19,6 +19,7 @@ use zksync_os_sequencer::config::{
     BatcherConfig, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
     MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
+use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
 pub mod contracts;
@@ -136,7 +137,7 @@ impl Tester {
             ..Default::default()
         };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run(
+            zksync_os_sequencer::run::<FullDiffsState>(
                 stop_receiver,
                 general_config,
                 GenesisConfig {

@@ -19,19 +19,18 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_state::StateHandle;
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{ReadRepository, ViewState};
+use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
 
 #[derive(Debug)]
-pub struct ZkClient {
+pub struct ZkClient<ReadState> {
     chain_spec: Arc<ChainSpec>,
     repositories: RepositoryManager,
-    state_handle: StateHandle,
+    state_handle: ReadState,
 }
 
-impl ZkClient {
-    pub fn new(repositories: RepositoryManager, state_handle: StateHandle, chain_id: u64) -> Self {
+impl<ReadState: ReadStateHistory> ZkClient<ReadState> {
+    pub fn new(repositories: RepositoryManager, state_handle: ReadState, chain_id: u64) -> Self {
         let builder = ChainSpecBuilder::default()
             .chain(Chain::from(chain_id))
             // Activate everything up to Cancun
@@ -49,7 +48,7 @@ impl ZkClient {
     }
 }
 
-impl ChainSpecProvider for ZkClient {
+impl<ReadState: ReadStateHistory> ChainSpecProvider for ZkClient<ReadState> {
     type ChainSpec = ChainSpec;
 
     fn chain_spec(&self) -> Arc<Self::ChainSpec> {
@@ -57,7 +56,7 @@ impl ChainSpecProvider for ZkClient {
     }
 }
 
-impl StateProviderFactory for ZkClient {
+impl<ReadState: ReadStateHistory + Clone> StateProviderFactory for ZkClient<ReadState> {
     fn latest(&self) -> ProviderResult<StateProviderBox> {
         Ok(Box::new(ZkState {
             state_handle: self.state_handle.clone(),
@@ -94,16 +93,16 @@ impl StateProviderFactory for ZkClient {
 }
 
 #[derive(Debug)]
-pub struct ZkState {
-    state_handle: StateHandle,
+pub struct ZkState<ReadState> {
+    state_handle: ReadState,
     latest_block: u64,
 }
 
-impl AccountReader for ZkState {
+impl<ReadState: ReadStateHistory> AccountReader for ZkState<ReadState> {
     fn basic_account(&self, address: &Address) -> ProviderResult<Option<Account>> {
         Ok(self
             .state_handle
-            .state_view_at_block(self.latest_block)
+            .state_view_at(self.latest_block)
             .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?
             .get_account(B160::from_be_bytes(address.into_array()))
             .map(|props| Account {
@@ -118,7 +117,7 @@ impl AccountReader for ZkState {
     }
 }
 
-impl BytecodeReader for ZkState {
+impl<ReadStorage: ReadStateHistory> BytecodeReader for ZkState<ReadStorage> {
     fn bytecode_by_hash(&self, _code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
         unimplemented!(
             "reth mempool only calls this for EIP-7702 transactions which we do not support yet"
@@ -133,7 +132,7 @@ impl BytecodeReader for ZkState {
 //
 //
 
-impl BlockHashReader for ZkState {
+impl<ReadStorage: ReadStateHistory> BlockHashReader for ZkState<ReadStorage> {
     fn block_hash(&self, _number: BlockNumber) -> ProviderResult<Option<B256>> {
         todo!()
     }
@@ -147,7 +146,7 @@ impl BlockHashReader for ZkState {
     }
 }
 
-impl StateRootProvider for ZkState {
+impl<ReadStorage: ReadStateHistory> StateRootProvider for ZkState<ReadStorage> {
     fn state_root(&self, _hashed_state: HashedPostState) -> ProviderResult<B256> {
         todo!()
     }
@@ -171,7 +170,7 @@ impl StateRootProvider for ZkState {
     }
 }
 
-impl StorageRootProvider for ZkState {
+impl<ReadStorage: ReadStateHistory> StorageRootProvider for ZkState<ReadStorage> {
     fn storage_root(
         &self,
         _address: Address,
@@ -199,7 +198,7 @@ impl StorageRootProvider for ZkState {
     }
 }
 
-impl StateProofProvider for ZkState {
+impl<ReadStorage: ReadStateHistory> StateProofProvider for ZkState<ReadStorage> {
     fn proof(
         &self,
         _input: TrieInput,
@@ -222,13 +221,13 @@ impl StateProofProvider for ZkState {
     }
 }
 
-impl HashedPostStateProvider for ZkState {
+impl<ReadStorage: ReadStateHistory> HashedPostStateProvider for ZkState<ReadStorage> {
     fn hashed_post_state(&self, _bundle_state: &BundleState) -> HashedPostState {
         todo!()
     }
 }
 
-impl StateProvider for ZkState {
+impl<ReadStorage: ReadStateHistory> StateProvider for ZkState<ReadStorage> {
     fn storage(
         &self,
         _account: Address,
@@ -238,7 +237,7 @@ impl StateProvider for ZkState {
     }
 }
 
-impl BlockHashReader for ZkClient {
+impl<ReadStorage: ReadStateHistory> BlockHashReader for ZkClient<ReadStorage> {
     fn block_hash(&self, _number: BlockNumber) -> ProviderResult<Option<B256>> {
         todo!()
     }
@@ -252,7 +251,7 @@ impl BlockHashReader for ZkClient {
     }
 }
 
-impl BlockNumReader for ZkClient {
+impl<ReadStorage: ReadStateHistory> BlockNumReader for ZkClient<ReadStorage> {
     fn chain_info(&self) -> ProviderResult<ChainInfo> {
         todo!()
     }
@@ -270,7 +269,7 @@ impl BlockNumReader for ZkClient {
     }
 }
 
-impl BlockIdReader for ZkClient {
+impl<ReadStorage: ReadStateHistory> BlockIdReader for ZkClient<ReadStorage> {
     fn pending_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
         todo!()
     }

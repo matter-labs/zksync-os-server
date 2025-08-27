@@ -1,11 +1,27 @@
 use alloy::primitives::Address;
+use serde::{Deserialize, Serialize};
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
 use std::{path::PathBuf, time::Duration};
+use zksync_os_l1_sender::config::L1SenderConfig;
+use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::ObjectStoreConfig;
 pub use zksync_os_rpc::RpcConfig;
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
 /// Default values are provided for local setup.
+#[derive(Debug)]
+pub struct Config {
+    pub general_config: GeneralConfig,
+    pub genesis_config: GenesisConfig,
+    pub rpc_config: RpcConfig,
+    pub mempool_config: MempoolConfig,
+    pub sequencer_config: SequencerConfig,
+    pub l1_sender_config: L1SenderConfig,
+    pub l1_watcher_config: L1WatcherConfig,
+    pub batcher_config: BatcherConfig,
+    pub prover_input_generator_config: ProverInputGeneratorConfig,
+    pub prover_api_config: ProverApiConfig,
+}
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -38,17 +54,23 @@ pub struct GeneralConfig {
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
 
-    /// If set to true, the server will replay all blocks starting from genesis.
-    /// Useful when there are inconsistencies in saved block numbers.
-    #[config(default_t = false)]
-    pub replay_all_blocks_unsafe: bool,
-
     /// Prometheus address to listen on.
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
+    /// Prometheus address to listen on.
+    #[config(default_t = StateBackendConfig::FullDiffs)]
+    #[config(with = Serde![str])]
+    pub state_backend: StateBackendConfig,
+
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum StateBackendConfig {
+    FullDiffs,
+    Compacted,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

@@ -19,8 +19,8 @@ pub struct StorageMetrics {
 }
 
 impl StorageMetrics {
-    /// consider delegating individual
-    pub fn collect_metrics(state: StateHandle) -> StorageMetrics {
+    /// Currently not used - will be exposed to `/status` endpoint
+    pub fn _collect_metrics(state: StateHandle) -> StorageMetrics {
         let mut unique: HashSet<Bytes32> = HashSet::new();
         let mut storage_keys = 0usize;
 

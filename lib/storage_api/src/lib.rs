@@ -19,4 +19,4 @@ mod metered_state;
 mod state;
 pub use metered_state::{MeteredViewState, StateAccessLabel};
 
-pub use state::{ReadStateHistory, StateError, StateResult, ViewState};
+pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};

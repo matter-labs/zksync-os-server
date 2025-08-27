@@ -10101,6 +10101,8 @@ dependencies = [
  "zksync_os_object_store",
  "zksync_os_rpc_api",
  "zksync_os_sequencer",
+ "zksync_os_state",
+ "zksync_os_state_full_diffs",
  "zksync_os_types",
 ]
 
@@ -10381,6 +10383,7 @@ dependencies = [
  "zksync_os_rocksdb",
  "zksync_os_rpc",
  "zksync_os_state",
+ "zksync_os_state_full_diffs",
  "zksync_os_storage",
  "zksync_os_storage_api",
  "zksync_os_types",
@@ -10397,6 +10400,23 @@ dependencies = [
  "ruint",
  "smart-config",
  "tokio",
+ "tracing",
+ "vise",
+ "zk_ee",
+ "zksync_os_genesis",
+ "zksync_os_rocksdb",
+ "zksync_os_storage_api",
+]
+
+[[package]]
+name = "zksync_os_state_full_diffs"
+version = "0.1.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "forward_system",
+ "ruint",
+ "tempfile",
  "tracing",
  "vise",
  "zk_ee",

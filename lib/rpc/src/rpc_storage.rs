@@ -88,6 +88,14 @@ pub struct RpcStorage<Repository, Replay, Finality, Batch, StateHistory> {
     state: StateHistory,
 }
 
+impl<Repository, Replay, Finality, Batch, StateHistory> std::fmt::Debug
+    for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RpcStorage").finish()
+    }
+}
+
 impl<Repository, Replay, Finality, Batch, StateHistory>
     RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
 {
@@ -150,5 +158,9 @@ impl<
         block_number: BlockNumber,
     ) -> StateResult<impl ReadStorageTree + PreimageSource + Clone> {
         self.state.state_view_at(block_number)
+    }
+
+    fn last_available_block_number(&self) -> u64 {
+        self.state.last_available_block_number()
     }
 }

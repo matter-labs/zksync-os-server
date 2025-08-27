@@ -1,6 +1,10 @@
 //! RocksDB-backed persistence for Batch metadata and FRI proofs.
 //! May be extracted to a separate service later on (aka FRI Cache)
-//!
+//! Currently used as a general batch storage:
+//!  * batch -> block mapping
+//!  * block -> batch mapping (temporary using bin-search)
+//!  * batch -> its FRI proof
+//!  * batch -> its commitment (used for l1 senders)
 
 use alloy::primitives::BlockNumber;
 use serde::{Deserialize, Serialize};
