@@ -18,6 +18,20 @@ alloy::sol!(
     "test-contracts/out/EventEmitter.sol/EventEmitter.json"
 );
 
+alloy::sol!(
+    /// Contract that calls `TracingSecondary` internally.
+    #[sol(rpc)]
+    TracingPrimary,
+    "test-contracts/out/TracingPrimary.sol/TracingPrimary.json"
+);
+
+alloy::sol!(
+    /// Contract that is called by `TracingPrimary`.
+    #[sol(rpc)]
+    TracingSecondary,
+    "test-contracts/out/TracingSecondary.sol/TracingSecondary.json"
+);
+
 alloy::sol! {
     #[sol(rpc)]
     interface IBaseToken {
