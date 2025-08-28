@@ -183,7 +183,7 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x3091286df2aa845ef1fd6e6eedf4f7c520915585".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0x133303087fc98a0371c422a1e89abd66d8763e73".parse().unwrap())]
     pub bridgehub_address: Address,
 
     /// Chain ID of the chain node operates on.
