@@ -4,6 +4,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::state::StateOverride;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::EthCallAssert;
+use zksync_os_integration_tests::contracts::EventEmitter;
 
 #[test_log::test(tokio::test)]
 async fn call_genesis() -> anyhow::Result<()> {
@@ -108,5 +109,18 @@ async fn call_fail() -> anyhow::Result<()> {
         .expect_to_fail("missing `maxPriorityFeePerGas` field for EIP-1559 transaction")
         .await;
 
+    Ok(())
+}
+
+// todo: enable this test after we upgrade to zksync-os 0.0.14
+#[test_log::test(tokio::test)]
+#[ignore]
+async fn call_deploy() -> anyhow::Result<()> {
+    // Test that the node can run `eth_call` with contract deployment
+    let tester = Tester::setup().await?;
+    let result = EventEmitter::deploy_builder(tester.l2_provider.clone())
+        .call()
+        .await?;
+    assert_eq!(result, EventEmitter::DEPLOYED_BYTECODE);
     Ok(())
 }
