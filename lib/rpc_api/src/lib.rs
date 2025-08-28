@@ -1,3 +1,4 @@
+pub mod debug;
 pub mod eth;
 pub mod filter;
 pub mod ots;

@@ -91,9 +91,11 @@ impl ExecuteCommand {
             .cloned()
             .map(IExecutor::PriorityOpsBatchInfo::from)
             .collect::<Vec<_>>();
+        // For now interop roots are empty.
         let interop_roots: Vec<Vec<InteropRoot>> = vec![vec![]; self.batches.len()];
         let encoded_data = (stored_batch_infos, priority_ops, interop_roots).abi_encode_params();
 
+        /// Current commitment encoding version as per protocol.
         const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         // Prefixed by current encoding version as expected by protocol

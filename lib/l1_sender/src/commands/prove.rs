@@ -184,6 +184,7 @@ impl ProofCommand {
             proof,
         };
 
+        /// Current commitment encoding version as per protocol.
         const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
