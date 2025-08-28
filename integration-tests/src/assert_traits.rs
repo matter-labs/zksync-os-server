@@ -4,7 +4,7 @@ use alloy::providers::ext::DebugApi;
 use alloy::providers::{EthCall, PendingTransaction, PendingTransactionBuilder, Provider};
 use alloy::rpc::json_rpc::RpcRecv;
 use alloy::rpc::types::TransactionReceipt;
-use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
+use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, GethDebugTracingOptions};
 use anyhow::Context;
 use std::time::Duration;
 
@@ -32,6 +32,7 @@ pub trait ReceiptAssert<N: Network> {
     async fn expect_successful_receipt(self) -> anyhow::Result<N::ReceiptResponse>;
     async fn expect_register(self) -> anyhow::Result<PendingTransaction>;
     async fn expect_to_execute(self) -> anyhow::Result<N::ReceiptResponse>;
+    async fn expect_call_trace(self) -> anyhow::Result<CallFrame>;
 }
 
 impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
@@ -98,6 +99,23 @@ impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
         Err(anyhow::anyhow!(
             "transaction was not executed on L1 in time"
         ))
+    }
+
+    async fn expect_call_trace(self) -> anyhow::Result<CallFrame> {
+        let provider = self.provider().clone();
+        let receipt = self
+            .with_timeout(Some(DEFAULT_TIMEOUT))
+            .get_receipt()
+            .await?;
+        let trace = provider
+            .debug_trace_transaction(
+                receipt.transaction_hash(),
+                GethDebugTracingOptions::call_tracer(CallConfig::default()),
+            )
+            .await?;
+        trace
+            .try_into_call_frame()
+            .context("failed to parse call trace")
     }
 }
 
