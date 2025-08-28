@@ -83,6 +83,11 @@ pub enum StateBackendConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
+    /// Where to download replays instead of actually running blocks.
+    /// Setting this makes the node into an external node.
+    #[config(default_t = None)]
+    pub block_replay_download_address: Option<String>,
+
     /// Defines the block time for the sequencer.
     #[config(default_t = Duration::from_millis(100))]
     pub block_time: Duration,
@@ -99,11 +104,6 @@ pub struct SequencerConfig {
     #[config(default_t = "0.0.0.0:3053".into())]
     pub block_replay_server_address: String,
 
-    /// Where to download replays instead of actually running blocks.
-    /// Setting this makes the node into an external node.
-    #[config(default_t = None)]
-    pub block_replay_download_address: Option<String>,
-
     /// Max gas used per block
     #[config(default_t = 100_000_000)]
     pub block_gas_limit: u64,
@@ -111,6 +111,12 @@ pub struct SequencerConfig {
     /// Max pubdata bytes per block
     #[config(default_t = 110_000)]
     pub block_pubdata_limit_bytes: u64,
+}
+
+impl SequencerConfig {
+    pub fn is_main_node(&self) -> bool {
+        self.block_replay_download_address.is_none()
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

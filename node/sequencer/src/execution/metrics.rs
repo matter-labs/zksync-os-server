@@ -104,7 +104,6 @@ pub struct BlockReplayRocksDBMetrics {
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub set_latency: Histogram<Duration>,
 }
-
 #[vise::register]
 pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
 
