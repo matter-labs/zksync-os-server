@@ -34,31 +34,23 @@ impl L1InteropRootWatcher {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
-        zk_chain_address: Address,
+        message_root_address: Address,
         output: mpsc::Sender<InteropRoot>,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
-            ?zk_chain_address,
+            ?message_root_address,
             "initializing L1 interop root watcher"
         );
-
-        let bridgehub = IZKChain::new(zk_chain_address, &provider).getBridgehub().call().await.unwrap();
-        let message_root = IBridgehub::new(bridgehub, &provider).messageRoot().call().await.unwrap();
 
         let current_l1_block = provider.get_block_number().await?;
 
         let l1_watcher = L1Watcher::new(
             provider,
-            message_root,
+            message_root_address,
             current_l1_block,
             config.max_blocks_to_process,
-        );
-
-        tracing::info!(
-            ?message_root, 
-            "watching message root contract"
         );
 
         Ok(Self {

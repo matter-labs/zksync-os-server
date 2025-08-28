@@ -275,6 +275,14 @@ impl<P: Provider + Clone> Bridgehub<P> {
         ))
     }
 
+    pub async fn message_root_address(&self) -> alloy::contract::Result<Address> {
+        self
+            .instance
+            .messageRoot()
+            .call()
+            .await
+    }
+
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
         self.instance.getAllZKChainChainIDs().call().await
     }

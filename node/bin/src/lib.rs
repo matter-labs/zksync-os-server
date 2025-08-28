@@ -61,7 +61,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
+use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1InteropRootWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -99,8 +99,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (blocks_for_batcher_subsystem_sender, blocks_for_batcher_subsystem_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(5);
 
-    // Channel between L1Watcher and Sequencer
+    // Channels between L1Watcher and Sequencer
     let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(5);
+    let (interop_roots_sender, interop_roots) = tokio::sync::mpsc::channel(10);
 
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
@@ -283,6 +284,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(report_exit("L1 transaction watcher")),
     );
 
+    tasks.spawn(
+        L1InteropRootWatcher::new(
+            config.l1_watcher_config.clone(),
+            l1_provider.clone().erased(),
+            node_startup_state.l1_state.message_root,
+            interop_roots_sender,
+        )
+            .await
+            .expect("failed to start L1 transaction watcher")
+            .run()
+            .map(report_exit("L1 transaction watcher")),
+    );
+
     // =========== Start JSON RPC ========
 
     let rpc_storage = RpcStorage::new(
@@ -319,6 +333,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions,
+        interop_roots,
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
@@ -489,9 +504,6 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     // Channel between between `ProverAPI` and `GaplessCommitter`
     let (batch_with_proof_sender, batch_with_proof_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
-
-    // Channel between `L1Watcher` and `BlockContextProvider`
-    let (interop_roots_sender, interop_roots) = tokio::sync::mpsc::channel(10);
 
     // Channel between `GaplessCommitter` and `L1Committer`
     let (batch_for_commit_sender, batch_for_commit_receiver) =

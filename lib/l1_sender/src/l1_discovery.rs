@@ -9,6 +9,7 @@ pub struct L1State {
     pub bridgehub: Address,
     pub diamond_proxy: Address,
     pub validator_timelock: Address,
+    pub message_root: Address,
     pub last_committed_batch: u64,
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
@@ -28,6 +29,7 @@ pub async fn get_l1_state(
         chain_id
     );
     let zk_chain = bridgehub.zk_chain().await?;
+    let message_root = bridgehub.message_root_address().await?;
     let diamond_proxy = *zk_chain.address();
     let validator_timelock_address = bridgehub.validator_timelock_address().await?;
 
@@ -55,6 +57,7 @@ pub async fn get_l1_state(
         bridgehub: bridgehub_address,
         diamond_proxy,
         validator_timelock: validator_timelock_address,
+        message_root,
         last_committed_batch,
         last_proved_batch,
         last_executed_batch,

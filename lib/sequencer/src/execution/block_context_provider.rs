@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use zk_ee::common_structs::PreimageType;
-use zk_ee::system::metadata::{BlockHashes, InteropRoot};
+use zk_ee::system::metadata::{BlockHashes};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
@@ -19,7 +19,7 @@ use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{InteropRoot, L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
