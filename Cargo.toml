@@ -12,11 +12,12 @@ members = [
     "lib/rocksdb",
     "lib/rpc",
     "lib/rpc_api",
+    "lib/sequencer",
     "lib/state",
     "lib/storage",
     "lib/storage_api",
     "lib/types",
-    "node/sequencer",
+    "node/bin",
     "integration-tests",
     "tools/generate-deposit",
     "lib/observability",
@@ -24,7 +25,7 @@ members = [
     "lib/state_full_diffs",
 ]
 resolver = "3"
-default-members = ["node/sequencer"]
+default-members = ["node/bin"]
 
 [workspace.package]
 version = "0.1.2-non-semver-compat"
@@ -68,6 +69,8 @@ zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/z
 air-compiler-cli = { package = "cli", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
+
+zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "main" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
@@ -145,6 +148,7 @@ zksync_os_observability = { path = "lib/observability" }
 zksync_os_rocksdb = { path = "lib/rocksdb" }
 zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
+zksync_os_sequencer = { path = "lib/sequencer" }
 zksync_os_state = { path = "lib/state" }
 zksync_os_state_full_diffs = { path = "lib/state_full_diffs" }
 zksync_os_storage = { path = "lib/storage" }
@@ -153,7 +157,7 @@ zksync_os_types = { path = "lib/types" }
 zksync_os_genesis = { path = "lib/genesis" }
 zksync_os_object_store = { path = "lib/object_store" }
 
-zksync_os_sequencer = { path = "node/sequencer" }
+zksync_os_bin = { path = "node/bin" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
