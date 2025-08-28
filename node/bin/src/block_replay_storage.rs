@@ -1,6 +1,4 @@
 use crate::BLOCK_REPLAY_WAL_DB_NAME;
-use crate::execution::metrics::BLOCK_REPLAY_ROCKS_DB_METRICS;
-use crate::model::blocks::BlockCommand;
 use alloy::primitives::{B256, BlockNumber};
 use futures::Stream;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -12,11 +10,14 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::pin;
 use tokio::time::{Instant, Sleep};
+use vise::Unit;
+use vise::{Buckets, Histogram, Metrics};
 use zk_ee::system::metadata::BlockMetadataFromOracle;
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
-use zksync_os_storage_api::{ReadReplay, ReplayRecord};
+use zksync_os_sequencer::model::blocks::BlockCommand;
+use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:
@@ -104,25 +105,6 @@ impl BlockReplayStorage {
             })
         }
         this
-    }
-
-    /// Appends a replay command (context + raw transactions) to the WAL.
-    /// Also updates the Latest CF. Returns the corresponding ReplayRecord.
-    pub fn append_replay(&self, record: ReplayRecord) {
-        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
-        assert!(!record.transactions.is_empty());
-
-        let current_latest_block = self.latest_block().unwrap_or(0);
-
-        if record.block_context.block_number <= current_latest_block {
-            tracing::debug!(
-                "Not appending block {}: already exists in WAL",
-                record.block_context.block_number
-            );
-            return;
-        }
-        self.append_replay_unchecked(record);
-        latency_observer.observe();
     }
 
     fn append_replay_unchecked(&self, record: ReplayRecord) {
@@ -318,3 +300,38 @@ impl ReadReplay for BlockReplayStorage {
         }
     }
 }
+
+impl WriteReplay for BlockReplayStorage {
+    fn append(&self, record: ReplayRecord) {
+        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
+        assert!(!record.transactions.is_empty());
+
+        let current_latest_block = self.latest_block().unwrap_or(0);
+
+        if record.block_context.block_number <= current_latest_block {
+            tracing::debug!(
+                "Not appending block {}: already exists in WAL",
+                record.block_context.block_number
+            );
+            return;
+        }
+        self.append_replay_unchecked(record);
+        latency_observer.observe();
+    }
+}
+
+const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
+
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "block_replay_storage")]
+pub struct BlockReplayRocksDBMetrics {
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub get_latency: Histogram<Duration>,
+
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
+    pub set_latency: Histogram<Duration>,
+}
+
+#[vise::register]
+pub(crate) static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
+    vise::Global::new();

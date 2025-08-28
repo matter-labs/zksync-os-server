@@ -1,14 +1,11 @@
-use crate::RethPool;
+use crate::L2TransactionPool;
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
-use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
 use reth_primitives_traits::transaction::error::InvalidTransactionError;
-use reth_storage_api::StateProviderFactory;
 use reth_transaction_pool::error::InvalidPoolTransactionError;
 use reth_transaction_pool::{
-    BestTransactions, EthPooledTransaction, TransactionListenerKind, TransactionPool,
-    ValidPoolTransaction,
+    BestTransactions, EthPooledTransaction, TransactionListenerKind, ValidPoolTransaction,
 };
 use std::pin::Pin;
 use std::sync::Arc;
@@ -30,10 +27,8 @@ pub struct BestTransactionsStream<'a> {
 }
 
 /// Convenience method to stream best L2 transactions
-pub fn best_transactions<
-    Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
->(
-    l2_mempool: &RethPool<Client>,
+pub fn best_transactions(
+    l2_mempool: &impl L2TransactionPool,
     l1_transactions: &mut mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_tx: Option<L1UpgradeEnvelope>,
 ) -> impl TxStream<Item = ZkTransaction> + Send {

@@ -6,6 +6,8 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::ObjectStoreConfig;
 pub use zksync_os_rpc::RpcConfig;
+pub use zksync_os_sequencer::config::SequencerConfig;
+
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
 /// Default values are provided for local setup.
@@ -78,39 +80,6 @@ pub struct GeneralConfig {
 pub enum StateBackendConfig {
     FullDiffs,
     Compacted,
-}
-
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct SequencerConfig {
-    /// Defines the block time for the sequencer.
-    #[config(default_t = Duration::from_millis(100))]
-    pub block_time: Duration,
-
-    /// Max number of transactions in a block.
-    #[config(default_t = 1000)]
-    pub max_transactions_in_block: usize,
-
-    /// Path to the directory where block dumps for unexpected failures will be saved.
-    #[config(default_t = "./db/block_dumps".into())]
-    pub block_dump_path: PathBuf,
-
-    /// Where to serve block replays
-    #[config(default_t = "0.0.0.0:3053".into())]
-    pub block_replay_server_address: String,
-
-    /// Where to download replays instead of actually running blocks.
-    /// Setting this makes the node into an external node.
-    #[config(default_t = None)]
-    pub block_replay_download_address: Option<String>,
-
-    /// Max gas used per block
-    #[config(default_t = 100_000_000)]
-    pub block_gas_limit: u64,
-
-    /// Max pubdata bytes per block
-    #[config(default_t = 110_000)]
-    pub block_pubdata_limit_bytes: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

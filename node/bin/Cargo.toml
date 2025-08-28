@@ -1,5 +1,5 @@
 [package]
-name = "zksync_os_sequencer"
+name = "zksync_os_bin"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -22,6 +22,7 @@ zksync_os_priority_tree.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_object_store.workspace = true
+zksync_os_sequencer.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true

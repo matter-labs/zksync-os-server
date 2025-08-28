@@ -1,6 +1,7 @@
 use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
+use zk_os_forward_system::run::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
@@ -52,6 +53,14 @@ pub trait ReadRepository: Send + Sync + 'static {
         // block.
         0
     }
+}
+
+pub trait WriteRepository: ReadRepository {
+    fn populate(
+        &self,
+        block_output: BlockOutput,
+        transactions: Vec<ZkTransaction>,
+    ) -> impl Future<Output = ()>;
 }
 
 /// Repository result type.

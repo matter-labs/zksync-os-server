@@ -9,7 +9,7 @@ use zk_os_forward_system::run::BlockOutput;
 use zksync_os_genesis::Genesis;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
-    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
+    ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta, WriteRepository,
 };
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
@@ -43,34 +43,6 @@ impl RepositoryManager {
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
         }
-    }
-
-    /// Calls `populate_in_memory` while respecting `self.max_blocks_in_memory`.
-    /// Blocks until the database has enough blocks persisted to allow in-memory population.
-    pub async fn populate_in_memory_blocking(
-        &self,
-        block_output: BlockOutput,
-        transactions: Vec<ZkTransaction>,
-    ) {
-        let should_be_persisted_up_to = self
-            .in_memory
-            .get_latest_block()
-            .saturating_sub(self.max_blocks_in_memory);
-        let _ = self
-            .db
-            .wait_for_block_number(should_be_persisted_up_to)
-            .await;
-        let (block, transactions) = self
-            .in_memory
-            .populate_in_memory(block_output, transactions);
-
-        // todo: move notifications upstream of `RepositoryManager`
-        let notification = BlockNotification {
-            block,
-            transactions,
-        };
-        // Ignore error if there are no subscribed receivers
-        let _ = self.block_sender.send(notification);
     }
 
     // fixme: as this loop is not tied to state compacting, it can fall behind and result in
@@ -194,6 +166,30 @@ impl ReadRepository for RepositoryManager {
         self.in_memory
             .get_latest_block()
             .max(self.db.get_latest_block())
+    }
+}
+
+impl WriteRepository for RepositoryManager {
+    async fn populate(&self, block_output: BlockOutput, transactions: Vec<ZkTransaction>) {
+        let should_be_persisted_up_to = self
+            .in_memory
+            .get_latest_block()
+            .saturating_sub(self.max_blocks_in_memory);
+        let _ = self
+            .db
+            .wait_for_block_number(should_be_persisted_up_to)
+            .await;
+        let (block, transactions) = self
+            .in_memory
+            .populate_in_memory(block_output, transactions);
+
+        // todo: move notifications upstream of `RepositoryManager`
+        let notification = BlockNotification {
+            block,
+            transactions,
+        };
+        // Ignore error if there are no subscribed receivers
+        let _ = self.block_sender.send(notification);
     }
 }
 

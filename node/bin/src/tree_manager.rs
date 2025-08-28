@@ -1,4 +1,4 @@
-use crate::execution::metrics::EXECUTION_METRICS;
+use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use std::ops::Div;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::watch;
 use tokio::time::Instant;
-use vise::{Buckets, Histogram, Metrics, Unit};
+use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_genesis::Genesis;
 use zksync_os_merkle_tree::{
@@ -156,7 +156,7 @@ impl TreeManager {
                     TREE_METRICS.block_time.observe(started_at.elapsed());
 
                     TREE_METRICS.processing_range.observe(count as u64);
-                    EXECUTION_METRICS.block_number[&"tree_manager"].set(block_number);
+                    TREE_METRICS.block_number.set(block_number);
                 }
                 None => {
                     // Channel closed, exit the loop
@@ -183,6 +183,7 @@ pub struct TreeMetrics {
     pub range_time: Histogram<Duration>,
     #[metrics(buckets = BLOCK_RANGE_SIZE)]
     pub processing_range: Histogram<u64>,
+    pub block_number: Gauge<BlockNumber>,
 }
 
 #[vise::register]

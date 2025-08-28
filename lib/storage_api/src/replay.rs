@@ -14,3 +14,7 @@ pub trait ReadReplay: Send + Sync + 'static {
     /// Get full data needed to replay a block by its number.
     fn get_replay_record(&self, block_number: BlockNumber) -> Option<ReplayRecord>;
 }
+
+pub trait WriteReplay: ReadReplay {
+    fn append(&self, record: ReplayRecord);
+}
