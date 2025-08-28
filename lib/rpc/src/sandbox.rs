@@ -39,12 +39,10 @@ pub fn execute(
 
 pub fn call_trace(
     txs: Vec<ZkTransaction>,
-    mut block_context: BlockContext,
+    block_context: BlockContext,
     state_view: impl ViewState,
     call_config: CallConfig,
 ) -> Result<CallFrame, Box<ForwardSubsystemError>> {
-    block_context.eip1559_basefee = U256::from(0);
-
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),

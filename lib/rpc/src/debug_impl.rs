@@ -48,10 +48,8 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             return Err(DebugError::TransactionNotFound);
         };
         let block_number = tx_meta.block_number;
-        let prev_block_number = block_number - 1;
-        let Some(prev_block_context) = self.storage.replay_storage().get_context(prev_block_number)
-        else {
-            tracing::error!(prev_block_number, "could not load previous block's context");
+        let Some(block_context) = self.storage.replay_storage().get_context(block_number) else {
+            tracing::error!(block_number, "could not load block's context");
             return Err(DebugError::InternalError);
         };
         let Some(block) = self
@@ -77,8 +75,8 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 break;
             }
         }
-        let prev_state_view = self.storage.state_view_at(prev_block_number)?;
-        match sandbox::call_trace(txs, prev_block_context, prev_state_view, call_config) {
+        let prev_state_view = self.storage.state_view_at(block_number - 1)?;
+        match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
             Ok(call) => Ok(GethTrace::CallTracer(call)),
             Err(err) => {
                 tracing::error!(?err, "failed to trace transaction");
