@@ -13,11 +13,11 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
-use zksync_os_sequencer::config::{
+use zksync_os_bin::config::{
     Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
+use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
@@ -160,7 +160,7 @@ impl Tester {
             prover_api_config,
         };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run::<FullDiffsState>(stop_receiver, config).await;
+            zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
