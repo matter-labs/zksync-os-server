@@ -1,8 +1,9 @@
 use crate::metrics::REPOSITORIES_METRICS;
+use crate::shared::alloy_header;
 use alloy::consensus::Sealed;
 use alloy::eips::Encodable2718;
 use alloy::primitives::{
-    Address, B64, B256, BlockHash, BlockNumber, Bloom, Log, LogData, TxHash, TxNonce, U256,
+    Address, B256, BlockHash, BlockNumber, Bloom, Log, LogData, TxHash, TxNonce,
 };
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -264,34 +265,6 @@ impl BlockReceiptRepository {
     }
 }
 
-fn alloy_header(
-    header: &zk_os_forward_system::run::output::BlockHeader,
-) -> alloy::consensus::Header {
-    alloy::consensus::Header {
-        parent_hash: B256::new(header.parent_hash.as_u8_array()),
-        ommers_hash: B256::new(header.ommers_hash.as_u8_array()),
-        beneficiary: Address::new(header.beneficiary.to_be_bytes()),
-        state_root: B256::new(header.state_root.as_u8_array()),
-        transactions_root: B256::new(header.transactions_root.as_u8_array()),
-        receipts_root: B256::new(header.receipts_root.as_u8_array()),
-        logs_bloom: Bloom::new(header.logs_bloom),
-        difficulty: U256::from_be_bytes(header.difficulty.to_be_bytes::<32>()),
-        number: header.number,
-        gas_limit: header.gas_limit,
-        gas_used: header.gas_used,
-        timestamp: header.timestamp,
-        extra_data: header.extra_data.to_vec().into(),
-        mix_hash: B256::new(header.mix_hash.as_u8_array()),
-        nonce: B64::new(header.nonce),
-        base_fee_per_gas: Some(header.base_fee_per_gas),
-        withdrawals_root: None,
-        blob_gas_used: None,
-        excess_blob_gas: None,
-        parent_beacon_block_root: None,
-        requests_hash: None,
-    }
-}
-
 /// Thread-safe in-memory repository of transaction receipts, keyed by transaction hash.
 ///
 /// Retains all inserted receipts indefinitely. Internally uses a lock-free
@@ -420,6 +393,9 @@ fn transaction_to_api_data(
         .l2_to_l1_logs
         .iter()
         .map(|l2_to_l1_log| L2ToL1Log {
+            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+            is_service: l2_to_l1_log.log.is_service,
+            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
             sender: Address::new(l2_to_l1_log.log.sender.to_be_bytes()),
             key: B256::new(l2_to_l1_log.log.key.as_u8_array()),
             value: B256::new(l2_to_l1_log.log.value.as_u8_array()),

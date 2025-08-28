@@ -1,6 +1,6 @@
 use std::time::Duration;
-use vise::EncodeLabelValue;
 use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Counter, EncodeLabelValue};
 
 // todo: these metrics are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `batcher_metrics` or `batcher` crate once we have one.
@@ -8,7 +8,7 @@ use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "stage", rename_all = "snake_case")]
 pub enum BatchExecutionStage {
-    Sealed,
+    BatchSealed,
     ProverInputStarted,
     FriProverPicked,
     FriProvedReal,
@@ -36,7 +36,21 @@ pub struct BatcherSubsystemMetrics {
 
     #[metrics(labels = ["stage"])]
     pub block_number: LabeledFamily<BatchExecutionStage, Gauge<u64>>,
-}
 
+    #[metrics(labels = ["seal_reason"])]
+    pub seal_reason: LabeledFamily<&'static str, Counter>,
+
+    #[metrics(buckets = Buckets::exponential(1.0..=100_000.0, 3.0))]
+    pub transactions_per_batch: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(1.0..=1_000.0, 2.0))]
+    pub blocks_per_batch: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(10_000.0..=10_000_000_000.0, 5.0))]
+    pub computational_native_used_per_batch: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(1_000.0..=1_000_000.0, 4.0))]
+    pub pubdata_per_batch: Histogram<u64>,
+}
 #[vise::register]
-pub(crate) static BATCHER_METRICS: vise::Global<BatcherSubsystemMetrics> = vise::Global::new();
+pub static BATCHER_METRICS: vise::Global<BatcherSubsystemMetrics> = vise::Global::new();

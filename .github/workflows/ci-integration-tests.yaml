@@ -1,14 +1,16 @@
-name: Integration Tests
-
+name: Workflow for running integration tests
 on:
-  push:
-    branches: [ main ]
-  pull_request:
+  workflow_call:
+    secrets:
+      GH_TOKEN:
+        description: "Token for cloning private repositories"
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   PASSED_ENV_VARS: RUST_BACKTRACE
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
 
 jobs:
   integration-tests:
@@ -44,6 +46,11 @@ jobs:
       shell: bash
       run: ci_up
 
+    # This can be removed once zksync-airbender-prover is public.
+    - name: Configure Git for private repos
+      run: |
+        ci_run git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
+
     - name: Start sccache server
       shell: bash
       run: ci_run sccache --start-server
@@ -52,7 +59,8 @@ jobs:
       run: |
         ci_run wget https://foundry.paradigm.xyz -O foundryup.sh
         ci_run bash foundryup.sh
-        ci_run /root/.foundry/bin/foundryup
+        # Temporarily pin foundry version to 1.2.3 as anvil 1.3.0/1.3.1 made breaking changes in state format.
+        ci_run /root/.foundry/bin/foundryup -i 1.2.3
         echo /root/.foundry/bin >> $GITHUB_PATH
 
     - name: Run integration tests (no prover)

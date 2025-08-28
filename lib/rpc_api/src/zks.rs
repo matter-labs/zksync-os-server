@@ -1,4 +1,6 @@
-use alloy::primitives::Address;
+use crate::types::L2ToL1LogProof;
+use alloy::primitives::{Address, TxHash};
+use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 
@@ -7,4 +9,11 @@ use jsonrpsee::proc_macros::rpc;
 pub trait ZksApi {
     #[method(name = "getBridgehubContract")]
     async fn get_bridgehub_contract(&self) -> RpcResult<Address>;
+
+    #[method(name = "getL2ToL1LogProof")]
+    async fn get_l2_to_l1_log_proof(
+        &self,
+        tx_hash: TxHash,
+        index: Index,
+    ) -> RpcResult<Option<L2ToL1LogProof>>;
 }

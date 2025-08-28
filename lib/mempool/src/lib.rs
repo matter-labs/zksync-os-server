@@ -25,6 +25,7 @@ pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + State
     let blob_store = NoopBlobStore::default();
     RethPool::new(
         EthTransactionValidatorBuilder::new(client)
+            .no_prague()
             .with_max_tx_input_bytes(max_input_bytes)
             .build(blob_store),
         CoinbaseTipOrdering::default(),

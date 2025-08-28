@@ -2,12 +2,10 @@ use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
 use crate::commands::L1SenderCommand;
 use crate::commitment::StoredBatchInfo;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
 use std::fmt::Display;
-use vise::{Counter, LabeledFamily};
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
 
@@ -18,7 +16,6 @@ const FAKE_PROOF_MAGIC_VALUE: i32 = 13;
 #[derive(Debug)]
 pub struct ProofCommand {
     batches: Vec<BatchEnvelope<FriProof>>,
-    // only fake proof is supported for now
     proof: SnarkProof,
 }
 
@@ -33,14 +30,14 @@ impl L1SenderCommand for ProofCommand {
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
 
-    fn state_metric() -> &'static LabeledFamily<L1SenderState, Counter<f64>> {
-        &L1_SENDER_METRICS.prove_state
-    }
-
     fn solidity_call(&self) -> impl SolCall {
-        assert!(matches!(self.proof, SnarkProof::Fake));
         proveBatchesSharedBridgeCall::new((
-            U256::from(0),
+            self.batches
+                .first()
+                .unwrap()
+                .batch
+                .commit_batch_info
+                .chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),
@@ -187,7 +184,8 @@ impl ProofCommand {
             proof,
         };
 
-        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+        /// Current commitment encoding version as per protocol.
+        const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
         proof_payload.abi_encode_raw(&mut proof_data);

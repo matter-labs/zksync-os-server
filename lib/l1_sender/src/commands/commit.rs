@@ -1,21 +1,24 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::config::BatchDaInputMode;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use vise::{Counter, LabeledFamily};
 use zksync_os_contract_interface::IExecutor;
 
 #[derive(Debug)]
 pub struct CommitCommand {
     input: BatchEnvelope<FriProof>,
+    da_input_mode: BatchDaInputMode,
 }
 
 impl CommitCommand {
-    pub fn new(input: BatchEnvelope<FriProof>) -> Self {
-        Self { input }
+    pub fn new(input: BatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode) -> Self {
+        Self {
+            input,
+            da_input_mode,
+        }
     }
 }
 
@@ -23,14 +26,9 @@ impl L1SenderCommand for CommitCommand {
     const NAME: &'static str = "commit";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
-
-    fn state_metric() -> &'static LabeledFamily<L1SenderState, Counter<f64>> {
-        &L1_SENDER_METRICS.commit_state
-    }
-
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::commitBatchesSharedBridgeCall::new((
-            U256::from(self.input.batch.commit_batch_info.chain_id),
+            self.input.batch.commit_batch_info.chain_address,
             U256::from(self.input.batch_number()),
             U256::from(self.input.batch_number()),
             self.to_calldata_suffix().into(),
@@ -68,12 +66,16 @@ impl CommitCommand {
     /// function makes sure last committed batch and new batch are encoded correctly.
     fn to_calldata_suffix(&self) -> Vec<u8> {
         /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+        const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
-        let commit_batch_info =
-            IExecutor::CommitBoojumOSBatchInfo::from(self.input.batch.commit_batch_info.clone());
+        let commit_batch_info = self
+            .input
+            .batch
+            .commit_batch_info
+            .clone()
+            .into_l1_commit_data(self.da_input_mode);
         tracing::debug!(
             last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
             last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,

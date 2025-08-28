@@ -1,3 +1,4 @@
+use crate::config::BatchDaInputMode;
 use alloy::primitives::{Address, B256, Bytes, FixedBytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::{ZkEnvelope, ZkTransaction};
+use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
@@ -18,6 +19,7 @@ pub struct StoredBatchInfo {
     pub state_commitment: B256,
     pub number_of_layer1_txs: u64,
     pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub commitment: B256,
     pub last_block_timestamp: u64,
@@ -43,8 +45,11 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
             number_of_layer_1_txs: U256::from(value.number_of_layer1_txs),
             priority_operations_hash: Bytes32::from(value.priority_operations_hash.0),
             l2_logs_tree_root: Bytes32::from(value.l2_to_l1_logs_root_hash.0),
-            // TODO: Presumably shouldn't always be zero once we have upgrade transactions
-            upgrade_tx_hash: Default::default(),
+            upgrade_tx_hash: value
+                .upgrade_tx_hash
+                .map(|h| Bytes32::from_array(h.0))
+                .unwrap_or(Bytes32::ZERO),
+            interop_root_rolling_hash: Bytes32::from(value.dependency_roots_rolling_hash.0),
         };
         let commitment = FixedBytes::from(system_batch_output.hash());
         Self {
@@ -52,6 +57,7 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
             state_commitment: value.new_state_commitment,
             number_of_layer1_txs: value.number_of_layer1_txs,
             priority_operations_hash: value.priority_operations_hash,
+            dependency_roots_rolling_hash: value.dependency_roots_rolling_hash,
             l2_to_l1_logs_root_hash: value.l2_to_l1_logs_root_hash,
             commitment,
             last_block_timestamp: value.last_block_timestamp,
@@ -65,19 +71,21 @@ impl From<&StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredB
             // `batchNumber`
             value.batch_number,
             // `batchHash` - for ZKsync OS batches we store full state commitment here
-            B256::from(value.state_commitment.0),
+            value.state_commitment,
             // `indexRepeatedStorageChanges` - Not used in Boojum OS, must be zero
             0u64,
             // `numberOfLayer1Txs`
             U256::from(value.number_of_layer1_txs),
             // `priorityOperationsHash`
-            B256::from(value.priority_operations_hash.0),
+            value.priority_operations_hash,
+            // `dependencyRootsRollingHash`,
+            value.dependency_roots_rolling_hash,
             // `l2LogsTreeRoot`
-            B256::from(value.l2_to_l1_logs_root_hash.0),
+            value.l2_to_l1_logs_root_hash,
             // `timestamp` - Not used in ZKsync OS, must be zero
             U256::from(0),
             // `commitment` - For ZKsync OS batches we store batch output hash here
-            B256::from(value.commitment.0),
+            value.commitment,
         ))
     }
 }
@@ -89,13 +97,16 @@ pub struct CommitBatchInfo {
     pub new_state_commitment: B256,
     pub number_of_layer1_txs: u64,
     pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub l2_da_validator: Address,
     pub da_commitment: B256,
     pub first_block_timestamp: u64,
     pub last_block_timestamp: u64,
     pub chain_id: u64,
+    pub chain_address: Address,
     pub operator_da_input: Vec<u8>,
+    pub upgrade_tx_hash: Option<B256>,
 }
 
 impl CommitBatchInfo {
@@ -107,6 +118,7 @@ impl CommitBatchInfo {
             &zksync_os_merkle_tree::TreeBatchOutput,
         )>,
         chain_id: u64,
+        chain_address: Address,
         batch_number: u64,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
@@ -117,6 +129,7 @@ impl CommitBatchInfo {
         let (first_block_output, _, _, _) = *blocks.first().unwrap();
         let (last_block_output, last_block_context, _, last_block_tree) = *blocks.last().unwrap();
 
+        let mut upgrade_tx_hash = None;
         for (block_output, _, transactions, _) in blocks {
             total_pubdata.extend(block_output.pubdata.clone());
 
@@ -129,6 +142,14 @@ impl CommitBatchInfo {
                         number_of_layer1_txs += 1;
                     }
                     ZkEnvelope::L2(_) => {}
+                    ZkEnvelope::Upgrade(_) => {
+                        assert!(
+                            upgrade_tx_hash.is_none(),
+                            "more than one upgrade tx in a batch: first {upgrade_tx_hash:?}, second {}",
+                            tx.hash()
+                        );
+                        upgrade_tx_hash = Some(*tx.hash());
+                    }
                 }
             }
 
@@ -187,10 +208,11 @@ impl CommitBatchInfo {
         let new_state_commitment = B256::from_slice(&hasher.finalize());
 
         /* ---------- root hash of l2->l1 logs ---------- */
-        // todo - extract constant
-        let l2_l1_local_root =
-            MiniMerkleTree::new(encoded_l2_l1_logs.clone().into_iter(), Some(1 << 14))
-                .merkle_root();
+        let l2_l1_local_root = MiniMerkleTree::new(
+            encoded_l2_l1_logs.clone().into_iter(),
+            Some(L2_TO_L1_TREE_SIZE),
+        )
+        .merkle_root();
         // The result should be Keccak(l2_l1_local_root, aggreagation_root) - we don't compute aggregation root yet
         let l2_to_l1_logs_root_hash = keccak256([l2_l1_local_root.0, [0u8; 32]].concat());
 
@@ -199,6 +221,7 @@ impl CommitBatchInfo {
             new_state_commitment,
             number_of_layer1_txs,
             priority_operations_hash,
+            dependency_roots_rolling_hash: B256::ZERO,
             l2_to_l1_logs_root_hash,
             // TODO: Update once enforced, not sure where to source it from yet
             l2_da_validator: Default::default(),
@@ -206,25 +229,38 @@ impl CommitBatchInfo {
             first_block_timestamp: first_block_output.header.timestamp,
             last_block_timestamp: last_block_output.header.timestamp,
             chain_id,
+            chain_address,
             operator_da_input,
+            upgrade_tx_hash,
         }
     }
 }
 
-impl From<CommitBatchInfo> for zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo {
-    fn from(value: CommitBatchInfo) -> Self {
-        Self::from((
-            value.batch_number,
-            value.new_state_commitment,
-            U256::from(value.number_of_layer1_txs),
-            value.priority_operations_hash,
-            value.l2_to_l1_logs_root_hash,
-            Address::from(value.l2_da_validator.0),
-            value.da_commitment,
-            value.first_block_timestamp,
-            value.last_block_timestamp,
-            U256::from(value.chain_id),
-            Bytes::from(value.operator_da_input),
+impl CommitBatchInfo {
+    /// `CommitBatchInfo` has full da input - even for validium chains
+    /// we only drop `operator_da_input` field when we are actually committing the batch
+    /// this way, we don't need to consider the DA mode in advance - it's only known to the l1-sender.
+    pub fn into_l1_commit_data(
+        self,
+        mode: BatchDaInputMode,
+    ) -> zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo {
+        let operator_da_input = match mode {
+            BatchDaInputMode::Rollup => self.operator_da_input,
+            BatchDaInputMode::Validium => U256::ZERO.to_be_bytes_vec(),
+        };
+        zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo::from((
+            self.batch_number,
+            self.new_state_commitment,
+            U256::from(self.number_of_layer1_txs),
+            self.priority_operations_hash,
+            self.dependency_roots_rolling_hash,
+            self.l2_to_l1_logs_root_hash,
+            Address::from(self.l2_da_validator.0),
+            self.da_commitment,
+            self.first_block_timestamp,
+            self.last_block_timestamp,
+            U256::from(self.chain_id),
+            Bytes::from(operator_da_input),
         ))
     }
 }

@@ -12,6 +12,8 @@ categories.workspace = true
 [dependencies]
 zksync_os_contract_interface.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "k256"] }
+alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde", "rlp", "k256", "rpc-types"] }
+alloy-rlp.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+bincode.workspace = true

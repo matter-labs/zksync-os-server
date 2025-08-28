@@ -1,17 +1,19 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
-use zksync_os_state::StateHandle;
+use std::ops::RangeInclusive;
+use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
-    ReadFinality, ReadReplay, ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult,
+    ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
+    RepositoryResult, StateResult,
 };
 
-pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
+pub trait ReadRpcStorage: ReadStateHistory + Clone {
     fn repository(&self) -> &dyn ReadRepository;
     fn block_subscriptions(&self) -> &dyn SubscribeToBlocks;
     fn replay_storage(&self) -> &dyn ReadReplay;
     fn finality(&self) -> &dyn ReadFinality;
-    fn state(&self) -> &StateHandle;
+    fn batch(&self) -> &dyn ReadBatch;
 
     /// Get sealed block with transaction hashes by its hash OR number.
     fn get_block_by_hash_or_number(
@@ -29,38 +31,35 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
     /// actions as possible.
     ///
     /// WARNING: Does not ensure that the returned block's hash or number actually exists
-    fn resolve_block_hash_or_number(
-        &self,
-        block_id: BlockId,
-    ) -> RepositoryResult<BlockHashOrNumber> {
+    fn resolve_block_hash_or_number(&self, block_id: BlockId) -> BlockHashOrNumber {
         match block_id {
-            BlockId::Hash(hash) => Ok(hash.block_hash.into()),
+            BlockId::Hash(hash) => hash.block_hash.into(),
             BlockId::Number(BlockNumberOrTag::Pending) => {
-                Ok(self.repository().get_latest_block().into())
+                self.repository().get_latest_block().into()
             }
             BlockId::Number(BlockNumberOrTag::Latest) => {
-                Ok(self.repository().get_latest_block().into())
+                self.repository().get_latest_block().into()
             }
-            BlockId::Number(BlockNumberOrTag::Safe) => Ok(self
+            BlockId::Number(BlockNumberOrTag::Safe) => self
                 .finality()
                 .get_finality_status()
                 .last_committed_block
-                .into()),
-            BlockId::Number(BlockNumberOrTag::Finalized) => Ok(self
+                .into(),
+            BlockId::Number(BlockNumberOrTag::Finalized) => self
                 .finality()
                 .get_finality_status()
                 .last_executed_block
-                .into()),
+                .into(),
             BlockId::Number(BlockNumberOrTag::Earliest) => {
-                Err(RepositoryError::EarliestBlockNotSupported)
+                self.repository().get_earliest_block().into()
             }
-            BlockId::Number(BlockNumberOrTag::Number(number)) => Ok(number.into()),
+            BlockId::Number(BlockNumberOrTag::Number(number)) => number.into(),
         }
     }
 
     /// Resolve block's number by its id.
     fn resolve_block_number(&self, block_id: BlockId) -> RepositoryResult<Option<BlockNumber>> {
-        let block_hash_or_number = self.resolve_block_hash_or_number(block_id)?;
+        let block_hash_or_number = self.resolve_block_hash_or_number(block_id);
         match block_hash_or_number {
             // todo: should be possible to not load the entire block here
             BlockHashOrNumber::Hash(block_hash) => Ok(self
@@ -76,30 +75,43 @@ pub trait ReadRpcStorage: Send + Sync + Clone + 'static {
         // We presume that a reasonable number of historical blocks are being saved, so that
         // `Latest`/`Pending`/`Safe`/`Finalized` always resolve even if we don't take a look between
         // two actions below.
-        let block_hash_or_number = self.resolve_block_hash_or_number(block_id)?;
+        let block_hash_or_number = self.resolve_block_hash_or_number(block_id);
         self.get_block_by_hash_or_number(block_hash_or_number)
     }
 }
 
 #[derive(Clone)]
-pub struct RpcStorage<Repository, Replay, Finality> {
+pub struct RpcStorage<Repository, Replay, Finality, Batch, StateHistory> {
     repository: Repository,
     replay_storage: Replay,
     finality: Finality,
-    state: StateHandle,
+    batch: Batch,
+    state: StateHistory,
 }
 
-impl<Repository, Replay, Finality> RpcStorage<Repository, Replay, Finality> {
+impl<Repository, Replay, Finality, Batch, StateHistory> std::fmt::Debug
+    for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RpcStorage").finish()
+    }
+}
+
+impl<Repository, Replay, Finality, Batch, StateHistory>
+    RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
     pub fn new(
         repository: Repository,
         replay_storage: Replay,
         finality: Finality,
-        state: StateHandle,
+        batch: Batch,
+        state: StateHistory,
     ) -> Self {
         Self {
             repository,
             replay_storage,
             finality,
+            batch,
             state,
         }
     }
@@ -109,7 +121,9 @@ impl<
     Repository: ReadRepository + SubscribeToBlocks + Clone,
     Replay: ReadReplay + Clone,
     Finality: ReadFinality + Clone,
-> ReadRpcStorage for RpcStorage<Repository, Replay, Finality>
+    Batch: ReadBatch + Clone,
+    StateHistory: ReadStateHistory + Clone,
+> ReadRpcStorage for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
 {
     fn repository(&self) -> &dyn ReadRepository {
         &self.repository
@@ -127,7 +141,27 @@ impl<
         &self.finality
     }
 
-    fn state(&self) -> &StateHandle {
-        &self.state
+    fn batch(&self) -> &dyn ReadBatch {
+        &self.batch
+    }
+}
+
+impl<
+    Repository: ReadRepository + SubscribeToBlocks + Clone,
+    Replay: ReadReplay + Clone,
+    Finality: ReadFinality + Clone,
+    Batch: ReadBatch + Clone,
+    StateHistory: ReadStateHistory + Clone,
+> ReadStateHistory for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
+    fn state_view_at(
+        &self,
+        block_number: BlockNumber,
+    ) -> StateResult<impl ReadStorageTree + PreimageSource + Clone> {
+        self.state.state_view_at(block_number)
+    }
+
+    fn block_range_available(&self) -> RangeInclusive<u64> {
+        self.state.block_range_available()
     }
 }

@@ -8,22 +8,24 @@ use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
-use zksync_os_sequencer::config::{
-    FakeFriProversConfig, FakeSnarkProversConfig, MempoolConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+use zksync_os_bin::config::{
+    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
+use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
+use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
 pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
 mod prover_api;
+pub mod provider;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
@@ -32,10 +34,12 @@ const L1_CHAIN_ID: u64 = 31337;
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,
+
     /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
     /// system to be Ethereum-compatible. But this can be useful if you need to assert custom fields
     /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
-    pub l2_zk_provier: DynProvider<Zksync>,
+    pub l2_zk_provider: DynProvider<Zksync>,
+
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
@@ -43,6 +47,11 @@ pub struct Tester {
 
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
+
+    // Needed to be able to connect external nodes
+    l1_address: String,
+    replay_url: String,
+    object_store_path: PathBuf,
 }
 
 impl Tester {
@@ -53,37 +62,27 @@ impl Tester {
     pub async fn setup() -> anyhow::Result<Self> {
         Self::builder().build().await
     }
-}
 
-#[derive(Default)]
-pub struct TesterBuilder {
-    enable_prover: bool,
-}
-
-impl TesterBuilder {
-    #[cfg(feature = "prover-tests")]
-    pub fn enable_prover(mut self) -> Self {
-        self.enable_prover = true;
-        self
+    pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
+        Self::launch_node(
+            self.l1_address.clone(),
+            self.l1_provider.clone(),
+            self.l1_wallet.clone(),
+            false,
+            Some(self.replay_url.clone()),
+            Some(self.object_store_path.clone()),
+        )
+        .await
     }
 
-    pub async fn build(self) -> anyhow::Result<Tester> {
-        let l1_locked_port = LockedPort::acquire_unused().await?;
-        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
-        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-            let anvil = if std::env::var("CI").is_ok() {
-                // This is where `anvil` gets installed to in our CI. For some reason it does not
-                // make it into PATH. todo: investigate why
-                anvil.path("/root/.foundry/bin/anvil")
-            } else {
-                anvil
-            };
-            anvil
-                .port(l1_locked_port.port)
-                .chain_id(L1_CHAIN_ID)
-                .arg("--load-state")
-                .arg("../zkos-l1-state.json")
-        })?;
+    async fn launch_node(
+        l1_address: String,
+        l1_provider: EthDynProvider,
+        l1_wallet: EthereumWallet,
+        enable_prover: bool,
+        main_node_replay_url: Option<String>,
+        object_store_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         (|| async {
             // Wait for L1 node to get up and be able to respond.
             l1_provider.clone().get_chain_id().await?;
@@ -99,62 +98,81 @@ impl TesterBuilder {
         })
         .await?;
 
+        // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
-        let l2_address = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
+        let replay_locked_port = LockedPort::acquire_unused().await?;
+        let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
+        let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
+        let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
+        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
+        let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
+        let replay_url = format!("localhost:{}", replay_locked_port.port);
+
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
-        let rpc_config = RpcConfig {
-            address: format!("0.0.0.0:{}", l2_locked_port.port),
+        let object_store_path =
+            object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
+
+        let general_config = GeneralConfig {
+            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            l1_rpc_url: l1_address.clone(),
             ..Default::default()
         };
         let sequencer_config = SequencerConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            block_replay_server_address: replay_address.clone(),
+            block_replay_download_address: main_node_replay_url,
             ..Default::default()
         };
-        let l1_sender_config = L1SenderConfig {
-            l1_api_url: l1_address.clone(),
-            ..Default::default()
-        };
-        let l1_watcher_config = L1WatcherConfig {
+        let rpc_config = RpcConfig {
+            address: l2_rpc_address,
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
             fake_fri_provers: FakeFriProversConfig {
-                enabled: !self.enable_prover,
+                enabled: !enable_prover,
                 ..Default::default()
             },
             fake_snark_provers: FakeSnarkProversConfig {
                 enabled: true,
                 ..Default::default()
             },
-            address: format!("0.0.0.0:{}", prover_api_locked_port.port),
+            address: prover_api_address,
+            object_store: ObjectStoreConfig {
+                mode: ObjectStoreMode::FileBacked {
+                    file_backed_base_path: object_store_path.clone(),
+                },
+                max_retries: 1,
+                local_mirror_path: None,
+            },
             ..Default::default()
         };
+        let config = Config {
+            general_config,
+            genesis_config: GenesisConfig {
+                genesis_input_path: "../genesis/genesis.json".into(),
+                ..Default::default()
+            },
+            rpc_config,
+            mempool_config: Default::default(),
+            sequencer_config,
+            l1_sender_config: Default::default(),
+            l1_watcher_config: Default::default(),
+            batcher_config: Default::default(),
+            prover_input_generator_config: ProverInputGeneratorConfig {
+                logging_enabled: enable_prover,
+                ..Default::default()
+            },
+            prover_api_config,
+        };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run(
-                stop_receiver,
-                Default::default(),
-                rpc_config,
-                MempoolConfig::default(),
-                sequencer_config,
-                l1_sender_config,
-                l1_watcher_config,
-                Default::default(),
-                ProverInputGeneratorConfig {
-                    logging_enabled: self.enable_prover,
-                    ..Default::default()
-                },
-                prover_api_config,
-            )
-            .await;
+            zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
-        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         #[cfg(feature = "prover-tests")]
-        if self.enable_prover {
-            tokio::task::spawn(zkos_prover::run(zkos_prover::Args {
+        if enable_prover {
+            tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
                 app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),
@@ -171,7 +189,7 @@ impl TesterBuilder {
         let l2_provider = (|| async {
             let l2_provider = ProviderBuilder::new()
                 .wallet(l2_wallet.clone())
-                .connect(&l2_address)
+                .connect(&l2_rpc_ws_url)
                 .await?;
 
             // Wait for L2 node to get up and be able to respond.
@@ -208,22 +226,68 @@ impl TesterBuilder {
         })
         .await?;
 
-        let l2_zk_provier = ProviderBuilder::new_with_network::<Zksync>()
-            .connect(&l2_address)
+        let l2_zk_provider = ProviderBuilder::new_with_network::<Zksync>()
+            .wallet(l2_wallet.clone())
+            .connect(&l2_rpc_ws_url)
             .await?;
-
-        let l1_wallet = l1_provider.wallet().clone();
 
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
-            l2_zk_provier: DynProvider::new(l2_zk_provier),
+            l2_zk_provider: DynProvider::new(l2_zk_provider),
             l1_wallet,
             l2_wallet,
             prover_api: ProverApi::new(prover_api_url),
             stop_sender,
             main_task,
+            l1_address,
+            replay_url,
+            object_store_path,
         })
+    }
+}
+
+#[derive(Default)]
+pub struct TesterBuilder {
+    enable_prover: bool,
+}
+
+impl TesterBuilder {
+    #[cfg(feature = "prover-tests")]
+    pub fn enable_prover(mut self) -> Self {
+        self.enable_prover = true;
+        self
+    }
+
+    pub async fn build(self) -> anyhow::Result<Tester> {
+        let l1_locked_port = LockedPort::acquire_unused().await?;
+        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
+            let anvil = if std::env::var("CI").is_ok() {
+                // This is where `anvil` gets installed to in our CI. For some reason it does not
+                // make it into PATH. todo: investigate why
+                anvil.path("/root/.foundry/bin/anvil")
+            } else {
+                anvil
+            };
+            anvil
+                .port(l1_locked_port.port)
+                .chain_id(L1_CHAIN_ID)
+                .arg("--load-state")
+                .arg("../zkos-l1-state.json")
+        })?;
+
+        let l1_wallet = l1_provider.wallet().clone();
+
+        Tester::launch_node(
+            l1_address,
+            EthDynProvider::new(l1_provider),
+            l1_wallet,
+            self.enable_prover,
+            None,
+            None,
+        )
+        .await
     }
 }
 

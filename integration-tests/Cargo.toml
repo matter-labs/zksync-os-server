@@ -12,15 +12,16 @@ publish = false
 build = "build.rs"
 
 [dependencies]
-zksync_os_l1_sender.workspace = true
-zksync_os_l1_watcher.workspace = true
-zksync_os_sequencer.workspace = true
+zksync_os_bin.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_types.workspace = true
+zksync_os_object_store.workspace = true
+zksync_os_rpc_api.workspace = true
+zksync_os_state_full_diffs.workspace = true
 
-zkos_prover = { git = "https://github.com/matter-labs/zksync-era.git", branch = "zksync-os-integration", optional = true }
+zksync_os_fri_prover = { workspace = true, optional = true }
 
-alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc"] }
+alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 fs2.workspace = true
 tokio.workspace = true
@@ -37,5 +38,5 @@ serde.workspace = true
 test-log.workspace = true
 
 [features]
-prover-tests = ["dep:zkos_prover"]
-gpu-prover-tests = ["prover-tests", "zkos_prover/gpu"]
+prover-tests = ["dep:zksync_os_fri_prover"]
+gpu-prover-tests = ["prover-tests", "zksync_os_fri_prover/gpu"]

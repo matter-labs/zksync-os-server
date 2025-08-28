@@ -8,7 +8,9 @@ use zksync_os_crypto::hasher::keccak::KeccakHasher;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
-use zksync_os_observability::{ComponentStateLatencyTracker, GenericComponentState};
+use zksync_os_observability::{
+    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
+};
 use zksync_os_storage_api::ReadReplay;
 use zksync_os_types::ZkEnvelope;
 
@@ -21,7 +23,7 @@ pub struct PriorityTreeManager<ReplayStorage> {
 
     // outbound
     execute_batches_sender: mpsc::Sender<ExecuteCommand>,
-    pub latency_tracker: ComponentStateLatencyTracker,
+    pub latency_tracker: ComponentStateHandle<GenericComponentState>,
 }
 
 impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
@@ -34,11 +36,8 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         // outbound
         execute_batches_sender: mpsc::Sender<ExecuteCommand>,
     ) -> anyhow::Result<Self> {
-        let latency_tracker = ComponentStateLatencyTracker::new(
-            "priority_tree_manager",
-            GenericComponentState::Processing,
-            None,
-        );
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("priority_tree_manager", GenericComponentState::Processing);
         Ok(Self {
             replay_storage,
             last_executed_block,
@@ -66,6 +65,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                 match tx.into_envelope() {
                     ZkEnvelope::L1(l1_tx) => l1_tx_hashes.push(l1_tx.hash().0.into()),
                     ZkEnvelope::L2(_) => {}
+                    ZkEnvelope::Upgrade(_) => {}
                 }
             }
         }
@@ -108,6 +108,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                                 merkle_tree.push_hash(l1_tx.hash().0.into());
                             }
                             ZkEnvelope::L2(_) => {}
+                            ZkEnvelope::Upgrade(_) => {}
                         }
                     }
                 }

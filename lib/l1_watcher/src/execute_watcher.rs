@@ -20,7 +20,7 @@ pub struct L1ExecuteWatcher<Finality, BatchStorage> {
     batch_storage: BatchStorage,
 }
 
-impl<Finality: WriteFinality, BatchStorage> L1ExecuteWatcher<Finality, BatchStorage> {
+impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality, BatchStorage> {
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
@@ -28,17 +28,22 @@ impl<Finality: WriteFinality, BatchStorage> L1ExecuteWatcher<Finality, BatchStor
         finality: Finality,
         batch_storage: BatchStorage,
     ) -> anyhow::Result<Self> {
+        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
+        let current_l1_block = provider.get_block_number().await?;
+        let last_executed_block = finality.get_finality_status().last_executed_block;
+        let last_executed_batch = batch_storage
+            .get_batch_by_block_number(last_executed_block)
+            .await?
+            .expect("executed batch is missing from proof storage");
         tracing::info!(
+            current_l1_block,
+            last_executed_batch,
             config.max_blocks_to_process,
             ?config.poll_interval,
             ?zk_chain_address,
             "initializing L1 execute watcher"
         );
-        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
-
-        let current_l1_block = provider.get_block_number().await?;
-        let next_batch_number = finality.get_finality_status().last_executed_block + 1;
-        let next_l1_block = find_l1_execute_block_by_batch_number(zk_chain, next_batch_number)
+        let last_l1_block = find_l1_execute_block_by_batch_number(zk_chain, last_executed_batch)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -55,19 +60,20 @@ impl<Finality: WriteFinality, BatchStorage> L1ExecuteWatcher<Finality, BatchStor
                     Ok(0)
                 }
             })?;
+        tracing::info!(last_l1_block, "resolved on L1");
 
-        tracing::info!(next_l1_block, "resolved on L1");
-
+        // We start from last L1 block as it may contain more executed batches apart from the last
+        // one.
         let l1_watcher = L1Watcher::new(
             provider,
             zk_chain_address,
-            next_l1_block,
+            last_l1_block,
             config.max_blocks_to_process,
         );
 
         Ok(Self {
             l1_watcher,
-            next_batch_number,
+            next_batch_number: last_executed_batch + 1,
             poll_interval: config.poll_interval,
             finality,
             batch_storage,
@@ -98,15 +104,10 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
                     "skipping already processed executed batch",
                 );
             } else {
-                tracing::debug!(
-                    batch_number,
-                    ?batch_hash,
-                    ?batch_commitment,
-                    "discovered executed batch"
-                );
                 let (_, last_executed_block) = self
                     .batch_storage
-                    .get_batch_range_by_number(batch_number)?
+                    .get_batch_range_by_number(batch_number)
+                    .await?
                     .expect("executed batch is missing");
                 self.finality.update_finality_status(|finality| {
                     assert!(
@@ -115,6 +116,13 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
                     );
                     finality.last_executed_block = last_executed_block;
                 });
+                tracing::debug!(
+                    batch_number,
+                    ?batch_hash,
+                    ?batch_commitment,
+                    last_executed_block,
+                    "discovered executed batch"
+                );
             }
         }
 
@@ -124,11 +132,11 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
 
 async fn find_l1_execute_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
-    next_batch_number: u64,
+    batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
     util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
         let res = zk.get_total_batches_executed(block.into()).await?;
-        Ok(res >= next_batch_number)
+        Ok(res >= batch_number)
     })
     .await
 }

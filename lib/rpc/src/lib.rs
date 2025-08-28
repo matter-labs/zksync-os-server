@@ -12,11 +12,13 @@ mod ots_impl;
 mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
+mod debug_impl;
 mod sandbox;
 mod tx_handler;
 mod types;
 mod zks_impl;
 
+use crate::debug_impl::DebugNamespace;
 use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
@@ -29,6 +31,7 @@ use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_mempool::L2TransactionPool;
+use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_rpc_api::ots::OtsApiServer;
@@ -52,8 +55,9 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone()).into_rpc(),
     )?;
     rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
-    rpc.merge(ZksNamespace::new(bridgehub_address).into_rpc())?;
-    rpc.merge(OtsNamespace::new(storage).into_rpc())?;
+    rpc.merge(ZksNamespace::new(bridgehub_address, storage.clone()).into_rpc())?;
+    rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
+    rpc.merge(DebugNamespace::new(storage).into_rpc())?;
 
     // Add a CORS middleware for handling HTTP requests.
     // This middleware does affect the response, including appropriate
@@ -69,13 +73,12 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
+        .max_request_body_size(config.max_request_size_bytes())
+        .max_response_body_size(config.max_response_size_bytes())
         .build();
     let server_builder = ServerBuilder::default()
         .set_config(server_config)
         .set_http_middleware(middleware);
-    // .max_response_body_size(response_body_size_limit)
-    // .set_batch_request_config(batch_request_config)
-    // .set_rpc_middleware(rpc_middleware);
 
     let server = server_builder
         .build(config.address)

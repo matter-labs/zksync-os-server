@@ -1,12 +1,10 @@
 use crate::metrics::METRICS;
-use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use std::marker::PhantomData;
-use zksync_os_storage_api::ReadBatchError;
 
 pub(crate) struct L1Watcher<Event> {
     provider: DynProvider<Ethereum>,
@@ -37,17 +35,10 @@ impl<Event: WatchedEvent> L1Watcher<Event> {
     /// Scans up to `self.max_blocks_to_process` next L1 blocks for new events of type `Event`
     /// and returns them.
     pub(crate) async fn poll(&mut self) -> Result<Vec<Event>, L1WatcherError<Event::Error>> {
-        let latest_block = self
-            .provider
-            .get_block(BlockId::latest())
-            .await?
-            .ok_or(L1WatcherError::NoL1Blocks)?;
+        let latest_block = self.provider.get_block_number().await?;
         let from_block = self.next_l1_block;
         // Inspect up to `self.max_blocks_to_process` blocks at a time
-        let to_block = latest_block
-            .header
-            .number
-            .min(from_block + self.max_blocks_to_process - 1);
+        let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
         if from_block > to_block {
             return Ok(vec![]);
         }
@@ -106,7 +97,7 @@ pub enum L1WatcherError<E> {
     #[error(transparent)]
     Transport(#[from] alloy::transports::TransportError),
     #[error(transparent)]
-    Batch(#[from] ReadBatchError),
+    Batch(#[from] anyhow::Error),
     #[error(transparent)]
     Convert(E),
     #[error("output has been closed")]

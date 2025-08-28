@@ -15,5 +15,5 @@ pub use execute_watcher::{L1ExecuteWatcher, L1ExecuteWatcherError, L1ExecuteWatc
 mod interop_root_watcher;
 pub use interop_root_watcher::{L1InteropRootWatcher, L1InteropRootWatcherError, L1InteropRootWatcherResult};
 
-mod util;
+pub mod util;
 mod watcher;

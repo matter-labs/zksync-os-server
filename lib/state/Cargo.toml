@@ -11,11 +11,13 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_rocksdb.workspace = true
+zksync_os_genesis.workspace = true
+zksync_os_storage_api.workspace = true
 
 zk_os_forward_system.workspace = true
-zk_os_basic_system.workspace = true
 zk_ee.workspace = true
 
+alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }

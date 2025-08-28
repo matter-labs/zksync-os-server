@@ -1,6 +1,7 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/core.rs
 
+use crate::types::{ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt};
 use alloy::consensus::Account;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -8,14 +9,12 @@ use alloy::primitives::{Address, B256, Bytes, U64, U256};
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
-    AccessListResult, AccountInfo, Block, BlockOverrides, Bundle, EIP1186AccountProofResponse,
-    EthCallResponse, FeeHistory, Header, Index, Log, StateContext, SyncStatus, Transaction,
-    TransactionReceipt, TransactionRequest,
+    AccessListResult, AccountInfo, BlockOverrides, Bundle, EIP1186AccountProofResponse,
+    EthCallResponse, FeeHistory, Index, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use zksync_os_types::{ZkEnvelope, ZkReceiptEnvelope};
 
 /// Eth rpc interface: <https://ethereum.github.io/execution-apis/docs/reference/json-rpc-api>
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "eth"))]
@@ -47,11 +46,7 @@ pub trait EthApi {
 
     /// Returns information about a block by hash.
     #[method(name = "getBlockByHash")]
-    async fn block_by_hash(
-        &self,
-        hash: B256,
-        full: bool,
-    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>>;
+    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<ZkApiBlock>>;
 
     /// Returns information about a block by number.
     #[method(name = "getBlockByNumber")]
@@ -59,7 +54,7 @@ pub trait EthApi {
         &self,
         number: BlockNumberOrTag,
         full: bool,
-    ) -> RpcResult<Option<Block<Transaction<ZkEnvelope>>>>;
+    ) -> RpcResult<Option<ZkApiBlock>>;
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
     #[method(name = "getBlockTransactionCountByHash")]
@@ -88,7 +83,7 @@ pub trait EthApi {
     async fn block_receipts(
         &self,
         block_id: BlockId,
-    ) -> RpcResult<Option<Vec<TransactionReceipt<ZkReceiptEnvelope<Log>>>>>;
+    ) -> RpcResult<Option<Vec<ZkTransactionReceipt>>>;
 
     /// Returns an uncle block of the given block and index.
     #[method(name = "getUncleByBlockHashAndIndex")]
@@ -96,7 +91,7 @@ pub trait EthApi {
         &self,
         hash: B256,
         index: Index,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<ZkApiBlock>>;
 
     /// Returns an uncle block of the given block and index.
     #[method(name = "getUncleByBlockNumberAndIndex")]
@@ -104,7 +99,7 @@ pub trait EthApi {
         &self,
         number: BlockNumberOrTag,
         index: Index,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<ZkApiBlock>>;
 
     /// Returns the EIP-2718 encoded transaction if it exists.
     ///
@@ -114,7 +109,7 @@ pub trait EthApi {
 
     /// Returns the information about a transaction requested by transaction hash.
     #[method(name = "getTransactionByHash")]
-    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
+    async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<ZkApiTransaction>>;
 
     /// Returns information about a raw transaction by block hash and transaction index position.
     #[method(name = "getRawTransactionByBlockHashAndIndex")]
@@ -130,7 +125,7 @@ pub trait EthApi {
         &self,
         hash: B256,
         index: Index,
-    ) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
+    ) -> RpcResult<Option<ZkApiTransaction>>;
 
     /// Returns information about a raw transaction by block number and transaction index
     /// position.
@@ -147,7 +142,7 @@ pub trait EthApi {
         &self,
         number: BlockNumberOrTag,
         index: Index,
-    ) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
+    ) -> RpcResult<Option<ZkApiTransaction>>;
 
     /// Returns information about a transaction by sender and nonce.
     #[method(name = "getTransactionBySenderAndNonce")]
@@ -155,14 +150,11 @@ pub trait EthApi {
         &self,
         address: Address,
         nonce: U64,
-    ) -> RpcResult<Option<Transaction<ZkEnvelope>>>;
+    ) -> RpcResult<Option<ZkApiTransaction>>;
 
     /// Returns the receipt of a transaction by transaction hash.
     #[method(name = "getTransactionReceipt")]
-    async fn transaction_receipt(
-        &self,
-        hash: B256,
-    ) -> RpcResult<Option<TransactionReceipt<ZkReceiptEnvelope<Log>>>>;
+    async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<ZkTransactionReceipt>>;
 
     /// Returns the balance of the account of given address.
     #[method(name = "getBalance")]
@@ -191,11 +183,12 @@ pub trait EthApi {
 
     /// Returns the block's header at given number.
     #[method(name = "getHeaderByNumber")]
-    async fn header_by_number(&self, block_number: BlockNumberOrTag) -> RpcResult<Option<Header>>;
+    async fn header_by_number(&self, block_number: BlockNumberOrTag)
+    -> RpcResult<Option<ZkHeader>>;
 
     /// Returns the block's header at given hash.
     #[method(name = "getHeaderByHash")]
-    async fn header_by_hash(&self, hash: B256) -> RpcResult<Option<Header>>;
+    async fn header_by_hash(&self, hash: B256) -> RpcResult<Option<ZkHeader>>;
 
     /// `eth_simulateV1` executes an arbitrary number of transactions on top of the requested state.
     /// The transactions are packed into individual blocks. Overrides can be provided.

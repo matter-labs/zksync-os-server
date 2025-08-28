@@ -1,5 +1,6 @@
 use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
@@ -25,8 +26,9 @@ pub struct StoredTxData {
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct ReplayRecord {
+    #[bincode(with_serde)]
     pub block_context: BlockContext,
     /// L1 transaction serial id (0-based) expected at the beginning of this block.
     /// If `l1_transactions` is non-empty, equals to the first tx id in this block
@@ -37,8 +39,10 @@ pub struct ReplayRecord {
     /// Will be moved to the BlockContext at some point
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
+    #[bincode(with_serde)]
     pub node_version: semver::Version,
     /// Hash of the block output.
+    #[bincode(with_serde)]
     pub block_output_hash: B256,
 }
 
@@ -54,6 +58,7 @@ impl ReplayRecord {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
             ZkEnvelope::L2(_) => None,
+            ZkEnvelope::Upgrade(_) => None,
         });
         if let Some(first_l1_tx_priority_id) = first_l1_tx_priority_id {
             assert_eq!(

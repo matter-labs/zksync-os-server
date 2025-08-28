@@ -7,16 +7,40 @@ New sequencer implementation for zksync-os with focus on high throughput, low la
 ### Local
 
 To run node locally, first launch `anvil`:
+
 ```
 anvil --load-state zkos-l1-state.json --port 8545
 ```
+
 then launch the server:
+
 ```
 cargo run
 ```
-Note that by default, fake (dummy) proofs are used both for FRI and SNARK proofs.
 
-Rich account `0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110` (`0x36615Cf349d7F6344891B1e7CA7C72883F5dc049`)
+To restart the chain, erase the local DB and re-run anvil:
+
+```
+rm -rf db/*
+```
+
+By default, fake (dummy) proofs are used both for FRI and SNARK proofs.
+
+**Rich account:**
+
+```
+PRIVATE_KEY = 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+ACCOUNT_ID = 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
+```
+
+Example transaction to send:
+
+```
+cast send -r http://localhost:3050 0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0 --value 
+100 --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+```
+
+**Config options**
 
 See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g.:
 
@@ -24,7 +48,14 @@ See `node/sequencer/config.rs` for config options and defaults. Use env variable
 prover_api_fake_provers_enabled=false cargo run --release
 ```
 
+### External node
 
+Setting the `block_replay_download_address` environment variable puts the node in external node mode, which means it
+receives block replays from another node instead of producing its own blocks. The node will get priority transactions
+from L1 and check that they match the ones in the replay but it won't change L1 state.
+
+To run the external node locally, you need to set its services' ports so they don't overlap with the main node. See
+`run_en.sh` for an example.
 
 ### Docker
 
@@ -36,6 +67,7 @@ sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e ba
 ### Exposed Ports
 
 * `3050` - L2 JSON RPC
+* `3053` - Block replay server (transport for EN)
 * `3124` - Prover API (e.g. `127.0.0.1/prover-jobs/status`) (only enabled if `prover_api_component_enabled` is set to
   `true`)
 * `3312` - Prometheus
@@ -54,18 +86,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"    
 ```
 
-### Resetting the Chain
+### Otterscan (Local Explorer)
 
-Erase the local DB and re-run anvil:
-
-```
-rm -rf db/node1/*
-anvil --load-state zkos-l1-state.json --port 8545
-```
-
-### Otterscan
-
-Server supports `ots_` namespace and hence can be used in combination with [Otterscan](https://github.com/otterscan/otterscan)
+Server supports `ots_` namespace and hence can be used in combination
+with [Otterscan](https://github.com/otterscan/otterscan)
 block explorer. To run a local instance as a Docker container (bound to `http://localhost:5100`):
 
 ```
@@ -86,16 +110,13 @@ See Otterscan's [docs](https://docs.otterscan.io/intro/) for other running optio
       downstream subsystems. Waits on backpressure.
 * **API** subsystem — optional (not configurable atm). Has shared access to `state`. Exposes ethereum-compatible JSON
   RPC
-* **Batcher** subsystem — optional (configurable via `batcher_component_enabled=true/false`). Has shared access to
-  `state`.
+* **Batcher** subsystem — only runs for the main node - automatically disabled for ENs.
     * Turns a stream of blocks into a stream of batches (1 batch = 1 proof = 1 L1 commit); exposes Prover APIs; submits
       batches and proofs to L1.
-      Note: currently 1 block == 1 batch, multi-block batches are not implemented yet.
     * For each batch, computes the Prover Input (runs RiscV binary (`app.bin`) and records its input as a stream of
       `Vec<u32>` - see `batcher/mod.rs`)
-    * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary (not batch!).
-      This will be optimized later on.
-    * if `localhost:8545` is available, runs **L1 sender**.
+    * This process requires Merkle Tree with materialized root hashes and proofs at every block boundary.
+    * Also runs L1 senders for each of `commit` / `prove` / `execute`
 
 Note on **Persistent Tree** — it is only necessary for Batcher Subsystem. Sequencer doesn't need the tree — block hashes
 don't include root hash. Still, even when batcher subsystem is not enabled, we want to run the tree for potential
@@ -129,14 +150,15 @@ internal state or persistence — this is one of the design principles.
 
 ### RPC
 
-* All standard `eth_` methods are supported (except those specific to EIP-2930, EIP-4844 and EIP-7702). Block tags have a special meaning:
-  * `earliest` - not supported yet (will return genesis or first uncompressed block)
-  * `pending` - the latest produced block
-  * `latest` - same as `pending` (consider taking consensus into account here)
-  * `safe` - the latest block that has been committed to L1
-  * `finalized` - not supported yet (will return the latest block that has been executed on L1)
+* All standard `eth_` methods are supported (except those specific to EIP-2930, EIP-4844 and EIP-7702). Block tags have
+  a special meaning:
+    * `earliest` - not supported yet (will return genesis or first uncompressed block)
+    * `pending` - the latest produced block
+    * `latest` - same as `pending` (consider taking consensus into account here)
+    * `safe` - the latest block that has been committed to L1
+    * `finalized` - not supported yet (will return the latest block that has been executed on L1)
 * `zks_` namespace is kept to the minimum right now to avoid legacy from Era. Only following methods are supported:
-  * `zks_getBridgehubContract`
+    * `zks_getBridgehubContract`
 * `ots_` namespace is used for Otterscan integration (meant for local development only)
 
 ### Prover API
@@ -145,43 +167,23 @@ internal state or persistence — this is one of the design principles.
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
-        .route("/prover-jobs/available", get(list_available_proofs))
-        .route("/prover-jobs/FRI/:block", get(get_fri_proof))
+        .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
+        .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
 ```
-
-Note that it's the same api as in old sequencer integration, so FRI GPU Provers themselves are fully compatible.
 
 ### Principles
 
 * Minimal, async persistence
-    * to meet throughput and latency requirements, we avoid synchronous persistence at the critical path. Additionally,
-      we aim at storing only the data that is strictly needed - minimizing the potential for state inconsistency
-* Few, meaningful data containers / abstractions. Examples:
-    * We reuse `BatchOutput` and `BatchContext` structs that are introduced in `zksync-os`  - avoiding further container
-      structs
-    * We introduce key concept of `ReplayRecord` that has all info to replay a block (along from the key value state
-      access):
-
-```rust
-pub struct ReplayRecord {
-    pub context: BatchContext,
-    pub transactions: Vec<Transaction>,
-}
-```
-
+  * to meet throughput and latency requirements, we avoid synchronous persistence at the critical path. Additionally,
+    we aim at storing only the data that is strictly needed - minimizing the potential for state inconsistency
+* Easy to replay arbitrary blocks:
+  * Sequencer: components are idempotent
+  * Batcher: `batcher` component skips all blocks until the first uncommitted batch - thus, downstream components only receive batches that they need need to act upon 
 * State - strong separation between:
     1. Actual state - data needed to execute VM: key-value storage and preimages map - see `state` crate
     2. Receipts repositories - data only needed in API - see `repositories/mod.rs`
     3. Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from `batcher` -
        see below.
-
-Minimal Node only needs (1).
-
-## Known restrictions
-
-* lacking seal criteria - potential for unprovable blocks
-* older blocks are not available for eth_call
-* no upgrade/interop logic
 
 ## Glossary
 
@@ -189,10 +191,17 @@ Minimal Node only needs (1).
     * One `block` = one vm run in block_executor = one block_receipt,
     * one `batch` = one FRI proof = one L1 commit.
 
-Important: currently zksync-os uses term `batch` for blocks (e.g. `run_batch` etc.).
-Also, return type of a block is `BatchOutput` - which represents a block in our case.
-todo: use `use BatchOutput as BlockOutput` in this repo to avoid confusion.
-
 ## L1 State
 
 Please see the [How to run with L1 doc](docs/running_with_l1.md)
+
+## FAQ
+
+**Failed to read L1 state: contract call to `getAllZKChainChainIDs` returned no data ("0x"); the called address might
+not be a contract**
+
+Something went wrong with L1 - check that you're really running the anvil with the proper state on the right port.
+
+**Failed to deserialize context**
+
+If you hit this error when starting, check if you don't have some 'old' rocksDB data in db/node1 directory.
