@@ -17,7 +17,7 @@ members = [
     "lib/storage",
     "lib/storage_api",
     "lib/types",
-    "node/sequencer",
+    "node/bin",
     "integration-tests",
     "tools/generate-deposit",
     "lib/observability",
@@ -25,7 +25,7 @@ members = [
     "lib/state_full_diffs",
 ]
 resolver = "3"
-default-members = ["node/sequencer"]
+default-members = ["node/bin"]
 
 [workspace.package]
 version = "0.1.2-non-semver-compat"
@@ -155,7 +155,7 @@ zksync_os_types = { path = "lib/types" }
 zksync_os_genesis = { path = "lib/genesis" }
 zksync_os_object_store = { path = "lib/object_store" }
 
-zksync_os_bin = { path = "node/sequencer" }
+zksync_os_bin = { path = "node/bin" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
