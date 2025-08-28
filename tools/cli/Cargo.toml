@@ -1,0 +1,21 @@
+[package]
+name = "zksync_os_cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+hex.workspace = true
+alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "signer-local"] }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["full"] }
+clap = { workspace = true, features = ["derive"] }
+rocksdb.workspace = true
+bincode.workspace = true
+ruint.workspace = true
+serde.workspace = true
