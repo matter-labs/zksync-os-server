@@ -6,6 +6,7 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 mod metadata;
+mod metrics;
 mod node_state_on_startup;
 pub mod prover_api;
 mod prover_input_generator;
@@ -21,6 +22,7 @@ use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, ProverApiConfig};
 use crate::metadata::NODE_VERSION;
+use crate::metrics::NODE_META_METRICS;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -84,6 +86,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     config: Config,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
+    NODE_META_METRICS.version[&NODE_VERSION].set(1);
+    let role: &'static str = if config.sequencer_config.is_main_node() {
+        "main_node"
+    } else {
+        "external_node"
+    };
+    NODE_META_METRICS.role[&role].set(1);
+
     tracing::info!(version = %node_version, "Initializing Node");
 
     let (blocks_for_batcher_subsystem_sender, blocks_for_batcher_subsystem_receiver) =
@@ -167,6 +177,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
 
     let node_startup_state = NodeStateOnStartup {
+        is_main_node: config.sequencer_config.is_main_node(),
         l1_state,
         state_block_range_available: state.block_range_available(),
         block_replay_storage_last_block: block_replay_storage.latest_block().unwrap_or(0),
@@ -209,6 +220,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         starting_block,
         "Node state on startup"
     );
+
+    node_startup_state.assert_consistency();
 
     tracing::info!("Initializing L1 Watchers");
     let finality_storage = Finality::new(FinalityStatus {
@@ -374,16 +387,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .await
     });
 
-    if config
-        .sequencer_config
-        .block_replay_download_address
-        .is_none()
-    {
+    if config.sequencer_config.is_main_node() {
+        // Main Node
         let genesis_block = repositories
             .get_block_by_number(0)
             .expect("Failed to read genesis block from repositories")
             .expect("Missing genesis block in repositories");
-        // Main Node
         run_batcher_subsystem(
             config,
             l1_provider.clone(),

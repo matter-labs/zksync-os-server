@@ -8,7 +8,7 @@ use vise::{Counter, EncodeLabelValue};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "stage", rename_all = "snake_case")]
 pub enum BatchExecutionStage {
-    Sealed,
+    BatchSealed,
     ProverInputStarted,
     FriProverPicked,
     FriProvedReal,
