@@ -28,7 +28,7 @@ impl L1SenderCommand for CommitCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::commitBatchesSharedBridgeCall::new((
-            U256::from(self.input.batch.commit_batch_info.chain_id),
+            self.input.batch.commit_batch_info.chain_address,
             U256::from(self.input.batch_number()),
             U256::from(self.input.batch_number()),
             self.to_calldata_suffix().into(),
@@ -66,7 +66,7 @@ impl CommitCommand {
     /// function makes sure last committed batch and new batch are encoded correctly.
     fn to_calldata_suffix(&self) -> Vec<u8> {
         /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+        const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);

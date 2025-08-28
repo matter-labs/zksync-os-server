@@ -507,12 +507,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
 
     let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
-        load_genesis_stored_batch_info(
-            genesis_block,
-            persistent_tree.clone(),
-            config.genesis_config.chain_id,
-        )
-        .await
+        load_genesis_stored_batch_info(genesis_block, persistent_tree.clone()).await
     } else {
         batch_storage
             .get(node_state_on_startup.l1_state.last_committed_batch)
@@ -579,6 +574,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     tracing::info!("Initializing Batcher");
     let batcher = Batcher::new(
         config.genesis_config.chain_id,
+        node_state_on_startup.l1_state.diamond_proxy,
         node_state_on_startup.last_committed_block + 1,
         node_state_on_startup.repositories_persisted_block,
         config.sequencer_config.block_pubdata_limit_bytes,
