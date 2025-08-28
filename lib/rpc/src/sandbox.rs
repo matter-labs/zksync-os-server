@@ -101,7 +101,6 @@ impl CallTracer {
 
 impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     fn on_new_execution_frame(&mut self, initial_state: &ExecutionEnvironmentLaunchParams<S>) {
-        println!("NEW FRAME");
         self.current_call_depth += 1;
 
         if !self.only_top_call || self.current_call_depth == 1 {
@@ -168,7 +167,6 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     }
 
     fn after_execution_frame_completed(&mut self, result: Option<(&S::Resources, &CallResult<S>)>) {
-        println!("FINISHED FRAME");
         assert_ne!(self.current_call_depth, 0);
 
         if !self.only_top_call || self.current_call_depth == 1 {
