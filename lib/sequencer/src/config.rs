@@ -34,3 +34,9 @@ pub struct SequencerConfig {
     #[config(default_t = 110_000)]
     pub block_pubdata_limit_bytes: u64,
 }
+
+impl SequencerConfig {
+    pub fn is_main_node(&self) -> bool {
+        self.block_replay_download_address.is_none()
+    }
+}
