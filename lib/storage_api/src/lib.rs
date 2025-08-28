@@ -15,5 +15,8 @@ pub use finality::{ReadFinality, WriteFinality};
 mod repository;
 pub use repository::{ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult};
 
+mod metered_state;
 mod state;
-pub use state::{ReadStateHistory, StateError, StateResult, ViewState};
+pub use metered_state::{MeteredViewState, StateAccessLabel};
+
+pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};

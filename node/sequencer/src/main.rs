@@ -6,11 +6,13 @@ use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_sequencer::config::{
-    BatcherConfig, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    BatcherConfig, Config, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig,
 };
 use zksync_os_sequencer::run;
 use zksync_os_sequencer::zkstack_config::ZkStackConfig;
+use zksync_os_state::StateHandle;
+use zksync_os_state_full_diffs::FullDiffsState;
 
 #[tokio::main]
 pub async fn main() {
@@ -23,47 +25,28 @@ pub async fn main() {
         .init();
 
     // =========== load configs ===========
-    let (
-        general_config,
-        genesis_config,
-        rpc_config,
-        mempool_config,
-        sequencer_config,
-        l1_sender_config,
-        l1_watcher_config,
-        batcher_config,
-        prover_input_generator_config,
-        prover_api_config,
-    ) = build_configs();
+    let config = build_configs();
 
     let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(general_config.prometheus_port);
+        PrometheusExporterConfig::pull(config.general_config.prometheus_port);
 
     // =========== init interruption channel ===========
 
     // todo: implement interruption handling in other tasks
     let (_stop_sender, stop_receiver) = watch::channel(false);
-
     // ======= Run tasks ===========
-    tokio::select! {
-        // ── Main task ───────────────────────────────────────────────
-        _ = run(
-            stop_receiver.clone(),
-            general_config,
-            genesis_config,
-            rpc_config,
-            mempool_config,
-            sequencer_config,
-            l1_sender_config,
-            l1_watcher_config,
-            batcher_config,
-            prover_input_generator_config,
-            prover_api_config,
-        ) => {}
+    let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
-        // ── Prometheus task ─────────────────────────────────────────
-        res = prometheus
-            .run(stop_receiver) => {
+    let main_task = async move {
+        match config.general_config.state_backend {
+            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
+            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+        }
+    };
+
+    tokio::select! {
+        _ = main_task => {},
+        res = prometheus.run(stop_receiver) => {
             match res {
                 Ok(_)  => tracing::warn!("Prometheus exporter unexpectedly exited"),
                 Err(e) => tracing::error!("Prometheus exporter failed: {e:#}"),
@@ -72,18 +55,7 @@ pub async fn main() {
     }
 }
 
-fn build_configs() -> (
-    GeneralConfig,
-    GenesisConfig,
-    RpcConfig,
-    MempoolConfig,
-    SequencerConfig,
-    L1SenderConfig,
-    L1WatcherConfig,
-    BatcherConfig,
-    ProverInputGeneratorConfig,
-    ProverApiConfig,
-) {
+fn build_configs() -> Config {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
     schema
@@ -199,7 +171,7 @@ fn build_configs() -> (
             .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
     }
 
-    (
+    Config {
         general_config,
         genesis_config,
         rpc_config,
@@ -210,5 +182,5 @@ fn build_configs() -> (
         batcher_config,
         prover_input_generator_config,
         prover_api_config,
-    )
+    }
 }

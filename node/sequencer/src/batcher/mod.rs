@@ -10,6 +10,9 @@ use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
+use zksync_os_observability::{
+    ComponentStateHandle, ComponentStateReporter, GenericComponentState,
+};
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
@@ -72,8 +75,12 @@ impl Batcher {
 
     /// Main processing loop for the batcher
     pub async fn run_loop(mut self, mut prev_batch_info: StoredBatchInfo) -> anyhow::Result<()> {
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("batcher", GenericComponentState::WaitingRecv);
         loop {
-            let batch_envelope = self.create_batch(&prev_batch_info).await?;
+            let batch_envelope = self
+                .create_batch(&prev_batch_info, &latency_tracker)
+                .await?;
             BATCHER_METRICS
                 .transactions_per_batch
                 .observe(batch_envelope.batch.tx_count as u64);
@@ -87,6 +94,7 @@ impl Batcher {
                 new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                 "Batch created"
             );
+            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             self.batch_data_sender
                 .send(batch_envelope)
                 .await
@@ -97,6 +105,7 @@ impl Batcher {
     async fn create_batch(
         &mut self,
         prev_batch_info: &StoredBatchInfo,
+        latency_tracker: &ComponentStateHandle<GenericComponentState>,
     ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
         // will be set to `Some` when we process the first block that the batch can be sealed after
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
@@ -108,7 +117,41 @@ impl Batcher {
             self.pubdata_limit_bytes,
         );
 
+        // skip the blocks from already committed batches
+        // when the server restarts some historical blocks are replayed - they are already batched and committed
         loop {
+            match self
+                .block_receiver
+                .peek_recv(|(_, replay_record, _)| {
+                    replay_record.block_context.block_number < self.first_block_to_process
+                })
+                .await
+            {
+                Some(true) => {
+                    // the block is before the first block to process, skip it
+                    let Some((_, replay_record, _)) = self.block_receiver.pop_buffer() else {
+                        anyhow::bail!("No block in buffer after peeking")
+                    };
+                    tracing::debug!(
+                        block_number = replay_record.block_context.block_number,
+                        "Skipping block before the first block to process",
+                    );
+                }
+                Some(false) => {
+                    // the block is within the range to process, proceed to batching
+                    break;
+                }
+                None => {
+                    anyhow::bail!("Batcher's block receiver channel closed unexpectedly");
+                }
+            }
+        }
+        tracing::info!(
+            self.first_block_to_process,
+            "Received the first block after the last committed one."
+        );
+        loop {
+            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
                 /* ---------- check for timeout ---------- */
                 _ = async {
@@ -123,9 +166,12 @@ impl Batcher {
 
                 /* ---------- collect blocks ---------- */
                 should_seal = self.block_receiver.peek_recv(|(block_output, _, _)| {
+                    // don't try to seal batches that are already processed
+                    block_output.header.number >= self.first_block_to_process &&
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output).is_batch_limit_reached(blocks.len())
+                        accumulator.clone().add(block_output).is_batch_limit_reached(blocks.len())
                 }) => {
+                    latency_tracker.enter_state(GenericComponentState::Processing);
                     match should_seal {
                         Some(true) => {
                             // some of the limits was reached, start sealing the batch
@@ -136,23 +182,17 @@ impl Batcher {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
+                            tracing::debug!(
+                                batch_number,
+                                block_number = replay_record.block_context.block_number,
+                                "Adding block to a pending batch."
+                            );
                             let block_number = replay_record.block_context.block_number;
-
-                            // skip the blocks from already committed batches (on server restart we replay some historical blocks - they are already batched and committed, so no action is needed here)
-                            if block_number < self.first_block_to_process {
-                                tracing::debug!(
-                                    "Skipping block {} (batcher starting block is {})",
-                                    replay_record.block_context.block_number,
-                                    self.first_block_to_process
-                                );
-
-                                continue;
-                            }
 
                             /* ---------- process block ---------- */
                             let tree = self.persistent_tree
                                 .clone()
-                                .get_at_block(replay_record.block_context.block_number)
+                                .get_at_block(block_number)
                                 .await;
 
                             let (root_hash, leaf_count) = tree.root_info()?;
@@ -174,8 +214,16 @@ impl Batcher {
 
                             // arm the timer after we process the block number that's more or equal
                             // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
-                            if deadline.is_none() && block_number >= self.last_persisted_block {
-                                deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
+                            if deadline.is_none() {
+                                if block_number >= self.last_persisted_block {
+                                    deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
+                                } else {
+                                    tracing::debug!(
+                                        block_number,
+                                        self.last_persisted_block,
+                                        "received block with number lower than `last_persisted_block`. Not enabling the deadline seal criteria yet."
+                                    )
+                                }
                             }
                         }
                         None => {

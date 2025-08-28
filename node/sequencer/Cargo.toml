@@ -30,13 +30,12 @@ zk_os_api.workspace = true
 
 air-compiler-cli.workspace = true
 execution_utils.workspace = true
-verifier_common.workspace = true
 full_statement_verifier.workspace = true
 
 reth-chainspec = { workspace = true }
 reth-trie-common = { workspace = true }
 reth-primitives.workspace = true
-reth-primitives-traits = {workspace = true }
+reth-primitives-traits = { workspace = true }
 reth-revm = { workspace = true }
 reth-storage-api = { workspace = true }
 reth-execution-types = { workspace = true }
@@ -66,6 +65,7 @@ bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }
 
 zksync_os_state.workspace = true
+zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
 axum.workspace = true
 http.workspace = true

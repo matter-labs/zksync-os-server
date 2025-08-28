@@ -1,11 +1,27 @@
 use alloy::primitives::Address;
+use serde::{Deserialize, Serialize};
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
 use std::{path::PathBuf, time::Duration};
+use zksync_os_l1_sender::config::L1SenderConfig;
+use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::ObjectStoreConfig;
 pub use zksync_os_rpc::RpcConfig;
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
 /// Default values are provided for local setup.
+#[derive(Debug)]
+pub struct Config {
+    pub general_config: GeneralConfig,
+    pub genesis_config: GenesisConfig,
+    pub rpc_config: RpcConfig,
+    pub mempool_config: MempoolConfig,
+    pub sequencer_config: SequencerConfig,
+    pub l1_sender_config: L1SenderConfig,
+    pub l1_watcher_config: L1WatcherConfig,
+    pub batcher_config: BatcherConfig,
+    pub prover_input_generator_config: ProverInputGeneratorConfig,
+    pub prover_api_config: ProverApiConfig,
+}
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -29,26 +45,39 @@ pub struct GeneralConfig {
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
     ///
-    /// Currently, it affects both the storage logs (see `state` crate)
+    /// Currently, it affects both the storage logs (for Compacted state impl - see `state` crate for details)
     /// and repositories (see `repositories` package in this crate)
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
+
+    /// Min number of blocks to replay on restart
+    /// Depending on L1/persistence state, we may need to replay more blocks than this number
+    /// In some cases, we need to replay the whole blockchain (e.g. switching state backends) -
+    /// in such cases a warning is logged.
+    #[config(default_t = 10)]
+    pub min_blocks_to_replay: usize,
 
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
 
-    /// If set to true, the server will replay all blocks starting from genesis.
-    /// Useful when there are inconsistencies in saved block numbers.
-    #[config(default_t = false)]
-    pub replay_all_blocks_unsafe: bool,
-
     /// Prometheus address to listen on.
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
+    /// Prometheus address to listen on.
+    #[config(default_t = StateBackendConfig::FullDiffs)]
+    #[config(with = Serde![str])]
+    pub state_backend: StateBackendConfig,
+
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum StateBackendConfig {
+    FullDiffs,
+    Compacted,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

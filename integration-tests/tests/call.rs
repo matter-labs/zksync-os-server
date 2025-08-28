@@ -112,7 +112,9 @@ async fn call_fail() -> anyhow::Result<()> {
     Ok(())
 }
 
+// todo: enable this test after we upgrade to zksync-os 0.0.14
 #[test_log::test(tokio::test)]
+#[ignore]
 async fn call_deploy() -> anyhow::Result<()> {
     // Test that the node can run `eth_call` with contract deployment
     let tester = Tester::setup().await?;
