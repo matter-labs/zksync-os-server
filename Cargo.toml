@@ -70,7 +70,7 @@ air-compiler-cli = { package = "cli", git = "https://github.com/matter-labs/zksy
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 
-zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "main" }
+zksync_os_fri_prover = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", branch = "main" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
