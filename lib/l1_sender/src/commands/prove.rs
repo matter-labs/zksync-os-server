@@ -32,7 +32,12 @@ impl L1SenderCommand for ProofCommand {
 
     fn solidity_call(&self) -> impl SolCall {
         proveBatchesSharedBridgeCall::new((
-            U256::from(0),
+            self.batches
+                .first()
+                .unwrap()
+                .batch
+                .commit_batch_info
+                .chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),
@@ -179,7 +184,8 @@ impl ProofCommand {
             proof,
         };
 
-        const SUPPORTED_ENCODING_VERSION: u8 = 0;
+        /// Current commitment encoding version as per protocol.
+        const SUPPORTED_ENCODING_VERSION: u8 = 1;
 
         let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
         proof_payload.abi_encode_raw(&mut proof_data);

@@ -12,11 +12,12 @@ members = [
     "lib/rocksdb",
     "lib/rpc",
     "lib/rpc_api",
+    "lib/sequencer",
     "lib/state",
     "lib/storage",
     "lib/storage_api",
     "lib/types",
-    "node/sequencer",
+    "node/bin",
     "integration-tests",
     "tools/generate-deposit",
     "lib/observability",
@@ -24,7 +25,7 @@ members = [
     "lib/state_full_diffs",
 ]
 resolver = "3"
-default-members = ["node/sequencer"]
+default-members = ["node/bin"]
 
 [workspace.package]
 version = "0.1.2-non-semver-compat"
@@ -50,15 +51,15 @@ serde_with = "1"
 serde_json = "1"
 
 
-#zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility", "unlimited_native", "no_print"] }
+#zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility", "no_print"] }
 #zk_ee = { package = "zk_ee", path = "../zksync-os/zk_ee" }
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.13", features = ["evm-compatibility", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.13" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.13" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.13" }
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.14", features = ["evm-compatibility", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.14" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.14" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.14" }
 
 #air-compiler-cli = { package = "cli", path = "../zksync-airbender/tools/cli" }
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
@@ -69,6 +70,8 @@ air-compiler-cli = { package = "cli", git = "https://github.com/matter-labs/zksy
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.3.3" }
 
+zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "main" }
+
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7", features = ["codec"], default-features = false }
@@ -78,8 +81,6 @@ itertools = "0.14.0"
 futures = "0.3"
 vise = "0.3.0"
 vise-exporter = "0.3.0"
-hex = "0.4"
-crossbeam-queue = "0.3"
 bincode = { version = "2.0.1", features = ["serde"] }
 smart-config = "=0.2.0-pre"
 thiserror = "2.0.12"
@@ -95,7 +96,6 @@ tempfile = "3.0.2"
 base64 = "0.22.1"
 axum = "0.7.9"
 http = "1.3.1"
-parking_lot = "0.12.4"
 fs2 = "0.4.3"
 test-log = "0.2.18"
 backon = "1.5.1"
@@ -145,6 +145,7 @@ zksync_os_observability = { path = "lib/observability" }
 zksync_os_rocksdb = { path = "lib/rocksdb" }
 zksync_os_rpc = { path = "lib/rpc" }
 zksync_os_rpc_api = { path = "lib/rpc_api" }
+zksync_os_sequencer = { path = "lib/sequencer" }
 zksync_os_state = { path = "lib/state" }
 zksync_os_state_full_diffs = { path = "lib/state_full_diffs" }
 zksync_os_storage = { path = "lib/storage" }
@@ -153,7 +154,7 @@ zksync_os_types = { path = "lib/types" }
 zksync_os_genesis = { path = "lib/genesis" }
 zksync_os_object_store = { path = "lib/object_store" }
 
-zksync_os_sequencer = { path = "node/sequencer" }
+zksync_os_bin = { path = "node/bin" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

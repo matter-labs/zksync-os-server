@@ -13,11 +13,11 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
-use zksync_os_sequencer::config::{
+use zksync_os_bin::config::{
     Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
 };
+use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
@@ -98,13 +98,20 @@ impl Tester {
         })
         .await?;
 
+        // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
-        let l2_address = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
+        let replay_locked_port = LockedPort::acquire_unused().await?;
+        let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
+        let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
+        let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
+        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
+        let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
+        let replay_url = format!("localhost:{}", replay_locked_port.port);
+
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
-        let replay_url = format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port);
         let object_store_path =
             object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
 
@@ -114,12 +121,12 @@ impl Tester {
             ..Default::default()
         };
         let sequencer_config = SequencerConfig {
-            block_replay_server_address: replay_url.clone(),
+            block_replay_server_address: replay_address.clone(),
             block_replay_download_address: main_node_replay_url,
             ..Default::default()
         };
         let rpc_config = RpcConfig {
-            address: format!("0.0.0.0:{}", l2_locked_port.port),
+            address: l2_rpc_address,
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
@@ -131,7 +138,7 @@ impl Tester {
                 enabled: true,
                 ..Default::default()
             },
-            address: format!("0.0.0.0:{}", prover_api_locked_port.port),
+            address: prover_api_address,
             object_store: ObjectStoreConfig {
                 mode: ObjectStoreMode::FileBacked {
                     file_backed_base_path: object_store_path.clone(),
@@ -160,10 +167,9 @@ impl Tester {
             prover_api_config,
         };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_sequencer::run::<FullDiffsState>(stop_receiver, config).await;
+            zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
-        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         #[cfg(feature = "prover-tests")]
         if enable_prover {
             tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
@@ -183,7 +189,7 @@ impl Tester {
         let l2_provider = (|| async {
             let l2_provider = ProviderBuilder::new()
                 .wallet(l2_wallet.clone())
-                .connect(&l2_address)
+                .connect(&l2_rpc_ws_url)
                 .await?;
 
             // Wait for L2 node to get up and be able to respond.
@@ -222,7 +228,7 @@ impl Tester {
 
         let l2_zk_provider = ProviderBuilder::new_with_network::<Zksync>()
             .wallet(l2_wallet.clone())
-            .connect(&l2_address)
+            .connect(&l2_rpc_ws_url)
             .await?;
 
         Ok(Tester {
