@@ -1,6 +1,7 @@
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
 use crate::util::peekable_receiver::PeekableReceiver;
+use alloy::primitives::Address;
 use std::pin::Pin;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
@@ -24,6 +25,7 @@ pub struct Batcher {
     // == initial state ==
     // L2 chain id
     chain_id: u64,
+    chain_address: Address,
     // first block to process
     first_block_to_process: u64,
     /// Last persisted block. We should not seal batches by timeout until this block is reached.
@@ -49,6 +51,7 @@ impl Batcher {
     pub fn new(
         // == initial state ==
         chain_id: u64,
+        chain_address: Address,
         first_block_to_process: u64,
         last_persisted_block: u64,
 
@@ -63,6 +66,7 @@ impl Batcher {
     ) -> Self {
         Self {
             chain_id,
+            chain_address,
             first_block_to_process,
             last_persisted_block,
             pubdata_limit_bytes,
@@ -241,6 +245,7 @@ impl Batcher {
             prev_batch_info.clone(),
             batch_number,
             self.chain_id,
+            self.chain_address,
         )
     }
 }

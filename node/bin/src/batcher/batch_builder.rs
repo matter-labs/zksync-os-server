@@ -1,3 +1,4 @@
+use alloy::primitives::Address;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
@@ -16,6 +17,7 @@ pub(crate) fn seal_batch(
     prev_batch_info: StoredBatchInfo,
     batch_number: u64,
     chain_id: u64,
+    chain_address: Address,
 ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
@@ -33,6 +35,7 @@ pub(crate) fn seal_batch(
             })
             .collect(),
         chain_id,
+        chain_address,
         batch_number,
     );
 
