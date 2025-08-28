@@ -1,19 +1,19 @@
-use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::SequencerConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
-use crate::model::blocks::{BlockCommand, ProduceCommand};
+use crate::model::blocks::BlockCommand;
 use anyhow::Context;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use zk_os_forward_system::run::BlockOutput;
+use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::ComponentStateReporter;
-use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, WriteState};
+use zksync_os_storage_api::{
+    ReadStateHistory, ReplayRecord, WriteReplay, WriteRepository, WriteState,
+};
 
 pub mod block_context_provider;
 pub mod block_executor;
@@ -22,16 +22,19 @@ pub(crate) mod utils;
 pub mod vm_wrapper;
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run_sequencer_actor<R: ReadStateHistory + WriteState + Clone>(
+pub async fn run_sequencer_actor<
+    State: ReadStateHistory + WriteState + Clone,
+    Mempool: L2TransactionPool,
+>(
     mut block_stream: BoxStream<'_, BlockCommand>,
 
     prover_input_generator_sink: Sender<(BlockOutput, ReplayRecord)>,
     tree_sink: Sender<BlockOutput>,
 
-    mut command_block_context_provider: BlockContextProvider<R>,
-    state: R,
-    wal: BlockReplayStorage,
-    repositories: RepositoryManager,
+    mut command_block_context_provider: BlockContextProvider<Mempool>,
+    state: State,
+    wal: impl WriteReplay,
+    repositories: impl WriteRepository,
     sequencer_config: SequencerConfig,
 ) -> anyhow::Result<()> {
     let latency_tracker =
@@ -89,7 +92,7 @@ pub async fn run_sequencer_actor<R: ReadStateHistory + WriteState + Clone>(
 
         // todo: do not call if api is not enabled.
         repositories
-            .populate_in_memory_blocking(block_output.clone(), replay_record.transactions.clone())
+            .populate(block_output.clone(), replay_record.transactions.clone())
             .await;
 
         tracing::debug!(block_number, "Added to repos. Updating mempools...",);
@@ -103,7 +106,7 @@ pub async fn run_sequencer_actor<R: ReadStateHistory + WriteState + Clone>(
         tracing::debug!(block_number, "Reported to mempools. Adding to wal...");
         latency_tracker.enter_state(SequencerState::AddingToWal);
 
-        wal.append_replay(replay_record.clone());
+        wal.append(replay_record.clone());
 
         tracing::debug!(block_number, "Added to wal. Sending to batcher...");
         latency_tracker.enter_state(SequencerState::SendingToBatcher);
@@ -121,35 +124,4 @@ pub async fn run_sequencer_actor<R: ReadStateHistory + WriteState + Clone>(
 
         tracing::debug!(block_number, "Block fully processed");
     }
-}
-
-pub fn command_source(
-    block_replay_wal: &BlockReplayStorage,
-    block_to_start: u64,
-    block_time: Duration,
-    max_transactions_in_block: usize,
-) -> BoxStream<BlockCommand> {
-    let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
-    tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
-    tracing::info!(block_to_start, "block_to_start: {block_to_start}");
-
-    // Stream of replay commands from WAL
-    let replay_wal_stream: BoxStream<BlockCommand> =
-        Box::pin(block_replay_wal.replay_commands_from(block_to_start));
-
-    // Combined source: run WAL replay first, then produce blocks from mempool
-    let produce_stream: BoxStream<BlockCommand> =
-        futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
-            Some((
-                BlockCommand::Produce(ProduceCommand {
-                    block_number,
-                    block_time,
-                    max_transactions_in_block,
-                }),
-                block_number + 1,
-            ))
-        })
-        .boxed();
-    let stream = replay_wal_stream.chain(produce_stream);
-    stream.boxed()
 }

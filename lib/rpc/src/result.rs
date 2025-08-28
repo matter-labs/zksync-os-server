@@ -4,6 +4,7 @@
 
 //! Additional helpers for converting errors.
 
+use crate::debug_impl::DebugError;
 use crate::eth_call_handler::EthCallError;
 use crate::eth_filter_impl::EthFilterError;
 use crate::eth_impl::EthError;
@@ -112,6 +113,7 @@ impl_to_rpc_result!(EthSendRawTransactionError);
 impl_to_rpc_result!(EthFilterError);
 impl_to_rpc_result!(EthError);
 impl_to_rpc_result!(ZksError);
+impl_to_rpc_result!(DebugError);
 
 /// Constructs an unimplemented JSON-RPC error.
 pub fn unimplemented_rpc_err() -> jsonrpsee::types::error::ErrorObject<'static> {

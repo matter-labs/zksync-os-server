@@ -12,11 +12,13 @@ mod ots_impl;
 mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
+mod debug_impl;
 mod sandbox;
 mod tx_handler;
 mod types;
 mod zks_impl;
 
+use crate::debug_impl::DebugNamespace;
 use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
@@ -29,6 +31,7 @@ use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_mempool::L2TransactionPool;
+use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_rpc_api::ots::OtsApiServer;
@@ -53,7 +56,8 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     )?;
     rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
     rpc.merge(ZksNamespace::new(bridgehub_address, storage.clone()).into_rpc())?;
-    rpc.merge(OtsNamespace::new(storage).into_rpc())?;
+    rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
+    rpc.merge(DebugNamespace::new(storage).into_rpc())?;
 
     // Add a CORS middleware for handling HTTP requests.
     // This middleware does affect the response, including appropriate
