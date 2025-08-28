@@ -98,13 +98,17 @@ impl Tester {
         })
         .await?;
 
+        // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
-        let l2_address = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
+        let replay_locked_port = LockedPort::acquire_unused().await?;
+        let l2_url = format!("ws://localhost:{}", l2_locked_port.port);
+        let prover_api_url = format!("0.0.0.0:{}", prover_api_locked_port.port);
+        let replay_url = format!("0.0.0.0:{}", replay_locked_port.port);
+
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
-        let replay_url = format!("0.0.0.0:{}", LockedPort::acquire_unused().await?.port);
         let object_store_path =
             object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
 
@@ -131,7 +135,7 @@ impl Tester {
                 enabled: true,
                 ..Default::default()
             },
-            address: format!("0.0.0.0:{}", prover_api_locked_port.port),
+            address: prover_api_url.clone(),
             object_store: ObjectStoreConfig {
                 mode: ObjectStoreMode::FileBacked {
                     file_backed_base_path: object_store_path.clone(),
@@ -163,7 +167,6 @@ impl Tester {
             zksync_os_sequencer::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
-        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         #[cfg(feature = "prover-tests")]
         if enable_prover {
             tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
@@ -183,7 +186,7 @@ impl Tester {
         let l2_provider = (|| async {
             let l2_provider = ProviderBuilder::new()
                 .wallet(l2_wallet.clone())
-                .connect(&l2_address)
+                .connect(&l2_url)
                 .await?;
 
             // Wait for L2 node to get up and be able to respond.
@@ -222,7 +225,7 @@ impl Tester {
 
         let l2_zk_provider = ProviderBuilder::new_with_network::<Zksync>()
             .wallet(l2_wallet.clone())
-            .connect(&l2_address)
+            .connect(&l2_url)
             .await?;
 
         Ok(Tester {
