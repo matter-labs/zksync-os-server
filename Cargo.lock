@@ -10282,7 +10282,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dashmap",
- "evm_interpreter",
  "forward_system",
  "futures",
  "hyper 1.6.0",

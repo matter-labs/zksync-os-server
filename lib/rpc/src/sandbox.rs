@@ -10,13 +10,17 @@ use zk_ee::system::{
     SystemTypes,
 };
 use zk_ee::types_config::SystemIOTypesConfig;
-use zk_os_evm_interpreter::{ERGS_PER_GAS, STACK_SIZE};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
 use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::test_impl::{NoopTxCallback, TxListSource};
 use zk_os_forward_system::run::{BlockContext, run_block, simulate_tx};
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
+
+/// EVM max stack size.
+pub const STACK_SIZE: usize = 1024;
+/// zksync-os ergs per gas.
+pub const ERGS_PER_GAS: u64 = 256;
 
 pub fn execute(
     tx: L2Transaction,
