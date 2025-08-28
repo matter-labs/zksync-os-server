@@ -1,11 +1,9 @@
 use crate::execution::block_executor::SealReason;
-use std::time::Duration;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics};
 use vise::{Counter, EncodeLabelValue};
 use zksync_os_observability::{GenericComponentState, StateLabel};
 use zksync_os_storage_api::StateAccessLabel;
 
-const LATENCIES_FAST: Buckets = Buckets::exponential(0.0000001..=1.0, 2.0);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "state", rename_all = "snake_case")]
 pub enum SequencerState {
@@ -95,18 +93,5 @@ pub struct ExecutionMetrics {
     pub next_l1_priority_id: Gauge<u64>,
 }
 
-#[derive(Debug, Metrics)]
-#[metrics(prefix = "block_replay_storage")]
-pub struct BlockReplayRocksDBMetrics {
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub get_latency: Histogram<Duration>,
-
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub set_latency: Histogram<Duration>,
-}
 #[vise::register]
 pub(crate) static EXECUTION_METRICS: vise::Global<ExecutionMetrics> = vise::Global::new();
-
-#[vise::register]
-pub(crate) static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
-    vise::Global::new();

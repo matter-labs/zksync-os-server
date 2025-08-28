@@ -5,10 +5,8 @@ mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
-pub mod execution;
 mod metadata;
 mod metrics;
-pub mod model;
 mod node_state_on_startup;
 pub mod prover_api;
 mod prover_input_generator;
@@ -23,8 +21,6 @@ use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, ProverApiConfig};
-use crate::execution::block_context_provider::BlockContextProvider;
-use crate::execution::{command_source, run_sequencer_actor};
 use crate::metadata::NODE_VERSION;
 use crate::metrics::NODE_META_METRICS;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -45,10 +41,13 @@ use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use futures::FutureExt;
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use ruint::aliases::U256;
 use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -67,6 +66,9 @@ use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
+use zksync_os_sequencer::execution::run_sequencer_actor;
+use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
@@ -414,6 +416,37 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await;
     };
     tasks.join_next().await;
+}
+
+fn command_source(
+    block_replay_wal: &BlockReplayStorage,
+    block_to_start: u64,
+    block_time: Duration,
+    max_transactions_in_block: usize,
+) -> BoxStream<BlockCommand> {
+    let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
+    tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
+    tracing::info!(block_to_start, "block_to_start: {block_to_start}");
+
+    // Stream of replay commands from WAL
+    let replay_wal_stream: BoxStream<BlockCommand> =
+        Box::pin(block_replay_wal.replay_commands_from(block_to_start));
+
+    // Combined source: run WAL replay first, then produce blocks from mempool
+    let produce_stream: BoxStream<BlockCommand> =
+        futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
+            Some((
+                BlockCommand::Produce(ProduceCommand {
+                    block_number,
+                    block_time,
+                    max_transactions_in_block,
+                }),
+                block_number + 1,
+            ))
+        })
+        .boxed();
+    let stream = replay_wal_stream.chain(produce_stream);
+    stream.boxed()
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
