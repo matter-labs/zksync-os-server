@@ -67,7 +67,7 @@ zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/z
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.4.3" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.4.3" }
 
-zksync_os_fri_prover = { git = "ssh://git@github.com/matter-labs/zksync-airbender-prover.git", branch = "main" }
+zksync_os_fri_prover = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", rev = "a67c054547a14311bb1c87ca331ba3a0aac5ef69" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
@@ -130,28 +130,28 @@ reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
 
 # "Local" dependencies
-zksync_os_contract_interface = { path = "lib/contract_interface" }
-zksync_os_crypto = { path = "lib/crypto" }
-zksync_os_l1_sender = { path = "lib/l1_sender" }
-zksync_os_l1_watcher = { path = "lib/l1_watcher" }
-zksync_os_mempool = { path = "lib/mempool" }
-zksync_os_mini_merkle_tree = { path = "lib/mini_merkle_tree" }
-zksync_os_merkle_tree = { path = "lib/merkle_tree" }
-zksync_os_priority_tree = { path = "lib/priority_tree" }
-zksync_os_observability = { path = "lib/observability" }
-zksync_os_rocksdb = { path = "lib/rocksdb" }
-zksync_os_rpc = { path = "lib/rpc" }
-zksync_os_rpc_api = { path = "lib/rpc_api" }
-zksync_os_sequencer = { path = "lib/sequencer" }
-zksync_os_state = { path = "lib/state" }
-zksync_os_state_full_diffs = { path = "lib/state_full_diffs" }
-zksync_os_storage = { path = "lib/storage" }
-zksync_os_storage_api = { path = "lib/storage_api" }
-zksync_os_types = { path = "lib/types" }
-zksync_os_genesis = { path = "lib/genesis" }
-zksync_os_object_store = { path = "lib/object_store" }
+zksync_os_contract_interface = { version = "=0.1.2-non-semver-compat", path = "lib/contract_interface" }
+zksync_os_crypto = { version = "=0.1.2-non-semver-compat", path = "lib/crypto" }
+zksync_os_l1_sender = { version = "=0.1.2-non-semver-compat", path = "lib/l1_sender" }
+zksync_os_l1_watcher = { version = "=0.1.2-non-semver-compat", path = "lib/l1_watcher" }
+zksync_os_mempool = { version = "=0.1.2-non-semver-compat", path = "lib/mempool" }
+zksync_os_mini_merkle_tree = { version = "=0.1.2-non-semver-compat", path = "lib/mini_merkle_tree" }
+zksync_os_merkle_tree = { version = "=0.1.2-non-semver-compat", path = "lib/merkle_tree" }
+zksync_os_priority_tree = { version = "=0.1.2-non-semver-compat", path = "lib/priority_tree" }
+zksync_os_observability = { version = "=0.1.2-non-semver-compat", path = "lib/observability" }
+zksync_os_rocksdb = { version = "=0.1.2-non-semver-compat", path = "lib/rocksdb" }
+zksync_os_rpc = { version = "=0.1.2-non-semver-compat", path = "lib/rpc" }
+zksync_os_rpc_api = { version = "=0.1.2-non-semver-compat", path = "lib/rpc_api" }
+zksync_os_sequencer = { version = "=0.1.2-non-semver-compat", path = "lib/sequencer" }
+zksync_os_state = { version = "=0.1.2-non-semver-compat", path = "lib/state" }
+zksync_os_state_full_diffs = { version = "=0.1.2-non-semver-compat", path = "lib/state_full_diffs" }
+zksync_os_storage = { version = "=0.1.2-non-semver-compat", path = "lib/storage" }
+zksync_os_storage_api = { version = "=0.1.2-non-semver-compat", path = "lib/storage_api" }
+zksync_os_types = { version = "=0.1.2-non-semver-compat", path = "lib/types" }
+zksync_os_genesis = { version = "=0.1.2-non-semver-compat", path = "lib/genesis" }
+zksync_os_object_store = { version = "=0.1.2-non-semver-compat", path = "lib/object_store" }
 
-zksync_os_bin = { path = "node/bin" }
+zksync_os_bin = { version = "=0.1.2-non-semver-compat", path = "node/bin" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
