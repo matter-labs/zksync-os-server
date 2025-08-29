@@ -15,7 +15,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_NET_GIT_FETCH_WITH_CLI: true
   TEST_RESULTS_XML: 'test-results.xml'
 
 jobs:
@@ -34,11 +33,6 @@ jobs:
         with:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache_shared_key: 'format-and-lint'
-
-      # This can be removed once zksync-airbender-prover is public.
-      - name: Configure Git for private repos
-        run: |
-          git config --global url."https://${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -64,11 +58,6 @@ jobs:
         with:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache_shared_key: 'build-and-test'
-
-      # This can be removed once zksync-airbender-prover is public.
-      - name: Configure Git for private repos
-        run: |
-          git config --global url."https://${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
 
       - name: Build project
         run: cargo build --all-targets --workspace --exclude zksync_os_integration_tests
@@ -105,11 +94,6 @@ jobs:
         with:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache_shared_key: 'integration-tests-${{ matrix.filterset }}'
-
-      # This can be removed once zksync-airbender-prover is public.
-      - name: Configure Git for private repos
-        run: |
-          git config --global url."https://${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}:x-oauth-basic@github.com/".insteadOf "ssh://git@github.com/"
 
       - name: Run integration tests (no prover)
         if: matrix.filterset == 'core'

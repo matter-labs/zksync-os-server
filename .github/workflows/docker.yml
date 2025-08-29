@@ -77,8 +77,6 @@ jobs:
           context: .
           load: true
           file: ./Dockerfile
-          secrets: |
-            GH_TOKEN=${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
           build-args: |
             SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage
             SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com
