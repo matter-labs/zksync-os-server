@@ -122,13 +122,13 @@ impl StorageMap {
         } else {
             // transaction replay or rollback
             let old_diff = self.diffs.get(&block_number).unwrap_or_else(|| {
-                panic!("missing diff for block {block_number} - latest_memory_block is be {latest_memory_block}")
+                panic!("missing diff for block {block_number} - latest_memory_block is {latest_memory_block}")
             });
 
             // Temporary:
             // check that we are inserting block with the same data.
             // Doesn't need to hold true with decentralization (ie actual rollbacks)
-            // Clones are expensive but only happen fo bounded number of blocks at startup
+            // Clones are expensive but only happen for bounded number of blocks at startup
             assert_eq!(
                 old_diff.map.len(),
                 new_diff.map.len(),

@@ -1,5 +1,6 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
+use std::ops::RangeInclusive;
 use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
@@ -88,6 +89,14 @@ pub struct RpcStorage<Repository, Replay, Finality, Batch, StateHistory> {
     state: StateHistory,
 }
 
+impl<Repository, Replay, Finality, Batch, StateHistory> std::fmt::Debug
+    for RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RpcStorage").finish()
+    }
+}
+
 impl<Repository, Replay, Finality, Batch, StateHistory>
     RpcStorage<Repository, Replay, Finality, Batch, StateHistory>
 {
@@ -150,5 +159,9 @@ impl<
         block_number: BlockNumber,
     ) -> StateResult<impl ReadStorageTree + PreimageSource + Clone> {
         self.state.state_view_at(block_number)
+    }
+
+    fn block_range_available(&self) -> RangeInclusive<u64> {
+        self.state.block_range_available()
     }
 }

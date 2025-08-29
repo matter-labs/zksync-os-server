@@ -7,7 +7,7 @@ pub use replay_wire_format::{
 };
 
 mod replay;
-pub use replay::ReadReplay;
+pub use replay::{ReadReplay, WriteReplay};
 
 mod batch;
 pub use batch::ReadBatch;
@@ -18,10 +18,12 @@ mod finality;
 pub use finality::{ReadFinality, WriteFinality};
 
 mod repository;
-pub use repository::{ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult};
+pub use repository::{
+    ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult, WriteRepository,
+};
 
 mod metered_state;
-mod state;
 pub use metered_state::{MeteredViewState, StateAccessLabel};
 
-pub use state::{ReadStateHistory, StateError, StateResult, ViewState};
+mod state;
+pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};

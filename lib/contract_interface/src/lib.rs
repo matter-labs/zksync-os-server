@@ -31,6 +31,13 @@ alloy::sol! {
         bytes reservedDynamic;
     }
 
+    // `Messaging.sol`
+    struct InteropRoot {
+        uint256 chainId;
+        uint256 blockOrBatchNumber;
+        bytes32[] sides;
+    }
+
     // `ZKChainStorage.sol`
     enum PubdataPricingMode {
         Rollup,
@@ -83,7 +90,7 @@ alloy::sol! {
     // `IChainTypeManager.sol`
     #[sol(rpc)]
     interface IChainTypeManager {
-        address public validatorTimelock;
+        address public validatorTimelockPostV29;
     }
 
     // `IZKChain.sol`
@@ -105,6 +112,7 @@ alloy::sol! {
             uint64 indexRepeatedStorageChanges;
             uint256 numberOfLayer1Txs;
             bytes32 priorityOperationsHash;
+            bytes32 dependencyRootsRollingHash;
             bytes32 l2LogsTreeRoot;
             uint256 timestamp;
             bytes32 commitment;
@@ -115,6 +123,7 @@ alloy::sol! {
             bytes32 newStateCommitment;
             uint256 numberOfLayer1Txs;
             bytes32 priorityOperationsHash;
+            bytes32 dependencyRootsRollingHash;
             bytes32 l2LogsTreeRoot;
             address l2DaValidator;
             bytes32 daCommitment;
@@ -128,7 +137,7 @@ alloy::sol! {
         event BlockExecution(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
 
         function commitBatchesSharedBridge(
-            uint256 _chainId,
+            address _chainAddress,
             uint256 _processFrom,
             uint256 _processTo,
             bytes calldata _commitData
@@ -137,7 +146,7 @@ alloy::sol! {
        function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
 
        function proveBatchesSharedBridge(
-            uint256, // always zero (used to be chain id)
+            address _chainAddress,
             uint256 _processBatchFrom,
             uint256 _processBatchTo,
             bytes calldata _proofData
@@ -150,7 +159,7 @@ alloy::sol! {
        }
 
        function executeBatchesSharedBridge(
-           uint256, // always zero (used to be chain id)
+           address _chainAddress,
            uint256 _processFrom,
            uint256 _processTo,
            bytes calldata _executeData
@@ -198,7 +207,7 @@ impl<P: Provider + Clone> Bridgehub<P> {
         let chain_type_manager_address = self.chain_type_manager_address().await?;
         let chain_type_manager =
             IChainTypeManager::new(chain_type_manager_address, self.instance.provider());
-        chain_type_manager.validatorTimelock().call().await
+        chain_type_manager.validatorTimelockPostV29().call().await
     }
 
     pub async fn shared_bridge_address(&self) -> alloy::contract::Result<Address> {

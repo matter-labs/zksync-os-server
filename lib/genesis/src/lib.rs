@@ -99,6 +99,8 @@ pub struct GenesisState {
     pub storage_logs: Vec<(Bytes32, Bytes32)>,
     /// Preimages of the padded bytecodes with artifacts and hashes of account properties
     /// for the contracts deployed in the genesis block.
+    /// Note: these preimages don't include `force_deploy_preimages` -
+    /// see `genesis_upgrade_tx` method for details
     pub preimages: Vec<(Bytes32, Vec<u8>)>,
     /// The header of the genesis block.
     pub header: BlockHeader,
