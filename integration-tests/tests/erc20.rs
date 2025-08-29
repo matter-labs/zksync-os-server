@@ -163,7 +163,13 @@ async fn deploy_l1_token_and_mint(
     tester: &Tester,
     mint_amount: U256,
 ) -> anyhow::Result<TestERC20Instance<EthDynProvider>> {
-    let l1_erc20 = TestERC20::deploy(tester.l1_provider.clone()).await?;
+    let l1_erc20 = TestERC20::deploy(
+        tester.l1_provider.clone(),
+        U256::ZERO,
+        "Test token".to_string(),
+        "TEST".to_string(),
+    )
+    .await?;
     l1_erc20
         .mint(tester.l1_wallet.default_signer().address(), mint_amount)
         .send()
