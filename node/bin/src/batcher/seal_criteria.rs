@@ -9,14 +9,15 @@ pub(crate) struct BatchInfoAccumulator {
     pub native_cycles: u64,
     pub pubdata_bytes: u64,
     pub l2_to_l1_logs_count: u64,
+    pub block_count: u64,
 
     // Limits
-    pub blocks_per_batch_limit: usize,
+    pub blocks_per_batch_limit: u64,
     pub batch_pubdata_limit_bytes: u64,
 }
 
 impl BatchInfoAccumulator {
-    pub fn new(blocks_per_batch_limit: usize, batch_pubdata_limit_bytes: u64) -> Self {
+    pub fn new(blocks_per_batch_limit: u64, batch_pubdata_limit_bytes: u64) -> Self {
         Self {
             blocks_per_batch_limit,
             batch_pubdata_limit_bytes,
@@ -32,14 +33,15 @@ impl BatchInfoAccumulator {
             .iter()
             .map(|tx_result| tx_result.as_ref().map_or(0, |tx| tx.l2_to_l1_logs.len()))
             .sum::<usize>() as u64;
+        self.block_count += 1;
 
         self
     }
 
     /// Checks if the batch should be sealed based on the content of the blocks.
     /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
-    pub fn is_batch_limit_reached(&self, blocks_len: usize) -> bool {
-        if blocks_len > self.blocks_per_batch_limit {
+    pub fn is_batch_limit_reached(&self) -> bool {
+        if self.block_count > self.blocks_per_batch_limit {
             BATCHER_METRICS.seal_reason[&"blocks_per_batch"].inc();
             tracing::debug!("Batcher: reached blocks per batch limit");
             return true;
