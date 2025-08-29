@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches:
+     - main
   pull_request:
 # Disabled for now, as we don't want to run CI twice
 # merge_group:
@@ -11,24 +12,102 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  TEST_RESULTS_XML: 'test-results.xml'
+
 jobs:
-  ci-build-and-unit-tests:
-    name: CI for build and unit tests
-    uses: ./.github/workflows/ci-build-and-unit-tests.yaml
-    secrets:
-      GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
-  ci-integration-tests:
-    name: CI for integration tests
-    uses: ./.github/workflows/ci-integration-tests.yaml
-    secrets:
-      GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
+  ############################
+  #     Format and lint      #
+  ############################
+  format-and-lint:
+    runs-on: ubuntu-24.04-github-hosted-32core
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-  ci-lint:
-    name: CI for linting
-    uses: ./.github/workflows/ci-lint.yaml
-    secrets:
-      GH_TOKEN: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          cache_shared_key: 'format-and-lint'
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy (core)
+        run: cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings
+
+      - name: Run clippy (integration tests)
+        run: cargo clippy --all-targets -p zksync_os_integration_tests -- -D warnings
+
+
+  ############################
+  # Build and run unit tests #
+  ############################
+  build-and-test:
+    runs-on: ubuntu-24.04-github-hosted-32core
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          cache_shared_key: 'build-and-test'
+
+      - name: Build project
+        run: cargo build --all-targets --workspace --exclude zksync_os_integration_tests
+
+      - name: Run unit tests
+        run: cargo nextest run --workspace --exclude zksync_os_integration_tests
+
+      - name: Upload test results
+        if: always() && !cancelled()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          check_name: 'Unit Tests'
+          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
+          action_fail_on_inconclusive: true
+
+
+  ############################
+  #    Integration tests     #
+  ############################
+  integration-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        filterset:
+          - "core"
+          - "prover"
+    runs-on: ${{ matrix.filterset == 'core' && 'ubuntu-24.04-github-hosted-32core' || 'matterlabs-ci-runner-ultra-performance' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          cache_shared_key: 'integration-tests-${{ matrix.filterset }}'
+
+      - name: Run integration tests (no prover)
+        if: matrix.filterset == 'core'
+        # Run all tests that don't require features enabled (e.g. `prover-tests`/`gpu-prover-tests`).
+        run: |
+          cargo nextest run --profile ci -p zksync_os_integration_tests
+
+      - name: Run integration tests (prover)
+        if: matrix.filterset == 'prover'
+        # Run prover tests. They need to be compiled in release mode for efficiency and to avoid stack overflow errors.
+        # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
+        # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
+        run: cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
+
 
   ci-success:
     name: Github Status Check
@@ -36,9 +115,9 @@ jobs:
     if: always() && !cancelled()
     needs:
       [
-        ci-build-and-unit-tests,
-        ci-integration-tests,
-        ci-lint,
+        format-and-lint,
+        build-and-test,
+        integration-tests,
       ]
     steps:
       - name: Status
