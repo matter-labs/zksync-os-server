@@ -10,17 +10,15 @@ pub const REPLAY_WIRE_FORMAT_VERSION: u32 = 1;
 use bincode::{Decode, Encode};
 
 // It is somewhat safe to assume that these will not change
-use alloy::primitives::{B256, U256, ruint::aliases::B160};
-
-// If ZkTransaction changes, we'll cut a major version anyway.
-use zksync_os_types::ZkTransaction;
+use alloy::consensus::Signed;
+use alloy::primitives::{Address, B256, U256, ruint::aliases::B160};
 
 /// The format ReplayRecords are currently sent in
 #[derive(Encode, Decode)]
 pub struct ReplayWireFormat {
     pub block_context: BlockContext,
     pub starting_l1_priority_id: u64,
-    pub transactions: Vec<ZkTransaction>,
+    pub transactions: Vec<ZkTransactionWireFormat>,
     pub previous_block_timestamp: u64,
     #[bincode(with_serde)]
     pub node_version: semver::Version,
@@ -76,3 +74,105 @@ impl<'de> serde::Deserialize<'de> for BlockHashes {
 /// The format ReplayRecords were sent in at the previous major version.
 #[derive(Encode, Decode)]
 pub struct PreviousReplayWireFormat(pub ReplayWireFormat); // Currently just a dummy because there is no previous version.
+
+// A deep copy of ZkTransaction follows
+
+// I don't believe that the EIP-specific data structures will change in future versions
+use alloy::{
+    consensus::{TxEip1559, TxEip2930, TxEip4844Variant, TxEip7702, TxLegacy},
+    eips::eip7594::BlobTransactionSidecarVariant,
+};
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+// These are checked to be equal via TypeHash
+use zksync_os_types::{L1PriorityEnvelope, L1UpgradeEnvelope};
+
+#[derive(Encode, Decode)]
+pub struct ZkTransactionWireFormat {
+    #[bincode(with_serde)]
+    pub signer: Address,
+    #[bincode(with_serde)]
+    pub inner: ZkEnvelope,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum ZkEnvelope {
+    Upgrade(L1UpgradeEnvelope),
+    L1(L1PriorityEnvelope),
+    L2(L2Envelope),
+}
+
+type L2Envelope = EthereumTxEnvelope<TxEip4844Variant<BlobTransactionSidecarVariant>>;
+
+// Copying EthereumTxEnvelope is very painful but necessary because it will change with new EIPs.
+
+#[derive(Clone)]
+pub enum EthereumTxEnvelope<Eip4844: Serialize + DeserializeOwned + Clone + 'static> {
+    Legacy(Signed<TxLegacy>),
+    Eip2930(Signed<TxEip2930>),
+    Eip1559(Signed<TxEip1559>),
+    Eip4844(Signed<Eip4844>),
+    Eip7702(Signed<TxEip7702>),
+}
+impl<Eip4844> Serialize for EthereumTxEnvelope<Eip4844>
+where
+    Eip4844: Serialize + DeserializeOwned + Clone + 'static,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let non_compat: alloy::consensus::EthereumTxEnvelope<Eip4844> = self.clone().into();
+        let compat: alloy::consensus::serde_bincode_compat::EthereumTxEnvelope<Eip4844> =
+            (&non_compat).into();
+        compat.serialize(serializer)
+    }
+}
+
+impl<'de, Eip4844> Deserialize<'de> for EthereumTxEnvelope<Eip4844>
+where
+    Eip4844: Serialize + DeserializeOwned + Clone + 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let compat =
+            alloy::consensus::serde_bincode_compat::EthereumTxEnvelope::<Eip4844>::deserialize(
+                deserializer,
+            )?;
+        let non_compat: alloy::consensus::EthereumTxEnvelope<Eip4844> = compat.into();
+        Ok(Self::from(non_compat))
+    }
+}
+
+impl<Eip4844> From<EthereumTxEnvelope<Eip4844>> for alloy::consensus::EthereumTxEnvelope<Eip4844>
+where
+    Eip4844: Serialize + DeserializeOwned + Clone + 'static,
+{
+    fn from(value: EthereumTxEnvelope<Eip4844>) -> Self {
+        match value {
+            EthereumTxEnvelope::Legacy(tx) => Self::Legacy(tx),
+            EthereumTxEnvelope::Eip2930(tx) => Self::Eip2930(tx),
+            EthereumTxEnvelope::Eip1559(tx) => Self::Eip1559(tx),
+            EthereumTxEnvelope::Eip4844(tx) => Self::Eip4844(tx),
+            EthereumTxEnvelope::Eip7702(tx) => Self::Eip7702(tx),
+        }
+    }
+}
+
+impl<Eip4844> From<alloy::consensus::EthereumTxEnvelope<Eip4844>> for EthereumTxEnvelope<Eip4844>
+where
+    Eip4844: Serialize + DeserializeOwned + Clone + 'static,
+{
+    fn from(value: alloy::consensus::EthereumTxEnvelope<Eip4844>) -> Self {
+        match value {
+            alloy::consensus::EthereumTxEnvelope::Legacy(tx) => Self::Legacy(tx),
+            alloy::consensus::EthereumTxEnvelope::Eip2930(tx) => Self::Eip2930(tx),
+            alloy::consensus::EthereumTxEnvelope::Eip1559(tx) => Self::Eip1559(tx),
+            alloy::consensus::EthereumTxEnvelope::Eip4844(tx) => Self::Eip4844(tx),
+            alloy::consensus::EthereumTxEnvelope::Eip7702(tx) => Self::Eip7702(tx),
+        }
+    }
+}
