@@ -850,30 +850,39 @@ async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     batch_storage: &ProofStorage,
 ) -> (u64, u64, u64) {
-    if l1_state.last_committed_batch == 0 {
-        return (0, 0, 0);
-    }
-    let last_committed_block = batch_storage
-        .get(l1_state.last_committed_batch)
-        .await
-        .expect("Failed to get last committed block from proof storage")
-        .map(|envelope| envelope.batch.last_block_number)
-        .expect("Committed batch is not present in proof storage");
+    let last_committed_block = if l1_state.last_committed_batch == 0 {
+        0
+    } else {
+        batch_storage
+            .get(l1_state.last_committed_batch)
+            .await
+            .expect("Failed to get last committed block from proof storage")
+            .map(|envelope| envelope.batch.last_block_number)
+            .expect("Committed batch is not present in proof storage")
+    };
 
     // only used to log on node startup
-    let last_proved_block = batch_storage
-        .get(l1_state.last_proved_batch)
-        .await
-        .expect("Failed to get last proved block from proof storage")
-        .map(|envelope| envelope.batch.last_block_number)
-        .expect("Proved batch is not present in proof storage");
+    let last_proved_block = if l1_state.last_proved_batch == 0 {
+        0
+    } else {
+        batch_storage
+            .get(l1_state.last_proved_batch)
+            .await
+            .expect("Failed to get last proved block from proof storage")
+            .map(|envelope| envelope.batch.last_block_number)
+            .expect("Proved batch is not present in proof storage")
+    };
 
-    let last_executed_block = batch_storage
-        .get(l1_state.last_executed_batch)
-        .await
-        .expect("Failed to get last proved block from execute storage")
-        .map(|envelope| envelope.batch.last_block_number)
-        .expect("Execute batch is not present in proof storage");
+    let last_executed_block = if l1_state.last_executed_batch == 0 {
+        0
+    } else {
+        batch_storage
+            .get(l1_state.last_executed_batch)
+            .await
+            .expect("Failed to get last proved block from execute storage")
+            .map(|envelope| envelope.batch.last_block_number)
+            .expect("Execute batch is not present in proof storage")
+    };
     (last_committed_block, last_proved_block, last_executed_block)
 }
 
