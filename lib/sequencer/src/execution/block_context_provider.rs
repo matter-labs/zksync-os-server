@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use zk_ee::common_structs::PreimageType;
-use zk_ee::system::metadata::BlockHashes;
+use zk_ee::system::metadata::{BlockHashes};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
@@ -19,7 +19,7 @@ use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{InteropRoot, L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -34,6 +34,7 @@ use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
+    interop_roots: mpsc::Receiver<InteropRoot>,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -49,6 +50,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     pub fn new(
         next_l1_priority_id: u64,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
+        interop_roots: mpsc::Receiver<InteropRoot>,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -61,6 +63,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         Self {
             next_l1_priority_id,
             l1_transactions,
+            interop_roots,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,

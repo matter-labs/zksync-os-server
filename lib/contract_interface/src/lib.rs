@@ -11,6 +11,12 @@ use alloy::primitives::{Address, B256, U256};
 use alloy::providers::Provider;
 
 alloy::sol! {
+    // `IMessageRoot.sol`
+    #[sol(rpc)]
+    interface IMessageRoot {
+        event NewInteropRoot(uint256 indexed chainId, uint256 indexed blockNumber, uint256 indexed logId, bytes32[] sides);
+    }
+
     // `Messaging.sol`
     struct L2CanonicalTransaction {
         uint256 txType;
@@ -62,6 +68,7 @@ alloy::sol! {
         function chainTypeManager(uint256 _chainId) external view returns (address);
         function sharedBridge() public view returns (address);
         function getAllZKChainChainIDs() external view returns (uint256[] memory);
+        function messageRoot() external view returns (address);
 
         struct L2TransactionRequestDirect {
             uint256 chainId;
@@ -266,6 +273,14 @@ impl<P: Provider + Clone> Bridgehub<P> {
             zk_chain_address,
             self.instance.provider().clone(),
         ))
+    }
+
+    pub async fn message_root_address(&self) -> alloy::contract::Result<Address> {
+        self
+            .instance
+            .messageRoot()
+            .call()
+            .await
     }
 
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
