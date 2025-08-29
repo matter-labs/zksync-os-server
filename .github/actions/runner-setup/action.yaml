@@ -1,0 +1,74 @@
+name: 'Setup runner'
+
+description: 'Setup self-hosted runner for zksync workflows execution.'
+
+inputs:
+  foundry_version:
+    type: string
+    description: 'Version of foundry-zksync to use.'
+    required: false
+    default: 'nightly'
+  enable_cache:
+    type: string
+    description: 'Whether to enable cache.'
+    required: false
+    default: 'true'
+  save_cache:
+    type: string
+    description: 'Whether to save cache.'
+    required: false
+    default: 'false'
+  cache_shared_key:
+    type: string
+    description: 'Shared key for cache.'
+    required: false
+    default: 'dev'
+
+
+outputs:
+  cache-hit:
+    description: 'Whether cache hit.'
+    value: ${{ steps.rust-cache.outputs.cache-hit }}
+
+
+runs:
+  using: composite
+  steps:
+
+    - name: Install linux packages
+      if: ${{ !contains(runner.name, 'matterlabs') }}
+      uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+      with:
+        packages: libclang-19-dev
+        version: 1.0
+
+    - name: Install linux packages (matterlabs)
+      if: ${{ contains(runner.name, 'matterlabs') }}
+      shell: 'bash -ex {0}'
+      run: sudo apt update && sudo apt install -y libclang-dev
+
+    - name: Install Rust toolchain
+      uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
+      env:
+        # To fix rate limiting issues with GitHub API
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        inherit-toolchain: true
+        components: 'rustfmt,clippy'
+        bins: 'cargo-nextest'
+        cache: false
+
+    - name: Rust cache
+      if: inputs.enable_cache == 'true'
+      uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+      id: rust-cache
+      with:
+        shared-key: "${{ inputs.cache_shared_key }}"
+        cache-all-crates: true
+        cache-workspace-crates: true
+        save-if: ${{ inputs.save_cache == 'true' }}
+
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
+      with:
+        version: ${{ inputs.foundry_version }}

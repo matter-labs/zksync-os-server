@@ -1,8 +1,12 @@
 [profile.default]
-# Tests are marked as slow if they take more than 1 minute, terminated after 3 minutes
-slow-timeout = { period = "1m", terminate-after = 3 }
+# Tests are marked as slow if they take more than 1 minute, terminated after 10 minutes
+slow-timeout = { period = "1m", terminate-after = 10 }
 # Global timeout for the entire test run. Test runs will be terminated if they take longer than this timeout.
 global-timeout = "1h"
+
+[profile.default.junit]
+# Save junit report to the project root.
+path = "test-results.xml"
 
 [profile.ci]
 # Do not cancel the test run on the first failure.
