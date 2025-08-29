@@ -176,6 +176,7 @@ impl Tester {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
                 app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),
+                circuit_limit: 10000,
             }));
         }
 
