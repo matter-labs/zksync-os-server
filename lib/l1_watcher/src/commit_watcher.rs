@@ -1,10 +1,11 @@
-use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent, WatchedEventTryFrom};
 use crate::{L1WatcherConfig, util};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
+use alloy::rpc::types::Log;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::{ReadBatch, WriteFinality};
@@ -138,6 +139,14 @@ async fn find_l1_commit_block_by_batch_number(
         Ok(res >= batch_number)
     })
     .await
+}
+
+impl WatchedEventTryFrom<BlockCommit> for BlockCommit {
+    type Error = Infallible;
+
+    fn try_from(value: (BlockCommit, Log)) -> Result<Self, Self::Error> {
+        Ok(value.0)
+    }
 }
 
 impl WatchedEvent for BlockCommit {

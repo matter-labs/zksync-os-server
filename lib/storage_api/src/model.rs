@@ -3,7 +3,7 @@ use alloy::rlp::{RlpDecodable, RlpEncodable};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use zk_os_forward_system::run::BlockContext;
-use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{InteropRootPosition, L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
 #[rlp(trailing)]
@@ -34,6 +34,7 @@ pub struct ReplayRecord {
     /// If `l1_transactions` is non-empty, equals to the first tx id in this block
     /// otherwise, `last_processed_l1_tx_id` equals to the previous block's value
     pub starting_l1_priority_id: L1TxSerialId,
+    pub starting_interop_root_pos: InteropRootPosition,
     pub transactions: Vec<ZkTransaction>,
     /// The field is used to generate the prover input for the block in ProverInputGenerator.
     /// Will be moved to the BlockContext at some point
@@ -50,6 +51,7 @@ impl ReplayRecord {
     pub fn new(
         block_context: BlockContext,
         starting_l1_priority_id: L1TxSerialId,
+        starting_interop_root_pos: InteropRootPosition,
         transactions: Vec<ZkTransaction>,
         previous_block_timestamp: u64,
         node_version: semver::Version,
@@ -73,6 +75,7 @@ impl ReplayRecord {
         Self {
             block_context,
             starting_l1_priority_id,
+            starting_interop_root_pos,
             transactions,
             previous_block_timestamp,
             node_version,

@@ -269,6 +269,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         ReplayRecord::new(
             ctx,
             command.starting_l1_priority_id,
+            command.starting_interop_root_pos,
             executed_txs,
             command.previous_block_timestamp,
             command.node_version,

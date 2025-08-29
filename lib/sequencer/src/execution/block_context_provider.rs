@@ -19,7 +19,7 @@ use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{InteropRoot, L1PriorityEnvelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{InteropRoot, InteropRootPosition, L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -33,6 +33,7 @@ use zksync_os_types::{InteropRoot, L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
+    next_interop_root_pos: InteropRootPosition,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     interop_roots: mpsc::Receiver<InteropRoot>,
     l2_mempool: Mempool,
@@ -49,6 +50,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         next_l1_priority_id: u64,
+        next_interop_root_pos: InteropRootPosition,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         interop_roots: mpsc::Receiver<InteropRoot>,
         l2_mempool: Mempool,
@@ -62,6 +64,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     ) -> Self {
         Self {
             next_l1_priority_id,
+            next_interop_root_pos,
             l1_transactions,
             interop_roots,
             l2_mempool,
@@ -117,6 +120,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
                     metrics_label: "produce",
                     starting_l1_priority_id: self.next_l1_priority_id,
+                    starting_interop_root_pos: self.next_interop_root_pos,
                     node_version: self.node_version.clone(),
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
@@ -138,6 +142,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     invalid_tx_policy: InvalidTxPolicy::Abort,
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                     starting_l1_priority_id: record.starting_l1_priority_id,
+                    starting_interop_root_pos: record.starting_interop_root_pos,
                     metrics_label: "replay",
                     node_version: record.node_version,
                     expected_block_output_hash: Some(record.block_output_hash),

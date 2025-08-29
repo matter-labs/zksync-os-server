@@ -2,7 +2,7 @@ use crate::metrics::METRICS;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::Filter;
+use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use std::marker::PhantomData;
 
@@ -68,7 +68,7 @@ impl<Event: WatchedEvent> L1Watcher<Event> {
             .into_iter()
             .map(|log| {
                 let sol_event = Event::SolEvent::decode_log(&log.inner)?.data;
-                Event::try_from(sol_event).map_err(L1WatcherError::Convert)
+                Event::try_from((sol_event, log)).map_err(L1WatcherError::Convert)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -82,7 +82,13 @@ impl<Event: WatchedEvent> L1Watcher<Event> {
     }
 }
 
-pub trait WatchedEvent: TryFrom<Self::SolEvent> {
+pub trait WatchedEventTryFrom<T>: Sized {
+    type Error;
+
+    fn try_from(value: (T, Log)) -> Result<Self, Self::Error>;
+}
+
+pub trait WatchedEvent: WatchedEventTryFrom<Self::SolEvent> {
     const NAME: &'static str;
 
     type SolEvent: SolEvent;

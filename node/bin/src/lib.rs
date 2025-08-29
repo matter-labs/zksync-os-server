@@ -270,6 +270,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .as_ref()
         .map_or(0, |record| record.starting_l1_priority_id);
 
+    let next_interop_root_pos = first_replay_record
+        .as_ref()
+        .map(|record| record.starting_interop_root_pos)
+        .unwrap_or_default();
+
     tasks.spawn(
         L1TxWatcher::new(
             config.l1_watcher_config.clone(),
@@ -290,6 +295,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_provider.clone().erased(),
             node_startup_state.l1_state.message_root,
             interop_roots_sender,
+            config.genesis_config.chain_id,
+            next_interop_root_posб
         )
             .await
             .expect("failed to start L1 transaction watcher")
@@ -332,6 +339,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let command_block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
+        next_interop_root_pos,
         l1_transactions,
         interop_roots,
         l2_mempool,

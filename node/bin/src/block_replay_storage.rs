@@ -18,6 +18,7 @@ use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_sequencer::model::blocks::BlockCommand;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
+use zksync_os_types::InteropRootPosition;
 
 /// A write-ahead log storing BlockReplayData.
 /// It is then used for:
@@ -37,6 +38,7 @@ pub struct BlockReplayStorage {
 pub enum BlockReplayColumnFamily {
     Context,
     StartingL1SerialId,
+    StartingInteropRootPos,
     Txs,
     NodeVersion,
     BlockOutputHash,
@@ -49,6 +51,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     const ALL: &'static [Self] = &[
         BlockReplayColumnFamily::Context,
         BlockReplayColumnFamily::StartingL1SerialId,
+        BlockReplayColumnFamily::StartingInteropRootPos,
         BlockReplayColumnFamily::Txs,
         BlockReplayColumnFamily::NodeVersion,
         BlockReplayColumnFamily::BlockOutputHash,
@@ -58,7 +61,8 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     fn name(&self) -> &'static str {
         match self {
             BlockReplayColumnFamily::Context => "context",
-            BlockReplayColumnFamily::StartingL1SerialId => "last_processed_l1_tx_id",
+            BlockReplayColumnFamily::StartingL1SerialId => "starting_l1_tx_id",
+            BlockReplayColumnFamily::StartingInteropRootPos => "starting_l1_tx_id",
             BlockReplayColumnFamily::Txs => "txs",
             BlockReplayColumnFamily::NodeVersion => "node_version",
             BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
@@ -98,6 +102,7 @@ impl BlockReplayStorage {
                     mix_hash: Default::default(),
                 },
                 starting_l1_priority_id: 0,
+                starting_interop_root_pos: InteropRootPosition::default(),
                 transactions: vec![],
                 previous_block_timestamp: 0,
                 node_version,
@@ -235,10 +240,14 @@ impl ReadReplay for BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::Context, &key)
             .expect("Failed to read from Context CF");
-        let last_processed_l1_tx_result = self
+        let starting_l1_tx_result = self
             .db
             .get_cf(BlockReplayColumnFamily::StartingL1SerialId, &key)
-            .expect("Failed to read from LastProcessedL1TxId CF");
+            .expect("Failed to read from StartingL1SerialId CF");
+        let starting_interop_root_pos_result = self
+            .db
+            .get_cf(BlockReplayColumnFamily::StartingInteropRootPos, &key)
+            .expect("Failed to read from StartingInteropRootPos CF");
         let txs_result = self
             .db
             .get_cf(BlockReplayColumnFamily::Txs, &key)
@@ -259,13 +268,15 @@ impl ReadReplay for BlockReplayStorage {
 
         match (
             context_result,
-            last_processed_l1_tx_result,
+            starting_l1_tx_result,
+            starting_interop_root_pos_result,
             txs_result,
             block_output_hash_result,
         ) {
             (
                 Some(bytes_context),
                 Some(bytes_starting_l1_tx),
+                Some(bytes_starting_interop_root_pos),
                 Some(bytes_txs),
                 Some(bytes_block_output_hash),
             ) => Some(ReplayRecord {
@@ -279,8 +290,14 @@ impl ReadReplay for BlockReplayStorage {
                     &bytes_starting_l1_tx,
                     bincode::config::standard(),
                 )
-                .expect("Failed to deserialize context")
+                .expect("Failed to deserialize `starting_l1_priority_id`")
                 .0,
+                starting_interop_root_pos: bincode::serde::decode_from_slice(
+                    &bytes_starting_interop_root_pos,
+                    bincode::config::standard(),
+                )
+                    .expect("Failed to deserialize `starting_interop_root_pos`")
+                    .0,
                 transactions: bincode::decode_from_slice(&bytes_txs, bincode::config::standard())
                     .expect("Failed to deserialize transactions")
                     .0,
@@ -295,8 +312,8 @@ impl ReadReplay for BlockReplayStorage {
                     .unwrap_or_else(|| semver::Version::new(0, 1, 0)),
                 block_output_hash: B256::from_slice(&bytes_block_output_hash),
             }),
-            (None, None, None, None) => None,
-            _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
+            (None, None, None, None, None) => None,
+            _ => panic!("Inconsistent state: all CFs must be written atomically"),
         }
     }
 }

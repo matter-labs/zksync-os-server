@@ -1,4 +1,3 @@
-mod interop_root;
 mod block;
 pub use block::BlockExt;
 
@@ -15,4 +14,5 @@ pub use transaction::{
     UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
 
-pub use interop_root::{InteropRoot, InteropRootError};
+mod interop_root;
+pub use interop_root::{InteropRoot, InteropRootPosition};

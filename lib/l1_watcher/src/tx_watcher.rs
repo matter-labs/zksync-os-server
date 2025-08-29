@@ -1,9 +1,10 @@
-use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent, WatchedEventTryFrom};
 use crate::{L1WatcherConfig, util};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use std::sync::Arc;
 use std::time::Duration;
+use alloy::rpc::types::Log;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
@@ -117,6 +118,14 @@ async fn find_l1_block_by_priority_id(
         Ok(res >= next_l1_priority_id)
     })
     .await
+}
+
+impl WatchedEventTryFrom<NewPriorityRequest> for L1PriorityEnvelope {
+    type Error = L1EnvelopeError;
+
+    fn try_from(value: (NewPriorityRequest, Log)) -> Result<Self, Self::Error> {
+        <L1PriorityEnvelope as TryFrom<NewPriorityRequest>>::try_from(value.0)
+    }
 }
 
 impl WatchedEvent for L1PriorityEnvelope {
