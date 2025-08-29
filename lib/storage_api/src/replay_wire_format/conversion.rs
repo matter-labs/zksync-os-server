@@ -1,7 +1,5 @@
-use crate::{
-    ReplayRecord,
-    replay_wire_format::{PreviousReplayWireFormat, ReplayWireFormat, ZkTransactionWireFormat},
-};
+use super::v1::{ReplayWireFormat, ZkTransactionWireFormat};
+use crate::ReplayRecord;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockContext;
 
@@ -15,7 +13,7 @@ impl From<ReplayWireFormat> for ReplayRecord {
             node_version,
             block_output_hash,
         } = value;
-        let crate::replay_wire_format::BlockContext {
+        let super::v1::BlockContext {
             chain_id,
             block_number,
             block_hashes,
@@ -75,10 +73,10 @@ impl From<ReplayRecord> for ReplayWireFormat {
             mix_hash,
         } = block_context;
         Self {
-            block_context: crate::replay_wire_format::BlockContext {
+            block_context: super::v1::BlockContext {
                 chain_id,
                 block_number,
-                block_hashes: crate::replay_wire_format::BlockHashes(block_hashes.0),
+                block_hashes: super::v1::BlockHashes(block_hashes.0),
                 timestamp,
                 eip1559_basefee,
                 gas_per_pubdata,
@@ -94,12 +92,6 @@ impl From<ReplayRecord> for ReplayWireFormat {
             node_version,
             block_output_hash,
         }
-    }
-}
-
-impl From<PreviousReplayWireFormat> for ReplayRecord {
-    fn from(value: PreviousReplayWireFormat) -> Self {
-        value.0.into()
     }
 }
 
@@ -123,34 +115,26 @@ impl From<ZkTransactionWireFormat> for zksync_os_types::ZkTransaction {
     }
 }
 
-impl From<zksync_os_types::ZkEnvelope> for crate::replay_wire_format::ZkEnvelope {
+impl From<zksync_os_types::ZkEnvelope> for super::v1::ZkEnvelope {
     fn from(value: zksync_os_types::ZkEnvelope) -> Self {
         match value {
             zksync_os_types::ZkEnvelope::Upgrade(envelope) => {
-                crate::replay_wire_format::ZkEnvelope::Upgrade(envelope)
+                super::v1::ZkEnvelope::Upgrade(envelope)
             }
-            zksync_os_types::ZkEnvelope::L1(envelope) => {
-                crate::replay_wire_format::ZkEnvelope::L1(envelope)
-            }
-            zksync_os_types::ZkEnvelope::L2(envelope) => {
-                crate::replay_wire_format::ZkEnvelope::L2(envelope.into())
-            }
+            zksync_os_types::ZkEnvelope::L1(envelope) => super::v1::ZkEnvelope::L1(envelope),
+            zksync_os_types::ZkEnvelope::L2(envelope) => super::v1::ZkEnvelope::L2(envelope.into()),
         }
     }
 }
 
-impl From<crate::replay_wire_format::ZkEnvelope> for zksync_os_types::ZkEnvelope {
-    fn from(value: crate::replay_wire_format::ZkEnvelope) -> Self {
+impl From<super::v1::ZkEnvelope> for zksync_os_types::ZkEnvelope {
+    fn from(value: super::v1::ZkEnvelope) -> Self {
         match value {
-            crate::replay_wire_format::ZkEnvelope::Upgrade(envelope) => {
+            super::v1::ZkEnvelope::Upgrade(envelope) => {
                 zksync_os_types::ZkEnvelope::Upgrade(envelope)
             }
-            crate::replay_wire_format::ZkEnvelope::L1(envelope) => {
-                zksync_os_types::ZkEnvelope::L1(envelope)
-            }
-            crate::replay_wire_format::ZkEnvelope::L2(envelope) => {
-                zksync_os_types::ZkEnvelope::L2(envelope.into())
-            }
+            super::v1::ZkEnvelope::L1(envelope) => zksync_os_types::ZkEnvelope::L1(envelope),
+            super::v1::ZkEnvelope::L2(envelope) => zksync_os_types::ZkEnvelope::L2(envelope.into()),
         }
     }
 }

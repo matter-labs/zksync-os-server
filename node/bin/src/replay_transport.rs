@@ -9,9 +9,7 @@ use tokio::{
 };
 use tokio_util::codec::{self, Framed, LengthDelimitedCodec};
 use zksync_os_sequencer::model::blocks::BlockCommand;
-use zksync_os_storage_api::{
-    PreviousReplayWireFormat, REPLAY_WIRE_FORMAT_VERSION, ReplayRecord, ReplayWireFormat,
-};
+use zksync_os_storage_api::{REPLAY_WIRE_FORMAT_VERSION, ReplayRecord};
 
 use crate::block_replay_storage::BlockReplayStorage;
 
@@ -44,7 +42,7 @@ pub async fn replay_server(
                 starting_block
             );
 
-            let mut replay_sender = Framed::new(socket, BlockReplayCodec::new()).split().0;
+            let mut replay_sender = Framed::new(socket, BlockReplayCodec::new(0)).split().0;
             let mut stream = block_replays.replay_commands_forever(starting_block);
             loop {
                 let replay = stream.next().await.unwrap();
@@ -78,24 +76,22 @@ pub async fn replay_receiver(
     socket.write_u64(starting_block).await?;
     let replay_version = socket.read_u32().await?;
 
-    Ok(if replay_version == REPLAY_WIRE_FORMAT_VERSION {
-        Framed::new(socket, BlockReplayCodec::new())
-            .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
-            .boxed()
-    } else if replay_version == REPLAY_WIRE_FORMAT_VERSION - 1 {
-        Framed::new(socket, OldReplayCodec::new())
-            .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
-            .boxed()
-    } else {
-        panic!("Unsupported replay version: {replay_version}");
-    })
+    Ok(Framed::new(socket, BlockReplayCodec::new(replay_version))
+        .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
+        .boxed())
 }
 
-struct BlockReplayCodec(LengthDelimitedCodec);
+struct BlockReplayCodec {
+    inner: LengthDelimitedCodec,
+    wire_format_version: u32,
+}
 
 impl BlockReplayCodec {
-    fn new() -> Self {
-        Self(LengthDelimitedCodec::new())
+    fn new(wire_format_version: u32) -> Self {
+        Self {
+            inner: LengthDelimitedCodec::new(),
+            wire_format_version,
+        }
     }
 }
 
@@ -107,15 +103,9 @@ impl codec::Decoder for BlockReplayCodec {
         &mut self,
         src: &mut alloy::rlp::BytesMut,
     ) -> Result<Option<Self::Item>, Self::Error> {
-        self.0.decode(src).map(|inner| {
-            inner.map(|bytes| {
-                let replay: ReplayWireFormat =
-                    bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
-                        .unwrap()
-                        .0;
-                replay.into()
-            })
-        })
+        self.inner
+            .decode(src)
+            .map(|inner| inner.map(|bytes| ReplayRecord::decode(&bytes, self.wire_format_version)))
     }
 }
 
@@ -127,39 +117,7 @@ impl codec::Encoder<ReplayRecord> for BlockReplayCodec {
         item: ReplayRecord,
         dst: &mut alloy::rlp::BytesMut,
     ) -> Result<(), Self::Error> {
-        self.0.encode(
-            bincode::encode_to_vec(ReplayWireFormat::from(item), bincode::config::standard())
-                .unwrap()
-                .into(),
-            dst,
-        )
-    }
-}
-
-struct OldReplayCodec(LengthDelimitedCodec);
-
-impl OldReplayCodec {
-    fn new() -> Self {
-        Self(LengthDelimitedCodec::new())
-    }
-}
-
-impl codec::Decoder for OldReplayCodec {
-    type Item = ReplayRecord;
-    type Error = std::io::Error;
-
-    fn decode(
-        &mut self,
-        src: &mut alloy::rlp::BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        self.0.decode(src).map(|inner| {
-            inner.map(|bytes| {
-                let old_replay: PreviousReplayWireFormat =
-                    bincode::decode_from_slice(bytes.as_ref(), bincode::config::standard())
-                        .unwrap()
-                        .0;
-                old_replay.into()
-            })
-        })
+        self.inner
+            .encode(item.encode_with_current_version().into(), dst)
     }
 }

@@ -1,11 +1,9 @@
 //! We need to not accidentally change the replay wire format
 //! but there is no way in Rust to get a stable unique ID for a type,
 //! so instead we define it in this separate file.
-//! Any change to this file necessitates a major version bump.
-
-/// If you change this file, you must increment this number, unless
-/// some other change after the most recent major version already bumped it.
-pub const REPLAY_WIRE_FORMAT_VERSION: u32 = 1;
+//!
+//! Do not change this file under any circumstances. Copy it instead. May be deleted when obsolete.
+//! (This is enforced by CI)
 
 use bincode::{Decode, Encode};
 
@@ -70,10 +68,6 @@ impl<'de> serde::Deserialize<'de> for BlockHashes {
         Ok(Self(array))
     }
 }
-
-/// The format ReplayRecords were sent in at the previous major version.
-#[derive(Encode, Decode)]
-pub struct PreviousReplayWireFormat(pub ReplayWireFormat); // Currently just a dummy because there is no previous version.
 
 // A deep copy of ZkTransaction follows
 

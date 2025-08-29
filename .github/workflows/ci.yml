@@ -107,7 +107,33 @@ jobs:
         # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
         # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
         run: cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
+  
+  check-replay-wire-format-version:
+    name: Check replay wire format version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # fetch tags
 
+      - name: Check that replay wire format version is set correctly
+        shell: bash
+        run: |
+          TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
+          DIR=lib/storage_api/src/replay_wire_format
+          git fetch --depth=1 origin tag "$TAG"
+          for FILE in "$DIR"/v*.rs; do
+            BASENAME=$(basename "$FILE")
+            if git show "$TAG:$FILE" > /tmp/old_wire_format.rs 2>/dev/null; then
+              if ! diff -q /tmp/old_wire_format.rs "$FILE"; then
+                echo "Change detected in already released wire format: $BASENAME"
+                exit 1
+              fi
+            else
+              echo "New wire format created in this change: $BASENAME"
+            fi
+          done
 
   ci-success:
     name: Github Status Check
@@ -118,6 +144,7 @@ jobs:
         format-and-lint,
         build-and-test,
         integration-tests,
+        check-replay-wire-format-version,
       ]
     steps:
       - name: Status

@@ -1,10 +1,7 @@
 mod model;
 mod replay_wire_format;
-mod replay_wire_format_conversion;
 pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
-pub use replay_wire_format::{
-    PreviousReplayWireFormat, REPLAY_WIRE_FORMAT_VERSION, ReplayWireFormat,
-};
+pub use replay_wire_format::REPLAY_WIRE_FORMAT_VERSION;
 
 mod replay;
 pub use replay::{ReadReplay, WriteReplay};
