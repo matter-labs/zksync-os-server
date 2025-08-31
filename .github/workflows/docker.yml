@@ -10,12 +10,14 @@ on:
   push:
     branches:
       - main
+      - 'release-please--**'
     tags:
       - v**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Cancel only in release PR updates, tags and pushes to main should always produce a new image
+  cancel-in-progress: ${{ github.event_name == 'push' && contains(github.ref, 'refs/heads/release-please--') }}
 
 defaults:
   run:
@@ -64,7 +66,7 @@ jobs:
             type=ref,event=pr
 
       - name: Define whether to save cache
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ github.event_name == 'push' }}
         id: set-cache-to
         run: echo "cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:buildcache,mode=max" >> "${GITHUB_OUTPUT}"
 
@@ -84,6 +86,7 @@ jobs:
             RUSTC_WRAPPER=sccache
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          push: ${{ github.event_name != 'pull_request' }}
+          # Do not push only in release PRs
+          push: ${{ !contains(github.ref, 'refs/heads/release-please--') }}
           cache-from: 'type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:buildcache'
           cache-to: ${{ steps.set-cache-to.outputs.cache-to }}
