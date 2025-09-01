@@ -2,7 +2,7 @@ use crate::network::Zksync;
 use alloy::primitives::{Address, TxHash};
 use alloy::providers::Provider;
 use alloy::transports::TransportResult;
-use zksync_os_types::rpc::L2ToL1LogProof;
+use zksync_os_rpc_api::types::L2ToL1LogProof;
 
 /// RPC interface that gives access to methods specific to ZKsync OS.
 #[allow(async_fn_in_trait)]

@@ -15,18 +15,18 @@ use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
 use alloy::primitives::{Address, BlockNumber, TxHash};
 use alloy::providers::ext::DebugApi;
-use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::providers::{DynProvider, Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{Block, TransactionRequest};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::transports::TransportResult;
-use alloy::transports::http::reqwest::Url;
 use anyhow::Context;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use zksync_os_observability::ComponentStateReporter;
 
@@ -59,16 +59,18 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     from_address_pk: SecretString,
 
     // == config ==
-    l1_api_url: String,
+    mut provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + 'static,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     command_limit: usize,
+    poll_interval: Duration,
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
 
-    let provider = build_provider::<Input>(from_address_pk, l1_api_url).await?;
-    let mut heartbeat = Heartbeat::new(provider.clone()).await?;
+    let operator_address = register_operator::<_, Input>(&mut provider, from_address_pk).await?;
+    let provider = provider.erased();
+    let mut heartbeat = Heartbeat::new(provider.clone(), poll_interval).await?;
     let mut cmd_buffer = Vec::with_capacity(command_limit);
 
     loop {
@@ -95,6 +97,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
             .then(|mut cmd| async {
                 let tx_request = tx_request_with_gas_fields(
                     &provider,
+                    operator_address,
                     max_fee_per_gas,
                     max_priority_fee_per_gas,
                 )
@@ -133,6 +136,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
 
 async fn tx_request_with_gas_fields(
     provider: &DynProvider,
+    operator_address: Address,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
 ) -> anyhow::Result<TransactionRequest> {
@@ -157,6 +161,7 @@ async fn tx_request_with_gas_fields(
     }
 
     let tx = TransactionRequest::default()
+        .with_from(operator_address)
         .with_max_fee_per_gas(max_fee_per_gas)
         .with_max_priority_fee_per_gas(max_priority_fee_per_gas)
         // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
@@ -164,22 +169,19 @@ async fn tx_request_with_gas_fields(
     Ok(tx)
 }
 
-async fn build_provider<Input: L1SenderCommand>(
+async fn register_operator<
+    P: Provider + WalletProvider<Wallet = EthereumWallet>,
+    Input: L1SenderCommand,
+>(
+    provider: &mut P,
     private_key: SecretString,
-    l1_api_url: String,
-) -> anyhow::Result<DynProvider> {
-    let operator_wallet = EthereumWallet::from(
-        PrivateKeySigner::from_str(private_key.expose_secret())
-            .context("failed to parse operator private key")?,
-    );
+) -> anyhow::Result<Address> {
+    let signer = PrivateKeySigner::from_str(private_key.expose_secret())
+        .context("failed to parse operator private key")?;
+    let address = signer.address();
+    provider.wallet_mut().register_signer(signer);
 
-    let address = operator_wallet.default_signer().address();
-    let res = DynProvider::new(
-        ProviderBuilder::new()
-            .wallet(operator_wallet)
-            .connect_http(Url::from_str(&l1_api_url)?),
-    );
-    let balance = res.get_balance(address).await?;
+    let balance = provider.get_balance(address).await?;
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {} has zero balance", address);
@@ -191,7 +193,7 @@ async fn build_provider<Input: L1SenderCommand>(
         "{} Initialized L1 sender",
         Input::NAME,
     );
-    Ok(res)
+    Ok(address)
 }
 
 /// L1 sender's heartbeat that monitors all L1 blocks and enforces that we receive them sequentially
@@ -201,9 +203,9 @@ struct Heartbeat {
 }
 
 impl Heartbeat {
-    async fn new(provider: DynProvider) -> anyhow::Result<Self> {
+    async fn new(provider: DynProvider, poll_interval: Duration) -> anyhow::Result<Self> {
         let current_block = provider.get_block_number().await?;
-        let new_blocks = NewBlocks::new(provider, current_block + 1);
+        let new_blocks = NewBlocks::new(provider, current_block + 1, poll_interval);
         let l1_block_stream = new_blocks.into_block_stream().boxed();
         Ok(Self {
             last_l1_block_number: None,
@@ -264,10 +266,16 @@ impl Heartbeat {
         command: &Input,
         tx_hash: TxHash,
     ) -> anyhow::Result<()> {
-        let receipt = provider
-            .get_transaction_receipt(tx_hash)
-            .await?
-            .context("mined transaction receipt is missing")?;
+        let receipt = loop {
+            let maybe_res = provider.get_transaction_receipt(tx_hash).await?;
+            if let Some(res) = maybe_res {
+                break res;
+            }
+            tracing::info!(
+                "L1 transaction receipt for a mined block is not available yet. Retrying..."
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
         if receipt.status() {
             // We could also look at tx receipt's logs for a corresponding
             // `BlockCommit` / `BlockProve`/ etc event but

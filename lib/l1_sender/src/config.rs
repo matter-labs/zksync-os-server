@@ -2,6 +2,7 @@ use alloy::consensus::constants::GWEI_TO_WEI;
 use serde::{Deserialize, Serialize};
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig};
+use std::time::Duration;
 
 /// Configuration of L1 sender.
 /// todo: consider renaming to L1Config and using in L1Watcher as well.
@@ -11,19 +12,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0xf1a9035f1ac26e6666719cb9bdecb9876d7fb1d7bef07c638d7ddaacfe46b0fa".into())]
+    #[config(alias = "operator_private_key", default_t = "0xb2bdfa49f384cf585d1b7a1717fe55474bf595d989041f4c0aa5af65fbe3f007".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xa6ed8fc6cb2a340c3f0a146ce1e1515c7445e1e16ccb0aaec25720df450b8a28".into())]
+    #[config(default_t = "0xd03adaa22b83513831b6e35bb1e8607a71fefd04ceaaa6cb309ef84a9aa42721".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xb30d0d1025f7170c77a4ea9825cc60b308787dfc76b6f16deaa1486a726734f2".into())]
+    #[config(default_t = "0xd20e09334956a0581140e64d20daae58f8eaafb13fbd35936fdaaba25f0ac512".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
@@ -46,6 +47,10 @@ pub struct L1SenderConfig {
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
+
+    /// How often to poll L1 for new blocks.
+    #[config(default_t = Duration::from_millis(100))]
+    pub poll_interval: Duration,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

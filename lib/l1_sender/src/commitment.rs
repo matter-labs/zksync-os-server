@@ -19,6 +19,7 @@ pub struct StoredBatchInfo {
     pub state_commitment: B256,
     pub number_of_layer1_txs: u64,
     pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub commitment: B256,
     pub last_block_timestamp: u64,
@@ -48,6 +49,7 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
                 .upgrade_tx_hash
                 .map(|h| Bytes32::from_array(h.0))
                 .unwrap_or(Bytes32::ZERO),
+            interop_root_rolling_hash: Bytes32::from(value.dependency_roots_rolling_hash.0),
         };
         let commitment = FixedBytes::from(system_batch_output.hash());
         Self {
@@ -55,6 +57,7 @@ impl From<CommitBatchInfo> for StoredBatchInfo {
             state_commitment: value.new_state_commitment,
             number_of_layer1_txs: value.number_of_layer1_txs,
             priority_operations_hash: value.priority_operations_hash,
+            dependency_roots_rolling_hash: value.dependency_roots_rolling_hash,
             l2_to_l1_logs_root_hash: value.l2_to_l1_logs_root_hash,
             commitment,
             last_block_timestamp: value.last_block_timestamp,
@@ -68,19 +71,21 @@ impl From<&StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredB
             // `batchNumber`
             value.batch_number,
             // `batchHash` - for ZKsync OS batches we store full state commitment here
-            B256::from(value.state_commitment.0),
+            value.state_commitment,
             // `indexRepeatedStorageChanges` - Not used in Boojum OS, must be zero
             0u64,
             // `numberOfLayer1Txs`
             U256::from(value.number_of_layer1_txs),
             // `priorityOperationsHash`
-            B256::from(value.priority_operations_hash.0),
+            value.priority_operations_hash,
+            // `dependencyRootsRollingHash`,
+            value.dependency_roots_rolling_hash,
             // `l2LogsTreeRoot`
-            B256::from(value.l2_to_l1_logs_root_hash.0),
+            value.l2_to_l1_logs_root_hash,
             // `timestamp` - Not used in ZKsync OS, must be zero
             U256::from(0),
             // `commitment` - For ZKsync OS batches we store batch output hash here
-            B256::from(value.commitment.0),
+            value.commitment,
         ))
     }
 }
@@ -92,12 +97,14 @@ pub struct CommitBatchInfo {
     pub new_state_commitment: B256,
     pub number_of_layer1_txs: u64,
     pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
     pub l2_da_validator: Address,
     pub da_commitment: B256,
     pub first_block_timestamp: u64,
     pub last_block_timestamp: u64,
     pub chain_id: u64,
+    pub chain_address: Address,
     pub operator_da_input: Vec<u8>,
     pub upgrade_tx_hash: Option<B256>,
 }
@@ -111,6 +118,7 @@ impl CommitBatchInfo {
             &zksync_os_merkle_tree::TreeBatchOutput,
         )>,
         chain_id: u64,
+        chain_address: Address,
         batch_number: u64,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
@@ -213,6 +221,7 @@ impl CommitBatchInfo {
             new_state_commitment,
             number_of_layer1_txs,
             priority_operations_hash,
+            dependency_roots_rolling_hash: B256::ZERO,
             l2_to_l1_logs_root_hash,
             // TODO: Update once enforced, not sure where to source it from yet
             l2_da_validator: Default::default(),
@@ -220,6 +229,7 @@ impl CommitBatchInfo {
             first_block_timestamp: first_block_output.header.timestamp,
             last_block_timestamp: last_block_output.header.timestamp,
             chain_id,
+            chain_address,
             operator_da_input,
             upgrade_tx_hash,
         }
@@ -243,6 +253,7 @@ impl CommitBatchInfo {
             self.new_state_commitment,
             U256::from(self.number_of_layer1_txs),
             self.priority_operations_hash,
+            self.dependency_roots_rolling_hash,
             self.l2_to_l1_logs_root_hash,
             Address::from(self.l2_da_validator.0),
             self.da_commitment,
