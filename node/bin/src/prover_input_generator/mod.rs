@@ -157,7 +157,7 @@ fn compute_prover_input(
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
-        replay_record.block_context,
+        replay_record.block_context.clone(),
         ProofData {
             state_root_view: initial_storage_commitment,
             last_block_timestamp,

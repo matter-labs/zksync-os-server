@@ -90,14 +90,11 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
             self.latency_tracker
                 .enter_state(GenericComponentState::Processing);
             let mut priority_ops = Vec::new();
+            let mut interop_roots = Vec::new();
             for batch in &batches {
-                let count = batch.batch.commit_batch_info.number_of_layer1_txs as usize;
-                if batch.batch.commit_batch_info.number_of_layer1_txs == 0 {
-                    // Short-circuit for batches with no L1 txs
-                    priority_ops.push(PriorityOpsBatchInfo::default());
-                    continue;
-                }
+                let priority_ops_count = batch.batch.commit_batch_info.number_of_layer1_txs as usize;
                 let mut first_priority_op_id_in_batch = None;
+                let mut batch_interop_roots = Vec::new();
                 for block_number in batch.batch.first_block_number..=batch.batch.last_block_number {
                     let replay = self.replay_storage.get_replay_record(block_number).unwrap();
                     for tx in replay.transactions {
@@ -111,36 +108,45 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                             ZkEnvelope::Upgrade(_) => {}
                         }
                     }
+                    batch_interop_roots.extend_from_slice(replay.block_context.interop_roots.roots().as_slice());
                 }
-                // We cache paths for priority transactions that happened in the previous batches.
-                // For this we absorb all the elements up to `first_priority_op_id_in_batch`.`
-                merkle_tree.trim_start(
-                    first_priority_op_id_in_batch.expect("at least one L1 tx")
-                        - merkle_tree.start_index(),
-                );
-                let (_, left, right) = merkle_tree.merkle_root_and_paths_for_range(..count);
-                let hashes = merkle_tree.hashes_prefix(count);
-                priority_ops.push(PriorityOpsBatchInfo {
-                    left_path: left
-                        .into_iter()
-                        .map(Option::unwrap_or_default)
-                        .map(|hash| TxHash::from(hash.0))
-                        .collect(),
-                    right_path: right
-                        .into_iter()
-                        .map(Option::unwrap_or_default)
-                        .map(|hash| TxHash::from(hash.0))
-                        .collect(),
-                    item_hashes: hashes
-                        .into_iter()
-                        .map(|hash| TxHash::from(hash.0))
-                        .collect(),
-                });
+                interop_roots.push(batch_interop_roots);
+
+                if priority_ops_count == 0 {
+                    // Short-circuit for batches with no L1 txs
+                    priority_ops.push(PriorityOpsBatchInfo::default());
+                } else {
+                    // We cache paths for priority transactions that happened in the previous batches.
+                    // For this we absorb all the elements up to `first_priority_op_id_in_batch`.`
+                    merkle_tree.trim_start(
+                        first_priority_op_id_in_batch.expect("at least one L1 tx")
+                            - merkle_tree.start_index(),
+                    );
+                    let (_, left, right) = merkle_tree.merkle_root_and_paths_for_range(..priority_ops_count);
+                    let hashes = merkle_tree.hashes_prefix(priority_ops_count);
+                    priority_ops.push(PriorityOpsBatchInfo {
+                        left_path: left
+                            .into_iter()
+                            .map(Option::unwrap_or_default)
+                            .map(|hash| TxHash::from(hash.0))
+                            .collect(),
+                        right_path: right
+                            .into_iter()
+                            .map(Option::unwrap_or_default)
+                            .map(|hash| TxHash::from(hash.0))
+                            .collect(),
+                        item_hashes: hashes
+                            .into_iter()
+                            .map(|hash| TxHash::from(hash.0))
+                            .collect(),
+                    });
+                }
             }
+
             self.latency_tracker
                 .enter_state(GenericComponentState::WaitingSend);
             self.execute_batches_sender
-                .send(ExecuteCommand::new(batches, priority_ops))
+                .send(ExecuteCommand::new(batches, priority_ops, interop_roots))
                 .await?;
         }
     }

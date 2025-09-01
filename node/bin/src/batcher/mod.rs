@@ -169,9 +169,9 @@ impl Batcher {
                 }
 
                 /* ---------- collect blocks ---------- */
-                should_seal = self.block_receiver.peek_recv(|(block_output, _, _)| {
+                should_seal = self.block_receiver.peek_recv(|(block_output, replay_record, _)| {
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output).is_batch_limit_reached()
+                    accumulator.clone().add(block_output, replay_record).is_batch_limit_reached()
                 }) => {
                     latency_tracker.enter_state(GenericComponentState::Processing);
                     match should_seal {
@@ -205,7 +205,7 @@ impl Batcher {
                             };
 
                             // ---------- accumulate batch data ----------
-                            accumulator.add(&block_output);
+                            accumulator.add(&block_output, &replay_record);
 
                             blocks.push((
                                 block_output,

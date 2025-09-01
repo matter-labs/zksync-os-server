@@ -7,9 +7,11 @@ use reth_primitives::SealedBlock;
 use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use arrayvec::ArrayVec;
 use tokio::sync::mpsc;
 use zk_ee::common_structs::PreimageType;
-use zk_ee::system::metadata::{BlockHashes};
+use zk_ee::system::MAX_NUMBER_INTEROP_ROOTS;
+use zk_ee::system::metadata::{BlockHashes, InteropRootsContainer, InteropRoot as ZkOsInteropRoot};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
@@ -96,6 +98,17 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let best_txs =
                     best_transactions(&self.l2_mempool, &mut self.l1_transactions, upgrade_tx);
                 let timestamp = (millis_since_epoch() / 1000) as u64;
+
+                let mut interop_roots: ArrayVec::<ZkOsInteropRoot, MAX_NUMBER_INTEROP_ROOTS> = ArrayVec::new();
+                for _ in 0..MAX_NUMBER_INTEROP_ROOTS {
+                    match self.interop_roots.try_recv() {
+                        Ok(root) => {
+                            interop_roots.push(root.into());
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let interop_roots = InteropRootsContainer::from(interop_roots);
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
                     native_price: U256::from(1),
@@ -109,6 +122,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
+                    interop_roots,
                 };
                 PreparedBlockCommand {
                     block_context,
@@ -135,6 +149,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                         ZkEnvelope::L2(_) => {}
                         ZkEnvelope::Upgrade(_) => {}
                     }
+                }
+                for interop_root in record.block_context.interop_roots.roots() {
+                    assert_eq!(&Into::<ZkOsInteropRoot>::into(self.interop_roots.recv().await.unwrap()), interop_root);
                 }
                 PreparedBlockCommand {
                     block_context: record.block_context,

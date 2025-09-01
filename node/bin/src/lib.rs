@@ -51,6 +51,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zk_ee::system::MAX_NUMBER_INTEROP_ROOTS;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_genesis::Genesis;
@@ -101,7 +102,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // Channels between L1Watcher and Sequencer
     let (l1_transactions_sender, l1_transactions) = tokio::sync::mpsc::channel(5);
-    let (interop_roots_sender, interop_roots) = tokio::sync::mpsc::channel(10);
+    let (interop_roots_sender, interop_roots) = tokio::sync::mpsc::channel(MAX_NUMBER_INTEROP_ROOTS);
 
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
@@ -296,7 +297,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.message_root,
             interop_roots_sender,
             config.genesis_config.chain_id,
-            next_interop_root_posб
+            next_interop_root_pos,
         )
             .await
             .expect("failed to start L1 transaction watcher")

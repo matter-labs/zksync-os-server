@@ -34,3 +34,4 @@ tokio.workspace = true
 tracing.workspace = true
 vise.workspace = true
 semver.workspace = true
+arrayvec.workspace = true

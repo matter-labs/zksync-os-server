@@ -273,7 +273,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let storage_view = self.storage.state_view_at(block_number)?;
 
         // Execute the transaction with the highest possible gas limit.
-        let mut res = execute(tx.clone(), block_context, storage_view.clone())
+        let mut res = execute(tx.clone(), block_context.clone(), storage_view.clone())
             .map_err(EthCallError::ForwardSubsystemError)?
             .map_err(EthCallError::InvalidTransaction)?;
         match res.execution_result {
@@ -310,7 +310,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
             // Re-execute the transaction with the new gas limit and update the result and
             // environment.
-            res = execute(optimistic_tx, block_context, storage_view.clone())
+            res = execute(optimistic_tx, block_context.clone(), storage_view.clone())
                 .map_err(EthCallError::ForwardSubsystemError)?
                 .map_err(EthCallError::InvalidTransaction)?;
 
@@ -351,7 +351,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             );
 
             // Execute transaction and handle potential gas errors, adjusting limits accordingly.
-            match execute(mid_tx, block_context, storage_view.clone())
+            match execute(mid_tx, block_context.clone(), storage_view.clone())
                 .map_err(EthCallError::ForwardSubsystemError)?
             {
                 Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {

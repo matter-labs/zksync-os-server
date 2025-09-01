@@ -30,7 +30,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     let state_view = state
         .state_view_at(ctx.block_number - 1)
         .map_err(|e| BlockDump {
-            ctx,
+            ctx: ctx.clone(),
             txs: Vec::new(),
             error: e.to_string(),
         })?;
@@ -38,7 +38,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         component_state_tracker: latency_tracker.clone(),
         state_view,
     };
-    let mut runner = VmWrapper::new(ctx, metered_state_view);
+    let mut runner = VmWrapper::new(ctx.clone(), metered_state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
@@ -84,7 +84,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             .await
                             .map_err(|e| {
                                 BlockDump {
-                                    ctx,
+                                    ctx: ctx.clone(),
                                     txs: all_processed_txs.clone(),
                                     error: e.to_string(),
                                 }
@@ -189,7 +189,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             // todo: maybe put this check to `ReplayRecord` instead - and just assert here? Or not even assert.
                             return Err(
                                 BlockDump {
-                                    ctx,
+                                    ctx: ctx.clone(),
                                     txs: all_processed_txs.clone(),
                                     error: format!("empty replay for block {}", ctx.block_number),
                                 }
@@ -211,7 +211,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
 
     /* ---------- seal & return ------------------------------------- */
     let output = runner.seal_block().await.map_err(|e| BlockDump {
-        ctx,
+        ctx: ctx.clone(),
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;

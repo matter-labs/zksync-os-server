@@ -13,7 +13,7 @@ const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
 /// User-friendly version of [`zksync_os_contract_interface::IExecutor::StoredBatchInfo`] containing
 /// fields that are relevant for ZKsync OS.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoredBatchInfo {
     pub batch_number: u64,
     pub state_commitment: B256,
@@ -91,7 +91,7 @@ impl From<&StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredB
 }
 
 /// User-friendly version of [`zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommitBatchInfo {
     pub batch_number: u64,
     pub new_state_commitment: B256,

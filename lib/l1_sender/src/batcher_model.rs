@@ -17,7 +17,7 @@ use zksync_os_observability::LatencyDistributionTracker;
 ///
 ///  Note that any change to this struct is breaking since we serialize it in `ProofStorage`
 ///
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BatchMetadata {
     pub previous_stored_batch_info: StoredBatchInfo,
     pub commit_batch_info: CommitBatchInfo,

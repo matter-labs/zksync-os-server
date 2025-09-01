@@ -17,3 +17,4 @@ alloy-rlp.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
+zk_ee.workspace = true

@@ -1,16 +1,13 @@
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent, WatchedEventTryFrom};
 use crate::{L1WatcherConfig};
-use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::primitives::Address;
+use alloy::providers::DynProvider;
 use zksync_os_types::{InteropRoot, InteropRootPosition};
 use std::convert::Infallible;
 use std::time::Duration;
 use alloy::rpc::types::Log;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
-
-/// Don't try to process that many block linearly
-const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
 pub struct L1InteropRootWatcher {
     l1_watcher: L1Watcher<InteropRoot>,
@@ -55,8 +52,7 @@ impl L1InteropRootWatcher {
     async fn poll(&mut self) -> L1InteropRootWatcherResult<()> {
         let interop_roots = self.l1_watcher.poll().await?;
 
-        let l2_chain_id = U256::from(self.l2_chain_id);
-        for interop_root in interop_roots.into_iter().filter(|root| root.chain_id != l2_chain_id) {
+        for interop_root in interop_roots.into_iter().filter(|root| root.chain_id != self.l2_chain_id) {
             if interop_root.pos < self.next_interop_root_pos {
                 tracing::debug!(
                     interop_root_pos = ?interop_root.pos,
