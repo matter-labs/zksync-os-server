@@ -1,6 +1,6 @@
-# zksync-os-sequencer
+# ZKsync OS Sequencer
 
-New sequencer implementation for zksync-os with focus on high throughput, low latency and great DevEx.
+This repo contains the sequencer implementation for ZKsync OS, the OS powering the ZKsync Stack. The ZKsync OS sequencer design optimizes for throughput, low latency, and fantastic DevEx.
 
 ## Run
 
@@ -205,3 +205,28 @@ Something went wrong with L1 - check that you're really running the anvil with t
 **Failed to deserialize context**
 
 If you hit this error when starting, check if you don't have some 'old' rocksDB data in db/node1 directory.
+
+## Policies
+
+- [Security policy](SECURITY.md)
+- [Contribution policy](CONTRIBUTING.md)
+
+## License
+
+ZKsync OS repositories are distributed under the terms of either
+
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/blog/license/mit/>)
+
+at your option.
+
+## Official Links
+
+- [Website](https://zksync.io/)
+- [GitHub](https://github.com/matter-labs)
+- [ZK Credo](https://github.com/zksync/credo)
+- [Twitter](https://twitter.com/zksync)
+- [Twitter for Developers](https://twitter.com/zkSyncDevs)
+- [Discord](https://join.zksync.dev/)
+- [Mirror](https://zksync.mirror.xyz/)
+- [Youtube](https://www.youtube.com/@zkSync-era)
