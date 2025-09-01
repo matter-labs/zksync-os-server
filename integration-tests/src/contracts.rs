@@ -19,6 +19,13 @@ alloy::sol!(
 );
 
 alloy::sol!(
+    /// Simple ERC20 with permissionless mint.
+    #[sol(rpc)]
+    TestERC20,
+    "test-contracts/out/TestERC20.sol/TestERC20.json"
+);
+
+alloy::sol!(
     /// Contract that calls `TracingSecondary` internally.
     #[sol(rpc)]
     TracingPrimary,
@@ -61,6 +68,12 @@ alloy::sol! {
 
     interface IL1Messenger {
         event L1MessageSent(address indexed _sender, bytes32 indexed _hash, bytes _message);
+    }
+
+    #[sol(rpc)]
+    interface IL2AssetRouter {
+        function l2TokenAddress(address _l1Token) public view returns (address);
+        function withdraw(address _l1Receiver, address _l2Token, uint256 _amount);
     }
 }
 

@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.24;
+pragma solidity ^0.8.26;
 
-interface tokenRecipient {
-    function receiveApproval(
-        address _from,
-        uint256 _value,
-        address _token,
-        bytes calldata _extraData
-    ) external;
-}
-
+/// @title TestERC20 - Simple ERC20 with permissionless mint
 contract TestERC20 {
     // Public variables of the token
     string public name;
@@ -127,68 +119,6 @@ contract TestERC20 {
     ) public returns (bool success) {
         allowance[msg.sender][_spender] = _value;
         emit Approval(msg.sender, _spender, _value);
-        return true;
-    }
-
-    /**
-     * Set allowance for other address and notify
-     *
-     * Allows `_spender` to spend no more than `_value` tokens on your behalf, and then ping the contract about it
-     *
-     * @param _spender The address authorized to spend
-     * @param _value the max amount they can spend
-     * @param _extraData some extra information to send to the approved contract
-     */
-    function approveAndCall(
-        address _spender,
-        uint256 _value,
-        bytes memory _extraData
-    ) public returns (bool success) {
-        tokenRecipient spender = tokenRecipient(_spender);
-        if (approve(_spender, _value)) {
-            spender.receiveApproval(
-                msg.sender,
-                _value,
-                address(this),
-                _extraData
-            );
-            return true;
-        }
-    }
-
-    /**
-     * Destroy tokens
-     *
-     * Remove `_value` tokens from the system irreversibly
-     *
-     * @param _value the amount of money to burn
-     */
-    function burn(uint256 _value) public returns (bool success) {
-        require(balanceOf[msg.sender] >= _value); // Check if the sender has enough
-        balanceOf[msg.sender] -= _value; // Subtract from the sender
-        totalSupply -= _value; // Updates totalSupply
-        emit Burn(msg.sender, _value);
-        return true;
-    }
-
-    /**
-     * Destroy tokens from other account
-     *
-     * Remove `_value` tokens from the system irreversibly on behalf of `_from`.
-     *
-     * @param _from the address of the sender
-     * @param _value the amount of money to burn
-     */
-    function burnFrom(
-        address _from,
-        uint256 _value
-    ) public returns (bool success) {
-        require(balanceOf[_from] >= _value); // Check if the targeted balance is enough
-        require(_value <= allowance[_from][msg.sender]); // Check allowance
-        balanceOf[_from] -= _value; // Subtract from the targeted balance
-        allowance[_from][msg.sender] -= _value; // Subtract from the sender's allowance
-        totalSupply -= _value; // Update totalSupply
-        emit Burn(_from, _value);
         return true;
     }
 }
