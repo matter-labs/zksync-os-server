@@ -2,6 +2,7 @@ use crate::ReplayRecord;
 
 mod conversion;
 
+// Don't change the file even if we update formatting rules
 #[rustfmt::skip]
 mod v1;
 

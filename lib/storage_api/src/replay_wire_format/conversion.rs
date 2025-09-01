@@ -1,7 +1,9 @@
 use super::v1::{ReplayWireFormat, ZkTransactionWireFormat};
 use crate::ReplayRecord;
+use alloy::eips::{Decodable2718, Encodable2718};
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockContext;
+use zksync_os_types::ZkEnvelope;
 
 impl From<ReplayWireFormat> for ReplayRecord {
     fn from(value: ReplayWireFormat) -> Self {
@@ -97,44 +99,15 @@ impl From<ReplayRecord> for ReplayWireFormat {
 
 impl From<zksync_os_types::ZkTransaction> for ZkTransactionWireFormat {
     fn from(value: zksync_os_types::ZkTransaction) -> Self {
-        Self {
-            signer: value.signer(),
-            inner: value.inner.into_inner().into(),
-        }
+        Self(value.inner.encoded_2718())
     }
 }
 
 impl From<ZkTransactionWireFormat> for zksync_os_types::ZkTransaction {
     fn from(value: ZkTransactionWireFormat) -> Self {
-        Self {
-            inner: alloy::consensus::transaction::Recovered::new_unchecked(
-                value.inner.into(),
-                value.signer,
-            ),
-        }
-    }
-}
-
-impl From<zksync_os_types::ZkEnvelope> for super::v1::ZkEnvelope {
-    fn from(value: zksync_os_types::ZkEnvelope) -> Self {
-        match value {
-            zksync_os_types::ZkEnvelope::Upgrade(envelope) => {
-                super::v1::ZkEnvelope::Upgrade(envelope)
-            }
-            zksync_os_types::ZkEnvelope::L1(envelope) => super::v1::ZkEnvelope::L1(envelope),
-            zksync_os_types::ZkEnvelope::L2(envelope) => super::v1::ZkEnvelope::L2(envelope.into()),
-        }
-    }
-}
-
-impl From<super::v1::ZkEnvelope> for zksync_os_types::ZkEnvelope {
-    fn from(value: super::v1::ZkEnvelope) -> Self {
-        match value {
-            super::v1::ZkEnvelope::Upgrade(envelope) => {
-                zksync_os_types::ZkEnvelope::Upgrade(envelope)
-            }
-            super::v1::ZkEnvelope::L1(envelope) => zksync_os_types::ZkEnvelope::L1(envelope),
-            super::v1::ZkEnvelope::L2(envelope) => zksync_os_types::ZkEnvelope::L2(envelope.into()),
-        }
+        ZkEnvelope::decode_2718(&mut &value.0[..])
+            .unwrap()
+            .try_into_recovered()
+            .unwrap()
     }
 }
