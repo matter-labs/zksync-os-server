@@ -75,7 +75,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         .allow_origin(Any)
         .allow_headers([hyper::header::CONTENT_TYPE]);
     let middleware = tower::ServiceBuilder::new().layer(cors);
-    let rpc_middleware = RpcServiceBuilder::new().layer_fn(move |svc| Monitoring::new(svc));
+    let rpc_middleware = RpcServiceBuilder::new().layer_fn(Monitoring::new);
 
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
