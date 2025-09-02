@@ -735,7 +735,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-    //todo
+    // Drain `blocks_for_batcher_subsystem_receiver`.
     tokio::spawn(
         async move { while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {} },
     );
