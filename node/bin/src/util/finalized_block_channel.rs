@@ -4,6 +4,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_storage_api::{ReadBatch, ReadFinality};
 
+/// Sends executed batch numbers starting from `start_from` (inclusive) to the given `sender`.
+/// If `block_replay_storage` is provided, it only sends batch numbers for which all blocks
+/// in the batch are present in the replay storage.
 pub async fn send_executed_and_replayed_batch_numbers<
     BatchStorage: ReadBatch,
     Finality: ReadFinality,

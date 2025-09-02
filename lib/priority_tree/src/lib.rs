@@ -69,6 +69,10 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         })
     }
 
+    /// Keeps building the tree by adding new transactions to the priority tree. As an input it can accept either
+    /// `proved_batch_envelopes_receiver` or `proved_batch_numbers_receiver`. Only one of them must be provided.
+    /// If `proved_batch_envelopes_receiver` is provided, then `execute_batches_sender` can also be provided
+    /// to forward the proved batches along with the priority ops proofs.
     pub async fn prepare_execute_commands<BatchStorage: ReadBatch>(
         self,
         batch_storage: BatchStorage,
@@ -205,6 +209,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         }
     }
 
+    /// Keeps caching the priority tree after each batch execution.
     pub async fn keep_caching(
         self,
         mut executed_batch_numbers_receiver: mpsc::Receiver<u64>,

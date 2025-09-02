@@ -682,6 +682,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         ),
     )
     .unwrap();
+    // Run task that adds new txs to PriorityTree and prepares `ExecuteCommand`s.
     tasks.spawn(
         priority_tree_manager
             .clone()
@@ -696,6 +697,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
                 "priority_tree_manager#prepare_execute_commands",
             )),
     );
+    // Auxiliary task that yields a channel of executed batch numbers.
     tasks.spawn(
         util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
             executed_batch_numbers_sender,
@@ -706,6 +708,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         )
         .map(report_exit("send_executed_batch_numbers")),
     );
+    // Run task that persists PriorityTree for executed batches and drops old data.
     tasks.spawn(
         priority_tree_manager
             .keep_caching(executed_batch_numbers_receiver, priority_txs_count_receiver)
@@ -783,6 +786,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         ),
     )
     .unwrap();
+    // Prepare a stream of executed batch numbers for the first task.
     tasks.spawn(
         util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
             executed_batch_numbers_sender_1,
@@ -793,6 +797,8 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         )
         .map(report_exit("send_executed_batch_numbers#1")),
     );
+    // Run task that adds new txs to PriorityTree. Unlike in MN, we do not provide a sender for ExecuteCommand.
+    // Also, channel of executed batch numbers serves as an input.
     tasks.spawn(
         priority_tree_manager
             .clone()
@@ -807,6 +813,8 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
                 "priority_tree_manager#prepare_execute_commands",
             )),
     );
+
+    // Prepare a stream of executed batch numbers for the second task.
     tasks.spawn(
         util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
             executed_batch_numbers_sender_2,
@@ -817,6 +825,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         )
         .map(report_exit("send_executed_batch_numbers#2")),
     );
+    // Run task that persists PriorityTree for executed batches and drops old data.
     tasks.spawn(
         priority_tree_manager
             .keep_caching(
