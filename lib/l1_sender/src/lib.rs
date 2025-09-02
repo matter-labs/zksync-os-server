@@ -11,11 +11,11 @@ use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::metrics::L1SenderState;
 use crate::new_blocks::NewBlocks;
-use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::network::{EthereumWallet, TransactionBuilder, TransactionResponse};
 use alloy::primitives::utils::format_ether;
 use alloy::primitives::{Address, BlockNumber, TxHash};
-use alloy::providers::ext::DebugApi;
-use alloy::providers::{DynProvider, Provider, WalletProvider};
+use alloy::providers::ext::{DebugApi, TxPoolApi};
+use alloy::providers::{DynProvider, PendingTransactionBuilder, Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{Block, TransactionRequest};
 use alloy::signers::local::PrivateKeySigner;
@@ -29,6 +29,9 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use zksync_os_observability::ComponentStateReporter;
+
+/// How long to wait for a pending transaction to be mined.
+const PENDING_TX_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -185,6 +188,51 @@ async fn register_operator<
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {} has zero balance", address);
+    }
+
+    // We only care about **pending** transactions as queued transaction could be underpriced or
+    // have a nonce gap.
+    let pending_txs = match provider.txpool_content_from(address).await {
+        Ok(content) => content.pending.into_values().collect(),
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                ?address,
+                "failed to get txpool content for L1 sender's operator; maybe `txpool_contentFrom` is not supported by the provider"
+            );
+            vec![]
+        }
+    };
+    if !pending_txs.is_empty() {
+        let pending_tx_hashes = pending_txs
+            .into_iter()
+            .map(|tx| tx.tx_hash())
+            .collect::<Vec<_>>();
+        tracing::info!(
+            ?pending_tx_hashes,
+            "detected pending transactions for L1 sender's operator; waiting for them to be mined"
+        );
+        for pending_tx_hash in pending_tx_hashes {
+            let pending_tx =
+                PendingTransactionBuilder::new(provider.root().clone(), pending_tx_hash)
+                    .with_timeout(Some(PENDING_TX_TIMEOUT));
+            match pending_tx.get_receipt().await {
+                Ok(receipt) => {
+                    tracing::debug!(
+                        ?pending_tx_hash,
+                        ?receipt.block_hash,
+                        "pending transaction was mined successfully"
+                    );
+                }
+                Err(err) => {
+                    tracing::error!(
+                        ?err,
+                        ?pending_tx_hash,
+                        "failed to get receipt for pending transaction; ignoring"
+                    );
+                }
+            }
+        }
     }
 
     tracing::info!(
