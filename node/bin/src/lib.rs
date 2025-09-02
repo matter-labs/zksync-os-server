@@ -72,12 +72,13 @@ use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord, RepositoryBlock,
-    WriteState,
+    FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
+    ReplayRecord, RepositoryBlock, WriteState,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
-const TREE_DB_NAME: &str = "tree";
+const STATE_TREE_DB_NAME: &str = "tree";
+const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
 
 #[allow(clippy::too_many_arguments)]
@@ -138,7 +139,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
-        &config.general_config.rocks_db_path.join(TREE_DB_NAME),
+        &config.general_config.rocks_db_path.join(STATE_TREE_DB_NAME),
     ));
 
     let genesis = Genesis::new(
@@ -288,7 +289,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let rpc_storage = RpcStorage::new(
         repositories.clone(),
         block_replay_storage.clone(),
-        finality_storage,
+        finality_storage.clone(),
         batch_storage.clone(),
         state.clone(),
     );
@@ -404,14 +405,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             block_replay_storage,
             &mut tasks,
             state,
+            finality_storage,
             _stop_receiver.clone(),
         )
         .await;
     } else {
         // External Node
-        run_batcher_channel_drain(
-            _stop_receiver.clone(),
+        run_en_batcher_tasks(
+            config,
+            batch_storage,
+            node_startup_state,
             blocks_for_batcher_subsystem_receiver,
+            block_replay_storage,
+            &mut tasks,
+            finality_storage,
+            _stop_receiver.clone(),
         )
         .await;
     };
@@ -449,21 +457,9 @@ fn command_source(
     stream.boxed()
 }
 
-/// Only for EN - we still populate channels destined for the batcher subsystem -
-/// need to drain them to not get stuck
-async fn run_batcher_channel_drain(
-    _stop_receiver: watch::Receiver<bool>,
-    mut blocks_for_batcher_subsystem_receiver: Receiver<(BlockOutput, ReplayRecord)>,
-) {
-    //todo
-    tokio::spawn(
-        async move { while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {} },
-    );
-}
-
 /// Only for Main Node
 #[allow(clippy::too_many_arguments)]
-async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
+async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFinality>(
     config: Config,
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     genesis_block: RepositoryBlock,
@@ -474,6 +470,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     block_replay_storage: BlockReplayStorage,
     tasks: &mut JoinSet<()>,
     state: State,
+    finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
 ) {
     // Batcher-specific async channels
@@ -501,6 +498,14 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     // Channel between `PriorityTree` and `L1Executor`
     let (batch_for_execute_sender, batch_for_execute_receiver) =
         tokio::sync::mpsc::channel::<ExecuteCommand>(5);
+
+    // Channel between `PriorityTree` tasks
+    let (priority_txs_count_sender, priority_txs_count_receiver) =
+        tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
+
+    // Channel for `PriorityTree` cache task
+    let (executed_batch_numbers_sender, executed_batch_numbers_receiver) =
+        tokio::sync::mpsc::channel::<u64>(1000);
 
     // Channel between `L1Executor` and `BatchSink`
     let (fully_processed_batch_sender, fully_processed_batch_receiver) =
@@ -666,22 +671,159 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
     tasks.spawn(l1_executor.map(report_exit("L1 executor")));
 
+    let priority_tree_manager = PriorityTreeManager::new(
+        block_replay_storage.clone(),
+        node_state_on_startup.last_executed_block,
+        Path::new(
+            &config
+                .general_config
+                .rocks_db_path
+                .join(PRIORITY_TREE_DB_NAME),
+        ),
+    )
+    .unwrap();
     tasks.spawn(
-        PriorityTreeManager::new(
-            block_replay_storage.clone(),
-            node_state_on_startup.last_executed_block,
-            batch_for_priority_tree_receiver,
-            batch_for_execute_sender,
+        priority_tree_manager
+            .clone()
+            .prepare_execute_commands(
+                batch_storage.clone(),
+                Some(batch_for_priority_tree_receiver),
+                None,
+                priority_txs_count_sender,
+                Some(batch_for_execute_sender),
+            )
+            .map(report_exit(
+                "priority_tree_manager#prepare_execute_commands",
+            )),
+    );
+    tasks.spawn(
+        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
+            executed_batch_numbers_sender,
+            batch_storage.clone(),
+            finality,
+            None,
+            node_state_on_startup.l1_state.last_executed_batch + 1,
         )
-        .unwrap()
-        .run()
-        .map(report_exit("Priority tree manager")),
+        .map(report_exit("send_executed_batch_numbers")),
+    );
+    tasks.spawn(
+        priority_tree_manager
+            .keep_caching(executed_batch_numbers_receiver, priority_txs_count_receiver)
+            .map(report_exit("priority_tree_manager#keep_caching")),
     );
 
     tasks.spawn(
         BatchSink::new(fully_processed_batch_receiver)
             .run()
             .map(report_exit("batch_sink")),
+    );
+}
+
+/// Only for EN - we still populate channels destined for the batcher subsystem -
+/// need to drain them to not get stuck
+#[allow(clippy::too_many_arguments)]
+async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
+    config: Config,
+    batch_storage: ProofStorage,
+    node_state_on_startup: NodeStateOnStartup,
+    mut blocks_for_batcher_subsystem_receiver: Receiver<(BlockOutput, ReplayRecord)>,
+    block_replay_storage: BlockReplayStorage,
+    tasks: &mut JoinSet<()>,
+    finality: Finality,
+    _stop_receiver: watch::Receiver<bool>,
+) {
+    //todo
+    tokio::spawn(
+        async move { while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {} },
+    );
+
+    // Channel between `PriorityTree` tasks
+    let (priority_txs_count_sender, priority_txs_count_receiver) =
+        tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
+
+    // Input channels for `PriorityTree` tasks
+    let (executed_batch_numbers_sender_1, executed_batch_numbers_receiver_1) =
+        tokio::sync::mpsc::channel::<u64>(1000);
+    let (executed_batch_numbers_sender_2, executed_batch_numbers_receiver_2) =
+        tokio::sync::mpsc::channel::<u64>(1000);
+
+    let last_ready_block = node_state_on_startup
+        .last_executed_block
+        .min(node_state_on_startup.block_replay_storage_last_block);
+    let batch_of_last_ready_block = batch_storage
+        .get_batch_by_block_number(last_ready_block)
+        .await
+        .unwrap()
+        .unwrap();
+    let batch_range = batch_storage
+        .get_batch_range_by_number(batch_of_last_ready_block)
+        .await
+        .unwrap()
+        .unwrap();
+    let last_ready_batch = if last_ready_block == batch_range.1 {
+        batch_of_last_ready_block
+    } else {
+        batch_of_last_ready_block.saturating_sub(1)
+    };
+    let init_block = batch_storage
+        .get_batch_range_by_number(last_ready_batch)
+        .await
+        .unwrap()
+        .unwrap()
+        .1;
+
+    let priority_tree_manager = PriorityTreeManager::new(
+        block_replay_storage.clone(),
+        init_block,
+        Path::new(
+            &config
+                .general_config
+                .rocks_db_path
+                .join(PRIORITY_TREE_DB_NAME),
+        ),
+    )
+    .unwrap();
+    tasks.spawn(
+        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
+            executed_batch_numbers_sender_1,
+            batch_storage.clone(),
+            finality.clone(),
+            Some(block_replay_storage.clone()),
+            last_ready_batch + 1,
+        )
+        .map(report_exit("send_executed_batch_numbers#1")),
+    );
+    tasks.spawn(
+        priority_tree_manager
+            .clone()
+            .prepare_execute_commands(
+                batch_storage.clone(),
+                None,
+                Some(executed_batch_numbers_receiver_1),
+                priority_txs_count_sender,
+                None,
+            )
+            .map(report_exit(
+                "priority_tree_manager#prepare_execute_commands",
+            )),
+    );
+    tasks.spawn(
+        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
+            executed_batch_numbers_sender_2,
+            batch_storage.clone(),
+            finality,
+            Some(block_replay_storage),
+            last_ready_batch + 1,
+        )
+        .map(report_exit("send_executed_batch_numbers#2")),
+    );
+    tasks.spawn(
+        priority_tree_manager
+            .keep_caching(
+                executed_batch_numbers_receiver_2,
+                priority_txs_count_receiver,
+            )
+            .map(report_exit("priority_tree_manager#keep_caching")),
     );
 }
 

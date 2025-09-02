@@ -10343,6 +10343,7 @@ version = "0.2.0-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
+ "bincode 2.0.1",
  "tokio",
  "tracing",
  "zksync_os_contract_interface",
@@ -10350,6 +10351,7 @@ dependencies = [
  "zksync_os_l1_sender",
  "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
+ "zksync_os_rocksdb",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
