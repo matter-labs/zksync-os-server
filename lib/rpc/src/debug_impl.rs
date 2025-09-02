@@ -10,6 +10,7 @@ use alloy::rpc::types::trace::geth::{
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
+use std::ops::Range;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_storage_api::{RepositoryError, StateError};
 
@@ -24,11 +25,12 @@ impl<RpcStorage> DebugNamespace<RpcStorage> {
 }
 
 impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
-    fn debug_trace_transaction_impl(
+    fn debug_trace_block_by_id_impl(
         &self,
-        requested_tx_hash: TxHash,
+        block_id: BlockId,
+        txs_range: Option<Range<usize>>,
         opts: Option<GethDebugTracingOptions>,
-    ) -> DebugResult<GethTrace> {
+    ) -> DebugResult<Vec<TraceResult>> {
         let opts = opts.unwrap_or_default();
         let Some(tracer) = opts.tracer else {
             return Err(DebugError::UnsupportedDefaultTracer);
@@ -40,6 +42,56 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             .tracer_config
             .into_call_config()
             .map_err(|_| DebugError::InvalidTracerConfig)?;
+        let Some(block) = self.storage.get_block_by_id(block_id)? else {
+            return Err(DebugError::BlockNotFound);
+        };
+        if block.number == 0 {
+            // Short-circuit for genesis block.
+            return Ok(Vec::new());
+        }
+
+        let Some(block_context) = self.storage.replay_storage().get_context(block.number) else {
+            tracing::error!(
+                block_number = block.number,
+                "could not load block's context"
+            );
+            return Err(DebugError::InternalError);
+        };
+        let mut txs = Vec::new();
+        for tx_hash in
+            &block.body.transactions[txs_range.unwrap_or(0..block.body.transactions.len())]
+        {
+            let Some(tx) = self.storage.repository().get_transaction(*tx_hash)? else {
+                tracing::error!(
+                    ?tx_hash,
+                    block_number = block.number,
+                    "could not find transaction that was included in block"
+                );
+                return Err(DebugError::InternalError);
+            };
+            txs.push(tx);
+        }
+        let prev_state_view = self.storage.state_view_at(block.number - 1)?;
+        match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
+            Ok(calls) => Ok(calls
+                .into_iter()
+                .zip(&block.body.transactions)
+                .map(|(call, tx_hash)| {
+                    TraceResult::new_success(GethTrace::CallTracer(call), Some(*tx_hash))
+                })
+                .collect()),
+            Err(err) => {
+                tracing::error!(?err, "failed to trace transaction");
+                Err(DebugError::InternalError)
+            }
+        }
+    }
+
+    fn debug_trace_transaction_impl(
+        &self,
+        requested_tx_hash: TxHash,
+        opts: Option<GethDebugTracingOptions>,
+    ) -> DebugResult<GethTrace> {
         let Some(tx_meta) = self
             .storage
             .repository()
@@ -48,41 +100,21 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             return Err(DebugError::TransactionNotFound);
         };
         let block_number = tx_meta.block_number;
-        let Some(block_context) = self.storage.replay_storage().get_context(block_number) else {
-            tracing::error!(block_number, "could not load block's context");
-            return Err(DebugError::InternalError);
-        };
-        let Some(block) = self
-            .storage
-            .repository()
-            .get_block_by_number(block_number)?
-        else {
-            tracing::error!(block_number, "could not load block containing transaction");
-            return Err(DebugError::InternalError);
-        };
-        let mut txs = Vec::new();
-        for tx_hash in &block.body.transactions {
-            let Some(tx) = self.storage.repository().get_transaction(*tx_hash)? else {
-                tracing::error!(
-                    ?tx_hash,
-                    block_number,
-                    "could not find transaction that was included in block"
-                );
-                return Err(DebugError::InternalError);
-            };
-            txs.push(tx);
-            if tx_hash == &requested_tx_hash {
-                break;
-            }
-        }
-        let prev_state_view = self.storage.state_view_at(block_number - 1)?;
-        match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
-            Ok(call) => Ok(GethTrace::CallTracer(call)),
-            Err(err) => {
-                tracing::error!(?err, "failed to trace transaction");
+
+        self.debug_trace_block_by_id_impl(
+            block_number.into(),
+            Some(0..tx_meta.tx_index_in_block as usize + 1),
+            opts,
+        )
+        // We only need last transaction's traces
+        .map(|mut traces| traces.pop().unwrap())
+        .and_then(|x| match x {
+            TraceResult::Success { result, .. } => Ok(result),
+            TraceResult::Error { error, .. } => {
+                tracing::error!(?error, "failed to trace transaction");
                 Err(DebugError::InternalError)
             }
-        }
+        })
     }
 }
 
@@ -118,18 +150,20 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
 
     async fn debug_trace_block_by_hash(
         &self,
-        _block: BlockHash,
-        _opts: Option<GethDebugTracingOptions>,
+        block: BlockHash,
+        opts: Option<GethDebugTracingOptions>,
     ) -> RpcResult<Vec<TraceResult>> {
-        Err(unimplemented_rpc_err())
+        self.debug_trace_block_by_id_impl(block.into(), None, opts)
+            .to_rpc_result()
     }
 
     async fn debug_trace_block_by_number(
         &self,
-        _block: BlockNumberOrTag,
-        _opts: Option<GethDebugTracingOptions>,
+        block: BlockNumberOrTag,
+        opts: Option<GethDebugTracingOptions>,
     ) -> RpcResult<Vec<TraceResult>> {
-        Err(unimplemented_rpc_err())
+        self.debug_trace_block_by_id_impl(block.into(), None, opts)
+            .to_rpc_result()
     }
 
     async fn debug_trace_transaction(
@@ -191,6 +225,9 @@ pub enum DebugError {
     /// Thrown when a requested transaction is not found
     #[error("transaction not found")]
     TransactionNotFound,
+    /// Thrown when a requested block is not found
+    #[error("block not found")]
+    BlockNotFound,
     /// Internal server error not exposed to user
     #[error("internal error")]
     InternalError,
