@@ -104,7 +104,7 @@ time = "0.3"
 criterion = "0.7.0"
 sha2 = "0.10.9"
 tower = "0.5.2"
-tower-http = { version = "0.6.6", features = ["cors", "metrics"] }
+tower-http = "0.6.6"
 hyper = "1.6.0"
 semver = { version = "1", features = ["serde"] }
 async-stream = "0.3.6"
