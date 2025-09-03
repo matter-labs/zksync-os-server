@@ -46,7 +46,7 @@ pub fn call_trace(
     block_context: BlockContext,
     state_view: impl ViewState,
     call_config: CallConfig,
-) -> Result<CallFrame, Box<ForwardSubsystemError>> {
+) -> Result<Vec<CallFrame>, Box<ForwardSubsystemError>> {
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
@@ -64,7 +64,7 @@ pub fn call_trace(
         &mut tracer,
     )?;
 
-    Ok(std::mem::take(tracer.transactions.last_mut().unwrap()))
+    Ok(tracer.transactions)
 }
 
 #[derive(Default)]
