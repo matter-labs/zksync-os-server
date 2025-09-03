@@ -10,7 +10,7 @@ interface tokenRecipient {
     ) external;
 }
 
-contract SimpleERC20 {
+contract TestERC20 {
     // Public variables of the token
     string public name;
     string public symbol;

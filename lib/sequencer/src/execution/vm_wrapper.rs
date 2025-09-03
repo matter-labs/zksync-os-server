@@ -1,3 +1,4 @@
+use crate::execution::metrics::EXECUTION_METRICS;
 use anyhow::Context;
 use std::time::Duration;
 use tokio::{
@@ -62,6 +63,9 @@ impl VmWrapper {
         &mut self,
         raw_tx: Vec<u8>,
     ) -> anyhow::Result<Result<TxProcessingOutputOwned, InvalidTransaction>> {
+        let total_observer = EXECUTION_METRICS.tx_execution[&"total"].start();
+        let sending_observer = EXECUTION_METRICS.tx_execution[&"sending"].start();
+
         // Send the next‐tx request.
         // If this fails, the runner has already shut down.
         if self
@@ -72,8 +76,10 @@ impl VmWrapper {
         {
             anyhow::bail!("BlockRunner: `tx_source` channel closed unexpectedly");
         }
+        sending_observer.observe();
+        let sending_observer = EXECUTION_METRICS.tx_execution[&"waiting"].start();
         // Await the VM's callback.
-        match self.tx_result_receiver.recv().await {
+        let res = match self.tx_result_receiver.recv().await {
             Some(Ok(output)) => Ok(Ok(output)),
             Some(Err(invalid)) => Ok(Err(invalid)),
             None => {
@@ -90,7 +96,10 @@ impl VmWrapper {
                     ),
                 }
             }
-        }
+        };
+        sending_observer.observe();
+        total_observer.observe();
+        res
     }
 
     /// Tell the VM to seal the block and return the final `BlockOutput`.

@@ -1,9 +1,6 @@
 use crate::prover_api::fri_job_manager::SubmitError;
-use air_compiler_cli::prover_utils::{
-    generate_oracle_data_from_metadata_and_proof_list, proof_list_and_metadata_from_program_proof,
-};
 use alloy::primitives::B256;
-use execution_utils::ProgramProof;
+use execution_utils::{ProgramProof, generate_oracle_data_from_metadata_and_proof_list};
 use zk_os_basic_system::system_implementation::system::BatchPublicInput;
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
 
@@ -53,7 +50,7 @@ fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32
 
 fn extract_final_register_values(input_program_proof: ProgramProof) -> [u32; 16] {
     // Once new version of airbender is integrated, these functions should be changed to the ones from execution_utils.
-    let (metadata, proof_list) = proof_list_and_metadata_from_program_proof(input_program_proof);
+    let (metadata, proof_list) = ProgramProof::to_metadata_and_proof_list(input_program_proof);
 
     let oracle_data = generate_oracle_data_from_metadata_and_proof_list(&metadata, &proof_list);
     tracing::debug!(
