@@ -81,9 +81,11 @@ impl Batcher {
     pub async fn run_loop(mut self, mut prev_batch_info: StoredBatchInfo) -> anyhow::Result<()> {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("batcher", GenericComponentState::WaitingRecv);
+
+        let mut first_block_in_batch = self.first_block_to_process;
         loop {
             let batch_envelope = self
-                .create_batch(&prev_batch_info, &latency_tracker)
+                .create_batch(&prev_batch_info, &latency_tracker, first_block_in_batch)
                 .await?;
             BATCHER_METRICS
                 .transactions_per_batch
@@ -98,6 +100,8 @@ impl Batcher {
                 new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                 "Batch created"
             );
+
+            first_block_in_batch = batch_envelope.batch.last_block_number + 1;
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             self.batch_data_sender
                 .send(batch_envelope)
@@ -110,6 +114,7 @@ impl Batcher {
         &mut self,
         prev_batch_info: &StoredBatchInfo,
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
+        expected_first_block: u64,
     ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
         // will be set to `Some` when we process the first block that the batch can be sealed after
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
@@ -121,26 +126,7 @@ impl Batcher {
             self.pubdata_limit_bytes,
         );
 
-        match self
-            .block_receiver
-            .peek_recv(|(_, replay_record, _)| {
-                replay_record.block_context.block_number < self.first_block_to_process
-            })
-            .await
-        {
-            Some(true) => {
-                anyhow::bail!(
-                    "Received block with number below `first_block_to_process` in the batcher. It should've been skipped on prover input generation step."
-                );
-            }
-            Some(false) => {
-                // do nothing, proceed to process the block
-            }
-            None => {
-                anyhow::bail!("Batcher's block receiver channel closed unexpectedly");
-            }
-        }
-
+        let mut expected_block_number = expected_first_block;
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {
@@ -177,6 +163,16 @@ impl Batcher {
                                 "Adding block to a pending batch."
                             );
                             let block_number = replay_record.block_context.block_number;
+
+                            // sanity check - ensure that we process blocks in order
+                            if block_number != expected_block_number {
+                                anyhow::bail!(
+                                    "Unexpected block number received. Expected {}, got {}",
+                                    expected_block_number,
+                                    block_number
+                                );
+                            }
+                            expected_block_number += 1;
 
                             /* ---------- process block ---------- */
                             let tree = self.persistent_tree
