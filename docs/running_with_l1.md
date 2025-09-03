@@ -96,10 +96,10 @@ WARNING: when you see the tool failing on postgres - it is ok, as the chain got 
 
 After this, you can finally run the sequencer:
 ```
-sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo run --release
+general_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo run --release
 ```
 
-the `sequencer_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
+the `general_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
 Alternatively, you need to set:
 * `l1_sender_operator_commit_pk` to the operator private key of `wallets.yaml` of `zkstack` tool output, 
 * `l1_sender_operator_prove_pk` and `l1_sender_operator_execute_pk` to arbitrary funded L1 wallets,
@@ -114,6 +114,8 @@ If you restart anvil, you have to repeat a subset of steps from above, to re-cre
 * you might also want to restart the sequencer - it will figure out the state on L1, and commit missing batches.
 
 ## Regenerate L1 state
+
+Note: There is an [experimental tool](https://github.com/mm-zk/zksync_tools/tree/main/zkos/update_state_json) that can run these commands for you. If it turns out to be useful, we might make it more permanent. 
 
 L1 state is checked in into this repo under `zkos-l1-state.json`. To regenerate it from scratch, run the following commands:
 ```
@@ -163,5 +165,5 @@ zkstack chain init --deploy-paymaster=false  \
 And start the sequencer.
 
 ```shell
-sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era2 cargo run --release
+general_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era2 cargo run --release
 ```
