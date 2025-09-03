@@ -35,16 +35,16 @@ pub trait L1TxType: Clone + Send + Sync + Debug + 'static {
 pub struct L1PriorityTxType;
 
 impl L1TxType for L1PriorityTxType {
-    const REAL_TX_TYPE: u8 = 42;
-    const FAKE_TX_TYPE: u8 = 42;
+    const REAL_TX_TYPE: u8 = 127;
+    const FAKE_TX_TYPE: u8 = 127;
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UpgradeTxType;
 
 impl L1TxType for UpgradeTxType {
-    const REAL_TX_TYPE: u8 = 41;
-    const FAKE_TX_TYPE: u8 = 41;
+    const REAL_TX_TYPE: u8 = 126;
+    const FAKE_TX_TYPE: u8 = 126;
 }
 
 /// An L1->L2 transaction.
