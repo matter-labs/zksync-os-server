@@ -386,6 +386,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .map(|_| tracing::warn!("repositories.run_persist_loop() unexpectedly exited"))
             .await
     });
+    let state_clone = state.clone();
+    tasks.spawn(async move {
+        state_clone
+            .compact_periodically_optional()
+            .map(|_| tracing::warn!("state.compact_periodically() unexpectedly exited"))
+            .await;
+    });
 
     if config.sequencer_config.is_main_node() {
         // Main Node
