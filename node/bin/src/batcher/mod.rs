@@ -26,6 +26,8 @@ pub struct Batcher {
     // L2 chain id
     chain_id: u64,
     chain_address: Address,
+    // first block to process
+    first_block_to_process: u64,
     /// Last persisted block. We should not seal batches by timeout until this block is reached.
     /// This helps to avoid premature sealing due to timeout criterion, since for  every tick of the
     /// timer the `should_seal_by_timeout` call will return `true`
@@ -50,6 +52,7 @@ impl Batcher {
         // == initial state ==
         chain_id: u64,
         chain_address: Address,
+        first_block_to_process: u64,
         last_persisted_block: u64,
 
         // == config ==
@@ -64,6 +67,7 @@ impl Batcher {
         Self {
             chain_id,
             chain_address,
+            first_block_to_process,
             last_persisted_block,
             pubdata_limit_bytes,
             batcher_config,
@@ -116,6 +120,26 @@ impl Batcher {
             self.batcher_config.blocks_per_batch_limit,
             self.pubdata_limit_bytes,
         );
+
+        match self
+            .block_receiver
+            .peek_recv(|(_, replay_record, _)| {
+                replay_record.block_context.block_number < self.first_block_to_process
+            })
+            .await
+        {
+            Some(true) => {
+                anyhow::bail!(
+                    "Received block with number below `first_block_to_process` in the batcher. It should've been skipped on prover input generation step."
+                );
+            }
+            Some(false) => {
+                // do nothing, proceed to process the block
+            }
+            None => {
+                anyhow::bail!("Batcher's block receiver channel closed unexpectedly");
+            }
+        }
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);

@@ -82,7 +82,7 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         );
         ReceiverStream::new(self.block_receiver)
             // skip the blocks that were already committed
-            .filter(|(_, replay_record)| {
+            .skip_while(|(_, replay_record)| {
                 let block_number = replay_record.block_context.block_number;
                 async move {
                     if block_number < self.first_block_to_process {
@@ -91,9 +91,9 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
                             block_number,
                             self.first_block_to_process
                         );
-                        false
-                    } else {
                         true
+                    } else {
+                        false
                     }
                 }
             })
