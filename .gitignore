@@ -8,3 +8,5 @@ block_dumps/*
 
 .DS_Store
 markers.bench
+
+lcov.info
