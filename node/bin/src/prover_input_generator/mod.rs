@@ -22,6 +22,7 @@ pub struct ProverInputGenerator<ReadState> {
     // == config ==
     bin_path: &'static str,
     maximum_in_flight_blocks: usize,
+    first_block_to_process: u64,
 
     // == plumbing ==
     // inbound
@@ -41,6 +42,7 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         // == config ==
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
+        first_block_to_process: u64,
 
         // == plumbing ==
         block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
@@ -63,6 +65,7 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         Self {
             block_receiver,
             blocks_for_batcher_sender,
+            first_block_to_process,
             persistent_tree,
             bin_path,
             maximum_in_flight_blocks,
@@ -78,6 +81,22 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
             GenericComponentState::ProcessingOrWaitingRecv,
         );
         ReceiverStream::new(self.block_receiver)
+            // skip the blocks that were already committed
+            .filter(|(_, replay_record)| {
+                let block_number = replay_record.block_context.block_number;
+                async move {
+                    if block_number < self.first_block_to_process {
+                        tracing::debug!(
+                            "Skipping block {} as it's below the first block to process {}",
+                            block_number,
+                            self.first_block_to_process
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                }
+            })
             // wait for tree to have processed block for each replay record
             .then(|(block_output, replay_record)| {
                 let tree = self.persistent_tree.clone();

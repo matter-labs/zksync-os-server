@@ -26,8 +26,6 @@ pub struct Batcher {
     // L2 chain id
     chain_id: u64,
     chain_address: Address,
-    // first block to process
-    first_block_to_process: u64,
     /// Last persisted block. We should not seal batches by timeout until this block is reached.
     /// This helps to avoid premature sealing due to timeout criterion, since for  every tick of the
     /// timer the `should_seal_by_timeout` call will return `true`
@@ -52,7 +50,6 @@ impl Batcher {
         // == initial state ==
         chain_id: u64,
         chain_address: Address,
-        first_block_to_process: u64,
         last_persisted_block: u64,
 
         // == config ==
@@ -67,7 +64,6 @@ impl Batcher {
         Self {
             chain_id,
             chain_address,
-            first_block_to_process,
             last_persisted_block,
             pubdata_limit_bytes,
             batcher_config,
@@ -121,39 +117,6 @@ impl Batcher {
             self.pubdata_limit_bytes,
         );
 
-        // skip the blocks from already committed batches
-        // when the server restarts some historical blocks are replayed - they are already batched and committed
-        loop {
-            match self
-                .block_receiver
-                .peek_recv(|(_, replay_record, _)| {
-                    replay_record.block_context.block_number < self.first_block_to_process
-                })
-                .await
-            {
-                Some(true) => {
-                    // the block is before the first block to process, skip it
-                    let Some((_, replay_record, _)) = self.block_receiver.pop_buffer() else {
-                        anyhow::bail!("No block in buffer after peeking")
-                    };
-                    tracing::debug!(
-                        block_number = replay_record.block_context.block_number,
-                        "Skipping block before the first block to process",
-                    );
-                }
-                Some(false) => {
-                    // the block is within the range to process, proceed to batching
-                    break;
-                }
-                None => {
-                    anyhow::bail!("Batcher's block receiver channel closed unexpectedly");
-                }
-            }
-        }
-        tracing::info!(
-            self.first_block_to_process,
-            "Received the first block after the last committed one."
-        );
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             tokio::select! {

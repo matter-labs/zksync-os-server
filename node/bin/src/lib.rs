@@ -582,7 +582,6 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     let batcher = Batcher::new(
         config.genesis_config.chain_id,
         node_state_on_startup.l1_state.diamond_proxy,
-        node_state_on_startup.last_committed_block + 1,
         node_state_on_startup.repositories_persisted_block,
         config.sequencer_config.block_pubdata_limit_bytes,
         config.batcher_config,
@@ -602,6 +601,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
         config
             .prover_input_generator_config
             .maximum_in_flight_blocks,
+        node_state_on_startup.last_committed_block + 1,
         blocks_for_batcher_subsystem_receiver,
         blocks_for_batcher_sender,
         persistent_tree,
