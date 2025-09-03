@@ -124,16 +124,16 @@ impl Batcher {
         match self
             .block_receiver
             .peek_recv(|(_, replay_record, _)| {
-                replay_record.block_context.block_number < self.first_block_to_process
+                replay_record.block_context.block_number == self.first_block_to_process
             })
             .await
         {
-            Some(true) => {
+            Some(false) => {
                 anyhow::bail!(
-                    "Received block with number below `first_block_to_process` in the batcher. It should've been skipped on prover input generation step."
+                    "Received block with number not equal to `first_block_to_process` in the batcher."
                 );
             }
-            Some(false) => {
+            Some(true) => {
                 // do nothing, proceed to process the block
             }
             None => {
