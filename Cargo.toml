@@ -56,10 +56,10 @@ serde_json = "1"
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", rev = "432eea2cb274ffb57c1ec9cbdcc8ef8b5c7ec987", features = ["evm-compatibility", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", rev = "432eea2cb274ffb57c1ec9cbdcc8ef8b5c7ec987" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", rev = "432eea2cb274ffb57c1ec9cbdcc8ef8b5c7ec987" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", rev = "432eea2cb274ffb57c1ec9cbdcc8ef8b5c7ec987" }
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", rev = "7fe3dfd0b70121af6ad41f9bdf49e41e884fed21", features = ["evm-compatibility", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", rev = "7fe3dfd0b70121af6ad41f9bdf49e41e884fed21" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", rev = "7fe3dfd0b70121af6ad41f9bdf49e41e884fed21" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", rev = "7fe3dfd0b70121af6ad41f9bdf49e41e884fed21" }
 
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
