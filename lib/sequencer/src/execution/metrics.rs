@@ -1,5 +1,6 @@
 use crate::execution::block_executor::SealReason;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics};
+use std::time::Duration;
+use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 use vise::{Counter, EncodeLabelValue};
 use zksync_os_observability::{GenericComponentState, StateLabel};
 use zksync_os_storage_api::StateAccessLabel;
@@ -72,6 +73,9 @@ pub struct ExecutionMetrics {
 
     #[metrics(labels = ["seal_reason"])]
     pub seal_reason: LabeledFamily<SealReason, Counter>,
+
+    #[metrics(unit = Unit::Seconds, labels = ["measure"], buckets = Buckets::exponential(0.0000001..=1.0, 2.0))]
+    pub tx_execution: LabeledFamily<&'static str, Histogram<Duration>>,
 
     #[metrics(buckets = Buckets::exponential(1.0..=10_000.0, 2.0))]
     pub transactions_per_block: Histogram<u64>,
