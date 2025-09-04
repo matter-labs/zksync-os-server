@@ -23,6 +23,7 @@ members = [
     "lib/observability",
     "lib/object_store",
     "lib/state_full_diffs",
+    "lib/multivm",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -50,16 +51,17 @@ serde = { version = "1", features = ["derive"] }
 serde_with = "1"
 serde_json = "1"
 
+zksync_os_interface = { path = "../zksync-os/interface" }
 
-#zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility", "no_print"] }
-#zk_ee = { package = "zk_ee", path = "../zksync-os/zk_ee" }
-#zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
-#zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
+zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility", "no_print"] }
+zk_ee = { package = "zk_ee", path = "../zksync-os/zk_ee" }
+zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
+zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21", features = ["evm-compatibility", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21" }
+#zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21", features = ["evm-compatibility", "no_print"] }
+#zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21" }
+#zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21" }
+#zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.21" }
 
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }

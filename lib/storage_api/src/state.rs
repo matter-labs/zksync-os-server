@@ -2,11 +2,13 @@ use alloy::primitives::BlockNumber;
 use alloy::primitives::ruint::aliases::B160;
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
-    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, address_into_special_storage_key,
 };
-use zk_os_forward_system::run::{PreimageSource, ReadStorageTree, StorageWrite};
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::common_types::{AccountProperties, StorageWrite};
+use zksync_os_interface::traits::{PreimageSource, ReadStorageTree};
+// use zksync_os_interface::common_types::derive_flat_storage_key;
 
 /// Read-only view on a state from a specific block.
 pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
@@ -15,7 +17,10 @@ pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
             &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
             &address_into_special_storage_key(&address),
         );
-        self.read(key).map(|hash| {
+        self.read(zksync_os_interface::bytes32::Bytes32::from_array(
+            key.as_u8_array(),
+        ))
+        .map(|hash| {
             AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
         })
     }

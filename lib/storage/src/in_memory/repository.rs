@@ -8,7 +8,7 @@ use alloy::primitives::{
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
-use zk_os_forward_system::run::{BlockOutput, ExecutionResult};
+use zksync_os_interface::common_types::{BlockOutput, ExecutionResult};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };

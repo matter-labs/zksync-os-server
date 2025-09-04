@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
-use zk_ee::utils::Bytes32;
 use zksync_os_genesis::Genesis;
+use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 

@@ -8,13 +8,11 @@ use ruint::aliases::U256;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use zk_ee::common_structs::PreimageType;
-use zk_ee::system::metadata::BlockHashes;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
-use zk_os_forward_system::run::{BlockContext, BlockOutput};
 use zksync_os_genesis::Genesis;
+use zksync_os_interface::common_types::{BlockContext, BlockHashes, BlockOutput, PreimageType};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };

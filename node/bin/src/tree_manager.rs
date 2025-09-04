@@ -8,8 +8,8 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
-use zk_os_forward_system::run::BlockOutput;
 use zksync_os_genesis::Genesis;
+use zksync_os_interface::common_types::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };

@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, B64, B256, Bloom, U256};
 
 pub fn alloy_header(
-    header: &zk_os_forward_system::run::output::BlockHeader,
+    header: &zksync_os_interface::common_types::BlockHeader,
 ) -> alloy::consensus::Header {
     alloy::consensus::Header {
         parent_hash: B256::new(header.parent_hash.as_u8_array()),

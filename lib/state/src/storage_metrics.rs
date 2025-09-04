@@ -1,7 +1,7 @@
 use crate::persistent_preimages::PreimagesCF;
 use crate::{StateHandle, StorageMapCF};
 use std::collections::HashSet;
-use zk_ee::utils::Bytes32;
+use zksync_os_interface::bytes32::Bytes32;
 
 #[derive(Debug)]
 #[allow(dead_code)]

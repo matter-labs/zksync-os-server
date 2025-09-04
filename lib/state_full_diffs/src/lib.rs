@@ -3,10 +3,9 @@ mod storage;
 
 use alloy::primitives::BlockNumber;
 use std::path::PathBuf;
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{
-    LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
-};
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::common_types::StorageWrite;
+use zksync_os_interface::traits::{PreimageSource, ReadStorage, ReadStorageTree};
 use zksync_os_storage_api::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
 
 use preimages::FullDiffsPreimages;
@@ -85,9 +84,9 @@ impl ReadStorageTree for StateViewFD {
         unreachable!("VM forward run should not invoke the tree")
     }
 
-    fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
-        unreachable!("VM forward run should not invoke the tree")
-    }
+    // fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
+    //     unreachable!("VM forward run should not invoke the tree")
+    // }
 
     fn prev_tree_index(&mut self, _key: Bytes32) -> u64 {
         unreachable!("VM forward run should not invoke the tree")

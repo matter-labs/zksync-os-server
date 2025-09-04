@@ -7,11 +7,11 @@ use tokio::{
 };
 use zk_ee::system::tracer::NopTracer;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::result_keeper::TxProcessingOutputOwned;
-use zk_os_forward_system::run::{
-    BlockContext, BlockOutput, InvalidTransaction, NextTxResponse, TxResultCallback, TxSource,
-    run_block,
+use zk_os_forward_system::run::run_block;
+use zksync_os_interface::common_types::{
+    BlockContext, BlockOutput, InvalidTransaction, TxProcessingOutputOwned,
 };
+use zksync_os_interface::traits::{NextTxResponse, TxResultCallback, TxSource};
 use zksync_os_storage_api::ViewState;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface

@@ -8,7 +8,7 @@ use anyhow::Context;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use tokio::sync::mpsc::Sender;
-use zk_os_forward_system::run::BlockOutput;
+use zksync_os_interface::common_types::BlockOutput;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_storage_api::{

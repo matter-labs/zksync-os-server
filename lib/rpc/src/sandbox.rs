@@ -11,9 +11,9 @@ use zk_ee::system::{
 };
 use zk_ee::types_config::SystemIOTypesConfig;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::output::TxResult;
 use zk_os_forward_system::run::test_impl::{NoopTxCallback, TxListSource};
-use zk_os_forward_system::run::{BlockContext, run_block, simulate_tx};
+use zk_os_forward_system::run::{run_block, simulate_tx};
+use zksync_os_interface::common_types::{BlockContext, TxResult};
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
 

@@ -14,6 +14,7 @@ zksync_os_rocksdb.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_storage_api.workspace = true
 
+zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 
