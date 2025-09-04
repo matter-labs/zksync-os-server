@@ -333,8 +333,7 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PaymasterReturnDataTooShort
         | InvalidTransaction::PaymasterInvalidMagic
         | InvalidTransaction::PaymasterContextInvalid
-        | InvalidTransaction::PaymasterContextOffsetTooLong
-        | InvalidTransaction::UpgradeTxFailed => TxRejectionMethod::Purge,
+        | InvalidTransaction::PaymasterContextOffsetTooLong => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
