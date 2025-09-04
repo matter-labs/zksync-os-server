@@ -31,7 +31,6 @@ use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
     RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
-    convert_envelope_to_api,
 };
 use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_types::{L2Envelope, ZkReceiptEnvelope};
@@ -697,7 +696,7 @@ pub fn build_api_receipt(
 
 pub fn build_api_tx(tx: zksync_os_types::ZkTransaction, meta: Option<&TxMeta>) -> ZkApiTransaction {
     ZkApiTransaction {
-        inner: tx.inner.map(convert_envelope_to_api),
+        inner: tx.inner,
         block_hash: meta.map(|meta| meta.block_hash),
         block_number: meta.map(|meta| meta.block_number),
         transaction_index: meta.map(|meta| meta.tx_index_in_block),
