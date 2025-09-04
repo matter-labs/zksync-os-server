@@ -50,7 +50,7 @@ pub struct Tester {
 
     // Needed to be able to connect external nodes
     l1_address: String,
-    replay_url: String,
+    l2_address: String,
     object_store_path: PathBuf,
 }
 
@@ -69,7 +69,7 @@ impl Tester {
             self.l1_provider.clone(),
             self.l1_wallet.clone(),
             false,
-            Some(self.replay_url.clone()),
+            Some(self.l2_address.clone()),
             Some(self.object_store_path.clone()),
         )
         .await
@@ -101,13 +101,10 @@ impl Tester {
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
-        let replay_locked_port = LockedPort::acquire_unused().await?;
-        let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
+        let l2_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
-        let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
-        let replay_url = format!("localhost:{}", replay_locked_port.port);
 
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
@@ -121,12 +118,11 @@ impl Tester {
             ..Default::default()
         };
         let sequencer_config = SequencerConfig {
-            block_replay_server_address: replay_address.clone(),
+            address_for_public_api: l2_address.clone(),
             block_replay_download_address: main_node_replay_url,
             ..Default::default()
         };
         let rpc_config = RpcConfig {
-            address: l2_rpc_address,
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
@@ -242,7 +238,7 @@ impl Tester {
             stop_sender,
             main_task,
             l1_address,
-            replay_url,
+            l2_address,
             object_store_path,
         })
     }

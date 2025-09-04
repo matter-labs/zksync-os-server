@@ -11,6 +11,7 @@ mod node_state_on_startup;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
+mod req_body;
 pub mod reth_state;
 mod state_initializer;
 pub mod tree_manager;
@@ -31,7 +32,7 @@ use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
-use crate::replay_transport::{replay_receiver, replay_server};
+use crate::replay_transport::{replay_receiver, send_replays};
 use crate::reth_state::ZkClient;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
@@ -43,14 +44,20 @@ use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use micro_http::codec::RequestDecoder;
+use micro_http::protocol::Message;
+use req_body::ReqBody;
 use ruint::aliases::U256;
 use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use tokio_util::codec::Decoder;
+use tower::util::ServiceExt;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_genesis::Genesis;
@@ -65,7 +72,7 @@ use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_priority_tree::PriorityTreeManager;
-use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_rpc::{RpcStorage, build_jsonrpsee_service};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::run_sequencer_actor;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
@@ -293,16 +300,62 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
     );
 
-    tasks.spawn(
-        run_jsonrpsee_server(
-            config.rpc_config.clone(),
-            config.genesis_config.chain_id,
-            node_startup_state.l1_state.bridgehub,
-            rpc_storage,
-            l2_mempool.clone(),
-        )
-        .map(report_exit("JSON-RPC server")),
-    );
+    let json_service = build_jsonrpsee_service(
+        config.rpc_config.clone(),
+        config.genesis_config.chain_id,
+        node_startup_state.l1_state.bridgehub,
+        rpc_storage,
+        l2_mempool.clone(),
+    )
+    .expect("failed to build JSON-RPC service");
+
+    tasks.spawn({
+        let block_replay_storage = block_replay_storage.clone();
+        let address = config.sequencer_config.address_for_public_api.clone();
+        async move {
+            let listener = TcpListener::bind(address).await?;
+
+            loop {
+                let (socket, _) = listener.accept().await?;
+
+                let json_service = json_service.clone();
+                let block_replay_storage = block_replay_storage.clone();
+
+                tokio::spawn(async move {
+                    let mut framed = RequestDecoder::new().framed(socket);
+
+                    // In HTTP 1.1 there might be multiple requests in a single connection
+                    //loop {
+                    // Read until we get the request header (and the payload size)
+                    let (header, payload_size) = loop {
+                        match framed.next().await.transpose().unwrap() {
+                            Some(Message::Header((hdr, sz))) => break (hdr, sz),
+                            Some(Message::Payload(_)) => {
+                                unreachable!("unexpected payload without header")
+                            }
+                            None => return,
+                        }
+                    };
+
+                    if header.uri().path() == "/replays" {
+                        let socket = framed.into_inner();
+                        send_replays(block_replay_storage.clone(), socket).await;
+                        return;
+                    } else {
+                        let request = header.body(ReqBody::new(framed, payload_size));
+                        json_service
+                            .clone()
+                            .oneshot(request)
+                            .await
+                            .map_err(|_e| tracing::info!("JSON-RPC request failed"))
+                            .unwrap();
+                    }
+                    //}
+                });
+            }
+        }
+        .map(report_exit::<(), std::io::Error>("public API server"))
+    });
 
     // ========== Start BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
@@ -330,13 +383,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
-    tasks.spawn(
-        replay_server(
-            block_replay_storage.clone(),
-            config.sequencer_config.block_replay_server_address.clone(),
-        )
-        .map(report_exit("replay server")),
-    );
     {
         let state = state.clone();
         let block_replay_storage = block_replay_storage.clone();

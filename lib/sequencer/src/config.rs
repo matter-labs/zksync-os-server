@@ -17,9 +17,10 @@ pub struct SequencerConfig {
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
 
-    /// Where to serve block replays
-    #[config(default_t = "0.0.0.0:3053".into())]
-    pub block_replay_server_address: String,
+    /// Public address to listen on.
+    /// Currently provides JSON-RPC and block replays
+    #[config(default_t = "0.0.0.0:3050".into())]
+    pub address_for_public_api: String,
 
     /// Where to download replays instead of actually running blocks.
     /// Setting this makes the node into an external node.

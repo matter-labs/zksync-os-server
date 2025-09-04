@@ -60,6 +60,8 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 semver = { workspace = true, features = ["serde"] }
 backon.workspace = true
+hyper.workspace = true
+tower.workspace = true
 
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types"] }
@@ -71,3 +73,6 @@ axum.workspace = true
 http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
+hyper-util = { version = "0.1.16", features = ["tokio"] }
+micro-http = "0.1.1"
+http-body = "1.0.1"

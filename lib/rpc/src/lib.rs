@@ -1,6 +1,9 @@
 mod call_fees;
 
 mod config;
+
+use std::error::Error;
+
 pub use config::RpcConfig;
 
 mod eth_call_handler;
@@ -12,6 +15,7 @@ mod ots_impl;
 mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
+use tower::util::BoxCloneService;
 mod debug_impl;
 mod sandbox;
 mod tx_handler;
@@ -24,12 +28,18 @@ use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::ots_impl::OtsNamespace;
 use crate::zks_impl::ZksNamespace;
-use alloy::primitives::Address;
-use anyhow::Context;
-use hyper::Method;
-use jsonrpsee::RpcModule;
-use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
-use tower_http::cors::{Any, CorsLayer};
+use alloy::{primitives::Address, rlp::Bytes};
+use hyper::{Method, body::Body};
+use jsonrpsee::{
+    RpcModule,
+    core::BoxError,
+    http_client::HttpRequest,
+    server::{HttpBody, stop_channel},
+};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    limit::{RequestBodyLimitLayer, ResponseBody},
+};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -38,15 +48,27 @@ use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
 
-pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>(
+pub fn build_jsonrpsee_service<
+    RpcStorage: ReadRpcStorage,
+    Mempool: L2TransactionPool,
+    RequestBody,
+>(
     config: RpcConfig,
     chain_id: u64,
     bridgehub_address: Address,
     storage: RpcStorage,
     mempool: Mempool,
-) -> anyhow::Result<()> {
-    tracing::info!("Starting JSON-RPC server at {}", config.address);
-
+) -> anyhow::Result<
+    BoxCloneService<
+        HttpRequest<RequestBody>,
+        hyper::Response<ResponseBody<HttpBody>>,
+        Box<(dyn Error + std::marker::Send + std::marker::Sync + 'static)>,
+    >,
+>
+where
+    RequestBody: Body<Data = Bytes> + Send + 'static,
+    RequestBody::Error: Into<BoxError>,
+{
     let mut rpc = RpcModule::new(());
     rpc.merge(
         EthNamespace::new(config.clone(), storage.clone(), mempool.clone(), chain_id).into_rpc(),
@@ -59,6 +81,11 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
     rpc.merge(DebugNamespace::new(storage).into_rpc())?;
 
+    let (stop_handle, _server_handle) = stop_channel();
+    let service = jsonrpsee::server::Server::builder()
+        .to_service_builder()
+        .build(rpc, stop_handle);
+
     // Add a CORS middleware for handling HTTP requests.
     // This middleware does affect the response, including appropriate
     // headers to satisfy CORS. Because any origins are allowed, the
@@ -69,24 +96,13 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         // Allow requests from any origin
         .allow_origin(Any)
         .allow_headers([hyper::header::CONTENT_TYPE]);
-    let middleware = tower::ServiceBuilder::new().layer(cors);
 
-    let server_config = ServerConfigBuilder::default()
-        .max_connections(config.max_connections)
-        .max_request_body_size(config.max_request_size_bytes())
-        .max_response_body_size(config.max_response_size_bytes())
-        .build();
-    let server_builder = ServerBuilder::default()
-        .set_config(server_config)
-        .set_http_middleware(middleware);
+    // TODO: limit response size
+    let rpc_service = tower::ServiceBuilder::new()
+        .concurrency_limit(config.max_connections)
+        .layer(RequestBodyLimitLayer::new(config.max_request_size_bytes()))
+        .layer(cors)
+        .service(service);
 
-    let server = server_builder
-        .build(config.address)
-        .await
-        .context("Failed building HTTP JSON-RPC server")?;
-
-    let server_handle = server.start(rpc);
-
-    server_handle.stopped().await;
-    Ok(())
+    Ok(BoxCloneService::new(rpc_service))
 }

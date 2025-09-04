@@ -100,8 +100,8 @@ reqwest = "0.12.22"
 time = "0.3"
 criterion = "0.7.0"
 sha2 = "0.10.9"
-tower = "0.5.2"
-tower-http = "0.6.6"
+tower = { version = "0.5.2", features = ["limit"] }
+tower-http = { version = "0.6.6", features = ["limit", "map-response-body"] }
 hyper = "1.6.0"
 semver = { version = "1", features = ["serde"] }
 async-stream = "0.3.6"

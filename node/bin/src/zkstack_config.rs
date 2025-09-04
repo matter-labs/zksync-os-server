@@ -92,27 +92,14 @@ impl ZkStackConfig {
 
         general_config.prometheus_port = prometheus_port as u16;
 
-        let rpc_port = api
-            .get("web3_json_rpc")
-            .and_then(|v| v.get("http_port").and_then(Value::as_u64))
-            .ok_or(anyhow!("Failed to get web3_json_rpc port"))?;
-
-        rpc_config.address = format!("0.0.0.0:{rpc_port}");
-
-        let merkle_port = api
-            .get("merkle_tree")
-            .and_then(|v| v.get("port").and_then(Value::as_u64))
-            .ok_or(anyhow!("Failed to get merkle_tree port"))?;
-
-        // FIXME: for now, use the merkle port for block replay.
-        sequencer_config.block_replay_server_address = format!("0.0.0.0:{merkle_port}");
-
         let data_handler_port = general_yaml
             .get("data_handler")
             .and_then(|v| v.get("http_port").and_then(Value::as_u64))
             .ok_or(anyhow!("Failed to get data_handler port"))?;
 
         prover_api_config.address = format!("0.0.0.0:{data_handler_port}");
+
+        // TODO RPC / EN port
 
         Ok(())
     }
