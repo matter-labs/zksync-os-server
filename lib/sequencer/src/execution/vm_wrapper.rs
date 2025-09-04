@@ -5,9 +5,6 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, channel},
     task::{JoinHandle, spawn_blocking},
 };
-use zk_ee::system::tracer::NopTracer;
-use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::run_block;
 use zksync_os_interface::common_types::{
     BlockContext, BlockOutput, InvalidTransaction, TxProcessingOutputOwned,
 };
@@ -18,7 +15,7 @@ use zksync_os_storage_api::ViewState;
 /// (as opposed to pull interface of `run_block` in zksync-os)
 /// consider changing that interface on zksync-os side, which will make this file redundant
 pub struct VmWrapper {
-    handle: Option<JoinHandle<Result<BlockOutput, ForwardSubsystemError>>>,
+    handle: Option<JoinHandle<Result<BlockOutput, anyhow::Error>>>,
     tx_sender: Sender<NextTxResponse>,
     tx_result_receiver: Receiver<Result<TxProcessingOutputOwned, InvalidTransaction>>,
 }
@@ -37,13 +34,13 @@ impl VmWrapper {
 
         // Spawn the blocking run_block(...) call.
         let join_handle = spawn_blocking(move || {
-            run_block(
+            zksync_os_multivm::run_block(
+                0,
                 context,
                 state_view.clone(),
                 state_view,
                 tx_source,
                 tx_callback,
-                &mut NopTracer::default(),
             )
         });
 

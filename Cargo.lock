@@ -10438,6 +10438,7 @@ dependencies = [
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_mempool",
+ "zksync_os_multivm",
  "zksync_os_observability",
  "zksync_os_storage_api",
  "zksync_os_types",
