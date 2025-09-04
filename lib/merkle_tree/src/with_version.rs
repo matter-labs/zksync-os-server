@@ -4,9 +4,8 @@ use crate::{
 };
 use alloy::primitives::{B256, FixedBytes};
 use tokio::sync::watch;
-use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_forward_system::run::LeafProof;
 use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::leaf_proof::{FlatStorageLeaf, LeafProof};
 use zksync_os_interface::traits::{ReadStorage, ReadStorageTree};
 
 pub struct MerkleTreeForReading<DB: Database, P: TreeParams = DefaultTreeParams> {
@@ -122,86 +121,86 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
             })
     }
 
-    // fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
-    //     let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
-    //
-    //     let mut current_node = self
-    //         .tree
-    //         .db()
-    //         .try_root(self.block)
-    //         .unwrap()
-    //         .unwrap()
-    //         .root_node;
-    //
-    //     let mut i = P::TREE_DEPTH as usize;
-    //     let mut nibble_count = 1;
-    //     let leaf = loop {
-    //         let index_on_level =
-    //             tree_index >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH);
-    //         let child_index = index_on_level as usize % (1 << P::INTERNAL_NODE_DEPTH);
-    //
-    //         // the root does not contain any nodes apart from its children
-    //         if nibble_count > 1 {
-    //             let hashes = current_node
-    //                 .internal_hashes::<P>(&self.tree.hasher, i as u8 - 3)
-    //                 .0;
-    //
-    //             for depth in 0..P::INTERNAL_NODE_DEPTH - 1 {
-    //                 let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
-    //                 let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
-    //                 let skip = needed_for_all - needed_for_this_and_lower_levels;
-    //
-    //                 let index = child_index >> (P::INTERNAL_NODE_DEPTH - depth - 1);
-    //
-    //                 i -= 1;
-    //                 sibling_hashes[i] = fixed_bytes_to_bytes32(hashes[skip + (index ^ 1)]);
-    //             }
-    //         }
-    //
-    //         i -= 1;
-    //         sibling_hashes[i] = fixed_bytes_to_bytes32(
-    //             current_node
-    //                 .children
-    //                 .get(child_index ^ 1)
-    //                 .map(|x| x.hash)
-    //                 .unwrap_or(self.tree.hasher.empty_subtree_hash(i as u8)),
-    //         );
-    //
-    //         let Some(child) = current_node.children.get(child_index) else {
-    //             break Leaf::default();
-    //         };
-    //         current_node = match self
-    //             .tree
-    //             .db
-    //             .try_nodes(&[NodeKey {
-    //                 version: child.version,
-    //                 nibble_count,
-    //                 index_on_level,
-    //             }])
-    //             .expect("inconsistent child reference")[0]
-    //             .clone()
-    //         {
-    //             Node::Internal(internal) => internal,
-    //             Node::Leaf(leaf) => break leaf,
-    //         };
-    //         nibble_count += 1;
-    //     };
-    //
-    //     for i in 0..i {
-    //         sibling_hashes[i] =
-    //             fixed_bytes_to_bytes32(self.tree.hasher.empty_subtree_hash(i as u8));
-    //     }
-    //
-    //     LeafProof::new(
-    //         tree_index,
-    //         FlatStorageLeaf {
-    //             key: fixed_bytes_to_bytes32(leaf.key),
-    //             value: fixed_bytes_to_bytes32(leaf.value),
-    //             next: leaf.next_index,
-    //         },
-    //         sibling_hashes,
-    //     )
-    // }
+    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
+        let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
+
+        let mut current_node = self
+            .tree
+            .db()
+            .try_root(self.block)
+            .unwrap()
+            .unwrap()
+            .root_node;
+
+        let mut i = P::TREE_DEPTH as usize;
+        let mut nibble_count = 1;
+        let leaf = loop {
+            let index_on_level =
+                tree_index >> ((leaf_nibbles::<P>() - nibble_count) * P::INTERNAL_NODE_DEPTH);
+            let child_index = index_on_level as usize % (1 << P::INTERNAL_NODE_DEPTH);
+
+            // the root does not contain any nodes apart from its children
+            if nibble_count > 1 {
+                let hashes = current_node
+                    .internal_hashes::<P>(&self.tree.hasher, i as u8 - 3)
+                    .0;
+
+                for depth in 0..P::INTERNAL_NODE_DEPTH - 1 {
+                    let needed_for_this_and_lower_levels = (2 << (depth + 1)) - 2;
+                    let needed_for_all = (2 << (P::INTERNAL_NODE_DEPTH - 1)) - 2;
+                    let skip = needed_for_all - needed_for_this_and_lower_levels;
+
+                    let index = child_index >> (P::INTERNAL_NODE_DEPTH - depth - 1);
+
+                    i -= 1;
+                    sibling_hashes[i] = fixed_bytes_to_bytes32(hashes[skip + (index ^ 1)]);
+                }
+            }
+
+            i -= 1;
+            sibling_hashes[i] = fixed_bytes_to_bytes32(
+                current_node
+                    .children
+                    .get(child_index ^ 1)
+                    .map(|x| x.hash)
+                    .unwrap_or(self.tree.hasher.empty_subtree_hash(i as u8)),
+            );
+
+            let Some(child) = current_node.children.get(child_index) else {
+                break Leaf::default();
+            };
+            current_node = match self
+                .tree
+                .db
+                .try_nodes(&[NodeKey {
+                    version: child.version,
+                    nibble_count,
+                    index_on_level,
+                }])
+                .expect("inconsistent child reference")[0]
+                .clone()
+            {
+                Node::Internal(internal) => internal,
+                Node::Leaf(leaf) => break leaf,
+            };
+            nibble_count += 1;
+        };
+
+        for i in 0..i {
+            sibling_hashes[i] =
+                fixed_bytes_to_bytes32(self.tree.hasher.empty_subtree_hash(i as u8));
+        }
+
+        LeafProof::new(
+            tree_index,
+            FlatStorageLeaf {
+                key: fixed_bytes_to_bytes32(leaf.key),
+                value: fixed_bytes_to_bytes32(leaf.value),
+                next: leaf.next_index,
+            },
+            sibling_hashes,
+        )
+    }
 
     fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
         // TODO this will fail for existing nodes
