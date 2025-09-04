@@ -49,10 +49,10 @@ pub enum ZkReceiptEnvelope<T = Log, U = L2ToL1Log> {
     #[serde(rename = "0x4", alias = "0x04")]
     Eip7702(ReceiptWithBloom<ZkReceipt<T, U>>),
     /// Receipt envelope with type flag 255, containing an L1->L2 priority transaction receipt.
-    #[serde(rename = "0xff")]
+    #[serde(rename = "0x7f")]
     L1(ReceiptWithBloom<ZkReceipt<T, U>>),
     /// Receipt envelope with type flag 254, containing an upgrade transaction receipt.
-    #[serde(rename = "0xfe")]
+    #[serde(rename = "0x7e")]
     Upgrade(ReceiptWithBloom<ZkReceipt<T, U>>),
 }
 
@@ -299,8 +299,8 @@ impl Typed2718 for ZkReceiptEnvelope {
             Self::Eip1559(_) => EIP1559_TX_TYPE_ID,
             Self::Eip4844(_) => EIP4844_TX_TYPE_ID,
             Self::Eip7702(_) => EIP7702_TX_TYPE_ID,
-            Self::L1(_) => L1PriorityTxType::FAKE_TX_TYPE,
-            Self::Upgrade(_) => UpgradeTxType::FAKE_TX_TYPE,
+            Self::L1(_) => L1PriorityTxType::TX_TYPE,
+            Self::Upgrade(_) => UpgradeTxType::TX_TYPE,
         }
     }
 }

@@ -18,7 +18,7 @@ use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::types::{RpcBlockConvert, ZkApiTransaction};
 use zksync_os_storage_api::{StoredTxData, ViewState};
-use zksync_os_types::ZkReceiptEnvelope;
+use zksync_os_types::{L1PriorityTxType, L1TxType, UpgradeTxType, ZkReceiptEnvelope};
 
 /// Max Otterscan API level we support.
 const API_LEVEL: u64 = 8;
@@ -394,8 +394,8 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
 
 fn api_receipt_type(receipt: &ZkReceiptEnvelope<Log>) -> u8 {
     match receipt {
-        ZkReceiptEnvelope::Upgrade(_) => 0xfe,
-        ZkReceiptEnvelope::L1(_) => 0xff,
+        ZkReceiptEnvelope::Upgrade(_) => UpgradeTxType::TX_TYPE,
+        ZkReceiptEnvelope::L1(_) => L1PriorityTxType::TX_TYPE,
         r => r.tx_type().ty(),
     }
 }

@@ -23,28 +23,21 @@ pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
 pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
 
 pub trait L1TxType: Clone + Send + Sync + Debug + 'static {
-    // L1 transactions are not encodable when we use type that is not in [0; 0x7f] as specified in EIP-2718.
-    // However, some L1 transactions have type greater than 0x7f for historical reasons.
-    // Real tx type can be any u8 number and it is used for VM and L1->L2 communication still uses 255.
-    // Fake tx type is used for rlp encoding in alloy trait implementations.
-    const REAL_TX_TYPE: u8;
-    const FAKE_TX_TYPE: u8;
+    const TX_TYPE: u8;
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct L1PriorityTxType;
 
 impl L1TxType for L1PriorityTxType {
-    const REAL_TX_TYPE: u8 = 255;
-    const FAKE_TX_TYPE: u8 = 42;
+    const TX_TYPE: u8 = 0x7f;
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UpgradeTxType;
 
 impl L1TxType for UpgradeTxType {
-    const REAL_TX_TYPE: u8 = 254;
-    const FAKE_TX_TYPE: u8 = 41;
+    const TX_TYPE: u8 = 0x7e;
 }
 
 /// An L1->L2 transaction.
@@ -97,7 +90,7 @@ pub struct L1Tx<T: L1TxType> {
 
 impl<T: L1TxType> Typed2718 for L1Tx<T> {
     fn ty(&self) -> u8 {
-        T::FAKE_TX_TYPE
+        T::TX_TYPE
     }
 }
 
@@ -140,7 +133,7 @@ impl<T: L1TxType> RlpEcdsaEncodableTx for L1Tx<T> {
 }
 
 impl<T: L1TxType> RlpEcdsaDecodableTx for L1Tx<T> {
-    const DEFAULT_TX_TYPE: u8 = T::FAKE_TX_TYPE;
+    const DEFAULT_TX_TYPE: u8 = T::TX_TYPE;
 
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
         Ok(Self {
@@ -392,7 +385,7 @@ impl<T: L1TxType> TryFrom<L2CanonicalTransaction> for L1Envelope<T> {
 
     fn try_from(tx: L2CanonicalTransaction) -> Result<Self, Self::Error> {
         let tx_type = tx.txType.saturating_to();
-        if tx_type != T::REAL_TX_TYPE {
+        if tx_type != T::TX_TYPE {
             return Err(L1EnvelopeError::IncorrectTransactionType(tx_type));
         }
         if !tx.maxPriorityFeePerGas.is_zero() {

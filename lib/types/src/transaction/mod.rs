@@ -25,9 +25,9 @@ use alloy::rlp as alloy_rlp;
 #[derive(Clone, Debug, TransactionEnvelope)]
 #[envelope(alloy_consensus = alloy::consensus, tx_type_name = ZkTxType)]
 pub enum ZkEnvelope {
-    #[envelope(ty = 41)]
+    #[envelope(ty = 126)]
     Upgrade(L1UpgradeEnvelope),
-    #[envelope(ty = 42)]
+    #[envelope(ty = 127)]
     L1(L1PriorityEnvelope),
     #[envelope(flatten)]
     L2(L2Envelope),
