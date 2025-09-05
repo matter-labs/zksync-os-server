@@ -151,7 +151,7 @@ impl Tester {
         let config = Config {
             general_config,
             genesis_config: GenesisConfig {
-                genesis_input_path: "../genesis/genesis.json".into(),
+                genesis_input_path: concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
                 ..Default::default()
             },
             rpc_config,
@@ -175,7 +175,7 @@ impl Tester {
             tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
-                app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),
+                app_bin_path: Some(concat!(env!("WORKSPACE_DIR"), "/multiblock_batch.bin").into()),
                 circuit_limit: 10000,
             }));
         }
@@ -263,12 +263,13 @@ impl TesterBuilder {
     pub async fn build(self) -> anyhow::Result<Tester> {
         let l1_locked_port = LockedPort::acquire_unused().await?;
         let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+
         let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg("../zkos-l1-state.json")
+                .arg(concat!(env!("WORKSPACE_DIR"), "/zkos-l1-state.json"))
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
