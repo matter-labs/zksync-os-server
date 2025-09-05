@@ -10,9 +10,9 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use zk_os_forward_system::run::LeafProof;
 use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_interface::common_types::StorageWrite;
-use zksync_os_interface::leaf_proof::LeafProof;
 use zksync_os_interface::traits::{PreimageSource, ReadStorage, ReadStorageTree};
 use zksync_os_rocksdb::RocksDB;
 // Re-export commonly used types

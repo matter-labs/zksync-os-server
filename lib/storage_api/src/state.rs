@@ -3,10 +3,10 @@ use alloy::primitives::ruint::aliases::B160;
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
-    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, address_into_special_storage_key,
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
 };
 use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::common_types::{AccountProperties, StorageWrite};
+use zksync_os_interface::common_types::StorageWrite;
 use zksync_os_interface::traits::{PreimageSource, ReadStorageTree};
 // use zksync_os_interface::common_types::derive_flat_storage_key;
 

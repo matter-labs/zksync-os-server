@@ -14,11 +14,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
 use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
-use zk_os_basic_system::system_implementation::flat_storage_model::ACCOUNT_PROPERTIES_STORAGE_ADDRESS;
+use zk_os_basic_system::system_implementation::flat_storage_model::{
+    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
+};
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::common_types::{AccountProperties, BlockHeader};
+use zksync_os_interface::common_types::BlockHeader;
 use zksync_os_types::L1UpgradeEnvelope;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,11 +132,14 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
             Bytes32::from_array(B256::from_slice(Blake2s256::digest(bytes).as_slice()).0)
         };
         let account_properties_hash = account_properties.compute_hash();
-        storage_logs.insert(flat_storage_key, account_properties_hash);
+        storage_logs.insert(
+            flat_storage_key,
+            account_properties_hash.as_u8_array().into(),
+        );
 
-        preimages.push((bytecode_hash, bytecode_preimage));
+        preimages.push((bytecode_hash.as_u8_array().into(), bytecode_preimage));
         preimages.push((
-            account_properties_hash,
+            account_properties_hash.as_u8_array().into(),
             account_properties.encoding().to_vec(),
         ));
     }

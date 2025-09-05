@@ -65,7 +65,7 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
         let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
             return Ok(false);
         };
-        Ok(props.bytecode_hash != Bytes32::ZERO)
+        Ok(props.bytecode_hash != zk_ee::utils::Bytes32::ZERO)
     }
 
     fn get_block_details_by_id_impl(&self, block_id: BlockId) -> EthResult<BlockDetails> {

@@ -1,6 +1,7 @@
+use zk_os_basic_system::system_implementation::flat_storage_model::Blake2sStorageHasher;
+use zk_os_forward_system::run::LeafProof;
 use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::leaf_proof::LeafProof;
-use zksync_os_interface::traits::{PreimageSource, ReadStorage, ReadStorageTree};
+use zksync_os_interface::traits::{AnyLeafProof, PreimageSource, ReadStorage, ReadStorageTree};
 use zksync_os_observability::{ComponentStateHandle, StateLabel};
 
 pub trait StateAccessLabel: StateLabel {
@@ -43,10 +44,8 @@ impl<T: StateAccessLabel, V: ReadStorageTree> ReadStorageTree for MeteredViewSta
         self.with_state(T::read_storage_state(), |view| view.tree_index(key))
     }
 
-    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
-        self.with_state(T::read_storage_state(), |view| {
-            view.merkle_proof(tree_index)
-        })
+    fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
+        todo!()
     }
 
     fn prev_tree_index(&mut self, key: Bytes32) -> u64 {

@@ -23,9 +23,9 @@ use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use std::convert::identity;
+use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::{get_balance, get_code, get_nonce};
 use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::common_types::derive_flat_storage_key;
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -254,11 +254,14 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
 
         let flat_key = derive_flat_storage_key(
             &B160::from_be_bytes(address.into_array()),
-            &Bytes32::from(key.as_b256().0),
+            &(key.as_b256().0.into()),
         );
         let mut state = self.storage.state_view_at(block_number)?;
         Ok(B256::from(
-            state.read(flat_key).unwrap_or_default().as_u8_array(),
+            state
+                .read(flat_key.as_u8_array().into())
+                .unwrap_or_default()
+                .as_u8_array(),
         ))
     }
 
