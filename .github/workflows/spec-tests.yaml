@@ -131,7 +131,6 @@ jobs:
               --rpc-seed-key "${PRIVATE_KEY}" \
               --junitxml="junit-report-${TEST_NAME//\//-}.xml" \
               --json-report \
-              -n auto \
               "tests/${TEST_PATH}" || true
             mv .report.json "report-${TEST_NAME//\//-}.json"
             sleep 5
@@ -240,6 +239,7 @@ jobs:
         working-directory: boojumos-e2e-tests
         run: |
           export PATH="${HOME}/.local/bin:${PATH}"
+          ./scripts/fund-rich.sh
           ./scripts/setup-exec-tests.sh
           cast balance --rpc-url "${RPC_URL}" "${WALLET_ADDRESS}"
           cd lib/execution-spec-tests
@@ -275,7 +275,6 @@ jobs:
               --rpc-seed-key "${PRIVATE_KEY}" \
               --junitxml="junit-report-${TEST_NAME//\//-}.xml" \
               --json-report \
-              -n auto \
               "tests/${TEST_PATH}" || true
             mv .report.json "report-${TEST_NAME//\//-}.json"
           done
