@@ -1,0 +1,387 @@
+name: ZK OS spec tests
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # every day at midnight UTC
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  geth-tests:
+    runs-on: matterlabs-ci-runner-high-performance
+    defaults:
+      run:
+        shell: bash -ex {0}
+    env:
+      L1_RPC_URL: http://localhost:8545
+      CHAIN_ID: 1337
+    outputs:
+      test-results: ${{ steps.test-results.outputs.json }}
+    steps:
+      - name: Checkout e2e tests
+        uses: actions/checkout@v4
+        with:
+          repository: Romsters/boojumos-e2e-tests
+          submodules: recursive
+
+      - name: Install nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install yarn
+        run: npm install -g yarn
+
+      - name: Install python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.13
+
+      - name: Install pip dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ./python-scripts/requirements.txt
+      - name: Install geth
+        run: |
+          sudo add-apt-repository -y ppa:ethereum/ethereum
+          sudo apt-get update
+          sudo apt-get install ethereum --yes
+      - name: Install yq
+        env:
+          YQ_DOWNLOAD_URL: https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
+        run: |
+          wget "${YQ_DOWNLOAD_URL}"
+          mv yq_linux_amd64 yq
+          chmod +x yq
+          echo "${PWD}" >> "${GITHUB_PATH}"
+      - name: Run geth node
+        run: |
+          geth --dev --http --http.api eth,web3,net --datadir data --miner.gaslimit 9000000000000 --rpc.allow-unprotected-txs --mine &
+          sleep 10
+      - name: Wait for geth to start
+        run: |
+          while ! nc -z localhost 8545; do
+            echo "Waiting for geth to start..."
+            sleep 5
+          done
+          echo "Geth is up and running."
+      - name: Create test account
+        run: |
+          PASSWORD=testpassword
+          echo "${PASSWORD}" > password.txt
+          geth account new --datadir ./data --password password.txt
+          KEYSTORE_FILE=$(ls ./data/keystore | tail -1)
+          PRIVATE_KEY=$(python ./python-scripts/export-private-key.py "./data/keystore/${KEYSTORE_FILE}" "${PASSWORD}")
+          echo "PRIVATE_KEY=${PRIVATE_KEY}" >> "${GITHUB_ENV}"
+          sleep 5
+      - name: Fund test account with ETH
+        run: |
+          # Fund test account with some ETH
+          ACCOUNTS=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_accounts","params":[],"id":1}' \
+            ${L1_RPC_URL})
+          COINBASE=$(echo "${ACCOUNTS}" | jq -r '.result[0]')
+          TEST_ACCOUNT=$(echo "${ACCOUNTS}" | jq -r '.result[1]')
+          python ./python-scripts/fund-wallet.py --coinbase "${COINBASE}" --to "${TEST_ACCOUNT}" --eth 50000.0
+      - name: Run spec tests on geth
+        run: |
+          export PATH=${HOME}/.local/bin:${PATH}
+          ./scripts/setup-exec-tests.sh
+          cd lib/execution-spec-tests
+          # Prepare environment with chainId
+          uv run eest make env
+          yq e ".remote_nodes[0].chain_id = ${CHAIN_ID}" -i env.yaml
+          # cancun/eip4844_blobs very slow test, probably hanging
+          for TEST_PATH in byzantium/eip198_modexp_precompile \
+              cancun/eip5656_mcopy \
+              shanghai/eip3860_initcode \
+              cancun/eip1153_tstore \
+              berlin/eip2930_access_list \
+              cancun/eip6780_selfdestruct \
+              cancun/eip7516_blobgasfee \
+              constantinople/eip1014_create2 \
+              frontier/create \
+              frontier/opcodes \
+              frontier/precompiles \
+              frontier/scenarios \
+              homestead/coverage \
+              homestead/yul \
+              istanbul/eip1344_chainid \
+              paris/security \
+              shanghai/eip3651_warm_coinbase \
+              shanghai/eip3855_push0 \
+              shanghai/eip4895_withdrawals \
+              zkevm/test_worst_compute.py; do
+            TEST_NAME="$(basename ${TEST_PATH})"
+            uv run execute remote \
+              --fork Cancun \
+              --rpc-endpoint "${L1_RPC_URL}" \
+              --rpc-chain-id "${CHAIN_ID}" \
+              --rpc-seed-key "${PRIVATE_KEY}" \
+              --junitxml="junit-report-${TEST_NAME//\//-}.xml" \
+              --json-report \
+              "tests/${TEST_PATH}" || true
+            mv .report.json "report-${TEST_NAME//\//-}.json"
+            sleep 5
+          done
+      - name: Upload test results
+        if: (!cancelled())
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-geth
+          path: |
+            lib/execution-spec-tests/junit-report*.xml
+            lib/execution-spec-tests/report*.json
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        id: test-results
+        if: (!cancelled())
+        with:
+          check_name: "gETH Execution Spec Tests"
+          files: "lib/execution-spec-tests/junit-report*.xml"
+          compare_to_earlier_commit: false
+          json_suite_details: true
+          json_test_case_results: true
+          json_file: test.json
+
+      - name: Conclusion
+        run: cat test.json
+
+
+  zk-os-tests:
+    runs-on: matterlabs-ci-runner-high-performance
+    defaults:
+      run:
+        shell: bash -ex {0}
+    env:
+      RPC_URL: http://localhost:3050
+      CHAIN_ID: 270
+      WALLET_ADDRESS: "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049"
+      PRIVATE_KEY: "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110"
+    outputs:
+      test-results: ${{ steps.test-results.outputs.json }}
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: sudo apt update && sudo apt install --yes libclang-dev bc
+
+      - name: Install yarn
+        run: npm install -g yarn
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@v1
+        env:
+          # To fix rate limiting issues with GitHub API
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          cache: true
+
+      - name: Run anvil L1
+        run: |
+          anvil --load-state ./zkos-l1-state.json --port 8545 &
+
+      - name: Build server
+        run: cargo build --release --bin zksync_os_bin
+
+      - name: Run server
+        run: |
+          rm -rf db && cargo run --release --bin zksync_os_bin > zkos.log.txt 2>&1 &
+          sleep 30
+
+      - name: Clone tests
+        uses: actions/checkout@v4
+        with:
+          repository: Romsters/boojumos-e2e-tests
+          path: boojumos-e2e-tests
+          submodules: recursive
+
+      - name: Install yq
+        env:
+          YQ_DOWNLOAD_URL: https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
+        run: |
+          wget "${YQ_DOWNLOAD_URL}"
+          mv yq_linux_amd64 yq
+          chmod +x yq
+          echo "${PWD}" >> "${GITHUB_PATH}"
+
+      # TODO: add JSON output to RPC tests
+#      - name: Run RPC tests
+#        working-directory: boojumos-e2e-tests
+#        run: |
+#          ./scripts/setup-rpc-tests.sh
+#          ./scripts/run-rpc-tests.sh || true
+
+      - name: Run spec tests
+        working-directory: boojumos-e2e-tests
+        run: |
+          export PATH="${HOME}/.local/bin:${PATH}"
+          ./scripts/fund-rich.sh
+          ./scripts/setup-exec-tests.sh
+          cast balance --rpc-url "${RPC_URL}" "${WALLET_ADDRESS}"
+          cd lib/execution-spec-tests
+          # Prepare environment with chainId
+          uv run eest make env
+          yq e ".remote_nodes[0].chain_id = ${CHAIN_ID}" -i env.yaml
+          # cancun/eip4844_blobs very slow test
+          for TEST_PATH in cancun/eip1153_tstore \
+              homestead/coverage \
+              byzantium/eip198_modexp_precompile \
+              cancun/eip5656_mcopy \
+              shanghai/eip3860_initcode \
+              berlin/eip2930_access_list \
+              cancun/eip6780_selfdestruct \
+              cancun/eip7516_blobgasfee \
+              constantinople/eip1014_create2 \
+              frontier/create \
+              frontier/opcodes \
+              frontier/precompiles \
+              frontier/scenarios \
+              homestead/yul \
+              istanbul/eip1344_chainid \
+              paris/security \
+              shanghai/eip3651_warm_coinbase \
+              shanghai/eip3855_push0 \
+              shanghai/eip4895_withdrawals \
+              zkevm/test_worst_compute.py; do
+            TEST_NAME="$(basename ${TEST_PATH})"
+            uv run execute remote \
+              --fork Cancun \
+              --rpc-endpoint "${RPC_URL}" \
+              --rpc-chain-id "${CHAIN_ID}" \
+              --rpc-seed-key "${PRIVATE_KEY}" \
+              --junitxml="junit-report-${TEST_NAME//\//-}.xml" \
+              --json-report \
+              "tests/${TEST_PATH}" || true
+            mv .report.json "report-${TEST_NAME//\//-}.json"
+          done
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: zkos.log.txt
+
+      - name: Upload test results
+        if: (!cancelled())
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-zk-os
+          path: |
+            boojumos-e2e-tests/lib/execution-spec-tests/junit-report*.xml
+            boojumos-e2e-tests/lib/execution-spec-tests/report*.json
+
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        id: test-results
+        if: (!cancelled())
+        with:
+          check_name: "ZK OS Execution Spec Tests"
+          files: "boojumos-e2e-tests/lib/execution-spec-tests/junit-report*.xml"
+          compare_to_earlier_commit: false
+          json_suite_details: true
+          json_test_case_results: true
+          json_file: test.json
+
+  prepare-compatibility-table:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -ex {0}
+    needs: [zk-os-tests, geth-tests]
+    steps:
+
+      - name: Download reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-results-*
+          path: data
+          merge-multiple: 'false'
+
+      - name: Prepare markdown table
+        run: |
+          geth_dir="./data/test-results-geth"
+          zkos_dir="./data/test-results-zk-os"
+
+          # Extract test names from both dirs and combine unique sorted list
+          tests=($( (ls "$geth_dir"/report-*.json 2>/dev/null; ls "$zkos_dir"/report-*.json 2>/dev/null) \
+            | xargs -n1 basename \
+            | sed -E 's/report-(.*)\.json/\1/' \
+            | sort -u)
+          )
+
+          # Print markdown header
+          echo "| Test Name           | Geth Pass/Total | ZK OS Pass/Total | Durations (Geth / ZK OS / Diff)          |" > report.md
+          echo "|---------------------|-----------------|------------------|-------------------------------------------|" >> report.md
+
+          for test in "${tests[@]}"; do
+            geth_file="$geth_dir/report-$test.json"
+            zkos_file="$zkos_dir/report-$test.json"
+
+            # Default values if file doesn't exist
+            geth_passed=0; geth_total=0; geth_duration=0
+            zkos_passed=0; zkos_total=0; zkos_duration=0
+
+            if [[ -f "$geth_file" ]]; then
+              geth_passed=$(jq '.summary.passed // 0' "$geth_file")
+              geth_total=$(jq '.summary.total // 0' "$geth_file")
+              geth_duration=$(jq '.duration // 0' "$geth_file")
+            fi
+
+            if [[ -f "$zkos_file" ]]; then
+              zkos_passed=$(jq '.summary.passed // 0' "$zkos_file")
+              zkos_total=$(jq '.summary.total // 0' "$zkos_file")
+              zkos_duration=$(jq '.duration // 0' "$zkos_file")
+            fi
+
+            # Calculate duration difference: zkos - geth
+            duration_diff=$(echo "$zkos_duration - $geth_duration" | bc)
+
+            # Format duration difference with sign (+/-)
+            if (( $(echo "$duration_diff >= 0" | bc -l) )); then
+              duration_diff="+$duration_diff"
+            fi
+
+            # Format durations to 2 decimal places
+            geth_duration_fmt=$(printf "%.2f" "$geth_duration")
+            zkos_duration_fmt=$(printf "%.2f" "$zkos_duration")
+            duration_diff_fmt=$(printf "%+.2f" "$duration_diff")
+
+            duration_str="${geth_duration_fmt}s / ${zkos_duration_fmt}s / ${duration_diff_fmt}s"
+
+            printf "| %-19s | %d / %d       | %d / %d       | %s |\n" \
+              "$test" "$geth_passed" "$geth_total" "$zkos_passed" "$zkos_total" "$duration_str" >> report.md
+          done
+      - name: Update job summary
+        run: cat report.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload report
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-path: report.md
+          message-id: 'compatibility-matrix'
