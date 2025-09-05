@@ -65,8 +65,8 @@ impl CommitCommand {
     /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
     /// function makes sure last committed batch and new batch are encoded correctly.
     fn to_calldata_suffix(&self) -> Vec<u8> {
-        /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 1;
+        /// Current commitment encoding version for ZKsync OS.
+        const SUPPORTED_ENCODING_VERSION: u8 = 2;
 
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
