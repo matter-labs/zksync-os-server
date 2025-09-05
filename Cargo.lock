@@ -229,6 +229,7 @@ dependencies = [
  "alloy-rlp",
  "k256",
  "serde",
+ "serde_with 3.14.0",
  "thiserror 2.0.12",
 ]
 
