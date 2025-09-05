@@ -76,3 +76,4 @@ async-trait.workspace = true
 hyper-util = { version = "0.1.16", features = ["tokio"] }
 micro-http = "0.1.1"
 http-body = "1.0.1"
+tower-http.workspace = true

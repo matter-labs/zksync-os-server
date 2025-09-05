@@ -33,8 +33,7 @@ use hyper::{Method, body::Body};
 use jsonrpsee::{
     RpcModule,
     core::BoxError,
-    http_client::HttpRequest,
-    server::{HttpBody, stop_channel},
+    server::{HttpBody, HttpRequest, stop_channel},
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -62,7 +61,7 @@ pub fn build_jsonrpsee_service<
     BoxCloneService<
         HttpRequest<RequestBody>,
         hyper::Response<ResponseBody<HttpBody>>,
-        Box<(dyn Error + std::marker::Send + std::marker::Sync + 'static)>,
+        Box<(dyn Error + Send + Sync)>,
     >,
 >
 where

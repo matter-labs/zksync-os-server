@@ -44,6 +44,9 @@ use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use hyper::server::conn::http1;
+use hyper_util::rt::TokioIo;
+use hyper_util::service::TowerToHyperService;
 use micro_http::codec::RequestDecoder;
 use micro_http::protocol::Message;
 use req_body::ReqBody;
@@ -308,6 +311,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l2_mempool.clone(),
     )
     .expect("failed to build JSON-RPC service");
+    let json_service = TowerToHyperService::new(json_service);
 
     tasks.spawn({
         let block_replay_storage = block_replay_storage.clone();
@@ -322,35 +326,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 let block_replay_storage = block_replay_storage.clone();
 
                 tokio::spawn(async move {
-                    let mut framed = RequestDecoder::new().framed(socket);
+                    let io = TokioIo::new(socket);
 
-                    // In HTTP 1.1 there might be multiple requests in a single connection
-                    //loop {
-                    // Read until we get the request header (and the payload size)
-                    let (header, payload_size) = loop {
-                        match framed.next().await.transpose().unwrap() {
-                            Some(Message::Header((hdr, sz))) => break (hdr, sz),
-                            Some(Message::Payload(_)) => {
-                                unreachable!("unexpected payload without header")
-                            }
-                            None => return,
-                        }
-                    };
-
-                    if header.uri().path() == "/replays" {
-                        let socket = framed.into_inner();
-                        send_replays(block_replay_storage.clone(), socket).await;
-                        return;
-                    } else {
-                        let request = header.body(ReqBody::new(framed, payload_size));
-                        json_service
-                            .clone()
-                            .oneshot(request)
-                            .await
-                            .map_err(|_e| tracing::info!("JSON-RPC request failed"))
-                            .unwrap();
-                    }
-                    //}
+                    http1::Builder::new()
+                        .serve_connection(io, json_service)
+                        .with_upgrades() // needed for websockets to work
+                        .await
                 });
             }
         }
