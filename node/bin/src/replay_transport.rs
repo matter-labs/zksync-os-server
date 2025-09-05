@@ -68,7 +68,7 @@ pub async fn replay_server(
 }
 
 async fn skip_http_headers<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<(), std::io::Error> {
-    // Detects two consecutive line endings, which may be \r\n on \n.
+    // Detects two consecutive line endings, which may be \r\n or \n.
     let mut empty_line = false;
     loop {
         let buf = reader.fill_buf().await?;
