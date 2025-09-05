@@ -1,0 +1,10 @@
+codecov:
+  require_ci_to_pass: no
+
+# For now, do not fail if coverage is less than expected
+coverage:
+  status:
+    project:
+      default: false  # disable the default status that measures entire project
+    patch:
+      default: false  # disable the patch status that measures patch changes
