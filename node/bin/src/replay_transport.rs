@@ -2,12 +2,13 @@ use alloy::primitives::BlockNumber;
 use backon::{ConstantBuilder, Retryable};
 use futures::{SinkExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::net::ToSocketAddrs;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use tokio_util::codec::{self, Framed, LengthDelimitedCodec};
+use tokio_util::codec::{self, FramedRead, FramedWrite, LengthDelimitedCodec};
 use zksync_os_sequencer::model::blocks::BlockCommand;
 use zksync_os_storage_api::{REPLAY_WIRE_FORMAT_VERSION, ReplayRecord};
 
@@ -24,25 +25,33 @@ pub async fn replay_server(
 
         let block_replays = block_replays.clone();
         tokio::spawn(async move {
-            let starting_block = match socket.read_u64().await {
+            let (recv, mut send) = socket.split();
+
+            let mut reader = BufReader::new(recv);
+            skip_http_headers(&mut reader)
+                .await
+                .expect("failed to skip HTTP headers");
+
+            let starting_block = match reader.read_u64().await {
                 Ok(block_number) => block_number,
                 Err(e) => {
                     tracing::info!("Could not read start block for replays: {}", e);
                     return;
                 }
             };
-            if let Err(e) = socket.write_u32(REPLAY_WIRE_FORMAT_VERSION).await {
+
+            if let Err(e) = send.write_u32(REPLAY_WIRE_FORMAT_VERSION).await {
                 tracing::info!("Could not write replay version: {}", e);
                 return;
             }
 
             tracing::info!(
                 "Streaming replays to {} starting from {}",
-                socket.peer_addr().unwrap(),
+                send.peer_addr().unwrap(),
                 starting_block
             );
 
-            let mut replay_sender = Framed::new(socket, BlockReplayEncoder::new());
+            let mut replay_sender = FramedWrite::new(send, BlockReplayEncoder::new());
             let mut stream = block_replays.replay_commands_forever(starting_block);
             loop {
                 let replay = stream.next().await.unwrap();
@@ -55,6 +64,35 @@ pub async fn replay_server(
                 };
             }
         });
+    }
+}
+
+async fn skip_http_headers<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<(), std::io::Error> {
+    // Detects two consecutive line endings, which may be \r\n on \n.
+    let mut empty_line = false;
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "EOF reached before end of headers",
+            ));
+        }
+
+        for (i, &byte) in buf.iter().enumerate() {
+            if byte == b'\n' {
+                if empty_line {
+                    reader.consume(i + 1);
+                    return Ok(());
+                }
+                empty_line = true;
+            } else if byte != b'\r' {
+                empty_line = false;
+            }
+        }
+
+        let len = buf.len();
+        reader.consume(len);
     }
 }
 
@@ -73,12 +111,20 @@ pub async fn replay_receiver(
         })
         .await?;
 
+    // This makes it valid HTTP
+    socket
+        .write(b"POST /block_replays HTTP/1.0\r\n\r\n")
+        .await?;
+
+    // Instead of negotiating an upgrade, we just drop down to the TCP layer after the headers.
     socket.write_u64(starting_block).await?;
     let replay_version = socket.read_u32().await?;
 
-    Ok(Framed::new(socket, BlockReplayDecoder::new(replay_version))
-        .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
-        .boxed())
+    Ok(
+        FramedRead::new(socket, BlockReplayDecoder::new(replay_version))
+            .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
+            .boxed(),
+    )
 }
 
 struct BlockReplayDecoder {
