@@ -1,7 +1,7 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
 use std::ops::RangeInclusive;
-use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
+use zksync_os_interface::traits::{PreimageSource, ReadStorageTree};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
     ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,

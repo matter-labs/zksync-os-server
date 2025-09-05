@@ -8,7 +8,7 @@ use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
-use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
+use zksync_os_interface::common_types::{BlockOutput, InvalidTransaction};
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{MeteredViewState, ReadStateHistory, ReplayRecord, WriteState};
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};

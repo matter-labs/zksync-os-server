@@ -17,8 +17,8 @@ use reth_trie_common::{
 use ruint::aliases::B160;
 use std::fmt::Debug;
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
+use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
 

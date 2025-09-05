@@ -1,5 +1,6 @@
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{LeafProof, PreimageSource, ReadStorage, ReadStorageTree};
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::leaf_proof::LeafProof;
+use zksync_os_interface::traits::{PreimageSource, ReadStorage, ReadStorageTree};
 use zksync_os_observability::{ComponentStateHandle, StateLabel};
 
 pub trait StateAccessLabel: StateLabel {

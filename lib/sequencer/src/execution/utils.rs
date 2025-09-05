@@ -3,7 +3,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use zk_os_forward_system::run::{BlockContext, BlockOutput};
+use zksync_os_interface::common_types::{BlockContext, BlockOutput};
 use zksync_os_types::ZkTransaction;
 
 // Hash of the block output, which is used to identify divergences in block execution.

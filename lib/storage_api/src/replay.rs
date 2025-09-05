@@ -1,6 +1,6 @@
 use crate::ReplayRecord;
 use alloy::primitives::BlockNumber;
-use zk_os_forward_system::run::BlockContext;
+use zksync_os_interface::common_types::BlockContext;
 
 /// Read-only view on block replay data.
 ///

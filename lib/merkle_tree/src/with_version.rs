@@ -4,9 +4,9 @@ use crate::{
 };
 use alloy::primitives::{B256, FixedBytes};
 use tokio::sync::watch;
-use zk_ee::utils::Bytes32;
-use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::leaf_proof::{FlatStorageLeaf, LeafProof};
+use zksync_os_interface::traits::{ReadStorage, ReadStorageTree};
 
 pub struct MerkleTreeForReading<DB: Database, P: TreeParams = DefaultTreeParams> {
     tree: MerkleTree<DB, P>,

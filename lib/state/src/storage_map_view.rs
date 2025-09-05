@@ -2,8 +2,8 @@ use crate::metrics::STORAGE_VIEW_METRICS;
 use crate::{Diff, PersistentStorageMap};
 use dashmap::DashMap;
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::ReadStorage;
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::traits::ReadStorage;
 
 /// Storage View valid for a specific block (`block`)
 /// It represents the state immediately after block `block`.

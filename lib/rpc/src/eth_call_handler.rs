@@ -12,7 +12,7 @@ use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use ruint::aliases::B160;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
+use zksync_os_interface::common_types::{BlockContext, ExecutionResult, InvalidTransaction};
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{RepositoryError, StateError};
 use zksync_os_types::{L2Envelope, L2Transaction};

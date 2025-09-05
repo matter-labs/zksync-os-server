@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::StorageWrite;
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::common_types::StorageWrite;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 

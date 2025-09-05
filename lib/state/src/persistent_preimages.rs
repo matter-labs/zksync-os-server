@@ -1,7 +1,7 @@
 use crate::metrics::PREIMAGES_METRICS;
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::PreimageSource;
 use zksync_os_genesis::Genesis;
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::traits::PreimageSource;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 

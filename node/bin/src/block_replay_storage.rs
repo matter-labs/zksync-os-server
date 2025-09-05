@@ -12,8 +12,7 @@ use tokio::pin;
 use tokio::time::{Instant, Sleep};
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
-use zk_ee::system::metadata::BlockMetadataFromOracle;
-use zk_os_forward_system::run::BlockContext;
+use zksync_os_interface::common_types::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_sequencer::model::blocks::BlockCommand;
@@ -84,7 +83,7 @@ impl BlockReplayStorage {
             );
             this.append_replay_unchecked(ReplayRecord {
                 // todo: save real genesis here once we have genesis logic
-                block_context: BlockMetadataFromOracle {
+                block_context: BlockContext {
                     chain_id,
                     block_number: 0,
                     block_hashes: Default::default(),

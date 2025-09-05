@@ -13,14 +13,12 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::OnceCell;
-use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
-use zk_os_basic_system::system_implementation::flat_storage_model::{
-    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
-};
-use zk_os_forward_system::run::output::BlockHeader;
+use zk_os_basic_system::system_implementation::flat_storage_model::ACCOUNT_PROPERTIES_STORAGE_ADDRESS;
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_interface::bytes32::Bytes32;
+use zksync_os_interface::common_types::{AccountProperties, BlockHeader};
 use zksync_os_types::L1UpgradeEnvelope;
 
 #[derive(Debug, Serialize, Deserialize)]

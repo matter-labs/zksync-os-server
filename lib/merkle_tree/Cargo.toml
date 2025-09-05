@@ -27,6 +27,7 @@ zk_os_forward_system.workspace = true
 zk_os_basic_system.workspace = true
 zk_ee.workspace = true
 tokio.workspace = true
+zksync_os_interface.workspace = true
 
 [dev-dependencies]
 alloy = { workspace = true, default-features = false, features = ["rand"] }
