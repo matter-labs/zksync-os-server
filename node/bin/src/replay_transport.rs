@@ -113,7 +113,7 @@ pub async fn replay_receiver(
 
     // This makes it valid HTTP
     socket
-        .write(b"POST /block_replays HTTP/1.0\r\n\r\n")
+        .write_all(b"POST /block_replays HTTP/1.0\r\n\r\n")
         .await?;
 
     // Instead of negotiating an upgrade, we just drop down to the TCP layer after the headers.
