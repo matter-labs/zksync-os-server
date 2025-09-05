@@ -2,6 +2,48 @@
 
 This repo contains the sequencer implementation for ZKsync OS, the OS powering the ZKsync Stack. The ZKsync OS sequencer design optimizes for throughput, low latency, and fantastic DevEx.
 
+## Prerequisites
+
+This project requires:
+
+* The **Foundry nightly toolchain**
+* The **Rust toolchain**
+
+### Install Foundry (nightly)
+
+Install [Foundry](https://getfoundry.sh/) and switch to the nightly release:
+
+```bash
+# Download the Foundry installer
+curl -L https://foundry.paradigm.xyz | bash
+
+# Install forge, cast, anvil, chisel
+# Ensure you are using the latest nightly release
+foundryup -i nightly
+```
+
+Verify your installation:
+
+```bash
+anvil --version
+```
+
+The output should include a `nightly-<date>` suffix.
+
+### Install Rust
+
+Install [Rust](https://www.rust-lang.org/tools/install) using `rustup`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+After installation, ensure Rust is available:
+
+```bash
+rustc --version
+```
+
 ## Run
 
 ### Local
