@@ -11,7 +11,7 @@ pub const REPLAY_WIRE_FORMAT_VERSION: u32 = 1;
 impl ReplayRecord {
     /// Encodes the replay using the current wire format version
     pub fn encode_with_current_version(self) -> Vec<u8> {
-        let wire_format = v1::ReplayWireFormat::from(self);
+        let wire_format = v1::ReplayWireFormatV1::from(self);
         bincode::encode_to_vec(wire_format, bincode::config::standard()).unwrap()
     }
 
@@ -20,7 +20,7 @@ impl ReplayRecord {
     pub fn decode(bytes: &[u8], version: u32) -> Self {
         match version {
             1 => {
-                let wire_format: v1::ReplayWireFormat =
+                let wire_format: v1::ReplayWireFormatV1 =
                     bincode::decode_from_slice(bytes, bincode::config::standard())
                         .unwrap()
                         .0;

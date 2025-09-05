@@ -12,7 +12,7 @@ use alloy::primitives::{B256, U256, ruint::aliases::B160};
 
 /// The format ReplayRecords are currently sent in
 #[derive(Encode, Decode)]
-pub struct ReplayWireFormat {
+pub struct ReplayWireFormatV1 {
     pub block_context: BlockContext,
     pub starting_l1_priority_id: u64,
     pub transactions: Vec<ZkTransactionWireFormat>,

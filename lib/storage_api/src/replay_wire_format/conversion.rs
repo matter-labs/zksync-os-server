@@ -1,13 +1,13 @@
-use super::v1::{ReplayWireFormat, ZkTransactionWireFormat};
+use super::v1::{ReplayWireFormatV1, ZkTransactionWireFormat};
 use crate::ReplayRecord;
 use alloy::eips::{Decodable2718, Encodable2718};
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockContext;
 use zksync_os_types::ZkEnvelope;
 
-impl From<ReplayWireFormat> for ReplayRecord {
-    fn from(value: ReplayWireFormat) -> Self {
-        let ReplayWireFormat {
+impl From<ReplayWireFormatV1> for ReplayRecord {
+    fn from(value: ReplayWireFormatV1) -> Self {
+        let ReplayWireFormatV1 {
             block_context,
             starting_l1_priority_id,
             transactions,
@@ -51,7 +51,7 @@ impl From<ReplayWireFormat> for ReplayRecord {
     }
 }
 
-impl From<ReplayRecord> for ReplayWireFormat {
+impl From<ReplayRecord> for ReplayWireFormatV1 {
     fn from(value: ReplayRecord) -> Self {
         let ReplayRecord {
             block_context,

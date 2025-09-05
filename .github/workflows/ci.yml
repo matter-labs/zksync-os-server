@@ -108,10 +108,10 @@ jobs:
         # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
         run: cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
   
-  #########################################
-  # Enforce wire format file immutability #
-  #########################################
-  check-replay-wire-format-version:
+  ############################################
+  # Enforce EN sync format file immutability #
+  ############################################
+  check-EN-backwards-compatibility:
     name: Check replay wire format version
     runs-on: ubuntu-latest
     steps:
@@ -149,7 +149,7 @@ jobs:
         format-and-lint,
         build-and-test,
         integration-tests,
-        check-replay-wire-format-version,
+        check-EN-backwards-compatibility,
       ]
     steps:
       - name: Status
