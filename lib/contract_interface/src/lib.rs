@@ -135,7 +135,7 @@ alloy::sol! {
             bytes32 commitment;
         }
 
-        struct CommitBoojumOSBatchInfo {
+        struct CommitBatchInfoZKsyncOS {
             uint64 batchNumber;
             bytes32 newStateCommitment;
             uint256 numberOfLayer1Txs;

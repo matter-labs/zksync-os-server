@@ -90,7 +90,7 @@ impl From<&StoredBatchInfo> for zksync_os_contract_interface::IExecutor::StoredB
     }
 }
 
-/// User-friendly version of [`zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo`].
+/// User-friendly version of [`zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitBatchInfo {
     pub batch_number: u64,
@@ -243,12 +243,12 @@ impl CommitBatchInfo {
     pub fn into_l1_commit_data(
         self,
         mode: BatchDaInputMode,
-    ) -> zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo {
+    ) -> zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS {
         let operator_da_input = match mode {
             BatchDaInputMode::Rollup => self.operator_da_input,
             BatchDaInputMode::Validium => U256::ZERO.to_be_bytes_vec(),
         };
-        zksync_os_contract_interface::IExecutor::CommitBoojumOSBatchInfo::from((
+        zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS::from((
             self.batch_number,
             self.new_state_commitment,
             U256::from(self.number_of_layer1_txs),
