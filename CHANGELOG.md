@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/matter-labs/zksync-os-server/compare/v0.3.0...v0.4.0) (2025-09-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* external node can read previous replay version ([#224](https://github.com/matter-labs/zksync-os-server/issues/224))
+
+### Features
+
+* external node can read previous replay version ([#224](https://github.com/matter-labs/zksync-os-server/issues/224)) ([a4bd5f5](https://github.com/matter-labs/zksync-os-server/commit/a4bd5f5e7b1576e6af7dced62434488a2ab6c292))
+
 ## [0.3.0](https://github.com/matter-labs/zksync-os-server/compare/v0.2.0...v0.3.0) (2025-09-05)
 
 
