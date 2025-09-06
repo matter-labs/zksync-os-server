@@ -12,7 +12,11 @@ pub struct ApiMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["method"], buckets = LATENCIES_FAST)]
     pub response_time: LabeledFamily<String, Histogram<Duration>>,
     #[metrics(unit = Unit::Bytes, labels = ["method"], buckets = BYTES_BUCKETS)]
+    pub request_size: LabeledFamily<String, Histogram<usize>>,
+    #[metrics(unit = Unit::Bytes, labels = ["method"], buckets = BYTES_BUCKETS)]
     pub response_size: LabeledFamily<String, Histogram<usize>>,
+    #[metrics(labels = ["method"], buckets = Buckets::exponential(1.0..=1_000.0, 2.0))]
+    pub requests_in_batch_count: LabeledFamily<String, Histogram<u64>>,
 }
 
 #[vise::register]

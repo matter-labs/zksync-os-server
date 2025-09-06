@@ -1,5 +1,3 @@
-extern crate core;
-
 mod call_fees;
 
 mod config;
@@ -15,7 +13,7 @@ mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
-mod middleware;
+mod monitoring_middleware;
 mod sandbox;
 mod tx_handler;
 mod types;
@@ -25,7 +23,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
-use crate::middleware::Monitoring;
+use crate::monitoring_middleware::Monitoring;
 use crate::ots_impl::OtsNamespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
