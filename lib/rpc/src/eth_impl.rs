@@ -1,6 +1,5 @@
 use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
-use crate::metrics::API_METRICS;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::ReadRpcStorage;
 use crate::tx_handler::TxHandler;
@@ -516,13 +515,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        let latency_observer = API_METRICS.response_time[&"call"].start();
-        let r = self
-            .eth_call_handler
+        self.eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
-            .to_rpc_result();
-        latency_observer.observe();
-        r
+            .to_rpc_result()
     }
 
     async fn call_many(
@@ -551,13 +546,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        let latency_observer = API_METRICS.response_time[&"estimate_gas"].start();
-        let result = self
+        Ok(self
             .eth_call_handler
             .estimate_gas_impl(request, block_number, state_override)
-            .to_rpc_result()?;
-        latency_observer.observe();
-        Ok(result)
+            .to_rpc_result()?)
     }
 
     async fn gas_price(&self) -> RpcResult<U256> {
@@ -603,16 +595,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
     }
 
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        let latency_observer = API_METRICS.response_time[&"send_raw_transaction"].start();
-
-        let r = self
-            .tx_handler
+        self.tx_handler
             .send_raw_transaction_impl(bytes)
             .await
-            .to_rpc_result();
-        latency_observer.observe();
-
-        r
+            .to_rpc_result()
     }
 
     async fn sign(&self, _address: Address, _message: Bytes) -> RpcResult<Bytes> {

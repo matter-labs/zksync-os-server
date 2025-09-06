@@ -364,11 +364,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthFilterApiServer
     }
 
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
-        let latency_observer = API_METRICS.response_time[&"get_logs"].start();
-        let logs = self.logs_impl(filter).to_rpc_result()?;
-        latency_observer.observe();
-
-        Ok(logs)
+        Ok(self.logs_impl(filter).to_rpc_result()?)
     }
 }
 
