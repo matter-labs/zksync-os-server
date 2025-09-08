@@ -25,7 +25,6 @@ use ruint::aliases::B160;
 use std::convert::identity;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::{get_balance, get_code, get_nonce};
-use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;

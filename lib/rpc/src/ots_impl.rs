@@ -14,7 +14,6 @@ use alloy::rpc::types::{Header, Log};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
-use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::types::{RpcBlockConvert, ZkApiTransaction};
 use zksync_os_storage_api::{StoredTxData, ViewState};

@@ -122,6 +122,7 @@ impl ReadStorageTree for StateView {
         unreachable!("VM forward run should not invoke the tree")
     }
 
+    #[allow(refining_impl_trait)]
     fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
         unreachable!("VM forward run should not invoke the tree")
     }

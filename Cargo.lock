@@ -10070,6 +10070,7 @@ dependencies = [
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
+ "zksync_os_multivm",
  "zksync_os_object_store",
  "zksync_os_observability",
  "zksync_os_priority_tree",
@@ -10293,6 +10294,7 @@ version = "0.3.0-non-semver-compat"
 dependencies = [
  "anyhow",
  "forward_system",
+ "semver 1.0.26",
  "zksync_os_interface",
 ]
 

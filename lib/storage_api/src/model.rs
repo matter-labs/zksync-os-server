@@ -38,6 +38,8 @@ pub struct ReplayRecord {
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
     pub node_version: semver::Version,
+    /// Version of ZKsync OS used for this replay record.
+    pub zksync_os_version: semver::Version,
     /// Hash of the block output.
     pub block_output_hash: B256,
 }
@@ -49,6 +51,7 @@ impl ReplayRecord {
         transactions: Vec<ZkTransaction>,
         previous_block_timestamp: u64,
         node_version: semver::Version,
+        zksync_os_version: semver::Version,
         block_output_hash: B256,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
@@ -72,6 +75,7 @@ impl ReplayRecord {
             transactions,
             previous_block_timestamp,
             node_version,
+            zksync_os_version,
             block_output_hash,
         }
     }
