@@ -12,19 +12,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x5446351bed0ad1d5a887be98232f26eedaa4af2adcf714e26f6c479a4cb1f603".into())]
+    #[config(alias = "operator_private_key", default_t = "0x026f7f2a55e46437c68e5a75b4a61d11e5fb6987620df61d2cd3400226945720".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xd742bf9b40ff0965100b8f694f59fd7fbd248ce1cf9d7e73983e4d5ee4e2de86".into())]
+    #[config(default_t = "0x1590cd15674138453a4ae04393c41ea4f21306ef9cf5f2ba326d757d4d97bb8a".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xa399d1c3c15972341a00dab527c76e1c7ef861b551decd662d7e3a8f71355074".into())]
+    #[config(default_t = "0x1bf13db0eca84058660ab17913b8f6342361b20847d613b4dc241145620cc593".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).

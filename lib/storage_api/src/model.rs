@@ -1,6 +1,5 @@
 use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use zksync_os_interface::common_types::BlockContext;
 use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
@@ -26,9 +25,8 @@ pub struct StoredTxData {
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
-    #[bincode(with_serde)]
     pub block_context: BlockContext,
     /// L1 transaction serial id (0-based) expected at the beginning of this block.
     /// If `l1_transactions` is non-empty, equals to the first tx id in this block
@@ -39,10 +37,8 @@ pub struct ReplayRecord {
     /// Will be moved to the BlockContext at some point
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
-    #[bincode(with_serde)]
     pub node_version: semver::Version,
     /// Hash of the block output.
-    #[bincode(with_serde)]
     pub block_output_hash: B256,
 }
 

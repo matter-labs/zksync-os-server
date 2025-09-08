@@ -20,9 +20,9 @@ env:
 jobs:
 
   ############################
-  #     Format and lint      #
+  #  Build, format and lint  #
   ############################
-  format-and-lint:
+  build-format-and-lint:
     runs-on: ubuntu-24.04-github-hosted-32core
     steps:
       - name: Checkout code
@@ -32,7 +32,7 @@ jobs:
         uses: ./.github/actions/runner-setup
         with:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'format-and-lint'
+          cache_shared_key: 'build-format-and-lint'
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -43,11 +43,14 @@ jobs:
       - name: Run clippy (integration tests)
         run: cargo clippy --all-targets -p zksync_os_integration_tests -- -D warnings
 
+      - name: Build project
+        run: cargo build --all-targets --workspace --exclude zksync_os_integration_tests
+
 
   ############################
-  # Build and run unit tests #
+  #      Run unit tests      #
   ############################
-  build-and-test:
+  unit-tests:
     runs-on: ubuntu-24.04-github-hosted-32core
     steps:
       - name: Checkout code
@@ -57,21 +60,33 @@ jobs:
         uses: ./.github/actions/runner-setup
         with:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'build-and-test'
-
-      - name: Build project
-        run: cargo build --all-targets --workspace --exclude zksync_os_integration_tests
+          cache_shared_key: 'unit-tests'
 
       - name: Run unit tests
-        run: cargo nextest run --workspace --exclude zksync_os_integration_tests
+        env:
+          RUSTC_BOOTSTRAP: 1
+        run: |
+          # pin to a specific version to avoid breaking changes
+          cargo install cargo-llvm-cov@0.6.18
+          # Run regression tests with code coverage
+          cargo llvm-cov --lcov --output-path lcov.info \
+            nextest --workspace --exclude zksync_os_integration_tests
 
       - name: Upload test results
         if: always() && !cancelled()
-        uses: EnricoMi/publish-unit-test-result-action@v2
+        uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
         with:
           check_name: 'Unit Tests'
           files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
           action_fail_on_inconclusive: true
+
+      - name: Generate codecov report
+        uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
+        if: always() && !cancelled()
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          slug: ${{ github.repository }}
 
 
   ############################
@@ -107,7 +122,38 @@ jobs:
         # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
         # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
         run: cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
+  
+  ############################################
+  # Enforce EN sync format file immutability #
+  ############################################
+  check-EN-backwards-compatibility:
+    name: Check replay wire format version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # fetch tags
 
+      - name: Check that replay wire format version is set correctly
+        shell: bash
+        run: |
+          # get latest tag (latest release)
+          TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
+
+          # check that released wire format files that still exist are unchanged
+          DIR=lib/storage_api/src/replay_wire_format
+          git fetch --depth=1 origin tag "$TAG"
+          for FILE in "$DIR"/v*.rs; do
+            if git show "$TAG:$FILE" > /tmp/old_wire_format.rs 2>/dev/null; then
+              if ! diff -q /tmp/old_wire_format.rs "$FILE"; then
+                echo "Change detected in already released wire format: $FILE"
+                exit 1
+              fi
+            else
+              echo "New wire format created in this change: $FILE"
+            fi
+          done
 
   ci-success:
     name: Github Status Check
@@ -115,9 +161,10 @@ jobs:
     if: always() && !cancelled()
     needs:
       [
-        format-and-lint,
-        build-and-test,
+        build-format-and-lint,
+        unit-tests,
         integration-tests,
+        check-EN-backwards-compatibility,
       ]
     steps:
       - name: Status
