@@ -131,7 +131,6 @@ impl RpcServiceT for Monitoring {
 
             tracing::debug!(
                 target: "rpc::monitoring::batch",
-                method = "batch",
                 batch_size,
                 elapsed = ?elapsed,
                 batch_input_size,
