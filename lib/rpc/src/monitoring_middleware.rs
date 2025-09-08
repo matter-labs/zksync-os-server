@@ -133,6 +133,32 @@ impl RpcServiceT for Monitoring {
     }
 }
 
+/// Macro to statically dispatch debug logs to different targets based on the method name.
+macro_rules! debug_dispatch {
+    (
+        targets: match $method:ident { $($method_arm:literal => $target_arm:literal,)* _ => $fallback:literal },
+        fields: $fields:tt,
+        message: $message:literal,
+    ) => {
+        match $method {
+            $($method_arm => {
+                tracing::debug!(
+                    target: $target_arm,
+                    $fields,
+                    $message
+                );
+            })*
+            _ => {
+                tracing::debug!(
+                    target: $fallback,
+                    $fields,
+                    $message
+                );
+            }
+        }
+    };
+}
+
 fn log_and_report(
     kind: CallKind,
     method: &str,
@@ -144,13 +170,20 @@ fn log_and_report(
     API_METRICS.request_size[method].observe(request_size);
     API_METRICS.response_size[method].observe(output_size_bytes);
 
-    tracing::debug!(
-        target: "rpc::monitoring:call",
-        kind = ?kind,
-        method,
-        elapsed = ?elapsed,
-        request_size,
-        output_size_bytes,
-        "rpc call completed"
+    debug_dispatch!(
+        targets: match method {
+            "eth_call" => "rpc::monitoring::eth::call",
+            "eth_sendRawTransaction" => "rpc::monitoring::eth::sendRawTransaction",
+            "debug_traceTransaction" => "rpc::monitoring::debug::traceTransaction",
+            _ => "rpc::monitoring::call"
+        },
+        fields: {
+            method,
+            ?kind,
+            ?elapsed,
+            request_size,
+            output_size_bytes,
+        },
+        message: "rpc call completed",
     );
 }
