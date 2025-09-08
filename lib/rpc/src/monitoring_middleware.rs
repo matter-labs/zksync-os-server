@@ -1,9 +1,9 @@
-use std::time::{Duration, Instant};
-
 use crate::metrics::API_METRICS;
-use jsonrpsee::core::middleware::{Batch, Notification};
+use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
 use jsonrpsee::types::Request;
+use jsonrpsee::{BatchResponseBuilder, MethodResponse};
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub enum CallKind {
@@ -14,11 +14,15 @@ pub enum CallKind {
 #[derive(Clone)]
 pub struct Monitoring {
     inner: RpcService,
+    max_response_size_bytes: usize,
 }
 
 impl Monitoring {
-    pub fn new(inner: RpcService) -> Self {
-        Self { inner }
+    pub fn new(inner: RpcService, max_response_size_bytes: u32) -> Self {
+        Self {
+            inner,
+            max_response_size_bytes: max_response_size_bytes as usize,
+        }
     }
 }
 
@@ -51,12 +55,10 @@ impl RpcServiceT for Monitoring {
         }
     }
 
-    fn batch<'a>(
-        &self,
-        requests: Batch<'a>,
-    ) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
-        let batch_size = requests.len();
-        let batch_input_size: usize = requests
+    fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
+        // Collect some metrics about the batch
+        let batch_size = batch.len();
+        let batch_input_size: usize = batch
             .iter()
             .filter_map(|x| {
                 if let Ok(req) = x {
@@ -67,7 +69,7 @@ impl RpcServiceT for Monitoring {
             })
             .sum();
 
-        let request_counts = requests
+        let request_counts = batch
             .iter()
             .filter_map(|x| {
                 if let Ok(req) = x {
@@ -80,17 +82,49 @@ impl RpcServiceT for Monitoring {
                 *acc.entry(method).or_insert(0) += 1;
                 acc
             });
-        let fut = self.inner.batch(requests);
 
+        let mut batch_rp = BatchResponseBuilder::new_with_limit(self.max_response_size_bytes);
+        let service = self.clone();
         async move {
             let started = Instant::now();
-            let out = fut.await;
-            let output_size = out.as_json().get().len();
+            let mut got_notification = false;
 
+            for batch_entry in batch.into_iter() {
+                match batch_entry {
+                    Ok(BatchEntry::Call(req)) => {
+                        let rp = service.call(req).await;
+                        if let Err(err) = batch_rp.append(rp) {
+                            return err;
+                        }
+                    }
+                    Ok(BatchEntry::Notification(n)) => {
+                        got_notification = true;
+                        service.notification(n).await;
+                    }
+                    Err(err) => {
+                        let (err, id) = err.into_parts();
+                        let rp = MethodResponse::error(id, err);
+                        if let Err(err) = batch_rp.append(rp) {
+                            return err;
+                        }
+                    }
+                }
+            }
+
+            // If the batch is empty, and we got a notification, we return an empty response.
+            let response = if batch_rp.is_empty() && got_notification {
+                MethodResponse::notification()
+            } else {
+                MethodResponse::from_batch(batch_rp.finish())
+            };
+
+            let response_size = response.as_json().get().len();
             let elapsed = started.elapsed();
+
+            // Report batch metrics
             API_METRICS.response_time["batch"].observe(elapsed);
             API_METRICS.request_size["batch"].observe(batch_input_size);
-            API_METRICS.response_size["batch"].observe(output_size);
+            API_METRICS.response_size["batch"].observe(response_size);
             for (method, count) in request_counts {
                 API_METRICS.requests_in_batch_count[&method].observe(count);
             }
@@ -101,10 +135,11 @@ impl RpcServiceT for Monitoring {
                 batch_size,
                 elapsed = ?elapsed,
                 batch_input_size,
-                output_size,
+                response_size,
                 "rpc batch call completed"
             );
-            out
+
+            response
         }
     }
 
