@@ -5,9 +5,10 @@ description: 'Setup self-hosted runner for zksync workflows execution.'
 inputs:
   foundry_version:
     type: string
-    description: 'Version of foundry-zksync to use.'
+    description: 'Version of foundry to use.'
     required: false
-    default: 'nightly'
+    # Pinned to a specific stable version to avoid breaking changes.
+    default: 'v1.3.4'
   enable_cache:
     type: string
     description: 'Whether to enable cache.'
