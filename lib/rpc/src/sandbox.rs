@@ -305,6 +305,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
                 },
                 // todo: populate
                 position: None,
+                index: None,
             })
         }
     }
