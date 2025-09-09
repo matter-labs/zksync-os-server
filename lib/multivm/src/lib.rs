@@ -1,3 +1,4 @@
+use zk_os_forward_system::run::RunBlockForward;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::traits::{
     PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
@@ -13,7 +14,7 @@ pub fn run_block<S: ReadStorage, PS: PreimageSource, TS: TxSource, TR: TxResultC
 ) -> Result<BlockOutput, anyhow::Error> {
     match block_context.protocol_version {
         1 => {
-            let object = zk_os_forward_system::run::RunBlockForward {};
+            let object = RunBlockForward {};
             object
                 .run_block(
                     (),
@@ -37,7 +38,7 @@ pub fn simulate_tx<S: ReadStorage, PS: PreimageSource>(
 ) -> Result<Result<TxOutput, InvalidTransaction>, anyhow::Error> {
     match block_context.protocol_version {
         1 => {
-            let object = zk_os_forward_system::run::RunBlockForward {};
+            let object = RunBlockForward {};
             object
                 .simulate_tx((), transaction, block_context, storage, preimage_source)
                 .map_err(|err| anyhow::anyhow!(err))

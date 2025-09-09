@@ -1,24 +1,29 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
-use zk_ee::system::evm::EvmFrameInterface;
-use zk_ee::system::evm::errors::EvmError;
-use zk_ee::system::metadata::BlockMetadataFromOracle;
-use zk_ee::system::tracer::Tracer;
-use zk_ee::system::tracer::evm_tracer::EvmTracer;
-use zk_ee::system::{
-    CallModifier, CallResult, EthereumLikeTypes, ExecutionEnvironmentLaunchParams, Resources,
-    SystemTypes,
-};
-use zk_ee::types_config::SystemIOTypesConfig;
-use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::run_block;
-use zk_os_forward_system::run::test_impl::{NoopTxCallback, TxListSource};
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{BlockContext, TxOutput};
 use zksync_os_multivm::simulate_tx;
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
+
+// For tracing.
+use zk_ee::{
+    execution_environment_type::ExecutionEnvironmentType,
+    system::{
+        CallModifier, CallResult, EthereumLikeTypes, ExecutionEnvironmentLaunchParams, Resources,
+        SystemTypes,
+        evm::{EvmFrameInterface, errors::EvmError},
+        metadata::BlockMetadataFromOracle,
+        tracer::{Tracer, evm_tracer::EvmTracer},
+    },
+    types_config::SystemIOTypesConfig,
+};
+use zk_os_forward_system::run::{
+    errors::ForwardSubsystemError,
+    run_block,
+    test_impl::{NoopTxCallback, TxListSource},
+};
 
 /// EVM max stack size.
 pub const STACK_SIZE: usize = 1024;
@@ -247,7 +252,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     #[inline(always)]
     fn on_storage_read(
         &mut self,
-        _ee_type: zk_ee::execution_environment_type::ExecutionEnvironmentType,
+        _ee_type: ExecutionEnvironmentType,
         _is_transient: bool,
         _address: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
         _key: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::StorageKey,
@@ -258,7 +263,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     #[inline(always)]
     fn on_storage_write(
         &mut self,
-        _ee_type: zk_ee::execution_environment_type::ExecutionEnvironmentType,
+        _ee_type: ExecutionEnvironmentType,
         _is_transient: bool,
         _address: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
         _key: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::StorageKey,
@@ -268,7 +273,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
 
     fn on_event(
         &mut self,
-        _ee_type: zk_ee::execution_environment_type::ExecutionEnvironmentType,
+        _ee_type: ExecutionEnvironmentType,
         address: &<<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
         topics: &[<<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::EventKey],
         data: &[u8],
@@ -305,7 +310,7 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
 
     fn on_bytecode_change(
         &mut self,
-        _ee_type: zk_ee::execution_environment_type::ExecutionEnvironmentType,
+        _ee_type: ExecutionEnvironmentType,
         address: <S::IOTypes as SystemIOTypesConfig>::Address,
         new_bytecode: Option<&[u8]>,
         _new_bytecode_hash: <S::IOTypes as SystemIOTypesConfig>::BytecodeHashValue,

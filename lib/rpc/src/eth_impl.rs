@@ -233,7 +233,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         Ok(self
             .storage
             .state_view_at(block_number)?
-            .get_account(B160::from_be_bytes(address.into_array()))
+            .get_account(address)
             .as_ref()
             .map(get_balance)
             .unwrap_or(U256::ZERO))
@@ -276,7 +276,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         let nonce = self
             .storage
             .state_view_at(block_number)?
-            .get_account(B160::from_be_bytes(address.into_array()))
+            .get_account(address)
             .as_ref()
             .map(get_nonce)
             .unwrap_or(0);
@@ -292,7 +292,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let mut view = self.storage.state_view_at(block_number)?;
-        let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
+        let Some(props) = view.get_account(address) else {
             return Ok(Bytes::default());
         };
         let bytecode = get_code(&mut view, &props);

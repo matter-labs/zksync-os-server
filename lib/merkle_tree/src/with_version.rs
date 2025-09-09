@@ -122,7 +122,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
     }
 
     fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
-        let mut sibling_hashes = Box::new([zk_ee::utils::Bytes32::zero(); 64]);
+        let mut sibling_hashes = Box::new([Bytes32::zero(); 64]);
 
         let mut current_node = self
             .tree

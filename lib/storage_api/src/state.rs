@@ -1,5 +1,5 @@
 use alloy::primitives::ruint::aliases::B160;
-use alloy::primitives::{B256, BlockNumber};
+use alloy::primitives::{Address, B256, BlockNumber};
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -10,10 +10,10 @@ use zksync_os_interface::types::StorageWrite;
 
 /// Read-only view on a state from a specific block.
 pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
-    fn get_account(&mut self, address: B160) -> Option<AccountProperties> {
+    fn get_account(&mut self, address: Address) -> Option<AccountProperties> {
         let key = derive_flat_storage_key(
             &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
-            &address_into_special_storage_key(&address),
+            &address_into_special_storage_key(&B160::from_be_bytes(address.into_array())),
         );
         self.read(B256::from(key.as_u8_array())).map(|hash| {
             AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
