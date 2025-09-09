@@ -8,14 +8,23 @@ on:
 # Disabled for now, as we don't want to run CI twice
 # merge_group:
 
+# Cancel new runs for PRs only
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'pull_request' }}
 
+# Default environment variables
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   TEST_RESULTS_XML: 'test-results.xml'
+  PROVER_GPU_TESTS: 'prover-gpu-tests'
+
+# Add default permissions for the workflow
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
 
 jobs:
 
@@ -90,16 +99,10 @@ jobs:
 
 
   ############################
-  #    Integration tests     #
+  #  Core integration tests  #
   ############################
-  integration-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        filterset:
-          - "core"
-          - "prover"
-    runs-on: ${{ matrix.filterset == 'core' && 'ubuntu-24.04-github-hosted-32core' || 'matterlabs-ci-runner-ultra-performance' }}
+  core-integration-tests:
+    runs-on: ubuntu-24.04-github-hosted-32core
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -108,20 +111,11 @@ jobs:
         uses: ./.github/actions/runner-setup
         with:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'integration-tests-${{ matrix.filterset }}'
+          cache_shared_key: 'core-integration-tests'
 
       - name: Run integration tests (no prover)
-        if: matrix.filterset == 'core'
         # Run all tests that don't require features enabled (e.g. `prover-tests`/`gpu-prover-tests`).
-        run: |
-          cargo nextest run --profile ci -p zksync_os_integration_tests
-
-      - name: Run integration tests (prover)
-        if: matrix.filterset == 'prover'
-        # Run prover tests. They need to be compiled in release mode for efficiency and to avoid stack overflow errors.
-        # We only run tests located in `prover.rs` (that's what `binary(prover)` filters for). Tests can be run in GPU
-        # mode if `gpu-prover-tests` feature is enabled instead of `prover-tests` (requires an L4 runner or better).
-        run: cargo nextest run --release --profile ci -p zksync_os_integration_tests --features prover-tests -E 'binary(prover)' --no-capture
+        run: cargo nextest run --profile ci -p zksync_os_integration_tests
   
   ############################################
   # Enforce EN sync format file immutability #
@@ -155,6 +149,81 @@ jobs:
             fi
           done
 
+  ####################################
+  #  Build prover integration tests  #
+  ####################################
+  prover-integration-tests-build:
+    runs-on: matterlabs-ci-runner-high-performance
+    container:
+      image: nvidia/cuda:12.9.1-devel-ubuntu22.04
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          cache_shared_key: 'prover-integration-tests'
+
+      # Build and archive tests to execute on another machine.
+      # Use `cargo nextest archive` to make sure that all dependencies are included properly.
+      - name: Build and archive test
+        env:
+          CUDAARCHS: 80
+          # This is a special mandatory hack to transfer test binary from one machine to another.
+          # We must use a dummy `./` path addition in the workspace path /home/runner/_work
+          # to prevent GitHub Actions to replace it to the mapped `/__w` folder in the docker container.
+          # This is required to make sure that the paths to workspace artifacts like server_app.bin
+          # are correct inside prebuilt binary.
+          # This variable overwrites the default relative `./` in the .cargo/config.toml.
+          WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
+        run: |
+          cargo nextest archive --release --profile ci -p zksync_os_integration_tests \
+            --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
+
+      - name: Upload tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROVER_GPU_TESTS }}
+          path: ${{ env.PROVER_GPU_TESTS }}.tar.zst
+          if-no-files-found: error
+
+
+  #################################################
+  #  Run prover integration tests on GPU machine  #
+  #################################################
+  prover-integration-tests:
+    runs-on: matterlabs-ci-gpu-runner
+    needs: prover-integration-tests-build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          save_cache: 'false'
+          cache_shared_key: 'prover-integration-tests'
+
+      - name: Download prebuilt tests
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PROVER_GPU_TESTS }}
+
+      # --workspace-remap is mandatory (!)
+      # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
+      - name: Run prover tests on GPU
+        run: |
+          cargo nextest run -E 'binary(prover)' --no-capture \
+            --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
+            --workspace-remap ${GITHUB_WORKSPACE}
+
+
+  ###############################
+  #  Mandatory CI status check  #
+  ###############################
   ci-success:
     name: Github Status Check
     runs-on: ubuntu-latest
@@ -163,7 +232,8 @@ jobs:
       [
         build-format-and-lint,
         unit-tests,
-        integration-tests,
+        core-integration-tests,
+        prover-integration-tests,
         check-EN-backwards-compatibility,
       ]
     steps:
