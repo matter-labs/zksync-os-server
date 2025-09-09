@@ -240,7 +240,7 @@ pub fn extract_changed_accounts(block_output: &BlockOutput) -> Vec<ChangedAccoun
     for log in &block_output.storage_writes {
         if log.account.as_slice()
             == ACCOUNT_PROPERTIES_STORAGE_ADDRESS
-                .to_be_bytes::<40>()
+                .to_be_bytes::<20>()
                 .as_slice()
         {
             let account_address = Address::from_slice(&log.account_key.as_slice()[12..]);
