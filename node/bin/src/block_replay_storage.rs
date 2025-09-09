@@ -39,7 +39,6 @@ pub enum BlockReplayColumnFamily {
     Txs,
     NodeVersion,
     BlockOutputHash,
-    ZKsyncOSVersion,
     /// Stores the latest appended block number under a fixed key.
     Latest,
 }
@@ -53,7 +52,6 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::NodeVersion,
         BlockReplayColumnFamily::BlockOutputHash,
         BlockReplayColumnFamily::Latest,
-        BlockReplayColumnFamily::ZKsyncOSVersion,
     ];
 
     fn name(&self) -> &'static str {
@@ -63,7 +61,6 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::Txs => "txs",
             BlockReplayColumnFamily::NodeVersion => "node_version",
             BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
-            BlockReplayColumnFamily::ZKsyncOSVersion => "zksync_os_version",
             BlockReplayColumnFamily::Latest => "latest",
         }
     }
@@ -77,7 +74,7 @@ impl BlockReplayStorage {
         rocks_db_path: PathBuf,
         chain_id: u64,
         node_version: semver::Version,
-        zksync_os_version: semver::Version,
+        protocol_version: u32,
     ) -> Self {
         let db =
             RocksDB::<BlockReplayColumnFamily>::new(&rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME))
@@ -103,12 +100,12 @@ impl BlockReplayStorage {
                     gas_limit: 100_000_000,
                     pubdata_limit: 100_000_000,
                     mix_hash: Default::default(),
+                    protocol_version,
                 },
                 starting_l1_priority_id: 0,
                 transactions: vec![],
                 previous_block_timestamp: 0,
                 node_version,
-                zksync_os_version,
                 block_output_hash: B256::ZERO,
             })
         }
@@ -129,7 +126,6 @@ impl BlockReplayStorage {
         let txs_value = bincode::encode_to_vec(&record.transactions, bincode::config::standard())
             .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
-        let zksync_os_version_value = record.zksync_os_version.to_string().as_bytes().to_vec();
 
         // Batch both writes: replay entry and latest pointer
         let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
@@ -154,11 +150,6 @@ impl BlockReplayStorage {
             BlockReplayColumnFamily::BlockOutputHash,
             &block_num,
             &record.block_output_hash.0,
-        );
-        batch.put_cf(
-            BlockReplayColumnFamily::ZKsyncOSVersion,
-            &block_num,
-            &zksync_os_version_value,
         );
 
         self.db.write(batch).expect("Failed to write to WAL");
@@ -231,33 +222,16 @@ impl BlockReplayStorage {
 }
 
 impl ReadReplay for BlockReplayStorage {
-    fn get_context(&self, block_number: BlockNumber) -> Option<(BlockContext, semver::Version)> {
+    fn get_context(&self, block_number: BlockNumber) -> Option<BlockContext> {
         let key = block_number.to_be_bytes();
-        let context = self
-            .db
+        self.db
             .get_cf(BlockReplayColumnFamily::Context, &key)
             .expect("Cannot read from DB")
             .map(|bytes| {
                 bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
                     .expect("Failed to deserialize context")
             })
-            .map(|(context, _)| context);
-
-        let zksync_os_version = self
-            .db
-            .get_cf(BlockReplayColumnFamily::ZKsyncOSVersion, &key)
-            .expect("Cannot read from DB")
-            .map(|bytes| {
-                bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
-                    .expect("Failed to deserialize context")
-            })
-            .map(|(v, _)| v);
-
-        match (context, zksync_os_version) {
-            (Some(context), Some(zksync_os_version)) => Some((context, zksync_os_version)),
-            (None, None) => None,
-            _ => panic!("Inconsistent state"),
-        }
+            .map(|(context, _)| context)
     }
 
     fn get_replay_record(&self, block_number: u64) -> Option<ReplayRecord> {
@@ -276,7 +250,7 @@ impl ReadReplay for BlockReplayStorage {
             .expect("Failed to read from Txs CF");
         let previous_block_timestamp = self
             .get_context(block_number)
-            .map(|(context, _)| context.timestamp)
+            .map(|context| context.timestamp)
             .unwrap_or(0);
 
         let node_version_result = self
@@ -287,10 +261,6 @@ impl ReadReplay for BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::BlockOutputHash, &key)
             .expect("Failed to read from BlockOutputHash CF");
-        let zksync_os_version_result = self
-            .db
-            .get_cf(BlockReplayColumnFamily::ZKsyncOSVersion, &key)
-            .expect("Failed to read from ZKsyncOSVersion CF");
 
         match (
             context_result,
@@ -298,7 +268,6 @@ impl ReadReplay for BlockReplayStorage {
             txs_result,
             block_output_hash_result,
             node_version_result,
-            zksync_os_version_result,
         ) {
             (
                 Some(bytes_context),
@@ -306,7 +275,6 @@ impl ReadReplay for BlockReplayStorage {
                 Some(bytes_txs),
                 Some(bytes_block_output_hash),
                 Some(node_version),
-                Some(zksync_os_version),
             ) => Some(ReplayRecord {
                 block_context: bincode::serde::decode_from_slice(
                     &bytes_context,
@@ -328,13 +296,9 @@ impl ReadReplay for BlockReplayStorage {
                     .expect("Failed to deserialize node version")
                     .parse()
                     .expect("Failed to parse node version"),
-                zksync_os_version: String::from_utf8(zksync_os_version)
-                    .expect("Failed to deserialize ZKsync OS version")
-                    .parse()
-                    .expect("Failed to parse ZKsync OS version"),
                 block_output_hash: B256::from_slice(&bytes_block_output_hash),
             }),
-            (None, None, None, None, None, None) => None,
+            (None, None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
     }

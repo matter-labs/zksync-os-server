@@ -50,8 +50,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             return Ok(Vec::new());
         }
 
-        let Some((block_context, _)) = self.storage.replay_storage().get_context(block.number)
-        else {
+        let Some(block_context) = self.storage.replay_storage().get_context(block.number) else {
             tracing::error!(
                 block_number = block.number,
                 "could not load block's context"

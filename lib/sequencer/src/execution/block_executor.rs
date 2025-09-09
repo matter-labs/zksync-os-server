@@ -38,7 +38,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         component_state_tracker: latency_tracker.clone(),
         state_view,
     };
-    let mut runner = VmWrapper::new(ctx, metered_state_view, command.zksync_os_version);
+    let mut runner = VmWrapper::new(ctx, metered_state_view);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
@@ -272,7 +272,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             executed_txs,
             command.previous_block_timestamp,
             command.node_version,
-            command.zksync_os_version.into(),
             block_hash_output,
         ),
         purged_txs,
@@ -310,6 +309,7 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PriorityFeeGreaterThanMaxFee
         | InvalidTransaction::BaseFeeGreaterThanMaxFee
         | InvalidTransaction::CallerGasLimitMoreThanBlock
+        | InvalidTransaction::CallerGasLimitMoreThanTxLimit
         | InvalidTransaction::CallGasCostMoreThanGasLimit
         | InvalidTransaction::RejectCallerWithCode
         | InvalidTransaction::OverflowPaymentInTransaction
@@ -334,7 +334,11 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PaymasterReturnDataTooShort
         | InvalidTransaction::PaymasterInvalidMagic
         | InvalidTransaction::PaymasterContextInvalid
-        | InvalidTransaction::PaymasterContextOffsetTooLong => TxRejectionMethod::Purge,
+        | InvalidTransaction::PaymasterContextOffsetTooLong
+        | InvalidTransaction::AuthListIsEmpty
+        | InvalidTransaction::BlobElementIsNotSupported
+        | InvalidTransaction::EIP7623IntrinsicGasIsTooLow
+        | InvalidTransaction::NativeResourcesAreTooExpensive => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }

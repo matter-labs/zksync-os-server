@@ -42,12 +42,12 @@ impl From<ReplayWireFormatV1> for ReplayRecord {
                 gas_limit,
                 pubdata_limit,
                 mix_hash,
+                protocol_version: 1, // hardcoded for v1
             },
             starting_l1_priority_id,
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            zksync_os_version: semver::Version::new(0, 0, 21), // hardcoded for v1
             block_output_hash,
         }
     }
@@ -61,7 +61,6 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
             transactions,
             previous_block_timestamp,
             node_version,
-            zksync_os_version,
             block_output_hash,
         } = value;
         let super::v2::BlockContext {
@@ -76,6 +75,7 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
             gas_limit,
             pubdata_limit,
             mix_hash,
+            protocol_version,
         } = block_context;
         Self {
             block_context: BlockContext {
@@ -90,12 +90,12 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
                 gas_limit,
                 pubdata_limit,
                 mix_hash,
+                protocol_version,
             },
             starting_l1_priority_id,
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            zksync_os_version,
             block_output_hash,
         }
     }
@@ -109,7 +109,6 @@ impl From<ReplayRecord> for ReplayWireFormatV2 {
             transactions,
             previous_block_timestamp,
             node_version,
-            zksync_os_version,
             block_output_hash,
         } = value;
         let BlockContext {
@@ -124,6 +123,7 @@ impl From<ReplayRecord> for ReplayWireFormatV2 {
             gas_limit,
             pubdata_limit,
             mix_hash,
+            protocol_version,
         } = block_context;
         Self {
             block_context: super::v2::BlockContext {
@@ -138,12 +138,12 @@ impl From<ReplayRecord> for ReplayWireFormatV2 {
                 gas_limit,
                 pubdata_limit,
                 mix_hash,
+                protocol_version,
             },
             starting_l1_priority_id,
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            zksync_os_version,
             block_output_hash,
         }
     }

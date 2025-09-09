@@ -62,7 +62,7 @@ use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
-use zksync_os_multivm::ZKsyncOSVersion;
+use zksync_os_multivm::LATEST_PROTOCOL_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
@@ -116,7 +116,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.general_config.rocks_db_path.clone(),
         config.genesis_config.chain_id,
         node_version.clone(),
-        ZKsyncOSVersion::latest().into(),
+        LATEST_PROTOCOL_VERSION,
     );
 
     // This is the only place where we initialize L1 provider, every component shares the same

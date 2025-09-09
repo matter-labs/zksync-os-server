@@ -16,7 +16,7 @@ use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput, Preimag
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
-use zksync_os_multivm::ZKsyncOSVersion;
+use zksync_os_multivm::LATEST_PROTOCOL_VERSION;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
@@ -102,6 +102,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
+                    protocol_version: LATEST_PROTOCOL_VERSION,
                 };
                 PreparedBlockCommand {
                     block_context,
@@ -114,7 +115,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     metrics_label: "produce",
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
-                    zksync_os_version: ZKsyncOSVersion::latest(),
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                 }
@@ -137,7 +137,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     node_version: record.node_version,
-                    zksync_os_version: record.zksync_os_version.try_into()?,
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
                 }

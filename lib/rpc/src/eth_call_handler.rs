@@ -169,17 +169,16 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         tracing::info!(?block_id, block_number, "resolved block id");
 
         // using previous block context
-        let (block_context, zksync_os_version) = self
+        let block_context = self
             .storage
             .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
-        let zksync_os_version = zksync_os_version.try_into().unwrap();
         let tx = self.create_tx_from_request(request, &block_context)?;
 
         let storage_view = self.storage.state_view_at(block_number)?;
 
-        let res = execute(tx, block_context, zksync_os_version, storage_view)
+        let res = execute(tx, block_context, storage_view)
             .map_err(EthCallError::ForwardSubsystemError)?
             .map_err(EthCallError::InvalidTransaction)?;
 
@@ -199,12 +198,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthCallError::BlockNotFound(block_id));
         };
-        let (block_context, zksync_os_version) = self
+        let block_context = self
             .storage
             .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
-        let zksync_os_version = zksync_os_version.try_into().unwrap();
 
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:
@@ -277,14 +275,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let storage_view = self.storage.state_view_at(block_number)?;
 
         // Execute the transaction with the highest possible gas limit.
-        let mut res = execute(
-            tx.clone(),
-            block_context,
-            zksync_os_version,
-            storage_view.clone(),
-        )
-        .map_err(EthCallError::ForwardSubsystemError)?
-        .map_err(EthCallError::InvalidTransaction)?;
+        let mut res = execute(tx.clone(), block_context, storage_view.clone())
+            .map_err(EthCallError::ForwardSubsystemError)?
+            .map_err(EthCallError::InvalidTransaction)?;
         match res.execution_result {
             ExecutionResult::Success(_) => {
                 // Transaction succeeded with the highest possible gas limit, we can proceed with
@@ -319,14 +312,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
             // Re-execute the transaction with the new gas limit and update the result and
             // environment.
-            res = execute(
-                optimistic_tx,
-                block_context,
-                zksync_os_version,
-                storage_view.clone(),
-            )
-            .map_err(EthCallError::ForwardSubsystemError)?
-            .map_err(EthCallError::InvalidTransaction)?;
+            res = execute(optimistic_tx, block_context, storage_view.clone())
+                .map_err(EthCallError::ForwardSubsystemError)?
+                .map_err(EthCallError::InvalidTransaction)?;
 
             // Update the gas used based on the new result.
             gas_used = res.gas_used;
@@ -365,13 +353,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             );
 
             // Execute transaction and handle potential gas errors, adjusting limits accordingly.
-            match execute(
-                mid_tx,
-                block_context,
-                zksync_os_version,
-                storage_view.clone(),
-            )
-            .map_err(EthCallError::ForwardSubsystemError)?
+            match execute(mid_tx, block_context, storage_view.clone())
+                .map_err(EthCallError::ForwardSubsystemError)?
             {
                 Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {
                     // Decrease the highest gas limit if gas is too high

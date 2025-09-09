@@ -20,8 +20,6 @@ pub struct ReplayWireFormatV2 {
     #[bincode(with_serde)]
     pub node_version: semver::Version,
     #[bincode(with_serde)]
-    pub zksync_os_version: semver::Version,
-    #[bincode(with_serde)]
     pub block_output_hash: B256,
 }
 
@@ -44,6 +42,7 @@ pub struct BlockContext {
     pub pubdata_limit: u64,
     #[bincode(with_serde)]
     pub mix_hash: U256,
+    pub protocol_version: u32,
 }
 
 pub struct BlockHashes(pub [U256; 256]);

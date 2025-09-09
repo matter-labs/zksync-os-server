@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::time::Duration;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::TxStream;
-use zksync_os_multivm::ZKsyncOSVersion;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1TxSerialId, ZkTransaction};
 
@@ -74,7 +73,6 @@ pub struct PreparedBlockCommand<'a> {
     pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
     pub node_version: semver::Version,
-    pub zksync_os_version: ZKsyncOSVersion,
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
     pub expected_block_output_hash: Option<B256>,
     pub previous_block_timestamp: u64,

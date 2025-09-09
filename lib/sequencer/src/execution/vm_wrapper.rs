@@ -10,7 +10,6 @@ use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, BlockOutput, TxProcessingOutputOwned},
 };
-use zksync_os_multivm::ZKsyncOSVersion;
 use zksync_os_storage_api::ViewState;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
@@ -24,11 +23,7 @@ pub struct VmWrapper {
 
 impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
-    pub fn new(
-        context: BlockContext,
-        state_view: impl ViewState,
-        zksync_os_version: ZKsyncOSVersion,
-    ) -> Self {
+    pub fn new(context: BlockContext, state_view: impl ViewState) -> Self {
         // Channel for sending NextTxResponse (Tx bytes or SealBlock).
         let (tx_sender, tx_receiver) = channel(1);
         // Channel for receiving per‐tx execution results.
@@ -41,7 +36,6 @@ impl VmWrapper {
         // Spawn the blocking run_block(...) call.
         let join_handle = spawn_blocking(move || {
             zksync_os_multivm::run_block(
-                zksync_os_version,
                 context,
                 state_view.clone(),
                 state_view,

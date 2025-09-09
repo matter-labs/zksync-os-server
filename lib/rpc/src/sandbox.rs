@@ -16,7 +16,7 @@ use zk_os_forward_system::run::run_block;
 use zk_os_forward_system::run::test_impl::{NoopTxCallback, TxListSource};
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{BlockContext, TxOutput};
-use zksync_os_multivm::{ZKsyncOSVersion, simulate_tx};
+use zksync_os_multivm::simulate_tx;
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
 
@@ -28,20 +28,13 @@ pub const ERGS_PER_GAS: u64 = 256;
 pub fn execute(
     tx: L2Transaction,
     mut block_context: BlockContext,
-    zksync_os_version: ZKsyncOSVersion,
     state_view: impl ViewState,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     let encoded_tx = tx.encode();
 
     block_context.eip1559_basefee = U256::from(0);
 
-    simulate_tx(
-        zksync_os_version,
-        encoded_tx,
-        block_context,
-        state_view.clone(),
-        state_view,
-    )
+    simulate_tx(encoded_tx, block_context, state_view.clone(), state_view)
 }
 
 pub fn call_trace(
