@@ -67,7 +67,7 @@ zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/z
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.4.3" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.4.3" }
 
-zksync_os_fri_prover = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", rev = "a67c054547a14311bb1c87ca331ba3a0aac5ef69" }
+zksync_os_fri_prover = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.4.3" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
@@ -85,7 +85,7 @@ clap = "4.2.2"
 insta = "1.29.0"
 jsonrpsee = { version = "0.25.1", default-features = false }
 leb128 = "0.2.5"
-rayon = "1.3.1"
+rayon = "1.11.0"
 once_cell = "1"
 proptest = "1.6.0"
 rand = "0.9.1"
