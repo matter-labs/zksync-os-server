@@ -9,7 +9,7 @@ use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::test_impl::TxListSource;
 use zk_os_forward_system::run::{StorageCommitment, generate_proof_input};
-use zksync_os_interface::common_types::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
@@ -177,7 +177,7 @@ fn compute_prover_input(
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
-        replay_record.block_context,
+        replay_record.block_context.into(),
         ProofData {
             state_root_view: initial_storage_commitment,
             last_block_timestamp,

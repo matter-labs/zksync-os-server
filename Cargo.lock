@@ -1958,6 +1958,7 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 name = "basic_bootloader"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "arrayvec",
  "basic_system",
  "crypto",
@@ -3584,11 +3585,11 @@ dependencies = [
 name = "forward_system"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "arrayvec",
  "basic_bootloader",
  "basic_system",
  "bincode 1.3.3",
- "blake2",
  "callable_oracles",
  "evm_interpreter",
  "hex",
@@ -10017,7 +10018,6 @@ dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
  "zk_ee",
- "zksync_os_interface",
  "zksync_os_runner",
 ]
 
@@ -10179,11 +10179,8 @@ dependencies = [
 name = "zksync_os_interface"
 version = "0.1.0"
 dependencies = [
- "arrayvec",
- "cfg-if",
- "ruint",
+ "alloy",
  "serde",
- "sha3",
 ]
 
 [[package]]
@@ -10392,6 +10389,7 @@ dependencies = [
  "zksync_os_interface",
  "zksync_os_mempool",
  "zksync_os_mini_merkle_tree",
+ "zksync_os_multivm",
  "zksync_os_rpc_api",
  "zksync_os_storage_api",
  "zksync_os_types",

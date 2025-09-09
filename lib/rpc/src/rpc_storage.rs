@@ -1,7 +1,7 @@
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
 use std::ops::RangeInclusive;
-use zksync_os_interface::traits::{PreimageSource, ReadStorageTree};
+use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
     ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
@@ -157,7 +157,7 @@ impl<
     fn state_view_at(
         &self,
         block_number: BlockNumber,
-    ) -> StateResult<impl ReadStorageTree + PreimageSource + Clone> {
+    ) -> StateResult<impl ReadStorage + PreimageSource + Clone> {
         self.state.state_view_at(block_number)
     }
 

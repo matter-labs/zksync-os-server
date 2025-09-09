@@ -1,6 +1,6 @@
 use crate::metrics::PREIMAGES_METRICS;
+use alloy::primitives::B256;
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_interface::traits::PreimageSource;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
@@ -61,11 +61,11 @@ impl PersistentPreimages {
     ///
     /// Each `(key, preimage)` is added if the key is not already present.
     /// This batch insertion is safe for concurrent use.
-    pub fn get(&self, key: Bytes32) -> Option<Vec<u8>> {
+    pub fn get(&self, key: B256) -> Option<Vec<u8>> {
         let latency_observer = PREIMAGES_METRICS.get[&"total"].start();
         let res = self
             .rocks
-            .get_cf(PreimagesCF::Storage, key.as_u8_array_ref())
+            .get_cf(PreimagesCF::Storage, key.as_slice())
             .ok()
             .flatten();
         latency_observer.observe();
@@ -74,14 +74,14 @@ impl PersistentPreimages {
 
     pub fn add<'a, J>(&self, new_block_number: u64, diffs: J)
     where
-        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
     {
         let latency_observer = PREIMAGES_METRICS.set[&"total"].start();
 
         let mut batch = self.rocks.new_write_batch();
 
         for (k, v) in diffs {
-            batch.put_cf(PreimagesCF::Storage, k.as_u8_array_ref(), v);
+            batch.put_cf(PreimagesCF::Storage, k.as_slice(), v);
         }
         batch.put_cf(
             PreimagesCF::Meta,
@@ -95,7 +95,7 @@ impl PersistentPreimages {
 }
 
 impl PreimageSource for PersistentPreimages {
-    fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
+    fn get_preimage(&mut self, hash: B256) -> Option<Vec<u8>> {
         self.get(hash)
     }
 }

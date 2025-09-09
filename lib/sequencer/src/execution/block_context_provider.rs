@@ -12,7 +12,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::common_types::{BlockContext, BlockHashes, BlockOutput, PreimageType};
+use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput, PreimageType};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
@@ -179,7 +179,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 .0
                 .into_iter()
                 .skip(1)
-                .chain([U256::from_be_bytes(last_block_hash)])
+                .chain([U256::from_be_bytes(last_block_hash.0)])
                 .collect::<Vec<_>>()
                 .try_into()
                 .unwrap(),
@@ -192,7 +192,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             number: block_output.header.number,
             timestamp: block_output.header.timestamp,
             gas_limit: block_output.header.gas_limit,
-            base_fee_per_gas: Some(block_output.header.base_fee_per_gas),
+            base_fee_per_gas: block_output.header.base_fee_per_gas,
             ..Default::default()
         };
         let body = BlockBody::<L2Envelope>::default();
@@ -239,8 +239,12 @@ pub fn extract_changed_accounts(block_output: &BlockOutput) -> Vec<ChangedAccoun
     // Then, map storage writes to account addresses
     let mut result = Vec::new();
     for log in &block_output.storage_writes {
-        if log.account == ACCOUNT_PROPERTIES_STORAGE_ADDRESS {
-            let account_address = Address::from_slice(&log.account_key.as_u8_array()[12..]);
+        if log.account.as_slice()
+            == ACCOUNT_PROPERTIES_STORAGE_ADDRESS
+                .to_be_bytes::<40>()
+                .as_slice()
+        {
+            let account_address = Address::from_slice(&log.account_key.as_slice()[12..]);
 
             if let Some(properties) = account_properties_preimages.get(&log.value) {
                 result.push(ChangedAccount {

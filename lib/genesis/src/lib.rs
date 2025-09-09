@@ -1,12 +1,11 @@
-use alloy::consensus::EMPTY_OMMER_ROOT_HASH;
+use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header};
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, B64, B256, Bloom, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use blake2::{Blake2s256, Digest};
-use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -19,8 +18,6 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::common_types::BlockHeader;
 use zksync_os_types::L1UpgradeEnvelope;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,7 +26,7 @@ pub struct GenesisInput {
     /// Storage entries that set the contracts as deployed and preimages will be derived from this field.
     pub initial_contracts: Vec<(Address, alloy::primitives::Bytes)>,
     /// Additional (not related to contract deployments) storage entries to add in genesis state.
-    pub additional_storage: Vec<(Bytes32, Bytes32)>,
+    pub additional_storage: Vec<(B256, B256)>,
 }
 
 /// Info about genesis upgrade fetched from L1:
@@ -38,7 +35,7 @@ pub struct GenesisInput {
 #[derive(Debug, Clone)]
 pub struct GenesisUpgradeTxInfo {
     pub tx: L1UpgradeEnvelope,
-    pub force_deploy_preimages: Vec<(Bytes32, Vec<u8>)>,
+    pub force_deploy_preimages: Vec<(B256, Vec<u8>)>,
 }
 
 /// Struct that represents the genesis state of the system.
@@ -96,14 +93,14 @@ impl Genesis {
 #[derive(Debug, Clone)]
 pub struct GenesisState {
     /// Storage logs for the genesis block.
-    pub storage_logs: Vec<(Bytes32, Bytes32)>,
+    pub storage_logs: Vec<(B256, B256)>,
     /// Preimages of the padded bytecodes with artifacts and hashes of account properties
     /// for the contracts deployed in the genesis block.
     /// Note: these preimages don't include `force_deploy_preimages` -
     /// see `genesis_upgrade_tx` method for details
-    pub preimages: Vec<(Bytes32, Vec<u8>)>,
+    pub preimages: Vec<(B256, Vec<u8>)>,
     /// The header of the genesis block.
-    pub header: BlockHeader,
+    pub header: Header,
 }
 
 fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
@@ -114,7 +111,7 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
 
     // BTreeMap is used to ensure that the storage logs are sorted by key, so that the order is deterministic
     // which is important for tree.
-    let mut storage_logs: BTreeMap<Bytes32, Bytes32> = BTreeMap::new();
+    let mut storage_logs: BTreeMap<B256, B256> = BTreeMap::new();
     let mut preimages = vec![];
 
     for (address, deployed_code) in genesis_input.initial_contracts {
@@ -129,7 +126,7 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
             bytes[12..32].copy_from_slice(&ACCOUNT_PROPERTIES_STORAGE_ADDRESS.to_be_bytes::<20>());
             bytes[44..64].copy_from_slice(address.as_slice());
 
-            Bytes32::from_array(B256::from_slice(Blake2s256::digest(bytes).as_slice()).0)
+            B256::from_slice(Blake2s256::digest(bytes).as_slice())
         };
         let account_properties_hash = account_properties.compute_hash();
         storage_logs.insert(
@@ -151,24 +148,29 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
         }
     }
 
-    let header = BlockHeader {
-        parent_hash: Bytes32::ZERO,
-        ommers_hash: Bytes32::from_array(EMPTY_OMMER_ROOT_HASH.0),
-        beneficiary: B160::ZERO,
+    let header = Header {
+        parent_hash: B256::ZERO,
+        ommers_hash: EMPTY_OMMER_ROOT_HASH,
+        beneficiary: Address::ZERO,
         // for now state root is zero
-        state_root: Bytes32::ZERO,
-        transactions_root: Bytes32::ZERO,
-        receipts_root: Bytes32::ZERO,
-        logs_bloom: [0; 256],
+        state_root: B256::ZERO,
+        transactions_root: B256::ZERO,
+        receipts_root: B256::ZERO,
+        logs_bloom: Bloom::ZERO,
         difficulty: U256::ZERO,
         number: 0,
         gas_limit: 5_000,
         gas_used: 0,
         timestamp: 0,
         extra_data: Default::default(),
-        mix_hash: Bytes32::ZERO,
-        nonce: [0u8; 8],
-        base_fee_per_gas: INITIAL_BASE_FEE,
+        mix_hash: B256::ZERO,
+        nonce: B64::ZERO,
+        base_fee_per_gas: Some(INITIAL_BASE_FEE),
+        withdrawals_root: None,
+        blob_gas_used: None,
+        excess_blob_gas: None,
+        parent_beacon_block_root: None,
+        requests_hash: None,
     };
 
     GenesisState {
@@ -230,7 +232,7 @@ async fn load_genesis_upgrade_tx(
             let digest = Blake2s256::digest(&preimage);
             let mut digest_array = [0u8; 32];
             digest_array.copy_from_slice(digest.as_slice());
-            (Bytes32::from_array(digest_array), preimage)
+            (B256::new(digest_array), preimage)
         })
         .collect();
 

@@ -4,8 +4,8 @@ use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
-use zk_ee::utils::Bytes32;
-use zksync_os_interface::common_types::{BlockContext, BlockOutput};
+use zk_ee::{common_structs::L2ToL1LogExt, utils::Bytes32};
+use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
 

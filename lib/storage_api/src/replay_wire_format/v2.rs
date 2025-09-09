@@ -8,7 +8,7 @@
 use bincode::{Decode, Encode};
 
 // It is somewhat safe to assume that these will not change
-use alloy::primitives::{B256, U256, ruint::aliases::B160};
+use alloy::primitives::{B256, U256, Address};
 
 /// The format ReplayRecords are currently sent in
 #[derive(Encode, Decode)]
@@ -39,7 +39,7 @@ pub struct BlockContext {
     #[bincode(with_serde)]
     pub native_price: U256,
     #[bincode(with_serde)]
-    pub coinbase: B160,
+    pub coinbase: Address,
     pub gas_limit: u64,
     pub pubdata_limit: u64,
     #[bincode(with_serde)]

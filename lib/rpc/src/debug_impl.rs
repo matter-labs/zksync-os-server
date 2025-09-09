@@ -50,7 +50,8 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             return Ok(Vec::new());
         }
 
-        let Some(block_context) = self.storage.replay_storage().get_context(block.number) else {
+        let Some((block_context, _)) = self.storage.replay_storage().get_context(block.number)
+        else {
             tracing::error!(
                 block_number = block.number,
                 "could not load block's context"
@@ -72,7 +73,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             txs.push(tx);
         }
         let prev_state_view = self.storage.state_view_at(block.number - 1)?;
-        match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
+        match sandbox::call_trace(txs, block_context.into(), prev_state_view, call_config) {
             Ok(calls) => Ok(calls
                 .into_iter()
                 .zip(&block.body.transactions)

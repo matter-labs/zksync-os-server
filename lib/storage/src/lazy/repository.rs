@@ -6,7 +6,7 @@ use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::common_types::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta, WriteRepository,

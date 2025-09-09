@@ -256,12 +256,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             &(key.as_b256().0.into()),
         );
         let mut state = self.storage.state_view_at(block_number)?;
-        Ok(B256::from(
-            state
-                .read(flat_key.as_u8_array().into())
-                .unwrap_or_default()
-                .as_u8_array(),
-        ))
+        Ok(state
+            .read(flat_key.as_u8_array().into())
+            .unwrap_or_default())
     }
 
     fn transaction_count_impl(

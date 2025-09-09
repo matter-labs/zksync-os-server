@@ -1,10 +1,10 @@
 use crate::metrics::STORAGE_MAP_METRICS;
+use alloy::primitives::B256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::Instant;
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::bytes32::Bytes32;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 
@@ -63,7 +63,7 @@ impl PersistentStorageMap {
         this
     }
 
-    pub fn compact_sync(&self, new_block_number: u64, diffs: HashMap<Bytes32, Bytes32>) {
+    pub fn compact_sync(&self, new_block_number: u64, diffs: HashMap<B256, B256>) {
         let started_at = Instant::now();
 
         let (prev_persisted, initial_upper) = (
@@ -79,11 +79,7 @@ impl PersistentStorageMap {
         let mut batch = self.rocks.new_write_batch();
 
         for (k, v) in diffs {
-            batch.put_cf(
-                StorageMapCF::Storage,
-                k.as_u8_array_ref(),
-                v.as_u8_array_ref(),
-            );
+            batch.put_cf(StorageMapCF::Storage, k.as_slice(), v.as_slice());
         }
         batch.put_cf(
             StorageMapCF::Meta,
@@ -122,9 +118,9 @@ impl PersistentStorageMap {
         self.persistent_block_upper_bound.load(Ordering::Relaxed)
     }
 
-    pub fn get(&self, key: Bytes32) -> Option<Bytes32> {
+    pub fn get(&self, key: B256) -> Option<B256> {
         self.rocks
-            .get_cf(StorageMapCF::Storage, key.as_u8_array_ref())
+            .get_cf(StorageMapCF::Storage, key.as_slice())
             .ok()
             .flatten()
             .map(|bytes| {
@@ -132,7 +128,7 @@ impl PersistentStorageMap {
                     .as_slice()
                     .try_into() // Vec<u8> → [u8; 32]
                     .expect("value must be 32 bytes");
-                Bytes32::from(arr)
+                B256::from(arr)
             })
     }
 }

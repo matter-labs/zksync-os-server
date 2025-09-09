@@ -5,10 +5,11 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, channel},
     task::{JoinHandle, spawn_blocking},
 };
-use zksync_os_interface::common_types::{
-    BlockContext, BlockOutput, InvalidTransaction, TxProcessingOutputOwned,
-};
 use zksync_os_interface::traits::{NextTxResponse, TxResultCallback, TxSource};
+use zksync_os_interface::{
+    error::InvalidTransaction,
+    types::{BlockContext, BlockOutput, TxProcessingOutputOwned},
+};
 use zksync_os_multivm::ZKsyncOSVersion;
 use zksync_os_storage_api::ViewState;
 

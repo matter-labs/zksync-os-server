@@ -4,11 +4,9 @@ use crate::{
 };
 use alloy::primitives::{B256, FixedBytes};
 use tokio::sync::watch;
-use zk_os_basic_system::system_implementation::flat_storage_model::{
-    Blake2sStorageHasher, FlatStorageLeaf, LeafProof,
-};
-use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::traits::{AnyLeafProof, ReadStorage, ReadStorageTree};
+use zk_ee::utils::Bytes32;
+use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
+use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 
 pub struct MerkleTreeForReading<DB: Database, P: TreeParams = DefaultTreeParams> {
     tree: MerkleTree<DB, P>,
@@ -123,7 +121,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
             })
     }
 
-    fn merkle_proof(&mut self, tree_index: u64) -> impl AnyLeafProof {
+    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
         let mut sibling_hashes = Box::new([zk_ee::utils::Bytes32::zero(); 64]);
 
         let mut current_node = self
@@ -192,7 +190,7 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
             sibling_hashes[i] = self.tree.hasher.empty_subtree_hash(i as u8).0.into();
         }
 
-        LeafProof::<64, Blake2sStorageHasher>::new(
+        LeafProof::new(
             tree_index,
             FlatStorageLeaf {
                 key: leaf.key.0.into(),

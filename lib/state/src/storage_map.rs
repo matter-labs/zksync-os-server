@@ -1,14 +1,14 @@
 use crate::metrics::STORAGE_MAP_METRICS;
 use crate::persistent_storage_map::PersistentStorageMap;
 use crate::storage_map_view::StorageMapView;
+use alloy::primitives::B256;
 use dashmap::DashMap;
 use std::sync::atomic::AtomicU64;
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::Ordering},
 };
-use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::common_types::StorageWrite;
+use zksync_os_interface::types::StorageWrite;
 use zksync_os_storage_api::{StateError, StateResult};
 
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ pub struct StorageMap {
 
 #[derive(Debug)]
 pub struct Diff {
-    pub map: HashMap<Bytes32, Bytes32>,
+    pub map: HashMap<B256, B256>,
 }
 
 impl Diff {
@@ -195,11 +195,7 @@ impl StorageMap {
 
     /// Aggregates all key-value updates between `from` and `to` (inclusive),
     /// returning the last written value for each key
-    pub fn collect_diffs_range(
-        &self,
-        from: u64,
-        to: u64,
-    ) -> anyhow::Result<HashMap<Bytes32, Bytes32>> {
+    pub fn collect_diffs_range(&self, from: u64, to: u64) -> anyhow::Result<HashMap<B256, B256>> {
         let mut aggregated_map = HashMap::new();
 
         for block_number in from..=to {

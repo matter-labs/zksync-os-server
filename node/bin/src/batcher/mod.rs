@@ -6,7 +6,7 @@ use std::pin::Pin;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
 use tracing;
-use zksync_os_interface::common_types::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;

@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::common_types::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };
@@ -57,8 +57,8 @@ impl TreeManager {
                 .storage_logs
                 .iter()
                 .map(|(key, value)| TreeEntry {
-                    key: key.as_u8_array().into(),
-                    value: value.as_u8_array().into(),
+                    key: *key,
+                    value: *value,
                 })
                 .collect::<Vec<_>>();
             tree.extend(&tree_entries).unwrap();
@@ -123,8 +123,8 @@ impl TreeManager {
                         .storage_writes
                         .into_iter()
                         .map(|write| TreeEntry {
-                            key: write.key.as_u8_array().into(),
-                            value: write.value.as_u8_array().into(),
+                            key: write.key,
+                            value: write.value,
                         })
                         .collect::<Vec<_>>();
 

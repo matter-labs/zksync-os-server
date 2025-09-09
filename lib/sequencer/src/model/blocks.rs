@@ -2,7 +2,7 @@ use alloy::primitives::B256;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::time::Duration;
-use zksync_os_interface::common_types::BlockContext;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::TxStream;
 use zksync_os_multivm::ZKsyncOSVersion;
 use zksync_os_storage_api::ReplayRecord;

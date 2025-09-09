@@ -2,7 +2,8 @@ use super::v1::ReplayWireFormatV1;
 use super::v2::ReplayWireFormatV2;
 use crate::ReplayRecord;
 use alloy::eips::{Decodable2718, Encodable2718};
-use zksync_os_interface::common_types::{BlockContext, BlockHashes};
+use alloy::primitives::Address;
+use zksync_os_interface::types::{BlockContext, BlockHashes};
 use zksync_os_types::ZkEnvelope;
 
 impl From<ReplayWireFormatV1> for ReplayRecord {
@@ -37,7 +38,7 @@ impl From<ReplayWireFormatV1> for ReplayRecord {
                 eip1559_basefee,
                 gas_per_pubdata,
                 native_price,
-                coinbase,
+                coinbase: Address::new(coinbase.to_be_bytes()),
                 gas_limit,
                 pubdata_limit,
                 mix_hash,

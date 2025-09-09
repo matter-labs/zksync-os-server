@@ -12,7 +12,7 @@ use tokio::pin;
 use tokio::time::{Instant, Sleep};
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
-use zksync_os_interface::common_types::BlockContext;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_sequencer::model::blocks::BlockCommand;
@@ -231,16 +231,33 @@ impl BlockReplayStorage {
 }
 
 impl ReadReplay for BlockReplayStorage {
-    fn get_context(&self, block_number: BlockNumber) -> Option<BlockContext> {
+    fn get_context(&self, block_number: BlockNumber) -> Option<(BlockContext, semver::Version)> {
         let key = block_number.to_be_bytes();
-        self.db
+        let context = self
+            .db
             .get_cf(BlockReplayColumnFamily::Context, &key)
             .expect("Cannot read from DB")
             .map(|bytes| {
                 bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
                     .expect("Failed to deserialize context")
             })
-            .map(|(context, _)| context)
+            .map(|(context, _)| context);
+
+        let zksync_os_version = self
+            .db
+            .get_cf(BlockReplayColumnFamily::ZKsyncOSVersion, &key)
+            .expect("Cannot read from DB")
+            .map(|bytes| {
+                bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                    .expect("Failed to deserialize context")
+            })
+            .map(|(v, _)| v);
+
+        match (context, zksync_os_version) {
+            (Some(context), Some(zksync_os_version)) => Some((context, zksync_os_version)),
+            (None, None) => None,
+            _ => panic!("Inconsistent state"),
+        }
     }
 
     fn get_replay_record(&self, block_number: u64) -> Option<ReplayRecord> {
@@ -259,7 +276,7 @@ impl ReadReplay for BlockReplayStorage {
             .expect("Failed to read from Txs CF");
         let previous_block_timestamp = self
             .get_context(block_number)
-            .map(|context| context.timestamp)
+            .map(|(context, _)| context.timestamp)
             .unwrap_or(0);
 
         let node_version_result = self

@@ -1,7 +1,7 @@
 use crate::persistent_preimages::PreimagesCF;
 use crate::{StateHandle, StorageMapCF};
+use alloy::primitives::B256;
 use std::collections::HashSet;
-use zksync_os_interface::bytes32::Bytes32;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub struct StorageMetrics {
 impl StorageMetrics {
     /// Currently not used - will be exposed to `/status` endpoint
     pub fn _collect_metrics(state: StateHandle) -> StorageMetrics {
-        let mut unique: HashSet<Bytes32> = HashSet::new();
+        let mut unique: HashSet<B256> = HashSet::new();
         let mut storage_keys = 0usize;
 
         for entry in state.storage_map.diffs.iter() {

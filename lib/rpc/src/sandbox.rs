@@ -3,17 +3,20 @@ use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
 use zk_ee::system::evm::EvmFrameInterface;
 use zk_ee::system::evm::errors::EvmError;
+use zk_ee::system::metadata::BlockMetadataFromOracle;
+use zk_ee::system::tracer::Tracer;
 use zk_ee::system::tracer::evm_tracer::EvmTracer;
-use zk_ee::system::tracer::{NopTracer, Tracer};
 use zk_ee::system::{
     CallModifier, CallResult, EthereumLikeTypes, ExecutionEnvironmentLaunchParams, Resources,
     SystemTypes,
 };
 use zk_ee::types_config::SystemIOTypesConfig;
 use zk_os_forward_system::run::errors::ForwardSubsystemError;
+use zk_os_forward_system::run::run_block;
 use zk_os_forward_system::run::test_impl::{NoopTxCallback, TxListSource};
-use zk_os_forward_system::run::{run_block, simulate_tx};
-use zksync_os_interface::common_types::{BlockContext, TxResult};
+use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::types::{BlockContext, TxOutput};
+use zksync_os_multivm::{ZKsyncOSVersion, simulate_tx};
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
 
@@ -25,25 +28,25 @@ pub const ERGS_PER_GAS: u64 = 256;
 pub fn execute(
     tx: L2Transaction,
     mut block_context: BlockContext,
+    zksync_os_version: ZKsyncOSVersion,
     state_view: impl ViewState,
-) -> Result<TxResult, Box<ForwardSubsystemError>> {
+) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     let encoded_tx = tx.encode();
 
     block_context.eip1559_basefee = U256::from(0);
 
     simulate_tx(
+        zksync_os_version,
         encoded_tx,
         block_context,
         state_view.clone(),
         state_view,
-        &mut NopTracer::default(),
     )
-    .map_err(Box::new)
 }
 
 pub fn call_trace(
     txs: Vec<ZkTransaction>,
-    block_context: BlockContext,
+    block_context: BlockMetadataFromOracle,
     state_view: impl ViewState,
     call_config: CallConfig,
 ) -> Result<Vec<CallFrame>, Box<ForwardSubsystemError>> {

@@ -1,32 +1,27 @@
-use alloy::primitives::BlockNumber;
 use alloy::primitives::ruint::aliases::B160;
+use alloy::primitives::{B256, BlockNumber};
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
 };
-use zksync_os_interface::bytes32::Bytes32;
-use zksync_os_interface::common_types::StorageWrite;
-use zksync_os_interface::traits::{PreimageSource, ReadStorageTree};
-// use zksync_os_interface::common_types::derive_flat_storage_key;
+use zksync_os_interface::traits::{PreimageSource, ReadStorage};
+use zksync_os_interface::types::StorageWrite;
 
 /// Read-only view on a state from a specific block.
-pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
+pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
     fn get_account(&mut self, address: B160) -> Option<AccountProperties> {
         let key = derive_flat_storage_key(
             &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
             &address_into_special_storage_key(&address),
         );
-        self.read(zksync_os_interface::bytes32::Bytes32::from_array(
-            key.as_u8_array(),
-        ))
-        .map(|hash| {
+        self.read(B256::from(key.as_u8_array())).map(|hash| {
             AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
         })
     }
 }
 
-impl<T: ReadStorageTree + PreimageSource + Send + Clone> ViewState for T {}
+impl<T: ReadStorage + PreimageSource + Send + Clone> ViewState for T {}
 
 /// Read-only history of state views.
 pub trait ReadStateHistory: Debug + Send + Sync + 'static {
@@ -48,7 +43,7 @@ pub trait WriteState: Send + Sync + 'static {
         new_preimages: J,
     ) -> anyhow::Result<()>
     where
-        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>;
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>;
 }
 
 /// State reader result type.
