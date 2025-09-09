@@ -375,7 +375,6 @@ fn transaction_to_api_data(
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
-    // TODO!
     let l2_to_l1_logs = tx_output
         .l2_to_l1_logs
         .iter()

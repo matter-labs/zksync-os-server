@@ -1,5 +1,3 @@
-// Copy of zk_ee::L2ToL1Log. Needed because there is no lightweight zksync-os types crate yet.
-
 use alloy::primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
