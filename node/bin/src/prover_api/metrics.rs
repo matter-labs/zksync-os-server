@@ -20,7 +20,6 @@ pub enum ProverStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
-#[allow(dead_code)] // SNARK cannot be tracked yet
 #[metrics(label = "type", rename_all = "snake_case")]
 pub enum ProverType {
     Real,
