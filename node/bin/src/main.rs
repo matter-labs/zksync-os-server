@@ -83,7 +83,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
             tracing::info!("Received SIGINT, shutting down immediately");
         },
         _ = sigterm.recv() => {
-            tracing::info!("sigterm received: scheduling shutdown in 10s");
+            tracing::info!("Received SIGTERM: scheduling shutdown in 10s");
 
             stop_sender
                 .send(true)
