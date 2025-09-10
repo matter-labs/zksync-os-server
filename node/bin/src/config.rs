@@ -1,12 +1,10 @@
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
+use smart_config::metadata::TimeUnit;
+use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
 use std::{path::PathBuf, time::Duration};
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::ObjectStoreConfig;
-pub use zksync_os_rpc::RpcConfig;
-pub use zksync_os_sequencer::config::SequencerConfig;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -25,32 +23,15 @@ pub struct Config {
     pub prover_api_config: ProverApiConfig,
 }
 
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct MempoolConfig {
-    /// Max input size of a transaction to be accepted by mempool
-    #[config(default_t = 128 * 1024 * 1024)]
-    pub max_tx_input_bytes: usize,
-}
-
 /// "Umbrella" config for the node.
 /// If variable is shared i.e. used by multiple components OR does not belong to any specific component (e.g. `zkstack_cli_config_dir`)
-/// then it should belong here.
+/// then it belongs here.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct GeneralConfig {
     /// L1's JSON RPC API.
     #[config(default_t = "http://localhost:8545".into())]
     pub l1_rpc_url: String,
-
-    /// Min number of blocks to retain in memory
-    /// it defines the blocks for which the node can handle API requests
-    /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
-    ///
-    /// Currently, it affects both the storage logs (for Compacted state impl - see `state` crate for details)
-    /// and repositories (see `repositories` package in this crate)
-    #[config(default_t = 512)]
-    pub blocks_to_retain_in_memory: usize,
 
     /// Min number of blocks to replay on restart
     /// Depending on L1/persistence state, we may need to replay more blocks than this number
@@ -67,10 +48,19 @@ pub struct GeneralConfig {
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
-    /// Prometheus address to listen on.
+    /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
     pub state_backend: StateBackendConfig,
+
+    /// Min number of blocks to retain in memory
+    /// it defines the blocks for which the node can handle API requests
+    /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
+    ///
+    /// Currently, it affects both the storage logs (for Compacted state impl - see `state` crate for details)
+    /// and repositories (see `repositories` package in this crate)
+    #[config(default_t = 512)]
+    pub blocks_to_retain_in_memory: usize,
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
@@ -84,16 +74,173 @@ pub enum StateBackendConfig {
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
+pub struct GenesisConfig {
+    /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
+    /// other contracts should be discoverable through it.
+    // TODO: Pre-configured value, to be removed
+    #[config(with = Serde![str], default_t = "0x3660cc585dc60e642a7994b69a9968a3176d1df6".parse().unwrap())]
+    pub bridgehub_address: Address,
+
+    /// Chain ID of the chain node operates on.
+    #[config(default_t = 270)]
+    pub chain_id: u64,
+
+    /// Path to the file with genesis input.
+    #[config(default_t = "./genesis/genesis.json".into())]
+    pub genesis_input_path: PathBuf,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct SequencerConfig {
+    /// Where to download replays instead of actually running blocks.
+    /// **Setting this makes the node into an external node.**
+    #[config(default_t = None)]
+    pub block_replay_download_address: Option<String>,
+
+    /// Where to serve block replays (EN syncing protocol)
+    #[config(default_t = "0.0.0.0:3053".into())]
+    pub block_replay_server_address: String,
+
+    /// Defines the block time for the sequencer.
+    /// One of the block Seal Criteria. Only affects the Main Node.
+    #[config(default_t = Duration::from_millis(100))]
+    pub block_time: Duration,
+
+    /// Max number of transactions in a block.
+    /// One of the block Seal Criteria. Only affects the Main Node.
+    #[config(default_t = 1000)]
+    pub max_transactions_in_block: usize,
+
+    /// Max gas used per block.
+    /// One of the block Seal Criteria. Only affects the Main Node.
+    #[config(default_t = 100_000_000)]
+    pub block_gas_limit: u64,
+
+    /// Max pubdata bytes per block.
+    /// One of the block Seal Criteria. Only affects the Main Node.
+    #[config(default_t = 110_000)]
+    pub block_pubdata_limit_bytes: u64,
+
+    /// Path to the directory where block dumps for unexpected failures will be saved.
+    #[config(default_t = "./db/block_dumps".into())]
+    pub block_dump_path: PathBuf,
+}
+impl SequencerConfig {
+    pub fn is_main_node(&self) -> bool {
+        self.block_replay_download_address.is_none()
+    }
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct RpcConfig {
+    /// JSON-RPC address to listen on.
+    #[config(default_t = "0.0.0.0:3050".into())]
+    pub address: String,
+
+    /// Gas limit of transactions executed via eth_call
+    #[config(default_t = 10000000)]
+    pub eth_call_gas: usize,
+
+    /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
+    #[config(default_t = 1000)]
+    pub max_connections: u32,
+
+    /// Maximum RPC request payload size for both HTTP and WS in megabytes
+    #[config(default_t = 15)]
+    pub max_request_size: u32,
+
+    /// Maximum RPC response payload size for both HTTP and WS in megabytes
+    #[config(default_t = 24)]
+    pub max_response_size: u32,
+
+    /// Maximum number of blocks that could be scanned per filter
+    #[config(default_t = 100_000)]
+    pub max_blocks_per_filter: u64,
+
+    /// Maximum number of logs that can be returned in a response
+    #[config(default_t = 20_000)]
+    pub max_logs_per_response: usize,
+
+    /// Duration since the last filter poll, after which the filter is considered stale
+    #[config(default_t = 15 * TimeUnit::Minutes)]
+    pub stale_filter_ttl: Duration,
+}
+
+/// Only used on the Main Node.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct L1SenderConfig {
+    /// Private key to commit batches to L1
+    /// Must be consistent with the operator key set on the contract (permissioned!)
+    // TODO: Pre-configured value, to be removed
+    #[config(alias = "operator_private_key", default_t = "0x026f7f2a55e46437c68e5a75b4a61d11e5fb6987620df61d2cd3400226945720".into())]
+    pub operator_commit_pk: SecretString,
+
+    /// Private key to use to submit proofs to L1
+    /// Can be arbitrary funded address - proof submission is permissionless.
+    // TODO: Pre-configured value, to be removed
+    #[config(default_t = "0x1590cd15674138453a4ae04393c41ea4f21306ef9cf5f2ba326d757d4d97bb8a".into())]
+    pub operator_prove_pk: SecretString,
+
+    /// Private key to use to execute batches on L1
+    /// Can be arbitrary funded address - execute submission is permissionless.
+    // TODO: Pre-configured value, to be removed
+    #[config(default_t = "0x1bf13db0eca84058660ab17913b8f6342361b20847d613b4dc241145620cc593".into())]
+    pub operator_execute_pk: SecretString,
+
+    /// Max fee per gas we are willing to spend (in gwei).
+    #[config(default_t = 101)]
+    pub max_fee_per_gas_gwei: u64,
+
+    /// Max priority fee per gas we are willing to spend (in gwei).
+    #[config(default_t = 2)]
+    pub max_priority_fee_per_gas_gwei: u64,
+
+    /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    #[config(default_t = 16)]
+    pub command_limit: usize,
+
+    /// How often to poll L1 for new blocks.
+    #[config(default_t = Duration::from_millis(100))]
+    pub poll_interval: Duration,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct L1WatcherConfig {
+    /// Max number of L1 blocks to be processed at a time.
+    #[config(default_t = 100)]
+    pub max_blocks_to_process: u64,
+
+    /// How often to poll L1 for new priority requests.
+    #[config(default_t = 100 * TimeUnit::Millis)]
+    pub poll_interval: Duration,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct MempoolConfig {
+    /// Max input size of a transaction to be accepted by mempool
+    #[config(default_t = 128 * 1024 * 1024)]
+    pub max_tx_input_bytes: usize,
+}
+
+/// Only used on the Main Node.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
 pub struct BatcherConfig {
     /// How long to keep a batch open before sealing it.
-    #[config(default_t = Duration::from_secs(3))]
+    #[config(default_t = Duration::from_secs(1))]
     pub batch_timeout: Duration,
 
     /// Max number of blocks per batch
-    #[config(default_t = 100)]
+    #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
 }
 
+/// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverInputGeneratorConfig {
@@ -108,6 +255,7 @@ pub struct ProverInputGeneratorConfig {
     pub maximum_in_flight_blocks: usize,
 }
 
+/// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverApiConfig {
@@ -115,11 +263,16 @@ pub struct ProverApiConfig {
     #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,
 
+    /// Enabled by default.
+    /// Use `prover_fake_fri_provers_enabled=false` to disable fake fri provers.
     #[config(nest)]
     pub fake_fri_provers: FakeFriProversConfig,
 
     #[config(nest)]
-    /// If this value is set to false but FRI fake provers are enabled,
+    /// Enabled by default.
+    /// Use `prover_fake_snark_provers_enabled=false` to disable fake SNARK provers.
+    ///
+    /// Note that if SNARK provers are disabled but FRI fake provers are enabled,
     /// we'll still use fake SNARK proofs for fake FRI proofs -
     /// however, we won't turn real FRI proofs into fake ones - even on timeout.
     pub fake_snark_provers: FakeSnarkProversConfig,
@@ -132,13 +285,14 @@ pub struct ProverApiConfig {
     /// If the difference is larger than this, provers will not be assigned new jobs.
     /// We use max range instead of length limit to avoid having one old batch stuck -
     /// otherwise GaplessCommitter's buffer would grow indefinitely.
-    #[config(default_t = 20)]
+    #[config(default_t = 10)]
     pub max_assigned_batch_range: usize,
 
     /// Max number of FRI proofs that will be aggregated to a single SNARK job.
     #[config(default_t = 10)]
     pub max_fris_per_snark: usize,
 
+    /// Default: backed by files under `./db/shared` folder.
     #[config(nest, default)]
     pub object_store: ObjectStoreConfig,
 }
@@ -172,25 +326,56 @@ pub struct FakeSnarkProversConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Number of fake provers to run in parallel.
+    /// Only pick up jobs that are this time old.
     #[config(default_t = Duration::from_secs(10))]
     pub max_batch_age: Duration,
 }
 
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct GenesisConfig {
-    /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
-    /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x3660cc585dc60e642a7994b69a9968a3176d1df6".parse().unwrap())]
-    pub bridgehub_address: Address,
+impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
+    fn from(c: RpcConfig) -> Self {
+        Self {
+            address: c.address,
+            eth_call_gas: c.eth_call_gas,
+            max_connections: c.max_connections,
+            max_request_size: c.max_request_size,
+            max_response_size: c.max_response_size,
+            max_blocks_per_filter: c.max_blocks_per_filter,
+            max_logs_per_response: c.max_logs_per_response,
+            stale_filter_ttl: c.stale_filter_ttl,
+        }
+    }
+}
 
-    /// Chain ID of the chain node operates on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
+impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
+    fn from(c: SequencerConfig) -> Self {
+        Self {
+            block_time: c.block_time,
+            max_transactions_in_block: c.max_transactions_in_block,
+            block_dump_path: c.block_dump_path,
+            block_replay_server_address: c.block_replay_server_address,
+            block_replay_download_address: c.block_replay_download_address,
+            block_gas_limit: c.block_gas_limit,
+            block_pubdata_limit_bytes: c.block_pubdata_limit_bytes,
+        }
+    }
+}
 
-    /// Path to the file with genesis input.
-    #[config(default_t = "./genesis/genesis.json".into())]
-    pub genesis_input_path: PathBuf,
+impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig {
+    fn from(c: L1SenderConfig) -> Self {
+        Self {
+            max_fee_per_gas_gwei: c.max_fee_per_gas_gwei,
+            max_priority_fee_per_gas_gwei: c.max_priority_fee_per_gas_gwei,
+            command_limit: c.command_limit,
+            poll_interval: c.poll_interval,
+        }
+    }
+}
+
+impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
+    fn from(c: L1WatcherConfig) -> Self {
+        Self {
+            max_blocks_to_process: c.max_blocks_to_process,
+            poll_interval: c.poll_interval,
+        }
+    }
 }
