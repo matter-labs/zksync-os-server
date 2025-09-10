@@ -189,6 +189,7 @@ async fn register_operator<
     provider.wallet_mut().register_signer(signer);
 
     let balance = provider.get_balance(address).await?;
+    L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {} has zero balance", address);
