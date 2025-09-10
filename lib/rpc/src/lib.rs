@@ -13,6 +13,7 @@ mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
+mod monitoring_middleware;
 mod sandbox;
 mod tx_handler;
 mod types;
@@ -22,6 +23,7 @@ use crate::debug_impl::DebugNamespace;
 use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
+use crate::monitoring_middleware::Monitoring;
 use crate::ots_impl::OtsNamespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
@@ -29,6 +31,7 @@ use anyhow::Context;
 use hyper::Method;
 use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
+use jsonrpsee::ws_client::RpcServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::debug::DebugApiServer;
@@ -71,6 +74,10 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         .allow_headers([hyper::header::CONTENT_TYPE]);
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
+    let max_response_size_bytes = config.max_response_size_bytes();
+    let rpc_middleware = RpcServiceBuilder::new()
+        .layer_fn(move |service| Monitoring::new(service, max_response_size_bytes));
+
     let server_config = ServerConfigBuilder::default()
         .max_connections(config.max_connections)
         .max_request_body_size(config.max_request_size_bytes())
@@ -78,7 +85,8 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         .build();
     let server_builder = ServerBuilder::default()
         .set_config(server_config)
-        .set_http_middleware(middleware);
+        .set_http_middleware(middleware)
+        .set_rpc_middleware(rpc_middleware);
 
     let server = server_builder
         .build(config.address)
