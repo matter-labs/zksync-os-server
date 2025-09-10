@@ -16,6 +16,8 @@ use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[tokio::main]
 pub async fn main() {
     tracing_subscriber::fmt()
@@ -46,31 +48,50 @@ pub async fn main() {
         }
     };
 
+    let prom_stop_receiver = stop_receiver.clone();
+
     tokio::select! {
         _ = main_task => {},
         _ = handle_delayed_termination(stop_sender) => {},
         res = prometheus.run(stop_receiver) => {
             match res {
-                Ok(_)  => tracing::warn!("Prometheus exporter unexpectedly exited"),
+                Ok(_) => {
+                    if *prom_stop_receiver.borrow() {
+                        tracing::info!("Prometheus exporter exited gracefully after stop signal");
+                        // sleep to wait for other tasks to finish
+                        tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+                    } else {
+                        tracing::warn!("Prometheus exporter unexpectedly exited")
+                    }
+                },
                 Err(e) => tracing::error!("Prometheus exporter failed: {e:#}"),
             }
-        }
+        },
     }
 }
 
 async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
-    // Handle SIGTERM: mark health false and exit after 10 seconds
-    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register signal handler");
-    let _ = sigterm.recv().await;
+    // sigint is sent on Ctrl+C
+    let mut sigint =
+        signal(SignalKind::interrupt()).expect("failed to register interrupt signal handler");
 
-    stop_sender
-        .send(true)
-        .expect("failed to send terminate signal");
+    // sigterm is sent on `kill <pid>` or by kubernetes during pod shutdown
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("failed to register terminate signal handler");
+    tokio::select! {
+        _ = sigint.recv() => {
+            tracing::info!("Received SIGINT, shutting down immediately");
+        },
+        _ = sigterm.recv() => {
+            tracing::info!("sigterm received: scheduling shutdown in 10s");
 
-    tracing::info!("sigterm received: scheduling shutdown in 10s");
-    tokio::time::sleep(Duration::from_secs(10)).await;
+            stop_sender
+                .send(true)
+                .expect("failed to send terminate signal");
 
-    tracing::info!("shutdown_timer_elapsed: exiting");
+            tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+        },
+    }
 }
 
 fn build_configs() -> Config {

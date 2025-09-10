@@ -14,9 +14,9 @@ pub(crate) async fn health(
     let is_terminating = *state.stop_receiver.borrow();
 
     let status = if is_terminating {
-        StatusCode::OK
-    } else {
         StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
     };
 
     (

@@ -10752,7 +10752,7 @@ dependencies = [
  "serde",
  "serde_json",
  "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.4.4)",
- "sha3 0.9.1",
+ "sha3 0.10.8",
  "snark_wrapper",
  "zksync_bellman",
 ]
