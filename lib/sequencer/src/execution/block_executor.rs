@@ -9,7 +9,7 @@ use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::output::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{MeteredViewState, ReadStateHistory, ReplayRecord, WriteState};
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};

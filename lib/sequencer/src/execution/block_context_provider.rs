@@ -1,19 +1,13 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::{Address, BlockHash, TxHash};
+use alloy::primitives::{BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
-use ruint::aliases::U256;
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use zk_os_basic_system::system_implementation::flat_storage_model::{
-    ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
-};
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::output::BlockOutput;
-use zksync_os_interface::types::{BlockContext, BlockHashes, PreimageType};
+use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
@@ -199,7 +193,15 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         let block = Block::new(header, body);
         let sealed_block =
             SealedBlock::new_unchecked(block, BlockHash::from(block_output.header.hash()));
-        let changed_accounts = extract_changed_accounts(block_output);
+        let changed_accounts = block_output
+            .account_diffs
+            .iter()
+            .map(|diff| ChangedAccount {
+                address: diff.address,
+                nonce: diff.nonce,
+                balance: diff.balance,
+            })
+            .collect();
         self.l2_mempool
             .on_canonical_state_change(CanonicalStateUpdate {
                 new_tip: &sealed_block,
@@ -210,60 +212,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 update_kind: PoolUpdateKind::Commit,
             });
     }
-}
-
-/// Extract changed accounts from a BlockOutput.
-///
-/// This method processes the published preimages and storage writes to extract
-/// accounts that were updated during block execution.
-pub fn extract_changed_accounts(block_output: &BlockOutput) -> Vec<ChangedAccount> {
-    // First, collect all account properties from published preimages
-    let mut account_properties_preimages = HashMap::new();
-    for (hash, preimage, preimage_type) in &block_output.published_preimages {
-        match preimage_type {
-            PreimageType::Bytecode => {}
-            PreimageType::AccountData => {
-                account_properties_preimages.insert(
-                    *hash,
-                    AccountProperties::decode(
-                        &preimage
-                            .clone()
-                            .try_into()
-                            .expect("Preimage should be exactly 124 bytes"),
-                    ),
-                );
-            }
-        }
-    }
-
-    // Then, map storage writes to account addresses
-    let mut result = Vec::new();
-    for log in &block_output.storage_writes {
-        if log.account.as_slice()
-            == ACCOUNT_PROPERTIES_STORAGE_ADDRESS
-                .to_be_bytes::<20>()
-                .as_slice()
-        {
-            let account_address = Address::from_slice(&log.account_key.as_slice()[12..]);
-
-            if let Some(properties) = account_properties_preimages.get(&log.value) {
-                result.push(ChangedAccount {
-                    address: account_address,
-                    nonce: properties.nonce,
-                    balance: properties.balance,
-                });
-            } else {
-                tracing::error!(
-                    %account_address,
-                    ?log.value,
-                    "account properties preimage not found"
-                );
-                panic!();
-            }
-        }
-    }
-
-    result
 }
 
 pub fn millis_since_epoch() -> u128 {

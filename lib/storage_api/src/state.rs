@@ -5,8 +5,8 @@ use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
 };
-use zksync_os_interface::output::StorageWrite;
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
+use zksync_os_interface::types::StorageWrite;
 
 /// Read-only view on a state from a specific block.
 pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
