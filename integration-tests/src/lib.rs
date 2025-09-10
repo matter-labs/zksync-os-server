@@ -50,7 +50,7 @@ pub struct Tester {
 
     // Needed to be able to connect external nodes
     l1_address: String,
-    replay_url: String,
+    replay_address: String,
     object_store_path: PathBuf,
 }
 
@@ -69,7 +69,7 @@ impl Tester {
             self.l1_provider.clone(),
             self.l1_wallet.clone(),
             false,
-            Some(self.replay_url.clone()),
+            Some(self.replay_address.clone()),
             Some(self.object_store_path.clone()),
         )
         .await
@@ -104,7 +104,7 @@ impl Tester {
         let l2_rpc_ws_url = format!("ws://localhost:{}", public_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
-        let replay_url = format!("localhost:{}/block_replays", public_port.port);
+        let replay_address = format!("localhost:{}", public_port.port);
 
         let rocksdb_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
@@ -239,7 +239,7 @@ impl Tester {
             stop_sender,
             main_task,
             l1_address,
-            replay_url,
+            replay_address,
             object_store_path,
         })
     }
