@@ -10,8 +10,10 @@ pub struct GeneralMetrics {
     pub component_time_spent_in_state:
         LabeledFamily<(&'static str, GenericComponentState, &'static str), Counter<f64>, 3>,
 
-    /// Unix timestamp for when the process was started
-    pub process_started_at: Gauge<i64>,
+    /// Unix timestamp for when the process was started.
+    /// Additionally, labels are used to track the version and role (main node / external node)
+    #[metrics(labels = ["version", "role"])]
+    pub process_started_at: LabeledFamily<(&'static str, &'static str), Gauge<i64>, 2>,
 
     /// Time spent on various startup routines.
     #[metrics(labels = ["stage"])]

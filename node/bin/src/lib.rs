@@ -6,7 +6,6 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 mod metadata;
-mod metrics;
 mod node_state_on_startup;
 pub mod prover_api;
 mod prover_input_generator;
@@ -22,7 +21,6 @@ use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, ProverApiConfig};
 use crate::metadata::NODE_VERSION;
-use crate::metrics::NODE_META_METRICS;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -86,23 +84,22 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     _stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
-    let process_started_at = Instant::now();
-    GENERAL_METRICS.process_started_at.set(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64,
-    );
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
-    NODE_META_METRICS.version[&NODE_VERSION].set(1);
     let role: &'static str = if config.sequencer_config.is_main_node() {
         "main_node"
     } else {
         "external_node"
     };
-    NODE_META_METRICS.role[&role].set(1);
 
-    tracing::info!(version = %node_version, "Initializing Node");
+    let process_started_at = Instant::now();
+    GENERAL_METRICS.process_started_at[&(NODE_VERSION, role)].set(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
+
+    tracing::info!(version = %node_version, role, "Initializing Node");
 
     let (blocks_for_batcher_subsystem_sender, blocks_for_batcher_subsystem_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(5);
@@ -143,6 +140,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .await
     .expect("Failed to read L1 state");
     tracing::info!(?l1_state, "L1 state");
+    l1_state.report_metrics();
 
     tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
