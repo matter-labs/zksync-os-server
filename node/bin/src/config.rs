@@ -4,6 +4,9 @@ use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
 use std::{path::PathBuf, time::Duration};
+use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commands::execute::ExecuteCommand;
+use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_object_store::ObjectStoreConfig;
 
 /// Configuration for the sequencer node.
@@ -361,17 +364,37 @@ impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
 }
 
 impl L1SenderConfig {
-    pub fn into_lib_l1_sender_config(
+    fn into_lib_l1_sender_config<Input>(
         self,
         operator_pk: SecretString,
-    ) -> zksync_os_l1_sender::config::L1SenderConfig {
+    ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_pk,
             max_fee_per_gas_gwei: self.max_fee_per_gas_gwei,
             max_priority_fee_per_gas_gwei: self.max_priority_fee_per_gas_gwei,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            phantom_data: Default::default(),
         }
+    }
+}
+impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
+    fn from(c: L1SenderConfig) -> Self {
+        let pk = c.operator_commit_pk.clone();
+        c.into_lib_l1_sender_config(pk)
+    }
+}
+
+impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
+    fn from(c: L1SenderConfig) -> Self {
+        let pk = c.operator_prove_pk.clone();
+        c.into_lib_l1_sender_config(pk)
+    }
+}
+impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
+    fn from(c: L1SenderConfig) -> Self {
+        let pk = c.operator_execute_pk.clone();
+        c.into_lib_l1_sender_config(pk)
     }
 }
 

@@ -24,7 +24,7 @@ use alloy::transports::TransportResult;
 use anyhow::Context;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use smart_config::value::{ExposeSecret, SecretString};
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
@@ -57,12 +57,13 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
 
     // == config ==
     mut provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + 'static,
-    config: L1SenderConfig,
+    config: L1SenderConfig<Input>,
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
 
-    let operator_address = register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
+    let operator_address =
+        register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
     let provider = provider.erased();
     let mut heartbeat = Heartbeat::new(provider.clone(), config.poll_interval).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);

@@ -1,11 +1,12 @@
 use alloy::consensus::constants::GWEI_TO_WEI;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use smart_config::value::SecretString;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
-pub struct L1SenderConfig {
+pub struct L1SenderConfig<Input> {
     /// Private key to operate from.
     /// Depending on the mode, this can be a commit/prove/execute operator.
     pub operator_pk: SecretString,
@@ -21,6 +22,8 @@ pub struct L1SenderConfig {
 
     /// How often to poll L1 for new blocks.
     pub poll_interval: Duration,
+
+    pub phantom_data: PhantomData<Input>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -29,7 +32,7 @@ pub enum BatchDaInputMode {
     Validium,
 }
 
-impl L1SenderConfig {
+impl<T> L1SenderConfig<T> {
     /// Max fee per gas we are willing to spend (in wei).
     pub fn max_fee_per_gas(&self) -> u128 {
         self.max_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128)

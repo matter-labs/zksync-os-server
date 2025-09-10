@@ -745,9 +745,7 @@ fn run_l1_senders(
         batch_for_snark_sender,
         l1_state.validator_timelock,
         provider.clone(),
-        l1_sender_config
-            .clone()
-            .into_lib_l1_sender_config(l1_sender_config.operator_commit_pk.clone()),
+        l1_sender_config.clone().into(),
     );
 
     let l1_proof_submitter = run_l1_sender(
@@ -755,9 +753,7 @@ fn run_l1_senders(
         batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
         provider.clone(),
-        l1_sender_config
-            .clone()
-            .into_lib_l1_sender_config(l1_sender_config.operator_prove_pk.clone()),
+        l1_sender_config.clone().into(),
     );
 
     let l1_executor = run_l1_sender(
@@ -765,9 +761,7 @@ fn run_l1_senders(
         fully_processed_batch_sender,
         l1_state.diamond_proxy,
         provider,
-        l1_sender_config
-            .clone()
-            .into_lib_l1_sender_config(l1_sender_config.operator_execute_pk.clone()),
+        l1_sender_config.clone().into(),
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }
