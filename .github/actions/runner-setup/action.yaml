@@ -36,20 +36,15 @@ runs:
   using: composite
   steps:
 
-    - name: Install linux packages
-      if: ${{ !contains(runner.name, 'matterlabs') }}
-      uses: awalsh128/cache-apt-pkgs-action@9f7a885e33ff6f8166b600e3e74a981ec11b92c3
-      with:
-        packages: 'libclang-19-dev'
-        version: 1.0
-
     - name: Install linux packages (matterlabs)
-      if: ${{ contains(runner.name, 'matterlabs') }}
       shell: 'bash -ex {0}'
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        apt update && apt install -y libclang-dev wget jq libssl-dev pkg-config
+        if command -v sudo >/dev/null 2>&1; then
+          SUDO=sudo
+        fi
+        ${SUDO} apt update && ${SUDO} apt install -y libclang-dev wget jq libssl-dev pkg-config
         echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
     - name: Install cmake
