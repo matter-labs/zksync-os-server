@@ -81,20 +81,20 @@ jobs:
           cargo llvm-cov --lcov --output-path lcov.info \
             nextest --workspace --exclude zksync_os_integration_tests
 
-      - name: Upload test results
-        if: always() && !cancelled()
-        uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
-        with:
-          check_name: 'Unit Tests'
-          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
-          action_fail_on_inconclusive: true
-
       - name: Generate codecov report
         uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
         if: always() && !cancelled()
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+          slug: ${{ github.repository }}
+
+      - name: Upload test results to Codecov
+        if: always() && !cancelled()
+        uses: codecov/test-results-action@47f89e9acb64b76debcd5ea40642d25a4adced9f # v1.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: 'target/nextest/default/${{ env.TEST_RESULTS_XML }}'
           slug: ${{ github.repository }}
 
 
@@ -116,7 +116,8 @@ jobs:
       - name: Run integration tests (no prover)
         # Run all tests that don't require features enabled (e.g. `prover-tests`/`gpu-prover-tests`).
         run: cargo nextest run --profile ci -p zksync_os_integration_tests
-  
+
+
   ############################################
   # Enforce EN sync format file immutability #
   ############################################
@@ -148,6 +149,7 @@ jobs:
               echo "New wire format created in this change: $FILE"
             fi
           done
+
 
   ####################################
   #  Build prover integration tests  #
@@ -233,6 +235,7 @@ jobs:
         build-format-and-lint,
         unit-tests,
         core-integration-tests,
+        prover-integration-tests-build,
         prover-integration-tests,
         check-EN-backwards-compatibility,
       ]
