@@ -43,6 +43,11 @@ pub struct GeneralConfig {
     #[config(default_t = "http://localhost:8545".into())]
     pub l1_rpc_url: String,
 
+    /// Port meant to be exposed to the world.
+    /// Provides JSON RPC and block replays.
+    #[config(default_t = 3050)]
+    pub public_port: u16,
+
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.

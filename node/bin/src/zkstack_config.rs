@@ -3,9 +3,8 @@ use std::{fs, path::Path, str::FromStr};
 use anyhow::{Context, anyhow};
 use serde_yaml::Value;
 use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_rpc::RpcConfig;
 
-use crate::config::{GeneralConfig, GenesisConfig, ProverApiConfig, SequencerConfig};
+use crate::config::{GeneralConfig, GenesisConfig, ProverApiConfig};
 
 pub struct ZkStackConfig {
     pub config_dir: String,
@@ -35,8 +34,6 @@ impl ZkStackConfig {
     pub fn update(
         &self,
         general_config: &mut GeneralConfig,
-        sequencer_config: &mut SequencerConfig,
-        rpc_config: &mut RpcConfig,
         l1_sender_config: &mut L1SenderConfig,
         genesis_config: &mut GenesisConfig,
         prover_api_config: &mut ProverApiConfig,
@@ -91,21 +88,6 @@ impl ZkStackConfig {
             .ok_or(anyhow!("Failed to get prometheus port"))?;
 
         general_config.prometheus_port = prometheus_port as u16;
-
-        let rpc_port = api
-            .get("web3_json_rpc")
-            .and_then(|v| v.get("http_port").and_then(Value::as_u64))
-            .ok_or(anyhow!("Failed to get web3_json_rpc port"))?;
-
-        rpc_config.address = format!("0.0.0.0:{rpc_port}");
-
-        let merkle_port = api
-            .get("merkle_tree")
-            .and_then(|v| v.get("port").and_then(Value::as_u64))
-            .ok_or(anyhow!("Failed to get merkle_tree port"))?;
-
-        // FIXME: for now, use the merkle port for block replay.
-        sequencer_config.block_replay_server_address = format!("0.0.0.0:{merkle_port}");
 
         let data_handler_port = general_yaml
             .get("data_handler")

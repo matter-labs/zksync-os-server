@@ -106,7 +106,7 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse genesis config");
 
-    let mut rpc_config = repo
+    let rpc_config = repo
         .single::<RpcConfig>()
         .expect("Failed to load rpc config")
         .parse()
@@ -118,7 +118,7 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse mempool config");
 
-    let mut sequencer_config = repo
+    let sequencer_config = repo
         .single::<SequencerConfig>()
         .expect("Failed to load sequencer config")
         .parse()
@@ -162,8 +162,6 @@ fn build_configs() -> Config {
         config
             .update(
                 &mut general_config,
-                &mut sequencer_config,
-                &mut rpc_config,
                 &mut l1_sender_config,
                 &mut genesis_config,
                 &mut prover_api_config,

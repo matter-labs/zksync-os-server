@@ -4,6 +4,7 @@ use futures::{SinkExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::net::ToSocketAddrs;
+use tokio::sync::oneshot;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -16,9 +17,10 @@ use crate::block_replay_storage::BlockReplayStorage;
 
 pub async fn replay_server(
     block_replays: BlockReplayStorage,
-    address: impl ToSocketAddrs,
+    port_sink: oneshot::Sender<u16>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(address).await?;
+    let listener = TcpListener::bind(("0.0.0.0", 0)).await?;
+    port_sink.send(listener.local_addr()?.port()).unwrap();
 
     loop {
         let (mut socket, _) = listener.accept().await?;

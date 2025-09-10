@@ -12,6 +12,7 @@ mod ots_impl;
 mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
+use tokio::sync::oneshot;
 mod debug_impl;
 mod monitoring_middleware;
 mod sandbox;
@@ -43,12 +44,13 @@ use zksync_os_rpc_api::zks::ZksApiServer;
 
 pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>(
     config: RpcConfig,
+    port_sink: oneshot::Sender<u16>,
     chain_id: u64,
     bridgehub_address: Address,
     storage: RpcStorage,
     mempool: Mempool,
 ) -> anyhow::Result<()> {
-    tracing::info!("Starting JSON-RPC server at {}", config.address);
+    tracing::info!("Starting JSON-RPC server");
 
     let mut rpc = RpcModule::new(());
     rpc.merge(
@@ -89,9 +91,10 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         .set_rpc_middleware(rpc_middleware);
 
     let server = server_builder
-        .build(config.address)
+        .build(("0.0.0.0", 0))
         .await
         .context("Failed building HTTP JSON-RPC server")?;
+    port_sink.send(server.local_addr().unwrap().port()).unwrap();
 
     let server_handle = server.start(rpc);
 

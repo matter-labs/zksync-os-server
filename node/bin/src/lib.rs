@@ -10,6 +10,7 @@ mod metrics;
 mod node_state_on_startup;
 pub mod prover_api;
 mod prover_input_generator;
+mod proxy;
 mod replay_transport;
 pub mod reth_state;
 mod state_initializer;
@@ -31,6 +32,7 @@ use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
+use crate::proxy::run_proxy;
 use crate::replay_transport::{replay_receiver, replay_server};
 use crate::reth_state::ZkClient;
 use crate::state_initializer::StateInitializer;
@@ -49,7 +51,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 use zk_ee::system::metadata::BlockHashes;
 use zk_os_forward_system::run::BlockOutput;
@@ -293,9 +295,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
     );
 
+    let (json_rpc_port_sender, json_rpc_port) = oneshot::channel();
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone(),
+            json_rpc_port_sender,
             config.genesis_config.chain_id,
             node_startup_state.l1_state.bridgehub,
             rpc_storage,
@@ -330,12 +334,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
+    let (block_replay_port_sender, block_replay_port) = oneshot::channel();
     tasks.spawn(
-        replay_server(
-            block_replay_storage.clone(),
-            config.sequencer_config.block_replay_server_address.clone(),
-        )
-        .map(report_exit("replay server")),
+        replay_server(block_replay_storage.clone(), block_replay_port_sender)
+            .map(report_exit("replay server")),
     );
     {
         let state = state.clone();
@@ -394,6 +396,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .await;
     });
 
+    let public_proxy_port = config.general_config.public_port;
+
     if config.sequencer_config.is_main_node() {
         // Main Node
         let genesis_block = repositories
@@ -422,6 +426,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await;
     };
+
+    tasks.spawn(
+        run_proxy(
+            public_proxy_port,
+            [
+                (b"GET", b"/", json_rpc_port.await.unwrap()),
+                (b"POST", b"/block_replays", block_replay_port.await.unwrap()),
+            ],
+        )
+        .map(report_exit("Public proxy")),
+    );
+
+    // Wait until some task has died. The rest are killed when the TaskSet is dropped
     tasks.join_next().await;
 }
 
