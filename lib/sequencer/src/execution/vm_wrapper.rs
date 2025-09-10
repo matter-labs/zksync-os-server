@@ -5,11 +5,9 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, channel},
     task::{JoinHandle, spawn_blocking},
 };
+use zksync_os_interface::output::{BlockOutput, TxProcessingOutputOwned};
 use zksync_os_interface::traits::{NextTxResponse, TxResultCallback, TxSource};
-use zksync_os_interface::{
-    error::InvalidTransaction,
-    types::{BlockContext, BlockOutput, TxProcessingOutputOwned},
-};
+use zksync_os_interface::{error::InvalidTransaction, types::BlockContext};
 use zksync_os_storage_api::ViewState;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface

@@ -1,5 +1,5 @@
 use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
-use zksync_os_interface::types::BlockOutput;
+use zksync_os_interface::output::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 
 #[derive(Default, Clone)]

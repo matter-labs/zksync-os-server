@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, atomic::Ordering},
 };
-use zksync_os_interface::types::StorageWrite;
+use zksync_os_interface::output::StorageWrite;
 use zksync_os_storage_api::{StateError, StateResult};
 
 #[derive(Debug, Clone)]

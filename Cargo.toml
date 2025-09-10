@@ -58,7 +58,7 @@ serde_json = "1"
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
-zksync_os_interface = { git = "https://github.com/matter-labs/zksync-os-interface", rev = "8482ed4c8d5f2c81cad4c791d2f1f878b1379554" }
+zksync_os_interface = { git = "https://github.com/matter-labs/zksync-os-interface", rev = "48a318216686405a8466601ffe47cbd99b70d749" }
 zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-clean", features = ["evm-compatibility", "no_print"] }
 zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-clean" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-clean" }

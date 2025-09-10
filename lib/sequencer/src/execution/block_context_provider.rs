@@ -12,7 +12,8 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput, PreimageType};
+use zksync_os_interface::output::BlockOutput;
+use zksync_os_interface::types::{BlockContext, BlockHashes, PreimageType};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };

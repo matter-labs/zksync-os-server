@@ -10,8 +10,8 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use zksync_os_interface::output::StorageWrite;
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
-use zksync_os_interface::types::StorageWrite;
 use zksync_os_rocksdb::RocksDB;
 // Re-export commonly used types
 use crate::persistent_preimages::{PersistentPreimages, PreimagesCF};

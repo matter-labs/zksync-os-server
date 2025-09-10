@@ -1,9 +1,10 @@
 use zk_os_forward_system::run::RunBlockForward;
 use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::output::{BlockOutput, TxOutput};
 use zksync_os_interface::traits::{
     PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
 };
-use zksync_os_interface::types::{BlockContext, BlockOutput, TxOutput};
+use zksync_os_interface::types::BlockContext;
 
 pub fn run_block<S: ReadStorage, PS: PreimageSource, TS: TxSource, TR: TxResultCallback>(
     block_context: BlockContext,

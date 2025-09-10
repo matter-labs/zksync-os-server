@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_genesis::Genesis;
-use zksync_os_interface::types::BlockOutput;
+use zksync_os_interface::output::BlockOutput;
 use zksync_os_merkle_tree::{
     MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
 };

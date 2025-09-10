@@ -5,7 +5,7 @@ use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, Tx
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
-use zksync_os_interface::types::{BlockOutput, ExecutionResult};
+use zksync_os_interface::output::{BlockOutput, ExecutionResult};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };

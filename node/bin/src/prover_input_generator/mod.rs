@@ -8,7 +8,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zk_ee::common_structs::ProofData;
 use zk_os_forward_system::run::{StorageCommitment, generate_proof_input, test_impl::TxListSource};
-use zksync_os_interface::types::BlockOutput;
+use zksync_os_interface::output::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,

@@ -3,8 +3,8 @@ mod storage;
 
 use alloy::primitives::{B256, BlockNumber};
 use std::path::PathBuf;
+use zksync_os_interface::output::StorageWrite;
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
-use zksync_os_interface::types::StorageWrite;
 use zksync_os_storage_api::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
 
 use preimages::FullDiffsPreimages;

@@ -10,10 +10,8 @@ use alloy::primitives::{Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_interface::{
-    error::InvalidTransaction,
-    types::{BlockContext, ExecutionResult},
-};
+use zksync_os_interface::output::ExecutionResult;
+use zksync_os_interface::{error::InvalidTransaction, types::BlockContext};
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{RepositoryError, StateError};
 use zksync_os_types::{L2Envelope, L2Transaction};
