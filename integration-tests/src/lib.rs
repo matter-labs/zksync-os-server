@@ -177,6 +177,8 @@ impl Tester {
                 enabled_logging: true,
                 app_bin_path: Some(concat!(env!("WORKSPACE_DIR"), "/multiblock_batch.bin").into()),
                 circuit_limit: 10000,
+                iterations: None,
+                path: None,
             }));
         }
 
