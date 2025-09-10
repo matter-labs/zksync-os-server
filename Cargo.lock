@@ -10212,7 +10212,6 @@ version = "0.3.0-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
- "smart-config",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -10360,7 +10359,6 @@ dependencies = [
  "jsonrpsee",
  "ruint",
  "serde",
- "smart-config",
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
@@ -10435,7 +10433,6 @@ dependencies = [
  "dashmap",
  "forward_system",
  "ruint",
- "smart-config",
  "tokio",
  "tracing",
  "vise",

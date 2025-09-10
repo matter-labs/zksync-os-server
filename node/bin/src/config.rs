@@ -360,13 +360,17 @@ impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
     }
 }
 
-impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig {
-    fn from(c: L1SenderConfig) -> Self {
-        Self {
-            max_fee_per_gas_gwei: c.max_fee_per_gas_gwei,
-            max_priority_fee_per_gas_gwei: c.max_priority_fee_per_gas_gwei,
-            command_limit: c.command_limit,
-            poll_interval: c.poll_interval,
+impl L1SenderConfig {
+    pub fn into_lib_l1_sender_config(
+        self,
+        operator_pk: SecretString,
+    ) -> zksync_os_l1_sender::config::L1SenderConfig {
+        zksync_os_l1_sender::config::L1SenderConfig {
+            operator_pk,
+            max_fee_per_gas_gwei: self.max_fee_per_gas_gwei,
+            max_priority_fee_per_gas_gwei: self.max_priority_fee_per_gas_gwei,
+            command_limit: self.command_limit,
+            poll_interval: self.poll_interval,
         }
     }
 }

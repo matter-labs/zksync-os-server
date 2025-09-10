@@ -47,7 +47,6 @@ use zksync_os_observability::ComponentStateReporter;
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
-#[allow(clippy::too_many_arguments)]
 pub async fn run_l1_sender<Input: L1SenderCommand>(
     // == plumbing ==
     mut inbound: Receiver<Input>,
@@ -55,7 +54,6 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
 
     // == command-specific settings ==
     to_address: Address,
-    from_address_pk: SecretString,
 
     // == config ==
     mut provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + 'static,
@@ -64,7 +62,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
 
-    let operator_address = register_operator::<_, Input>(&mut provider, from_address_pk).await?;
+    let operator_address = register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
     let provider = provider.erased();
     let mut heartbeat = Heartbeat::new(provider.clone(), config.poll_interval).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
