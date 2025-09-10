@@ -47,7 +47,7 @@ use ruint::aliases::U256;
 use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -64,6 +64,7 @@ use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
+use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
@@ -85,6 +86,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     _stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
+    let process_started_at = Instant::now();
+    GENERAL_METRICS.process_started_at.set(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
     NODE_META_METRICS.version[&NODE_VERSION].set(1);
     let role: &'static str = if config.sequencer_config.is_main_node() {
@@ -422,7 +430,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await;
     };
+    let startup_time = process_started_at.elapsed();
+    GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
+    tracing::info!("All components initialized in {startup_time:?}");
     tasks.join_next().await;
+    tracing::info!("One of the subsystems exited - exiting process.");
 }
 
 fn command_source(

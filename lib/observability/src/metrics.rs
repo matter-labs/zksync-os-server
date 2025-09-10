@@ -1,5 +1,5 @@
 use crate::GenericComponentState;
-use vise::{Counter, LabeledFamily, Metrics};
+use vise::{Counter, Gauge, LabeledFamily, Metrics};
 
 #[derive(Debug, Metrics)]
 pub struct GeneralMetrics {
@@ -9,6 +9,13 @@ pub struct GeneralMetrics {
     #[metrics(labels = ["component", "generic_state", "specific_state"])]
     pub component_time_spent_in_state:
         LabeledFamily<(&'static str, GenericComponentState, &'static str), Counter<f64>, 3>,
+
+    /// Unix timestamp for when the process was started
+    pub process_started_at: Gauge<i64>,
+
+    /// Time spent on various startup routines.
+    #[metrics(labels = ["stage"])]
+    pub startup_time: LabeledFamily<&'static str, Gauge<f64>>,
 }
 
 #[vise::register]
