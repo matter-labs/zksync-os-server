@@ -13,7 +13,10 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_bin::config::{Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig};
+use zksync_os_bin::config::{
+    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
+};
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -148,8 +151,8 @@ impl Tester {
             ..Default::default()
         };
 
-        let status_server_config = StatusServerConfig{
-            address:  status_address,
+        let status_server_config = StatusServerConfig {
+            address: status_address,
         };
 
         let config = Config {
