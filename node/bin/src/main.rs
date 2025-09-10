@@ -48,15 +48,23 @@ pub async fn main() {
         }
     };
 
-    let prom_stop_receiver = stop_receiver.clone();
+    let stop_receiver_copy = stop_receiver.clone();
 
     tokio::select! {
-        _ = main_task => {},
+        _ = main_task => {
+            if *stop_receiver_copy.borrow() {
+                tracing::info!("Main task exited gracefully after stop signal");
+                // sleep to wait for other tasks to finish
+                tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+            } else {
+                tracing::warn!("Main task unexpectedly exited")
+            }
+        },
         _ = handle_delayed_termination(stop_sender) => {},
         res = prometheus.run(stop_receiver) => {
             match res {
                 Ok(_) => {
-                    if *prom_stop_receiver.borrow() {
+                    if *stop_receiver_copy.borrow() {
                         tracing::info!("Prometheus exporter exited gracefully after stop signal");
                         // sleep to wait for other tasks to finish
                         tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
