@@ -1,6 +1,4 @@
-//! We need to not accidentally change the replay wire format
-//! but there is no way in Rust to get a stable unique ID for a type,
-//! so instead we define it in this separate file.
+//! We need to not accidentally change the replay wire format.
 //!
 //! Do not change this file under any circumstances. Copy it instead. May be deleted when obsolete.
 //! (This is enforced by CI)
@@ -9,6 +7,10 @@ use bincode::{Decode, Encode};
 
 // It is somewhat safe to assume that these will not change
 use alloy::primitives::{B256, U256, Address};
+
+// Differences from v1:
+// - added `protocol_version` to `BlockContext`
+// - changed `coinbase` type from `B160` to `Address`
 
 /// The format ReplayRecords are currently sent in
 #[derive(Encode, Decode)]

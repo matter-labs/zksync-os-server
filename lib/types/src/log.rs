@@ -1,3 +1,6 @@
+// Copy of `L2ToL1Log` from `zksync_os_interface` crate.
+// This type is used for API responses, so we want it to be independent.
+
 use alloy::primitives::{Address, B256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};

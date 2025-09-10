@@ -1,3 +1,7 @@
+//! This module provides a unified interface for running blocks and simulating transactions.
+//! When adding new protocol version, make sure it is handled in `run_block` and `simulate_tx` methods.
+//! Also, update the `LATEST_PROTOCOL_VERSION` constant accordingly.
+
 use zk_os_forward_system::run::RunBlockForward;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::traits::{
