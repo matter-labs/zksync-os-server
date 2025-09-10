@@ -177,6 +177,8 @@ impl Tester {
                 enabled_logging: true,
                 app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),
                 circuit_limit: 10000,
+                iterations: None,
+                path: None,
             }));
         }
 
