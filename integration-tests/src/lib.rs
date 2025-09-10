@@ -13,10 +13,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_bin::config::{
-    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-};
+use zksync_os_bin::config::{Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig};
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -102,11 +99,13 @@ impl Tester {
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let replay_locked_port = LockedPort::acquire_unused().await?;
+        let status_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
+        let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
         let rocksdb_path = tempfile::tempdir()?;
@@ -148,6 +147,11 @@ impl Tester {
             },
             ..Default::default()
         };
+
+        let status_server_config = StatusServerConfig{
+            address:  status_address,
+        };
+
         let config = Config {
             general_config,
             genesis_config: GenesisConfig {
@@ -165,7 +169,7 @@ impl Tester {
                 ..Default::default()
             },
             prover_api_config,
-            status_server_config: Default::default(),
+            status_server_config,
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
