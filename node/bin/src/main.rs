@@ -1,10 +1,12 @@
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
+use std::time::Duration;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_bin::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig,
+    ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
@@ -33,7 +35,7 @@ pub async fn main() {
     // =========== init interruption channel ===========
 
     // todo: implement interruption handling in other tasks
-    let (_stop_sender, stop_receiver) = watch::channel(false);
+    let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
@@ -46,6 +48,7 @@ pub async fn main() {
 
     tokio::select! {
         _ = main_task => {},
+        _ = handle_delayed_termination(stop_sender) => {},
         res = prometheus.run(stop_receiver) => {
             match res {
                 Ok(_)  => tracing::warn!("Prometheus exporter unexpectedly exited"),
@@ -53,6 +56,21 @@ pub async fn main() {
             }
         }
     }
+}
+
+async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
+    // Handle SIGTERM: mark health false and exit after 10 seconds
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register signal handler");
+    let _ = sigterm.recv().await;
+
+    stop_sender
+        .send(true)
+        .expect("failed to send terminate signal");
+
+    tracing::info!("sigterm received: scheduling shutdown in 10s");
+    tokio::time::sleep(Duration::from_secs(10)).await;
+
+    tracing::info!("shutdown_timer_elapsed: exiting");
 }
 
 fn build_configs() -> Config {
@@ -91,6 +109,9 @@ fn build_configs() -> Config {
     schema
         .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
         .expect("Failed to insert prover api config");
+    schema
+        .insert(&StatusServerConfig::DESCRIPTION, "status_server")
+        .expect("Failed to insert status server config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -154,6 +175,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse prover api config");
 
+    let status_server_config = repo
+        .single::<StatusServerConfig>()
+        .expect("Failed to load status server config")
+        .parse()
+        .expect("Failed to parse status server config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -182,5 +209,6 @@ fn build_configs() -> Config {
         batcher_config,
         prover_input_generator_config,
         prover_api_config,
+        status_server_config,
     }
 }

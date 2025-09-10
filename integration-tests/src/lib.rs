@@ -165,6 +165,7 @@ impl Tester {
                 ..Default::default()
             },
             prover_api_config,
+            status_server_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;

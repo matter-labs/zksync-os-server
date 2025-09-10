@@ -960,9 +960,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.98"
+version = "1.0.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
+checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 
 [[package]]
 name = "aquamarine"
@@ -7625,7 +7625,7 @@ dependencies = [
  "security-framework 3.2.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10084,6 +10084,7 @@ dependencies = [
  "zksync_os_sequencer",
  "zksync_os_state",
  "zksync_os_state_full_diffs",
+ "zksync_os_status_server",
  "zksync_os_storage",
  "zksync_os_storage_api",
  "zksync_os_types",
@@ -10460,6 +10461,17 @@ dependencies = [
  "zksync_os_genesis",
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
+]
+
+[[package]]
+name = "zksync_os_status_server"
+version = "0.3.0-non-semver-compat"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

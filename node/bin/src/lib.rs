@@ -69,6 +69,7 @@ use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::run_sequencer_actor;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
+use zksync_os_status_server::{prepare_status_server, run_status_server};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
@@ -281,6 +282,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to start L1 transaction watcher")
         .run()
         .map(report_exit("L1 transaction watcher")),
+    );
+
+    // ======== Start Status Server ========
+    let (status_server_listener, status_server_router) = prepare_status_server(
+        config.status_server_config.address.clone(),
+        _stop_receiver.clone(),
+    )
+    .await
+    .expect("Failed to prepare status server");
+
+    tasks.spawn(
+        run_status_server(status_server_listener, status_server_router)
+            .map(report_exit("Status server")),
     );
 
     // =========== Start JSON RPC ========

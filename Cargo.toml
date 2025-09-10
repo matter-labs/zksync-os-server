@@ -23,6 +23,7 @@ members = [
     "lib/observability",
     "lib/object_store",
     "lib/state_full_diffs",
+    "lib/status",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -150,6 +151,7 @@ zksync_os_storage_api = { version = "=0.3.0-non-semver-compat", path = "lib/stor
 zksync_os_types = { version = "=0.3.0-non-semver-compat", path = "lib/types" }
 zksync_os_genesis = { version = "=0.3.0-non-semver-compat", path = "lib/genesis" }
 zksync_os_object_store = { version = "=0.3.0-non-semver-compat", path = "lib/object_store" }
+zksync_os_status_server = { version = "=0.3.0-non-semver-compat", path = "lib/status" }
 
 zksync_os_bin = { version = "=0.3.0-non-semver-compat", path = "node/bin" }
 
