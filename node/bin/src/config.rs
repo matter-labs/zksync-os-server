@@ -24,6 +24,7 @@ pub struct Config {
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
+    pub status_server_config: StatusServerConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -91,6 +92,14 @@ pub struct GenesisConfig {
     /// Path to the file with genesis input.
     #[config(default_t = "./genesis/genesis.json".into())]
     pub genesis_input_path: PathBuf,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct StatusServerConfig {
+    /// Status server address to listen on.
+    #[config(default_t = "0.0.0.0:3071".into())]
+    pub address: String,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
