@@ -1,34 +1,39 @@
 use anyhow::Result;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     try_join,
 };
 
-pub struct Routes(BTreeMap<(&'static [u8], &'static [u8]), u16>);
+pub struct Routes(Vec<(&'static [u8], &'static [u8], u16)>);
 
 impl Routes {
     pub fn new() -> Self {
-        Self(BTreeMap::new())
+        Self(Vec::new())
     }
-    pub fn add_route(mut self, method: &'static [u8], path: &'static [u8], port: u16) -> Self {
-        let key = (method, path);
-        assert!(
-            !self.0.contains_key(&key),
-            "duplicate route for method {:?} and path {:?}",
-            method,
-            path
-        );
-        self.0.insert(key, port);
+
+    pub fn add_route(
+        mut self,
+        method: &'static [u8],
+        path_prefix: &'static [u8],
+        port: u16,
+    ) -> Self {
+        self.0.push((method, path_prefix, port));
         self
+    }
+
+    fn find(&self, (method, path): (&[u8], &[u8])) -> Option<u16> {
+        self.0.iter().find_map(|(m, prefix, port)| {
+            (*m == method && path.starts_with(prefix)).then_some(*port)
+        })
     }
 }
 
 /// Starts a server on `port` that routes any incoming TCP connections to other ports.
 /// The `routes` parameter takes an array of routes consisting of method, path and port to route to.
 pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
-    let routes = Arc::new(routes.0);
+    let routes = Arc::new(routes);
 
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
 
@@ -42,13 +47,8 @@ pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
             let method_and_path = loop {
                 bytes_read += connection.read(&mut buffer[bytes_read..]).await.unwrap();
 
-                // This isn't quite general enough, technically the same path can be written in multiple ways
-                let parts = buffer[..bytes_read]
-                    .split(|b| *b == b' ')
-                    .take(2)
-                    .collect::<Vec<_>>();
-                if parts.len() == 2 {
-                    break (parts[0], parts[1]);
+                if let Some(parts) = get_method_and_path(&buffer[..bytes_read]) {
+                    break parts;
                 }
 
                 if bytes_read == buffer.len() {
@@ -57,7 +57,7 @@ pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
                 }
             };
 
-            let Some(&target_port) = routes.get(&method_and_path) else {
+            let Some(target_port) = routes.find(method_and_path) else {
                 return;
             };
 
@@ -76,5 +76,37 @@ pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
             )
             .expect("proxy encountered error while forwarding data");
         });
+    }
+}
+
+fn get_method_and_path(request: &[u8]) -> Option<(&[u8], &[u8])> {
+    let mut iter = request.split(|b| *b == b' ').filter(|t| !t.is_empty());
+    let method = iter.next()?;
+    let path = iter.next()?;
+    // Can't know if the path is finished if the file ends there.
+    iter.next()?;
+
+    Some((method, path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_method_and_path() {
+        assert_eq!(
+            get_method_and_path(b"GET /path HTTP/1.1"),
+            Some((b"GET".as_slice(), b"/path".as_slice()))
+        );
+        assert_eq!(
+            get_method_and_path(b"GET  /path HTTP/1.1"),
+            Some((b"GET".as_slice(), b"/path".as_slice()))
+        );
+        assert_eq!(get_method_and_path(b"GET /pat"), None);
+        assert_eq!(
+            get_method_and_path(b" POST  /a HTTP/1.1"),
+            Some((b"POST".as_slice(), b"/a".as_slice()))
+        );
     }
 }
