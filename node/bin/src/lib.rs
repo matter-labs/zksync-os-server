@@ -136,7 +136,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .await
     .expect("Failed to read L1 state");
     if config.sequencer_config.is_main_node() {
-        // If this is a main node, we need to wait for the pending chain state to finalize before proceeding.
+        // On a main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         l1_state = l1_state
             .wait_to_finalize(&l1_provider, config.genesis_config.chain_id)
             .await
