@@ -1,8 +1,9 @@
-use anyhow::Result;
 use std::sync::Arc;
+
+use anyhow::Result;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     try_join,
 };
 
@@ -32,10 +33,10 @@ impl Routes {
 
 /// Starts a server on `port` that routes any incoming TCP connections to other ports.
 /// The `routes` parameter takes an array of routes consisting of method, path and port to route to.
-pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
+pub async fn run_proxy(address: impl ToSocketAddrs, routes: Routes) -> Result<()> {
     let routes = Arc::new(routes);
 
-    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
+    let listener = TcpListener::bind(address).await?;
 
     loop {
         let mut connection = listener.accept().await?.0;

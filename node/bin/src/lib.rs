@@ -442,7 +442,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         run_proxy(
-            general_config.public_port,
+            general_config.public_address,
             proxy::Routes::new()
                 .add_route(b"GET", b"/", json_rpc_port.await.unwrap())
                 .add_route(b"POST", b"/block_replays", block_replay_port.await.unwrap()),
@@ -457,7 +457,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     tasks.spawn(
-        run_proxy(general_config.private_port, private_routes).map(report_exit("Private proxy")),
+        run_proxy(general_config.private_address, private_routes).map(report_exit("Private proxy")),
     );
 
     // Wait until some task has died. The rest are killed when the TaskSet is dropped

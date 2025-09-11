@@ -112,8 +112,8 @@ impl Tester {
             object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
 
         let general_config = GeneralConfig {
-            public_port: public_port.port,
-            private_port: private_port.port,
+            public_address: format!("localhost:{}", public_port.port),
+            private_address: format!("localhost:{}", private_port.port),
             rocks_db_path: rocksdb_path.path().to_path_buf(),
             l1_rpc_url: l1_address.clone(),
             ..Default::default()

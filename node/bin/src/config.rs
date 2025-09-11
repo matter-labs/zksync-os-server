@@ -45,14 +45,14 @@ pub struct GeneralConfig {
     #[config(default_t = "http://localhost:8545".into())]
     pub l1_rpc_url: String,
 
-    /// Port meant to be exposed to the world.
+    /// Address meant to be exposed to the world.
     /// Provides JSON RPC and block replays.
-    #[config(default_t = 3050)]
-    pub public_port: u16,
+    #[config(default_t = "0.0.0.0:3050".into())]
+    pub public_address: String,
 
-    /// Port that consolidates debug APIs, metrics.
-    #[config(default_t = 3312)]
-    pub private_port: u16,
+    /// Address that consolidates debug APIs, metrics.
+    #[config(default_t = "0.0.0.0:3312".into())]
+    pub private_address: String,
 
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
