@@ -43,7 +43,7 @@ pub struct GeneralConfig {
     #[config(default_t = "0.0.0.0:3050".into())]
     pub public_address: String,
 
-    /// Address that consolidates debug APIs, metrics.
+    /// Address that consolidates prover API, debug APIs, metrics.
     #[config(default_t = "0.0.0.0:3312".into())]
     pub private_address: String,
 
