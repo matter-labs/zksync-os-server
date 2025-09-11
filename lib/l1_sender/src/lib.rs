@@ -10,7 +10,7 @@ mod new_blocks;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::config::L1SenderConfig;
-use crate::metrics::L1SenderState;
+use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
@@ -86,6 +86,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         let range = Input::display_range(&cmd_buffer); // Only for logging
         let command_name = Input::NAME;
         tracing::info!(command_name, range, "Sending l1 transactions...");
+        L1_SENDER_METRICS.parallel_transactions[&command_name].set(cmd_buffer.len() as u64);
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
         // This holds true because l1 transactions are included in the order of sender nonce.
@@ -116,11 +117,17 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         let mined_envelopes = heartbeat
             .wait_for_pending_txs(&provider, pending_tx_hashes)
             .await?;
+        let balance = format_ether(provider.get_balance(operator_address).await?);
+        let nonce = provider.get_transaction_count(operator_address).await?;
         tracing::info!(
             command_name,
             range,
+            balance,
+            nonce,
             "All transactions included. Sending downstream.",
         );
+        L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
+        L1_SENDER_METRICS.nonce[&command_name].set(nonce);
         latency_tracker.enter_state(L1SenderState::WaitingSend);
         for command in mined_envelopes {
             for mut output_envelope in command.into() {
@@ -179,6 +186,7 @@ async fn register_operator<
     provider.wallet_mut().register_signer(signer);
 
     let balance = provider.get_balance(address).await?;
+    L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {} has zero balance", address);
@@ -274,15 +282,36 @@ impl Heartbeat {
             tokio::time::sleep(Duration::from_millis(200)).await;
         };
         if receipt.status() {
+            // Transaction succeeded - log output and return OK(())
+
             // We could also look at tx receipt's logs for a corresponding
             // `BlockCommit` / `BlockProve`/ etc event but
             // not sure if this is 100% necessary yet.
+
+            let l2_txs_count: usize = command
+                .as_ref()
+                .iter()
+                .map(|envelope| envelope.batch.tx_count)
+                .sum();
+            let l1_transaction_fee = receipt.gas_used as u128 * receipt.effective_gas_price;
+
             tracing::info!(
                 %command,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
+                gas_used = receipt.gas_used,
+                gas_used_per_l2_tx = receipt.gas_used / l2_txs_count as u64,
+                l1_transaction_fee_ether = format_ether(l1_transaction_fee),
+                l1_transaction_fee_ether_per_l2_tx = format_ether(l1_transaction_fee / l2_txs_count as u128),
                 "succeeded on L1",
             );
+            L1_SENDER_METRICS.gas_used[&Input::NAME].observe(receipt.gas_used);
+            L1_SENDER_METRICS.gas_used_per_l2_tx[&Input::NAME]
+                .observe(receipt.gas_used / l2_txs_count as u64);
+            L1_SENDER_METRICS.l1_transaction_fee_ether[&Input::NAME]
+                .observe(format_ether(l1_transaction_fee).parse()?);
+            L1_SENDER_METRICS.l1_transaction_fee_ether[&Input::NAME]
+                .observe(format_ether(l1_transaction_fee / l2_txs_count as u128).parse()?);
 
             Ok(())
         } else {
