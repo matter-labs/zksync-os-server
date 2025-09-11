@@ -6,18 +6,29 @@ use tokio::{
     try_join,
 };
 
+pub struct Routes(BTreeMap<(&'static [u8], &'static [u8]), u16>);
+
+impl Routes {
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+    pub fn add_route(mut self, method: &'static [u8], path: &'static [u8], port: u16) -> Self {
+        let key = (method, path);
+        assert!(
+            !self.0.contains_key(&key),
+            "duplicate route for method {:?} and path {:?}",
+            method,
+            path
+        );
+        self.0.insert(key, port);
+        self
+    }
+}
+
 /// Starts a server on `port` that routes any incoming TCP connections to other ports.
 /// The `routes` parameter takes an array of routes consisting of method, path and port to route to.
-pub async fn run_proxy<const N: usize>(
-    port: u16,
-    routes: [(&'static [u8], &'static [u8], u16); N],
-) -> Result<()> {
-    let route_map = routes
-        .iter()
-        .map(|(method, path, port)| ((*method, *path), *port))
-        .collect::<BTreeMap<_, _>>();
-    assert_eq!(route_map.len(), routes.len(), "duplicate routes");
-    let routes = Arc::new(route_map);
+pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
+    let routes = Arc::new(routes.0);
 
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
 

@@ -118,10 +118,6 @@ pub struct ProverInputGeneratorConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverApiConfig {
-    /// Prover API address to listen on.
-    #[config(default_t = "0.0.0.0:3124".into())]
-    pub address: String,
-
     #[config(nest)]
     pub fake_fri_provers: FakeFriProversConfig,
 

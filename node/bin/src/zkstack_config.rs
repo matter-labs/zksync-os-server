@@ -4,7 +4,7 @@ use anyhow::{Context, anyhow};
 use serde_yaml::Value;
 use zksync_os_l1_sender::config::L1SenderConfig;
 
-use crate::config::{GeneralConfig, GenesisConfig, ProverApiConfig};
+use crate::config::{GeneralConfig, GenesisConfig};
 
 pub struct ZkStackConfig {
     pub config_dir: String,
@@ -36,7 +36,6 @@ impl ZkStackConfig {
         general_config: &mut GeneralConfig,
         l1_sender_config: &mut L1SenderConfig,
         genesis_config: &mut GenesisConfig,
-        prover_api_config: &mut ProverApiConfig,
     ) -> anyhow::Result<()> {
         let zkstack_yaml = self.get_yaml_file("ZkStack.yaml")?;
 
@@ -76,15 +75,6 @@ impl ZkStackConfig {
             alloy::primitives::Address::from_str(&bridgehub_address)?;
 
         // ports
-
-        let general_yaml = self.get_yaml_file("configs/general.yaml")?;
-
-        let data_handler_port = general_yaml
-            .get("data_handler")
-            .and_then(|v| v.get("http_port").and_then(Value::as_u64))
-            .ok_or(anyhow!("Failed to get data_handler port"))?;
-
-        prover_api_config.address = format!("0.0.0.0:{data_handler_port}");
 
         Ok(())
     }

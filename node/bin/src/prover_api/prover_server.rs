@@ -11,9 +11,10 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
-use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tracing::{error, info};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 // ───────────── JSON payloads ─────────────
@@ -201,7 +202,7 @@ pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
     proof_storage: ProofStorage,
-    bind_address: String,
+    port_sink: oneshot::Sender<u16>,
 ) -> anyhow::Result<()> {
     let app_state = AppState {
         fri_job_manager,
@@ -223,10 +224,12 @@ pub async fn run(
         // Set the request body limit to 10MiB
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
 
-    let bind_address: SocketAddr = bind_address.parse()?;
-    info!("starting proof data server on {bind_address}");
+    let listener = TcpListener::bind(("0.0.0.0", 0)).await?;
 
-    let listener = TcpListener::bind(bind_address).await?;
+    let port = listener.local_addr()?.port();
+    port_sink.send(port).unwrap();
+    info!("started proof data server on port {port}");
+
     axum::serve(listener, app).await?;
     Ok(())
 }

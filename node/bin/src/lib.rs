@@ -407,8 +407,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .map(report_exit("Prometheus exporter")),
     );
 
+    let mut prover_api_port = None;
+
     if config.sequencer_config.is_main_node() {
         // Main Node
+        let (prover_api_port_sink, prover_api_port_source) = oneshot::channel();
         let genesis_block = repositories
             .get_block_by_number(0)
             .expect("Failed to read genesis block from repositories")
@@ -424,9 +427,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             block_replay_storage,
             &mut tasks,
             state,
+            prover_api_port_sink,
             _stop_receiver.clone(),
         )
         .await;
+        prover_api_port = Some(prover_api_port_source.await.unwrap());
     } else {
         // External Node
         run_batcher_channel_drain(
@@ -439,20 +444,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         run_proxy(
             general_config.public_port,
-            [
-                (b"GET", b"/", json_rpc_port.await.unwrap()),
-                (b"POST", b"/block_replays", block_replay_port.await.unwrap()),
-            ],
+            proxy::Routes::new()
+                .add_route(b"GET", b"/", json_rpc_port.await.unwrap())
+                .add_route(b"POST", b"/block_replays", block_replay_port.await.unwrap()),
         )
         .map(report_exit("Public proxy")),
     );
 
+    let mut private_routes =
+        proxy::Routes::new().add_route(b"GET", b"/", prometheus_port.await.unwrap());
+    if let Some(prover_api_port) = prover_api_port {
+        private_routes = private_routes.add_route(b"POST", b"/prover-jobs", prover_api_port);
+    }
+
     tasks.spawn(
-        run_proxy(
-            general_config.private_port,
-            [(b"GET", b"/", prometheus_port.await.unwrap())],
-        )
-        .map(report_exit("Private proxy")),
+        run_proxy(general_config.private_port, private_routes).map(report_exit("Private proxy")),
     );
 
     // Wait until some task has died. The rest are killed when the TaskSet is dropped
@@ -515,6 +521,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
     block_replay_storage: BlockReplayStorage,
     tasks: &mut JoinSet<()>,
     state: State,
+    prover_api_port_sink: oneshot::Sender<u16>,
     _stop_receiver: watch::Receiver<bool>,
 ) {
     // Batcher-specific async channels
@@ -681,7 +688,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
             fri_job_manager.clone(),
             snark_job_manager.clone(),
             batch_storage.clone(),
-            config.prover_api_config.address.clone(),
+            prover_api_port_sink,
         )
         .map(report_exit("prover_server_job")),
     );

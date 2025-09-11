@@ -128,7 +128,7 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse ProverInputGenerator config");
 
-    let mut prover_api_config = repo
+    let prover_api_config = repo
         .single::<ProverApiConfig>()
         .expect("Failed to load prover api config")
         .parse()
@@ -144,7 +144,6 @@ fn build_configs() -> Config {
                 &mut general_config,
                 &mut l1_sender_config,
                 &mut genesis_config,
-                &mut prover_api_config,
             )
             .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
     }

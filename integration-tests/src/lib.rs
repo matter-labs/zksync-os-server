@@ -101,10 +101,8 @@ impl Tester {
         // Initialize and **hold** locked ports for the duration of node initialization.
         let public_port = LockedPort::acquire_unused().await?;
         let private_port = LockedPort::acquire_unused().await?;
-        let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_ws_url = format!("ws://localhost:{}", public_port.port);
-        let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
-        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
+        let prover_api_url = format!("http://localhost:{}", private_port.port);
         let replay_address = format!("localhost:{}", public_port.port);
 
         let rocksdb_path = tempfile::tempdir()?;
@@ -135,7 +133,6 @@ impl Tester {
                 enabled: true,
                 ..Default::default()
             },
-            address: prover_api_address,
             object_store: ObjectStoreConfig {
                 mode: ObjectStoreMode::FileBacked {
                     file_backed_base_path: object_store_path.clone(),
