@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 use zksync_os_bin::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
     MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig,
+    StateBackendConfig,
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
@@ -117,9 +117,6 @@ fn build_configs() -> Config {
     schema
         .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
         .expect("Failed to insert prover api config");
-    schema
-        .insert(&StatusServerConfig::DESCRIPTION, "status_server")
-        .expect("Failed to insert status server config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -183,12 +180,6 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse prover api config");
 
-    let status_server_config = repo
-        .single::<StatusServerConfig>()
-        .expect("Failed to load status server config")
-        .parse()
-        .expect("Failed to parse status server config");
-
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -215,6 +206,5 @@ fn build_configs() -> Config {
         prover_input_generator_config,
         prover_api_config,
         prometheus_config: PrometheusExporterConfig,
-        status_server_config,
     }
 }

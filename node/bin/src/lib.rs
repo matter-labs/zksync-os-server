@@ -298,12 +298,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ======== Start Status Server ========
+
+    let (status_server_port_sink, status_server_port) = oneshot::channel();
     tasks.spawn(
-        run_status_server(
-            config.status_server_config.address.clone(),
-            _stop_receiver.clone(),
-        )
-        .map(report_exit("Status server")),
+        run_status_server(status_server_port_sink, _stop_receiver.clone())
+            .map(report_exit("Status server")),
     );
 
     // =========== Start JSON RPC ========
@@ -467,7 +466,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             general_config.public_address,
             proxy::Routes::default()
                 .add_route(b"GET", b"/", json_rpc_port.await.unwrap())
-                .add_route(b"POST", b"/block_replays", block_replay_port.await.unwrap()),
+                .add_route(b"POST", b"/block_replays", block_replay_port.await.unwrap())
+                .add_route(b"GET", b"/status", status_server_port.await.unwrap()),
         )
         .map(report_exit("Public proxy")),
     );
