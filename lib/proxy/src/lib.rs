@@ -8,22 +8,17 @@ use tokio::{
 };
 
 #[derive(Default)]
-pub struct Routes(Vec<(&'static [u8], &'static [u8], u16)>);
+pub struct Routes(Vec<(Route, u16)>);
 
 impl Routes {
-    pub fn add_route(
-        mut self,
-        method: &'static [u8],
-        path_prefix: &'static [u8],
-        port: u16,
-    ) -> Self {
-        self.0.push((method, path_prefix, port));
+    pub fn add_route(mut self, route: Route, port: u16) -> Self {
+        self.0.push((route, port));
         self
     }
 
     fn into_sorted(self) -> SortedRoutes {
         let mut routes = self.0;
-        routes.sort_by_key(|(_, path, _)| path.len());
+        routes.sort_by_key(|(Route { path_prefix, .. }, _)| path_prefix.len());
         routes.reverse();
         SortedRoutes(routes)
     }
@@ -31,17 +26,22 @@ impl Routes {
 
 /// Routes sorted by path length, longest first.
 /// This way, more specific routes are matched before more general ones.
-struct SortedRoutes(Vec<(&'static [u8], &'static [u8], u16)>);
+struct SortedRoutes(Vec<(Route, u16)>);
 
 impl SortedRoutes {
     fn find(&self, (method, path): (&[u8], &[u8])) -> Option<u16> {
         self.0
             .iter()
-            .filter_map(|(m, prefix, port)| {
-                (*m == method && path.starts_with(prefix)).then_some(*port)
+            .filter_map(|(route, port)| {
+                (route.method == method && path.starts_with(route.path_prefix)).then_some(*port)
             })
             .next()
     }
+}
+
+pub struct Route {
+    pub method: &'static [u8],
+    pub path_prefix: &'static [u8],
 }
 
 /// Starts a server on `port` that routes any incoming TCP connections to other ports.

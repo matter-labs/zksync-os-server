@@ -41,7 +41,7 @@ use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use proxy::run_proxy;
+use proxy::{Route, run_proxy};
 use ruint::aliases::U256;
 use smart_config::value::ExposeSecret;
 use std::path::Path;
@@ -465,17 +465,46 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         run_proxy(
             general_config.public_address,
             proxy::Routes::default()
-                .add_route(b"GET", b"/", json_rpc_port.await.unwrap())
-                .add_route(b"POST", b"/block_replays", block_replay_port.await.unwrap())
-                .add_route(b"GET", b"/status", status_server_port.await.unwrap()),
+                .add_route(
+                    Route {
+                        method: b"GET",
+                        path_prefix: b"/",
+                    },
+                    json_rpc_port.await.unwrap(),
+                )
+                .add_route(
+                    Route {
+                        method: b"POST",
+                        path_prefix: b"/block_replays",
+                    },
+                    block_replay_port.await.unwrap(),
+                )
+                .add_route(
+                    Route {
+                        method: b"GET",
+                        path_prefix: b"/status",
+                    },
+                    status_server_port.await.unwrap(),
+                ),
         )
         .map(report_exit("Public proxy")),
     );
 
-    let mut private_routes =
-        proxy::Routes::default().add_route(b"GET", b"/", prometheus_port.await.unwrap());
+    let mut private_routes = proxy::Routes::default().add_route(
+        Route {
+            method: b"GET",
+            path_prefix: b"/",
+        },
+        prometheus_port.await.unwrap(),
+    );
     if let Some(prover_api_port) = prover_api_port {
-        private_routes = private_routes.add_route(b"POST", b"/prover-jobs", prover_api_port);
+        private_routes = private_routes.add_route(
+            Route {
+                method: b"POST",
+                path_prefix: b"/prover-jobs",
+            },
+            prover_api_port,
+        );
     }
 
     tasks.spawn(
