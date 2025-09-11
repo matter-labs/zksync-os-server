@@ -101,6 +101,9 @@ pub struct BatcherConfig {
     /// Max number of blocks per batch
     #[config(default_t = 100)]
     pub blocks_per_batch_limit: u64,
+
+    #[config(default_t = 0)]
+    pub pubdata_source: u8,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

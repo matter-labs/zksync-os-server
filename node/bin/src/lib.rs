@@ -60,7 +60,7 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
-use zksync_os_l1_sender::run_l1_sender;
+use zksync_os_l1_sender::{run_l1_sender, run_l1_sender_blobs};
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
@@ -751,7 +751,7 @@ fn run_l1_senders(
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");
     }
-    let l1_committer = run_l1_sender(
+    let l1_committer = run_l1_sender_blobs(
         batch_for_commit_receiver,
         batch_for_snark_sender,
         l1_state.validator_timelock,

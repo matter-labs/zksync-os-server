@@ -37,4 +37,6 @@ pub trait L1SenderCommand:
             })
             .join(", ")
     }
+
+    fn pubdata(&self) -> Vec<u8>;
 }

@@ -10,6 +10,7 @@ use zksync_os_bin::config::{
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
+use zksync_os_l1_sender::commitment::PubdataSource;
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
@@ -186,11 +187,13 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse L1 watcher config");
 
-    let batcher_config = repo
+    let mut batcher_config = repo
         .single::<BatcherConfig>()
         .expect("Failed to load L1 watcher config")
         .parse()
         .expect("Failed to parse L1 watcher config");
+
+    batcher_config.pubdata_source = PubdataSource::Blobs as u8;
 
     let prover_input_generator_config = repo
         .single::<ProverInputGeneratorConfig>()
