@@ -130,6 +130,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Reading L1 state");
     let l1_state = get_l1_state(
         &l1_provider,
+        config.sequencer_config.is_main_node(),
         config.genesis_config.bridgehub_address,
         config.genesis_config.chain_id,
     )
