@@ -10,7 +10,7 @@ mod new_blocks;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::config::L1SenderConfig;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::metrics::{L1_SENDER_METRICS, L1_STATE_METRICS, L1SenderState};
 use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
@@ -187,6 +187,8 @@ async fn register_operator<
 
     let balance = provider.get_balance(address).await?;
     L1_SENDER_METRICS.balance[&Input::NAME].set(format_ether(balance).parse()?);
+    let address_string: &'static str = address.to_string().leak();
+    L1_STATE_METRICS.l1_operator_address[&(Input::NAME, address_string)].set(1);
 
     if balance.is_zero() {
         anyhow::bail!("L1 sender's address {} has zero balance", address);
@@ -310,7 +312,7 @@ impl Heartbeat {
                 .observe(receipt.gas_used / l2_txs_count as u64);
             L1_SENDER_METRICS.l1_transaction_fee_ether[&Input::NAME]
                 .observe(format_ether(l1_transaction_fee).parse()?);
-            L1_SENDER_METRICS.l1_transaction_fee_ether[&Input::NAME]
+            L1_SENDER_METRICS.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
                 .observe(format_ether(l1_transaction_fee / l2_txs_count as u128).parse()?);
 
             Ok(())
