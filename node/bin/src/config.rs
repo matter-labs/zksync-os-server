@@ -23,6 +23,7 @@ pub struct Config {
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
+    pub status_server_config: StatusServerConfig,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -80,6 +81,14 @@ pub struct GeneralConfig {
 pub enum StateBackendConfig {
     FullDiffs,
     Compacted,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct StatusServerConfig {
+    /// Status server address to listen on.
+    #[config(default_t = "0.0.0.0:3071".into())]
+    pub address: String,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
