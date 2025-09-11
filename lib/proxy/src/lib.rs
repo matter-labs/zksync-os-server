@@ -80,8 +80,8 @@ pub async fn run_proxy(address: impl ToSocketAddrs, routes: Routes) -> Result<()
             let Some(target_port) = routes.find(method_and_path) else {
                 tracing::info!(
                     "No route for method {:?} and path {:?} in proxy",
-                    method_and_path.0,
-                    method_and_path.1
+                    String::from_utf8_lossy(method_and_path.0),
+                    String::from_utf8_lossy(method_and_path.1)
                 );
                 let _ = connection
                     .write_all(b"HTTP/1.1 404 \r\nConnection: close\r\n\r\n")
