@@ -132,13 +132,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to connect to L1 api");
 
     tracing::info!("Reading L1 state");
-    let l1_state = get_l1_state(
+    let mut l1_state = get_l1_state(
         &l1_provider,
         config.genesis_config.bridgehub_address,
         config.genesis_config.chain_id,
     )
     .await
     .expect("Failed to read L1 state");
+    if config.sequencer_config.is_main_node() {
+        // On a main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
+        l1_state = l1_state
+            .wait_to_finalize(&l1_provider, config.genesis_config.chain_id)
+            .await
+            .expect("failed to wait for L1 state finalization");
+    }
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
 
