@@ -23,13 +23,14 @@ impl L1State {
         let bridgehub: &'static str = self.bridgehub.to_string().leak();
         let diamond_proxy: &'static str = self.diamond_proxy.to_string().leak();
         let validator_timelock: &'static str = self.validator_timelock.to_string().leak();
+        L1_STATE_METRICS.l1_contract_addresses[&(bridgehub, diamond_proxy, validator_timelock)]
+            .set(1);
+
         let da_input_mode: &'static str = match self.da_input_mode {
             BatchDaInputMode::Rollup => "rollup",
             BatchDaInputMode::Validium => "validium",
         };
-        L1_STATE_METRICS.l1_addresses
-            [&(bridgehub, diamond_proxy, validator_timelock, da_input_mode)]
-            .set(1);
+        L1_STATE_METRICS.da_input_mode[&da_input_mode].set(1);
     }
 }
 
