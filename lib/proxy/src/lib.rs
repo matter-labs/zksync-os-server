@@ -7,13 +7,10 @@ use tokio::{
     try_join,
 };
 
+#[derive(Default)]
 pub struct Routes(Vec<(&'static [u8], &'static [u8], u16)>);
 
 impl Routes {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
     pub fn add_route(
         mut self,
         method: &'static [u8],
