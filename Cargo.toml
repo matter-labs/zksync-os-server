@@ -119,6 +119,7 @@ google-cloud-auth = "0.16.0"
 google-cloud-storage = "0.20.0"
 assert_matches = "1.5"
 serde_yaml = "0.9"
+secrecy = "0.10.3"
 
 zksync_kzg = "0.152.7"
 
