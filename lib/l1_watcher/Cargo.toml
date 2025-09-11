@@ -16,7 +16,6 @@ zksync_os_types.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
 anyhow.workspace = true
-smart-config = { workspace = true, features = ["primitive-types"] }
 tokio.workspace = true
 tracing.workspace = true
 vise.workspace = true

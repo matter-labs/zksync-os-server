@@ -1,11 +1,10 @@
 use std::{fs, path::Path, str::FromStr};
 
+use crate::config::{
+    GeneralConfig, GenesisConfig, L1SenderConfig, ProverApiConfig, RpcConfig, SequencerConfig,
+};
 use anyhow::{Context, anyhow};
 use serde_yaml::Value;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_rpc::RpcConfig;
-
-use crate::config::{GeneralConfig, GenesisConfig, ProverApiConfig, SequencerConfig};
 
 pub struct ZkStackConfig {
     pub config_dir: String,

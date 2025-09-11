@@ -26,7 +26,7 @@ blake2.workspace = true
 futures.workspace = true
 ruint.workspace = true
 serde.workspace = true
-smart-config = { workspace = true, features = ["primitive-types"] }
+secrecy.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 time = { workspace = true, features = ["parsing", "formatting"] }

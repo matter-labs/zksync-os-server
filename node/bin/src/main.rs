@@ -5,13 +5,12 @@ use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_bin::config::{
-    BatcherConfig, Config, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+    BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
+    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
