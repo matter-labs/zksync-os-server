@@ -23,7 +23,11 @@ members = [
     "lib/observability",
     "lib/object_store",
     "lib/state_full_diffs",
+<<<<<<< HEAD
     "lib/multivm",
+=======
+    "lib/status",
+>>>>>>> main
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -121,6 +125,7 @@ google-cloud-auth = "0.16.0"
 google-cloud-storage = "0.20.0"
 assert_matches = "1.5"
 serde_yaml = "0.9"
+secrecy = "0.10.3"
 
 # Reth dependencies
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
@@ -153,6 +158,7 @@ zksync_os_storage_api = { version = "=0.4.0-non-semver-compat", path = "lib/stor
 zksync_os_types = { version = "=0.4.0-non-semver-compat", path = "lib/types" }
 zksync_os_genesis = { version = "=0.4.0-non-semver-compat", path = "lib/genesis" }
 zksync_os_object_store = { version = "=0.4.0-non-semver-compat", path = "lib/object_store" }
+zksync_os_status_server = { version = "=0.4.0-non-semver-compat", path = "lib/status" }
 zksync_os_multivm = { version = "=0.4.0-non-semver-compat", path = "lib/multivm" }
 
 zksync_os_bin = { version = "=0.4.0-non-semver-compat", path = "node/bin" }

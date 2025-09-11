@@ -23,6 +23,5 @@ anyhow.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
-smart-config.workspace = true
 dashmap.workspace = true
 vise.workspace = true

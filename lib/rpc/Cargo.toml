@@ -30,7 +30,6 @@ futures.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
 ruint.workspace = true
 serde.workspace = true
-smart-config.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
