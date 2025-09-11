@@ -97,15 +97,15 @@ async fn wait_to_finalize<
             Err(_) => Ok(last_value),
         }
     })
-        .retry(RETRY_BUILDER)
-        .notify(|last_value, _| {
-            tracing::info!(
+    .retry(RETRY_BUILDER)
+    .notify(|last_value, _| {
+        tracing::info!(
             pending_value,
             last_value,
             "encountered a pending state change on L1; waiting for it to finalize"
         );
-        })
-        .await;
+    })
+    .await;
 
     match result {
         Ok(last_result) => {
