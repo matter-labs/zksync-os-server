@@ -9,8 +9,8 @@ mod new_blocks;
 
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::config::L1SenderConfig;
+use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
