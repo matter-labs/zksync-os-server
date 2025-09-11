@@ -5,6 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_object_store::ObjectStoreConfig;
+use zksync_os_observability::PrometheusExporterConfig;
 pub use zksync_os_rpc::RpcConfig;
 pub use zksync_os_sequencer::config::SequencerConfig;
 
@@ -23,6 +24,7 @@ pub struct Config {
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
+    pub prometheus_config: PrometheusExporterConfig,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -48,6 +50,10 @@ pub struct GeneralConfig {
     #[config(default_t = 3050)]
     pub public_port: u16,
 
+    /// Port that consolidates debug APIs, metrics.
+    #[config(default_t = 3312)]
+    pub private_port: u16,
+
     /// Min number of blocks to retain in memory
     /// it defines the blocks for which the node can handle API requests
     /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
@@ -68,11 +74,7 @@ pub struct GeneralConfig {
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
 
-    /// Prometheus address to listen on.
-    #[config(default_t = 3312)]
-    pub prometheus_port: u16,
-
-    /// Prometheus address to listen on.
+    /// Whether to store full diffs or compacted state
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
     pub state_backend: StateBackendConfig,

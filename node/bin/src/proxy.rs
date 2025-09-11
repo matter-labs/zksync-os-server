@@ -50,7 +50,6 @@ pub async fn run_proxy<const N: usize>(
                 return;
             };
 
-            dbg!(target_port);
             let mut target = TcpStream::connect(("127.0.0.1", target_port))
                 .await
                 .expect("proxy failed to connect to target");

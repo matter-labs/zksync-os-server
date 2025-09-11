@@ -100,6 +100,7 @@ impl Tester {
 
         // Initialize and **hold** locked ports for the duration of node initialization.
         let public_port = LockedPort::acquire_unused().await?;
+        let private_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_ws_url = format!("ws://localhost:{}", public_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
@@ -114,6 +115,7 @@ impl Tester {
 
         let general_config = GeneralConfig {
             public_port: public_port.port,
+            private_port: private_port.port,
             rocks_db_path: rocksdb_path.path().to_path_buf(),
             l1_rpc_url: l1_address.clone(),
             ..Default::default()
@@ -160,6 +162,7 @@ impl Tester {
                 ..Default::default()
             },
             prover_api_config,
+            prometheus_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;

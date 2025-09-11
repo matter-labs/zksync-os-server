@@ -78,16 +78,6 @@ impl ZkStackConfig {
         // ports
 
         let general_yaml = self.get_yaml_file("configs/general.yaml")?;
-        let api = general_yaml
-            .get("api")
-            .ok_or_else(|| anyhow!("Failed to get api from general.yaml"))?;
-
-        let prometheus_port = api
-            .get("prometheus")
-            .and_then(|v| v.get("listener_port").and_then(Value::as_u64))
-            .ok_or(anyhow!("Failed to get prometheus port"))?;
-
-        general_config.prometheus_port = prometheus_port as u16;
 
         let data_handler_port = general_yaml
             .get("data_handler")

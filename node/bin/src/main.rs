@@ -24,34 +24,14 @@ pub async fn main() {
         )
         .init();
 
-    // =========== load configs ===========
     let config = build_configs();
-
-    let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(config.general_config.prometheus_port);
-
-    // =========== init interruption channel ===========
 
     // todo: implement interruption handling in other tasks
     let (_stop_sender, stop_receiver) = watch::channel(false);
-    // ======= Run tasks ===========
-    let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
-    let main_task = async move {
-        match config.general_config.state_backend {
-            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
-            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
-        }
-    };
-
-    tokio::select! {
-        _ = main_task => {},
-        res = prometheus.run(stop_receiver) => {
-            match res {
-                Ok(_)  => tracing::warn!("Prometheus exporter unexpectedly exited"),
-                Err(e) => tracing::error!("Prometheus exporter failed: {e:#}"),
-            }
-        }
+    match config.general_config.state_backend {
+        StateBackendConfig::FullDiffs => run::<FullDiffsState>(stop_receiver.clone(), config).await,
+        StateBackendConfig::Compacted => run::<StateHandle>(stop_receiver.clone(), config).await,
     }
 }
 
@@ -180,5 +160,6 @@ fn build_configs() -> Config {
         batcher_config,
         prover_input_generator_config,
         prover_api_config,
+        prometheus_config: PrometheusExporterConfig,
     }
 }

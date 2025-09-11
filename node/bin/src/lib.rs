@@ -396,7 +396,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .await;
     });
 
-    let public_proxy_port = config.general_config.public_port;
+    let general_config = config.general_config.clone();
+
+    let (prometheus_port_sender, prometheus_port) = oneshot::channel();
+    tasks.spawn(
+        config
+            .prometheus_config
+            .clone()
+            .run(prometheus_port_sender, _stop_receiver.clone())
+            .map(report_exit("Prometheus exporter")),
+    );
 
     if config.sequencer_config.is_main_node() {
         // Main Node
@@ -429,13 +438,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         run_proxy(
-            public_proxy_port,
+            general_config.public_port,
             [
                 (b"GET", b"/", json_rpc_port.await.unwrap()),
                 (b"POST", b"/block_replays", block_replay_port.await.unwrap()),
             ],
         )
         .map(report_exit("Public proxy")),
+    );
+
+    tasks.spawn(
+        run_proxy(
+            general_config.private_port,
+            [(b"GET", b"/", prometheus_port.await.unwrap())],
+        )
+        .map(report_exit("Private proxy")),
     );
 
     // Wait until some task has died. The rest are killed when the TaskSet is dropped
