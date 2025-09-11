@@ -6,7 +6,6 @@ pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
 mod metadata;
-mod metrics;
 mod node_state_on_startup;
 pub mod prover_api;
 mod prover_input_generator;
@@ -20,9 +19,8 @@ pub mod zkstack_config;
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
-use crate::config::{Config, ProverApiConfig};
+use crate::config::{Config, L1SenderConfig, ProverApiConfig};
 use crate::metadata::NODE_VERSION;
-use crate::metrics::NODE_META_METRICS;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
@@ -47,7 +45,7 @@ use ruint::aliases::U256;
 use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -58,12 +56,12 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
+use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
@@ -87,15 +85,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     config: Config,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
-    NODE_META_METRICS.version[&NODE_VERSION].set(1);
     let role: &'static str = if config.sequencer_config.is_main_node() {
         "main_node"
     } else {
         "external_node"
     };
-    NODE_META_METRICS.role[&role].set(1);
 
-    tracing::info!(version = %node_version, "Initializing Node");
+    let process_started_at = Instant::now();
+    GENERAL_METRICS.process_started_at[&(NODE_VERSION, role)].set(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
+
+    tracing::info!(version = %node_version, role, "Initializing Node");
 
     let (blocks_for_batcher_subsystem_sender, blocks_for_batcher_subsystem_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(5);
@@ -143,6 +147,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .expect("failed to wait for L1 state finalization");
     }
     tracing::info!(?l1_state, "L1 state");
+    l1_state.report_metrics();
 
     tracing::info!("Initializing TreeManager");
     let tree_wrapper = TreeManager::tree_wrapper(Path::new(
@@ -241,7 +246,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
     tasks.spawn(
         L1CommitWatcher::new(
-            config.l1_watcher_config.clone(),
+            config.l1_watcher_config.clone().into(),
             l1_provider.clone().erased(),
             node_startup_state.l1_state.diamond_proxy,
             finality_storage.clone(),
@@ -255,7 +260,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         L1ExecuteWatcher::new(
-            config.l1_watcher_config.clone(),
+            config.l1_watcher_config.clone().into(),
             l1_provider.clone().erased(),
             node_startup_state.l1_state.diamond_proxy,
             finality_storage.clone(),
@@ -279,7 +284,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         L1TxWatcher::new(
-            config.l1_watcher_config.clone(),
+            config.l1_watcher_config.clone().into(),
             l1_provider.clone().erased(),
             node_startup_state.l1_state.diamond_proxy,
             l1_transactions_sender,
@@ -312,7 +317,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         run_jsonrpsee_server(
-            config.rpc_config.clone(),
+            config.rpc_config.clone().into(),
             config.genesis_config.chain_id,
             node_startup_state.l1_state.bridgehub,
             rpc_storage,
@@ -390,7 +395,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 state,
                 block_replay_storage.clone(),
                 repositories,
-                sequencer_config,
+                sequencer_config.into(),
             )
             .map(report_exit("Sequencer server"))
             .await
@@ -439,7 +444,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await;
     };
+    let startup_time = process_started_at.elapsed();
+    GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
+    tracing::info!("All components initialized in {startup_time:?}");
     tasks.join_next().await;
+    tracing::info!("One of the subsystems exited - exiting process.");
 }
 
 fn command_source(
@@ -762,36 +771,24 @@ fn run_l1_senders(
         batch_for_commit_receiver,
         batch_for_snark_sender,
         l1_state.validator_timelock,
-        l1_sender_config.operator_commit_pk.clone(),
         provider.clone(),
-        l1_sender_config.max_fee_per_gas(),
-        l1_sender_config.max_priority_fee_per_gas(),
-        l1_sender_config.command_limit,
-        l1_sender_config.poll_interval,
+        l1_sender_config.clone().into(),
     );
 
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
         batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
-        l1_sender_config.operator_prove_pk.clone(),
         provider.clone(),
-        l1_sender_config.max_fee_per_gas(),
-        l1_sender_config.max_priority_fee_per_gas(),
-        l1_sender_config.command_limit,
-        l1_sender_config.poll_interval,
+        l1_sender_config.clone().into(),
     );
 
     let l1_executor = run_l1_sender(
         batch_for_execute_receiver,
         fully_processed_batch_sender,
         l1_state.diamond_proxy,
-        l1_sender_config.operator_execute_pk.clone(),
         provider,
-        l1_sender_config.max_fee_per_gas(),
-        l1_sender_config.max_priority_fee_per_gas(),
-        l1_sender_config.command_limit,
-        l1_sender_config.poll_interval,
+        l1_sender_config.clone().into(),
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }

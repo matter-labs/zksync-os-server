@@ -1,4 +1,5 @@
 use crate::config::BatchDaInputMode;
+use crate::metrics::L1_STATE_METRICS;
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
@@ -20,6 +21,21 @@ pub struct L1State {
 }
 
 impl L1State {
+    pub fn report_metrics(&self) {
+        // Need to leak Strings here as metric exporter expects label names as `&'static`
+        // This only happens once per process lifetime so is safe
+        let bridgehub: &'static str = self.bridgehub.to_string().leak();
+        let diamond_proxy: &'static str = self.diamond_proxy.to_string().leak();
+        let validator_timelock: &'static str = self.validator_timelock.to_string().leak();
+        let da_input_mode: &'static str = match self.da_input_mode {
+            BatchDaInputMode::Rollup => "rollup",
+            BatchDaInputMode::Validium => "validium",
+        };
+        L1_STATE_METRICS.l1_addresses
+            [&(bridgehub, diamond_proxy, validator_timelock, da_input_mode)]
+            .set(1);
+    }
+
     /// Waits until pending L1 state is consistent with latest L1 state (i.e. there are no pending
     /// transactions that are modifying our L2 chain state).
     pub async fn wait_to_finalize(
@@ -81,15 +97,15 @@ async fn wait_to_finalize<
             Err(_) => Ok(last_value),
         }
     })
-    .retry(RETRY_BUILDER)
-    .notify(|last_value, _| {
-        tracing::info!(
+        .retry(RETRY_BUILDER)
+        .notify(|last_value, _| {
+            tracing::info!(
             pending_value,
             last_value,
             "encountered a pending state change on L1; waiting for it to finalize"
         );
-    })
-    .await;
+        })
+        .await;
 
     match result {
         Ok(last_result) => {
