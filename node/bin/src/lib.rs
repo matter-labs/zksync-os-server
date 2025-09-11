@@ -461,6 +461,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .await;
     };
 
+    let json_rpc_port = json_rpc_port.await.unwrap();
     tasks.spawn(
         run_proxy(
             general_config.public_address,
@@ -470,7 +471,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                         method: b"GET",
                         path_prefix: b"/",
                     },
-                    json_rpc_port.await.unwrap(),
+                    json_rpc_port,
+                )
+                .add_route(
+                    Route {
+                        method: b"POST",
+                        path_prefix: b"/",
+                    },
+                    json_rpc_port,
                 )
                 .add_route(
                     Route {
