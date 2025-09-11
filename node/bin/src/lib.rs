@@ -761,7 +761,7 @@ fn run_l1_senders(
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
         batch_for_priority_tree_sender,
-        l1_state.diamond_proxy,
+        l1_state.validator_timelock,
         provider.clone(),
         l1_sender_config.clone().into(),
     );
@@ -769,7 +769,7 @@ fn run_l1_senders(
     let l1_executor = run_l1_sender(
         batch_for_execute_receiver,
         fully_processed_batch_sender,
-        l1_state.diamond_proxy,
+        l1_state.validator_timelock,
         provider,
         l1_sender_config.clone().into(),
     );
