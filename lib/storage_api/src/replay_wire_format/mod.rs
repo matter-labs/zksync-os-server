@@ -8,6 +8,9 @@ mod v1;
 #[rustfmt::skip]
 mod v2;
 
+#[cfg(test)]
+mod tests;
+
 pub const REPLAY_WIRE_FORMAT_VERSION: u32 = 2;
 
 impl ReplayRecord {
