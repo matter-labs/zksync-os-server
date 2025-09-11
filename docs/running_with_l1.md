@@ -38,6 +38,8 @@ Use `zksync-os-integration` branch from`zksync-era`.
 
 IMPORTANT: the contracts deployed will come from the zksync-era/contracts directory. So if you want to test any changes to contracts, you have to put them there.
 
+Make sure that your zkstack was compiled from 'main' branch of era, and is relatively fresh (after September 10).
+
 Run this from the directory **above** zksync-era.
 ```
 mkdir zkstack-playground && cd zkstack-playground
@@ -86,10 +88,8 @@ done
 ```
 cd local_v1
 zkstack ecosystem init --deploy-paymaster=false --deploy-erc20=false --observability=false \
-  --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --chain era1 \
-  --server-db-url=postgres://invalid --server-db-name=invalid
+  --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --chain era1 --zksync-os
 ```
-WARNING: when you see the tool failing on postgres - it is ok, as the chain got registered.
 
 
 ### Start sequencer
@@ -102,7 +102,7 @@ general_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo 
 the `general_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
 Alternatively, you need to set:
 * `l1_sender_operator_commit_pk` to the operator private key of `wallets.yaml` of `zkstack` tool output, 
-* `l1_sender_operator_prove_pk` and `l1_sender_operator_execute_pk` to arbitrary funded L1 wallets,
+* `l1_sender_operator_prove_pk` and `l1_sender_operator_execute_pk` to respective wallets from `wallets.yaml`,
 * `l1_sender_bridgehub_address` to `bridgehub_proxy_addr` in `contracts.yaml` of `zkstack` tool output
 * (if running validium) `l1_sender_da_input_mode` to `validium`
 
@@ -139,7 +139,7 @@ Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--
 Update values in `L1SenderConfig`:
 * `bridgehub_address` -> `bridgehub_proxy_addr` in `contracts.yaml` of `zkstack` tool output
 * `operator_commit_pk` -> `operator_private_key` in `wallets.yaml`
-* `operator_prove_pk`, `operator_execute_pk` -> any funded L1 addresses (e.g. `blob_operator_private_key` and `deployer_private_key` from wallets.yaml)
+* `operator_prove_pk`, `operator_execute_pk` -> `prove_operator` and `execute_operarator` keys from wallets.yaml
 
 
 ## Running multiple chains
