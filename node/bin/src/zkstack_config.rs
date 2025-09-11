@@ -1,10 +1,8 @@
 use std::{fs, path::Path, str::FromStr};
 
+use crate::config::{GeneralConfig, GenesisConfig, L1SenderConfig};
 use anyhow::{Context, anyhow};
 use serde_yaml::Value;
-use zksync_os_l1_sender::config::L1SenderConfig;
-
-use crate::config::{GeneralConfig, GenesisConfig};
 
 pub struct ZkStackConfig {
     pub config_dir: String,
@@ -51,13 +49,12 @@ impl ZkStackConfig {
         let wallets_yaml = self.get_yaml_file("configs/wallets.yaml")?;
 
         let operator = Self::get_private_key("operator", &wallets_yaml)?;
-        let blob_operator = Self::get_private_key("blob_operator", &wallets_yaml)?;
-        let deployer = Self::get_private_key("deployer", &wallets_yaml)?;
+        let prove_operator = Self::get_private_key("prove_operator", &wallets_yaml)?;
+        let execute_operator = Self::get_private_key("execute_operator", &wallets_yaml)?;
 
-        l1_sender_config.operator_commit_pk = blob_operator.into();
-        l1_sender_config.operator_prove_pk = operator.into();
-        // TODO: this is not great, but we don't have a third wallet here. What should we use?
-        l1_sender_config.operator_execute_pk = deployer.into();
+        l1_sender_config.operator_commit_pk = operator.into();
+        l1_sender_config.operator_prove_pk = prove_operator.into();
+        l1_sender_config.operator_execute_pk = execute_operator.into();
 
         let contracts_yaml = self.get_yaml_file("configs/contracts.yaml")?;
 

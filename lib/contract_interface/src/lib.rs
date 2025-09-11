@@ -316,6 +316,7 @@ impl<P: Provider + Clone> Bridgehub<P> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ZkChain<P: Provider> {
     instance: IZKChainInstance<P, Ethereum>,
 }
@@ -353,8 +354,16 @@ impl<P: Provider> ZkChain<P> {
             .map(|n| n.saturating_to())
     }
 
-    pub async fn get_total_batches_proved(&self) -> alloy::contract::Result<U256> {
-        self.instance.getTotalBatchesVerified().call().await
+    pub async fn get_total_batches_proved(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<u64> {
+        self.instance
+            .getTotalBatchesVerified()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
     }
 
     pub async fn get_total_batches_executed(

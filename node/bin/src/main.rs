@@ -1,18 +1,21 @@
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
+use std::time::Duration;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_bin::config::{
-    BatcherConfig, Config, GeneralConfig, GenesisConfig, MempoolConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig,
+    BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
+    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
+
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 pub async fn main() {
@@ -27,11 +30,54 @@ pub async fn main() {
     let config = build_configs();
 
     // todo: implement interruption handling in other tasks
-    let (_stop_sender, stop_receiver) = watch::channel(false);
+    let (stop_sender, stop_receiver) = watch::channel(false);
+    // ======= Run tasks ===========
+    let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
-    match config.general_config.state_backend {
-        StateBackendConfig::FullDiffs => run::<FullDiffsState>(stop_receiver.clone(), config).await,
-        StateBackendConfig::Compacted => run::<StateHandle>(stop_receiver.clone(), config).await,
+    let main_task = async move {
+        match config.general_config.state_backend {
+            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
+            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+        }
+    };
+
+    let stop_receiver_copy = stop_receiver.clone();
+
+    tokio::select! {
+        _ = main_task => {
+            if *stop_receiver_copy.borrow() {
+                tracing::info!("Main task exited gracefully after stop signal");
+                // sleep to wait for other tasks to finish
+                tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+            } else {
+                tracing::warn!("Main task unexpectedly exited")
+            }
+        },
+        _ = handle_delayed_termination(stop_sender) => {},
+    }
+}
+
+async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
+    // sigint is sent on Ctrl+C
+    let mut sigint =
+        signal(SignalKind::interrupt()).expect("failed to register interrupt signal handler");
+
+    // sigterm is sent on `kill <pid>` or by kubernetes during pod shutdown
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("failed to register terminate signal handler");
+    tokio::select! {
+        _ = sigint.recv() => {
+            tracing::info!("Received SIGINT, shutting down immediately");
+        },
+        _ = sigterm.recv() => {
+            tracing::info!("Received SIGTERM: scheduling shutdown in 10s");
+
+            stop_sender
+                .send(true)
+                .expect("failed to send terminate signal");
+
+            tokio::time::sleep(GRACEFUL_SHUTDOWN_TIMEOUT).await;
+        },
     }
 }
 
@@ -71,6 +117,9 @@ fn build_configs() -> Config {
     schema
         .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
         .expect("Failed to insert prover api config");
+    schema
+        .insert(&StatusServerConfig::DESCRIPTION, "status_server")
+        .expect("Failed to insert status server config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -134,6 +183,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse prover api config");
 
+    let status_server_config = repo
+        .single::<StatusServerConfig>()
+        .expect("Failed to load status server config")
+        .parse()
+        .expect("Failed to parse status server config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -160,5 +215,6 @@ fn build_configs() -> Config {
         prover_input_generator_config,
         prover_api_config,
         prometheus_config: PrometheusExporterConfig,
+        status_server_config,
     }
 }
