@@ -316,6 +316,7 @@ impl<P: Provider + Clone> Bridgehub<P> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ZkChain<P: Provider> {
     instance: IZKChainInstance<P, Ethereum>,
 }

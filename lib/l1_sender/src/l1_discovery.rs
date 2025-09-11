@@ -19,18 +19,51 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
 }
 
-/// Waits until pending L1 state is consistent with latest L1 state (i.e. there are no pending
-/// transactions that are modifying our L2 chain state).
+impl L1State {
+    /// Waits until pending L1 state is consistent with latest L1 state (i.e. there are no pending
+    /// transactions that are modifying our L2 chain state).
+    pub async fn wait_to_finalize(
+        self,
+        provider: impl Provider + Clone,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
+        let bridgehub = Bridgehub::new(self.bridgehub, provider, chain_id);
+        let zk_chain = bridgehub.zk_chain().await?;
+        let last_committed_batch =
+            wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
+                .await
+                .context("getTotalBatchesCommitted")?;
+        let last_proved_batch =
+            wait_to_finalize(|block_id| zk_chain.get_total_batches_proved(block_id))
+                .await
+                .context("getTotalBatchesVerified")?;
+        let last_executed_batch =
+            wait_to_finalize(|block_id| zk_chain.get_total_batches_executed(block_id))
+                .await
+                .context("getTotalBatchesExecuted")?;
+        Ok(Self {
+            bridgehub: self.bridgehub,
+            diamond_proxy: self.diamond_proxy,
+            validator_timelock: self.validator_timelock,
+            last_committed_batch,
+            last_proved_batch,
+            last_executed_batch,
+            da_input_mode: self.da_input_mode,
+        })
+    }
+}
+
+/// Waits until provided function returns consistent values for both `latest` and `pending` block ids.
 async fn wait_to_finalize<
     T: PartialEq + tracing::Value + Display,
     Fut: Future<Output = alloy::contract::Result<T>>,
 >(
     f: impl Fn(BlockId) -> Fut,
 ) -> anyhow::Result<T> {
-    /// Ethereum blocks are mined every ~12 seconds on average, so we wait in 6-second intervals
-    /// optimistically.
+    /// Ethereum blocks are mined every ~12 seconds on average, but we wait in 1-second intervals
+    /// optimistically to save time on startup.
     const RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
-        .with_delay(Duration::from_secs(6))
+        .with_delay(Duration::from_secs(1))
         .with_max_times(10);
 
     let pending_value = f(BlockId::pending())
@@ -81,7 +114,6 @@ async fn wait_to_finalize<
 
 pub async fn get_l1_state(
     provider: impl Provider + Clone,
-    is_main_node: bool,
     bridgehub_address: Address,
     chain_id: u64,
 ) -> anyhow::Result<L1State> {
@@ -96,32 +128,10 @@ pub async fn get_l1_state(
     let diamond_proxy = *zk_chain.address();
     let validator_timelock_address = bridgehub.validator_timelock_address().await?;
 
-    // If this is a main node, we need to wait for the pending chain state to finalize before proceeding.
-    let last_committed_batch = if is_main_node {
-        wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
-            .await
-            .context("getTotalBatchesCommitted")?
-    } else {
-        zk_chain
-            .get_total_batches_committed(BlockId::latest())
-            .await?
-    };
-    let last_proved_batch = if is_main_node {
-        wait_to_finalize(|block_id| zk_chain.get_total_batches_proved(block_id))
-            .await
-            .context("getTotalBatchesVerified")?
-    } else {
-        zk_chain.get_total_batches_proved(BlockId::latest()).await?
-    };
-    let last_executed_batch = if is_main_node {
-        wait_to_finalize(|block_id| zk_chain.get_total_batches_executed(block_id))
-            .await
-            .context("getTotalBatchesExecuted")?
-    } else {
-        zk_chain
-            .get_total_batches_executed(BlockId::latest())
-            .await?
-    };
+    let latest = BlockId::latest();
+    let last_committed_batch = zk_chain.get_total_batches_committed(latest).await?;
+    let last_proved_batch = zk_chain.get_total_batches_proved(latest).await?;
+    let last_executed_batch = zk_chain.get_total_batches_executed(latest).await?;
 
     let pubdata_pricing_mode = zk_chain.get_pubdata_pricing_mode().await?;
     let da_input_mode = match pubdata_pricing_mode {
