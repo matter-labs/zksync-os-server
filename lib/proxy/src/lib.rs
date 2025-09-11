@@ -21,17 +21,33 @@ impl Routes {
         self
     }
 
+    fn into_sorted(self) -> SortedRoutes {
+        let mut routes = self.0;
+        routes.sort_by_key(|(_, path, _)| path.len());
+        routes.reverse();
+        SortedRoutes(routes)
+    }
+}
+
+/// Routes sorted by path length, longest first.
+/// This way, more specific routes are matched before more general ones.
+struct SortedRoutes(Vec<(&'static [u8], &'static [u8], u16)>);
+
+impl SortedRoutes {
     fn find(&self, (method, path): (&[u8], &[u8])) -> Option<u16> {
-        self.0.iter().find_map(|(m, prefix, port)| {
-            (*m == method && path.starts_with(prefix)).then_some(*port)
-        })
+        self.0
+            .iter()
+            .filter_map(|(m, prefix, port)| {
+                (*m == method && path.starts_with(prefix)).then_some(*port)
+            })
+            .next()
     }
 }
 
 /// Starts a server on `port` that routes any incoming TCP connections to other ports.
 /// The `routes` parameter takes an array of routes consisting of method, path and port to route to.
 pub async fn run_proxy(address: impl ToSocketAddrs, routes: Routes) -> Result<()> {
-    let routes = Arc::new(routes);
+    let routes = Arc::new(routes.into_sorted());
 
     let listener = TcpListener::bind(address).await?;
 
