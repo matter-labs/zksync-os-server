@@ -12,8 +12,6 @@ use zksync_os_bin::config::{
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
 use zksync_os_l1_sender::commitment::PubdataSource;
-use zksync_os_l1_sender::config::L1SenderConfig;
-use zksync_os_l1_watcher::L1WatcherConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
