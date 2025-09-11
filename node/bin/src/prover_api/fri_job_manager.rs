@@ -15,7 +15,7 @@
 //! `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
 
 use crate::prover_api::fri_proof_verifier;
-use crate::prover_api::metrics::PROVER_METRICS;
+use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
 use crate::prover_api::prover_job_map::ProverJobMap;
 use crate::util::peekable_receiver::PeekableReceiver;
 use itertools::MinMaxResult::MinMax;
@@ -184,8 +184,9 @@ impl FriJobManager {
         // Metrics: observe time since the last assignment.
         let prove_time = assigned_at.elapsed();
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
-        PROVER_METRICS.prove_time[&label].observe(prove_time);
-        PROVER_METRICS.prove_time_per_tx[&label]
+
+        PROVER_METRICS.prove_time[&(ProverStage::Fri, ProverType::Real, label)].observe(prove_time);
+        PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Real, label)]
             .observe(prove_time / batch_metadata.tx_count as u32);
 
         // We want to ensure we can send the result downstream before we remove the job
@@ -233,8 +234,9 @@ impl FriJobManager {
         // Metrics: observe time since the last assignment.
         let prove_time = assigned.assigned_at.elapsed();
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
-        PROVER_METRICS.prove_time[&label].observe(prove_time);
-        PROVER_METRICS.prove_time_per_tx[&label]
+
+        PROVER_METRICS.prove_time[&(ProverStage::Fri, ProverType::Fake, label)].observe(prove_time);
+        PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Fake, label)]
             .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
 
         // No verification / deserialization — we emit a fake proof.

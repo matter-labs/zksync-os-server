@@ -1,4 +1,5 @@
 use crate::config::BatchDaInputMode;
+use crate::metrics::L1_STATE_METRICS;
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
@@ -13,6 +14,23 @@ pub struct L1State {
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
     pub da_input_mode: BatchDaInputMode,
+}
+
+impl L1State {
+    pub fn report_metrics(&self) {
+        // Need to leak Strings here as metric exporter expects label names as `&'static`
+        // This only happens once per process lifetime so is safe
+        let bridgehub: &'static str = self.bridgehub.to_string().leak();
+        let diamond_proxy: &'static str = self.diamond_proxy.to_string().leak();
+        let validator_timelock: &'static str = self.validator_timelock.to_string().leak();
+        let da_input_mode: &'static str = match self.da_input_mode {
+            BatchDaInputMode::Rollup => "rollup",
+            BatchDaInputMode::Validium => "validium",
+        };
+        L1_STATE_METRICS.l1_addresses
+            [&(bridgehub, diamond_proxy, validator_timelock, da_input_mode)]
+            .set(1);
+    }
 }
 
 pub async fn get_l1_state(

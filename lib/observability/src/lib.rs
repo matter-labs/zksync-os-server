@@ -8,6 +8,7 @@ pub mod component_state_reporter;
 pub use component_state_reporter::{ComponentStateHandle, ComponentStateReporter, StateLabel};
 
 mod metrics;
+pub use metrics::GENERAL_METRICS;
 
 mod prometheus;
 pub use prometheus::PrometheusExporterConfig;
