@@ -52,12 +52,26 @@ pub async fn run_proxy(port: u16, routes: Routes) -> Result<()> {
                 }
 
                 if bytes_read == buffer.len() {
-                    // We read 256 bytes and still don't have a full request line
+                    tracing::info!(
+                        "Proxy could not parse request start: {:?}",
+                        &buffer[..bytes_read]
+                    );
+                    let _ = connection
+                        .write_all(b"HTTP/1.1 414 \r\nConnection: close\r\n\r\n")
+                        .await;
                     return;
                 }
             };
 
             let Some(target_port) = routes.find(method_and_path) else {
+                tracing::info!(
+                    "No route for method {:?} and path {:?} in proxy",
+                    method_and_path.0,
+                    method_and_path.1
+                );
+                let _ = connection
+                    .write_all(b"HTTP/1.1 404 \r\nConnection: close\r\n\r\n")
+                    .await;
                 return;
             };
 
