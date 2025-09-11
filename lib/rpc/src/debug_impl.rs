@@ -10,9 +10,9 @@ use alloy::rpc::types::trace::geth::{
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use ruint::aliases::B160;
 use std::ops::Range;
-use zk_ee::system::metadata::{BlockHashes, BlockMetadataFromOracle};
+use zk_ee::system::metadata::BlockMetadataFromOracle;
+use zk_os_forward_system::run::convert::FromInterface;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_storage_api::{RepositoryError, StateError};
 
@@ -74,20 +74,12 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             txs.push(tx);
         }
         let prev_state_view = self.storage.state_view_at(block.number - 1)?;
-        let context = BlockMetadataFromOracle {
-            chain_id: block_context.chain_id,
-            block_number: block_context.block_number,
-            block_hashes: BlockHashes(block_context.block_hashes.0),
-            timestamp: block_context.timestamp,
-            eip1559_basefee: block_context.eip1559_basefee,
-            gas_per_pubdata: block_context.gas_per_pubdata,
-            native_price: block_context.native_price,
-            coinbase: B160::from_be_bytes(block_context.coinbase.0.0),
-            gas_limit: block_context.gas_limit,
-            pubdata_limit: block_context.pubdata_limit,
-            mix_hash: block_context.mix_hash,
-        };
-        match sandbox::call_trace(txs, context, prev_state_view, call_config) {
+        match sandbox::call_trace(
+            txs,
+            BlockMetadataFromOracle::from_interface(block_context),
+            prev_state_view,
+            call_config,
+        ) {
             Ok(calls) => Ok(calls
                 .into_iter()
                 .zip(&block.body.transactions)

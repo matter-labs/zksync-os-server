@@ -301,6 +301,7 @@ pub enum SealReason {
     NativeCycles,
     Pubdata,
     L2ToL1Logs,
+    Other,
 }
 
 fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
@@ -339,7 +340,8 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::AuthListIsEmpty
         | InvalidTransaction::BlobElementIsNotSupported
         | InvalidTransaction::EIP7623IntrinsicGasIsTooLow
-        | InvalidTransaction::NativeResourcesAreTooExpensive => TxRejectionMethod::Purge,
+        | InvalidTransaction::NativeResourcesAreTooExpensive
+        | InvalidTransaction::OtherUnrecoverable(_) => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
@@ -355,5 +357,6 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         InvalidTransaction::BlockL2ToL1LogsLimitReached => {
             TxRejectionMethod::SealBlock(SealReason::L2ToL1Logs)
         }
+        InvalidTransaction::OtherLimitReached(_) => TxRejectionMethod::SealBlock(SealReason::Other),
     }
 }

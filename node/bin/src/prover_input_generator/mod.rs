@@ -1,17 +1,15 @@
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
-use ruint::aliases::B160;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
-use zk_ee::{
-    common_structs::ProofData,
-    system::metadata::{BlockHashes, BlockMetadataFromOracle},
+use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
+use zk_os_forward_system::run::{
+    StorageCommitment, convert::FromInterface, generate_proof_input, test_impl::TxListSource,
 };
-use zk_os_forward_system::run::{StorageCommitment, generate_proof_input, test_impl::TxListSource};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
@@ -176,22 +174,9 @@ fn compute_prover_input(
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
 
-    let context = BlockMetadataFromOracle {
-        chain_id: replay_record.block_context.chain_id,
-        block_number: replay_record.block_context.block_number,
-        block_hashes: BlockHashes(replay_record.block_context.block_hashes.0),
-        timestamp: replay_record.block_context.timestamp,
-        eip1559_basefee: replay_record.block_context.eip1559_basefee,
-        gas_per_pubdata: replay_record.block_context.gas_per_pubdata,
-        native_price: replay_record.block_context.native_price,
-        coinbase: B160::from_be_bytes(replay_record.block_context.coinbase.0.0),
-        gas_limit: replay_record.block_context.gas_limit,
-        pubdata_limit: replay_record.block_context.pubdata_limit,
-        mix_hash: replay_record.block_context.mix_hash,
-    };
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
-        context,
+        BlockMetadataFromOracle::from_interface(replay_record.block_context),
         ProofData {
             state_root_view: initial_storage_commitment,
             last_block_timestamp,

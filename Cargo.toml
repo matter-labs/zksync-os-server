@@ -23,11 +23,8 @@ members = [
     "lib/observability",
     "lib/object_store",
     "lib/state_full_diffs",
-<<<<<<< HEAD
-    "lib/multivm",
-=======
     "lib/status",
->>>>>>> main
+    "lib/multivm",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -62,7 +59,7 @@ serde_json = "1"
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
-zksync_os_interface = { git = "https://github.com/matter-labs/zksync-os-interface", rev = "d7654cd96c701e87132215c514830741e84f217c" }
+zksync_os_interface = { git = "https://github.com/matter-labs/zksync-os-interface", rev = "04aa514f167a543255732bc6d99e5705334347e5" }
 zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-clean", features = ["evm-compatibility", "no_print"] }
 zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-clean" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-clean" }
