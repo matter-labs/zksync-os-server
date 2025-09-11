@@ -34,9 +34,16 @@ impl StateLabel for L1SenderState {
 pub struct L1StateMetrics {
     /// Used to report L1 contract addresses to Prometheus.
     /// Gauge is always set to one.
-    #[metrics(labels = ["bridgehub", "diamond_proxy", "validator_timelock", "da_input_mode"])]
-    pub l1_addresses:
-        LabeledFamily<(&'static str, &'static str, &'static str, &'static str), Gauge, 4>,
+    #[metrics(labels = ["bridgehub", "diamond_proxy", "validator_timelock"])]
+    pub l1_contract_addresses: LabeledFamily<(&'static str, &'static str, &'static str), Gauge, 3>,
+    /// Used to report L1 operator addresses to Prometheus (commit/prove/execute),
+    /// Gauge is always set to one.
+    #[metrics(labels = ["operation", "operator_address"])]
+    pub l1_operator_address: LabeledFamily<(&'static str, &'static str), Gauge, 2>,
+    /// Used to report the DA mode (rollup/validium).
+    /// Gauge is always set to one.
+    #[metrics(labels = ["da_input_mode"])]
+    pub da_input_mode: LabeledFamily<&'static str, Gauge, 1>,
 }
 
 #[derive(Debug, Metrics)]
@@ -56,7 +63,7 @@ pub struct L1SenderMetrics {
 
     /// L1 Transaction fee in Ether per l2 transaction (`l1_transaction_fee / transactions_per_batch`)
     #[metrics(labels = ["command"], buckets = Buckets::exponential(0.0001..=100.0, 3.0))]
-    pub l1_transaction_fee_per_l2_tx: LabeledFamily<&'static str, Histogram<f64>>,
+    pub l1_transaction_fee_per_l2_tx_ether: LabeledFamily<&'static str, Histogram<f64>>,
 
     /// Total L1 gas used by L1 transaction (i.e. commit/prove/execute)
     #[metrics(labels = ["command"], buckets = Buckets::exponential(1.0..=10_000_000.0, 3.0))]
