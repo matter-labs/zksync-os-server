@@ -19,7 +19,7 @@ pub mod zkstack_config;
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
-use crate::config::{Config, ProverApiConfig};
+use crate::config::{Config, L1SenderConfig, ProverApiConfig};
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
@@ -56,7 +56,6 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_l1_sender::config::L1SenderConfig;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
@@ -240,7 +239,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(tree_manager.run_loop().map(report_exit("TREE server")));
     tasks.spawn(
         L1CommitWatcher::new(
-            config.l1_watcher_config.clone(),
+            config.l1_watcher_config.clone().into(),
             l1_provider.clone().erased(),
             node_startup_state.l1_state.diamond_proxy,
             finality_storage.clone(),
@@ -254,7 +253,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         L1ExecuteWatcher::new(
-            config.l1_watcher_config.clone(),
+            config.l1_watcher_config.clone().into(),
             l1_provider.clone().erased(),
             node_startup_state.l1_state.diamond_proxy,
             finality_storage.clone(),
@@ -278,7 +277,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         L1TxWatcher::new(
-            config.l1_watcher_config.clone(),
+            config.l1_watcher_config.clone().into(),
             l1_provider.clone().erased(),
             node_startup_state.l1_state.diamond_proxy,
             l1_transactions_sender,
@@ -311,7 +310,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tasks.spawn(
         run_jsonrpsee_server(
-            config.rpc_config.clone(),
+            config.rpc_config.clone().into(),
             config.genesis_config.chain_id,
             node_startup_state.l1_state.bridgehub,
             rpc_storage,
@@ -389,7 +388,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 state,
                 block_replay_storage.clone(),
                 repositories,
-                sequencer_config,
+                sequencer_config.into(),
             )
             .map(report_exit("Sequencer server"))
             .await
@@ -765,36 +764,24 @@ fn run_l1_senders(
         batch_for_commit_receiver,
         batch_for_snark_sender,
         l1_state.validator_timelock,
-        l1_sender_config.operator_commit_pk.clone(),
         provider.clone(),
-        l1_sender_config.max_fee_per_gas(),
-        l1_sender_config.max_priority_fee_per_gas(),
-        l1_sender_config.command_limit,
-        l1_sender_config.poll_interval,
+        l1_sender_config.clone().into(),
     );
 
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
         batch_for_priority_tree_sender,
         l1_state.diamond_proxy,
-        l1_sender_config.operator_prove_pk.clone(),
         provider.clone(),
-        l1_sender_config.max_fee_per_gas(),
-        l1_sender_config.max_priority_fee_per_gas(),
-        l1_sender_config.command_limit,
-        l1_sender_config.poll_interval,
+        l1_sender_config.clone().into(),
     );
 
     let l1_executor = run_l1_sender(
         batch_for_execute_receiver,
         fully_processed_batch_sender,
         l1_state.diamond_proxy,
-        l1_sender_config.operator_execute_pk.clone(),
         provider,
-        l1_sender_config.max_fee_per_gas(),
-        l1_sender_config.max_priority_fee_per_gas(),
-        l1_sender_config.command_limit,
-        l1_sender_config.poll_interval,
+        l1_sender_config.clone().into(),
     );
     (l1_committer, l1_proof_submitter, l1_executor)
 }

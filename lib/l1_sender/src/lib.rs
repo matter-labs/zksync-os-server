@@ -10,6 +10,7 @@ mod new_blocks;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
+use crate::config::L1SenderConfig;
 use crate::new_blocks::NewBlocks;
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::utils::format_ether;
@@ -23,7 +24,7 @@ use alloy::transports::TransportResult;
 use anyhow::Context;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use smart_config::value::{ExposeSecret, SecretString};
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
@@ -46,9 +47,6 @@ use zksync_os_observability::ComponentStateReporter;
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
-///
-/// `clippy::too_many_arguments`: maybe pass gas-related settings as a struct/separate config
-#[allow(clippy::too_many_arguments)]
 pub async fn run_l1_sender<Input: L1SenderCommand>(
     // == plumbing ==
     mut inbound: Receiver<Input>,
@@ -56,22 +54,19 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
 
     // == command-specific settings ==
     to_address: Address,
-    from_address_pk: SecretString,
 
     // == config ==
     mut provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + 'static,
-    max_fee_per_gas: u128,
-    max_priority_fee_per_gas: u128,
-    command_limit: usize,
-    poll_interval: Duration,
+    config: L1SenderConfig<Input>,
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
 
-    let operator_address = register_operator::<_, Input>(&mut provider, from_address_pk).await?;
+    let operator_address =
+        register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
     let provider = provider.erased();
-    let mut heartbeat = Heartbeat::new(provider.clone(), poll_interval).await?;
-    let mut cmd_buffer = Vec::with_capacity(command_limit);
+    let mut heartbeat = Heartbeat::new(provider.clone(), config.poll_interval).await?;
+    let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
@@ -79,7 +74,9 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
         // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
         // emptied in every iteration, its size never exceeds `self.command_limit`.
-        let received = inbound.recv_many(&mut cmd_buffer, command_limit).await;
+        let received = inbound
+            .recv_many(&mut cmd_buffer, config.command_limit)
+            .await;
         // This method only returns `0` if the channel has been closed and there are no more items
         // in the queue.
         if received == 0 {
@@ -99,8 +96,8 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
                 let tx_request = tx_request_with_gas_fields(
                     &provider,
                     operator_address,
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
+                    config.max_fee_per_gas(),
+                    config.max_priority_fee_per_gas(),
                 )
                 .await?
                 .with_to(to_address)
