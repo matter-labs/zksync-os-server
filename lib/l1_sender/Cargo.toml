@@ -34,3 +34,4 @@ time = { workspace = true, features = ["parsing", "formatting"] }
 itertools.workspace = true
 async-stream.workspace = true
 vise.workspace = true
+zksync_kzg.workspace = true

@@ -1,15 +1,33 @@
 use crate::config::BatchDaInputMode;
-use alloy::primitives::{Address, B256, Bytes, FixedBytes, U256, keccak256};
+use alloy::primitives::{Address, B256, Bytes, FixedBytes, Keccak256, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
 use zk_os_forward_system::run::{BlockContext, BlockOutput};
+use zksync_kzg::{KzgInfo, ZK_SYNC_BYTES_PER_BLOB};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
 
-const PUBDATA_SOURCE_CALLDATA: u8 = 0;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum PubdataSource {
+    Calldata = 0,
+    Blobs = 1,
+}
+
+impl TryFrom<u8> for PubdataSource {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Calldata),
+            1 => Ok(Self::Blobs),
+            _ => Err(()),
+        }
+    }
+}
 
 /// User-friendly version of [`zksync_os_contract_interface::IExecutor::StoredBatchInfo`] containing
 /// fields that are relevant for ZKsync OS.
@@ -107,6 +125,7 @@ pub struct CommitBatchInfo {
     pub chain_address: Address,
     pub operator_da_input: Vec<u8>,
     pub upgrade_tx_hash: Option<B256>,
+    pub pubdata: Vec<u8>,
 }
 
 impl CommitBatchInfo {
@@ -120,6 +139,7 @@ impl CommitBatchInfo {
         chain_id: u64,
         chain_address: Address,
         batch_number: u64,
+        pubdata_source: PubdataSource,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -185,18 +205,60 @@ impl CommitBatchInfo {
         // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
         // Ok(hasher.finalize().into())
 
+        let (number_blobs, pubdata, linear_hashes) = match pubdata_source {
+            PubdataSource::Calldata => {
+                let kzg_info = KzgInfo::new(&total_pubdata);
+                let blob_commitment = kzg_info.to_blob_commitment();
+
+                let mut hasher = Keccak256::new();
+                hasher.update(&total_pubdata);
+                let linear_hash = hasher.finalize();
+                (
+                    1u8,
+                    total_pubdata
+                        .clone()
+                        .into_iter()
+                        .chain(blob_commitment)
+                        .collect(),
+                    linear_hash.0.to_vec(),
+                )
+            }
+            PubdataSource::Blobs => {
+                let (pubdata_commitments, linear_hashes) = total_pubdata
+                    .chunks(ZK_SYNC_BYTES_PER_BLOB)
+                    .fold((vec![], vec![]), |(commitments, linear_hashes), blob| {
+                        let kzg_info = KzgInfo::new(blob);
+                        let mut hasher = Keccak256::new();
+                        hasher.update(&kzg_info.blob);
+                        let linear_hash = hasher.finalize().0;
+                        (
+                            commitments
+                                .into_iter()
+                                .chain(kzg_info.to_pubdata_commitment())
+                                .chain(Bytes32::zero().as_u8_array())
+                                .collect(),
+                            linear_hashes.into_iter().chain(linear_hash).collect(),
+                        )
+                    });
+                let number_blobs = if total_pubdata.len() % ZK_SYNC_BYTES_PER_BLOB == 0 {
+                    total_pubdata.len() / ZK_SYNC_BYTES_PER_BLOB
+                } else {
+                    (total_pubdata.len() / ZK_SYNC_BYTES_PER_BLOB) + 1
+                };
+                (number_blobs as u8, pubdata_commitments, linear_hashes)
+            }
+        };
+
         operator_da_input.extend(B256::ZERO.as_slice());
         operator_da_input.extend(keccak256(&total_pubdata));
-        operator_da_input.push(1);
-        operator_da_input.extend(B256::ZERO.as_slice());
+        operator_da_input.push(number_blobs);
+        operator_da_input.extend(linear_hashes);
 
         //     bytes32 daCommitment; - we compute hash of the first part of the operator_da_input (see above)
         let operator_da_input_header_hash = keccak256(&operator_da_input);
 
-        operator_da_input.extend([PUBDATA_SOURCE_CALLDATA]);
-        operator_da_input.extend(&total_pubdata);
-        // blob_commitment should be set to zero in ZK OS
-        operator_da_input.extend(B256::ZERO.as_slice());
+        operator_da_input.extend([pubdata_source as u8]);
+        operator_da_input.extend(&pubdata);
 
         /* ---------- new state commitment ---------- */
         let mut hasher = Blake2s256::new();
@@ -232,6 +294,7 @@ impl CommitBatchInfo {
             chain_address,
             operator_da_input,
             upgrade_tx_hash,
+            pubdata: total_pubdata,
         }
     }
 }

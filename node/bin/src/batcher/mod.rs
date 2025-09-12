@@ -9,7 +9,7 @@ use tracing;
 use zk_os_forward_system::run::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
-use zksync_os_l1_sender::commitment::StoredBatchInfo;
+use zksync_os_l1_sender::commitment::{PubdataSource, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -227,6 +227,7 @@ impl Batcher {
             batch_number,
             self.chain_id,
             self.chain_address,
+            PubdataSource::try_from(self.batcher_config.pubdata_source).unwrap(),
         )
     }
 }

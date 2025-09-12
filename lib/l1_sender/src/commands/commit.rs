@@ -34,6 +34,10 @@ impl L1SenderCommand for CommitCommand {
             self.to_calldata_suffix().into(),
         ))
     }
+
+    fn pubdata(&self) -> Vec<u8> {
+        self.input.batch.commit_batch_info.pubdata.clone()
+    }
 }
 
 impl AsRef<[BatchEnvelope<FriProof>]> for CommitCommand {

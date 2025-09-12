@@ -12,7 +12,8 @@ use crate::commands::L1SenderCommand;
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1_STATE_METRICS, L1SenderState};
 use crate::new_blocks::NewBlocks;
-use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::consensus::{Blob, BlobTransactionSidecar, Bytes48};
+use alloy::network::{EthereumWallet, TransactionBuilder, TransactionBuilder4844};
 use alloy::primitives::utils::format_ether;
 use alloy::primitives::{Address, BlockNumber, TxHash};
 use alloy::providers::ext::DebugApi;
@@ -29,6 +30,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
+use zksync_kzg::{KzgInfo, ZK_SYNC_BYTES_PER_BLOB};
 use zksync_os_observability::ComponentStateReporter;
 
 /// Process responsible for sending transactions to L1.
@@ -138,6 +140,92 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn run_l1_sender_blobs<Input: L1SenderCommand>(
+    // == plumbing ==
+    mut inbound: Receiver<Input>,
+    outbound: Sender<BatchEnvelope<FriProof>>,
+
+    // == command-specific settings ==
+    to_address: Address,
+
+    // == config ==
+    mut provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + 'static,
+    config: L1SenderConfig<Input>,
+) -> anyhow::Result<()> {
+    let latency_tracker =
+        ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
+
+    let operator_address =
+        register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
+    let provider = provider.erased();
+    let mut heartbeat = Heartbeat::new(provider.clone(), config.poll_interval).await?;
+    let mut cmd_buffer = Vec::with_capacity(config.command_limit);
+
+    loop {
+        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        // This sleeps until **at least one** command is received from the channel. Additionally,
+        // receives up to `self.command_limit` commands from the channel if they are ready (i.e. does
+        // not wait for them). Extends `cmd_buffer` with received values and, as `cmd_buffer` is
+        // emptied in every iteration, its size never exceeds `self.command_limit`.
+        let received = inbound
+            .recv_many(&mut cmd_buffer, config.command_limit)
+            .await;
+        // This method only returns `0` if the channel has been closed and there are no more items
+        // in the queue.
+        if received == 0 {
+            anyhow::bail!("inbound channel closed");
+        }
+        latency_tracker.enter_state(L1SenderState::SendingToL1);
+        let range = Input::display_range(&cmd_buffer); // Only for logging
+        let command_name = Input::NAME;
+        tracing::info!(command_name, range, "Sending l1 transactions...");
+        // It's important to preserve the order of commands -
+        // so that we send them downstream also in order.
+        // This holds true because l1 transactions are included in the order of sender nonce.
+        // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
+        let pending_tx_hashes: HashMap<TxHash, Input> = futures::stream::iter(cmd_buffer.drain(..))
+            .then(|mut cmd| async {
+                let tx_request = blob_tx_request_with_gas_fields(
+                    &provider,
+                    operator_address,
+                    config.max_fee_per_gas(),
+                    config.max_priority_fee_per_gas(),
+                    cmd.pubdata(),
+                )
+                .await?
+                .with_to(to_address)
+                .with_call(&cmd.solidity_call());
+                let pending_tx_hash = *provider.send_transaction(tx_request).await?.tx_hash();
+                cmd.as_mut()
+                    .iter_mut()
+                    .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
+                anyhow::Ok((pending_tx_hash, cmd))
+            })
+            // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
+            // but this is not necessary for now - we wait for them to be included in parallel
+            .try_collect::<HashMap<TxHash, Input>>()
+            .await?;
+        tracing::info!(command_name, range, "Sent to L1. Waiting for inclusion...");
+        latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
+        let mined_envelopes = heartbeat
+            .wait_for_pending_txs(&provider, pending_tx_hashes)
+            .await?;
+        tracing::info!(
+            command_name,
+            range,
+            "All transactions included. Sending downstream.",
+        );
+        latency_tracker.enter_state(L1SenderState::WaitingSend);
+        for command in mined_envelopes {
+            for mut output_envelope in command.into() {
+                output_envelope.set_stage(Input::MINED_STAGE);
+                outbound.send(output_envelope).await?;
+            }
+        }
+    }
+}
+
 async fn tx_request_with_gas_fields(
     provider: &DynProvider,
     operator_address: Address,
@@ -170,6 +258,71 @@ async fn tx_request_with_gas_fields(
         .with_max_priority_fee_per_gas(max_priority_fee_per_gas)
         // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
         .with_gas_limit(15000000);
+    Ok(tx)
+}
+
+async fn blob_tx_request_with_gas_fields(
+    provider: &DynProvider,
+    operator_address: Address,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+    pubdata: Vec<u8>,
+) -> anyhow::Result<TransactionRequest> {
+    let eip1559_est = provider.estimate_eip1559_fees().await?;
+    tracing::debug!(
+        eip1559_est.max_priority_fee_per_gas,
+        "estimated median priority fee (20% percentile) for the last 10 blocks"
+    );
+    if eip1559_est.max_fee_per_gas > max_fee_per_gas {
+        tracing::warn!(
+            max_fee_per_gas = max_fee_per_gas,
+            estimated_max_fee_per_gas = eip1559_est.max_fee_per_gas,
+            "L1 sender's configured maxFeePerGas is lower than the one estimated from network"
+        );
+    }
+    if eip1559_est.max_priority_fee_per_gas > max_priority_fee_per_gas {
+        tracing::warn!(
+            max_priority_fee_per_gas = max_priority_fee_per_gas,
+            estimated_max_priority_fee_per_gas = eip1559_est.max_priority_fee_per_gas,
+            "L1 sender's configured maxPriorityFeePerGas is lower than the one estimated from network"
+        );
+    }
+
+    let blob_fee = provider.get_blob_base_fee().await.unwrap();
+
+    let (blobs, commitments, proofs) = pubdata
+        .chunks(ZK_SYNC_BYTES_PER_BLOB)
+        .map(|blob| {
+            let kzg_info = KzgInfo::new(blob);
+            let blob: Blob = Blob::from_slice(&kzg_info.blob);
+            let commitment = Bytes48::new(kzg_info.kzg_commitment);
+            let proof = Bytes48::new(kzg_info.blob_proof);
+            (blob, commitment, proof)
+        })
+        .fold(
+            (vec![], vec![], vec![]),
+            |(mut blobs, mut commitments, mut proofs), (blob, commitment, proof)| {
+                blobs.push(blob);
+                commitments.push(commitment);
+                proofs.push(proof);
+                (blobs, commitments, proofs)
+            },
+        );
+
+    let sidecar = BlobTransactionSidecar {
+        blobs,
+        commitments,
+        proofs,
+    };
+
+    let tx = TransactionRequest::default()
+        .with_from(operator_address)
+        .with_max_fee_per_gas(max_fee_per_gas)
+        .with_max_priority_fee_per_gas(max_priority_fee_per_gas)
+        // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
+        .with_gas_limit(15000000)
+        .with_max_fee_per_blob_gas(blob_fee)
+        .with_blob_sidecar(sidecar);
     Ok(tx)
 }
 
