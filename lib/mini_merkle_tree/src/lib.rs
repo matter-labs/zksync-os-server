@@ -6,7 +6,7 @@
 #![allow(clippy::must_use_candidate, clippy::similar_names)]
 
 use alloy::primitives::B256;
-use std::{collections::VecDeque, iter, marker::PhantomData, ops::RangeTo};
+use std::{collections::VecDeque, iter, marker::PhantomData, ops::Range};
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
 
@@ -162,6 +162,55 @@ where
         }
     }
 
+    /// Creates a new Merkle tree with the specified hasher, starting index and cache.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the following conditions applies:
+    ///
+    /// - `binary_tree_size` derived from `start_index` is greater than `2^32`.
+    /// - `cache` is inconsistent with `start_index` (see the documentation of `self.cache` for details).
+    pub fn init_cached(hasher: H, start_index: usize, mut cache: Vec<Option<B256>>) -> Self {
+        let binary_tree_size = start_index.next_power_of_two();
+        let depth = tree_depth_by_size(binary_tree_size);
+        assert!(
+            depth <= MAX_TREE_DEPTH,
+            "Tree contains more than {} items; this is not supported",
+            1u64 << MAX_TREE_DEPTH
+        );
+
+        let expected_min_cache_len = if start_index < binary_tree_size {
+            depth
+        } else {
+            depth + 1
+        };
+        assert!(
+            cache.len() >= expected_min_cache_len,
+            "inconsistent input: cache length is too small"
+        );
+        cache.truncate(expected_min_cache_len);
+
+        let mut curr_index = start_index;
+        for item in &cache {
+            if curr_index & 1 > 0 {
+                assert!(item.is_some());
+            } else {
+                assert!(item.is_none());
+            }
+            curr_index /= 2;
+        }
+
+        Self {
+            hasher,
+            hashes: VecDeque::new(),
+            binary_tree_size,
+            start_index,
+            cache,
+            _leaf: PhantomData,
+            empty_leaf_hash: None,
+        }
+    }
+
     /// Returns `true` if the tree is empty.
     pub fn is_empty(&self) -> bool {
         self.start_index == 0 && self.hashes.is_empty()
@@ -205,12 +254,11 @@ where
     }
 
     /// Returns the root hash and the Merkle proofs for a range of leafs.
-    /// The range is 0..length, where `0` is the leftmost untrimmed leaf (i.e. leaf under `self.start_index`).
     /// # Panics
-    /// Panics if `range.end` is 0 or greater than the number of leaves in the tree.
+    /// Panics if `range.end` is 0 or greater than the number of uncached leaves in the tree.
     pub fn merkle_root_and_paths_for_range(
         &self,
-        range: RangeTo<usize>,
+        range: Range<usize>,
     ) -> (B256, Vec<Option<B256>>, Vec<Option<B256>>) {
         assert!(range.end > 0, "empty range");
         assert!(range.end <= self.hashes.len(), "range index out of bounds");
@@ -220,7 +268,9 @@ where
             Some(&mut right_path),
             Some(Side::Right),
         );
-        (root_hash, self.cache.clone(), right_path)
+        let mut left_path = vec![];
+        self.compute_merkle_root_and_path(range.start, Some(&mut left_path), Some(Side::Left));
+        (root_hash, left_path, right_path)
     }
 
     /// Adds a raw hash to the tree (replaces leftmost empty leaf).
@@ -236,9 +286,9 @@ where
         }
     }
 
-    /// Returns the leftmost `length` untrimmed leaf hashes.
-    pub fn hashes_prefix(&self, length: usize) -> Vec<B256> {
-        self.hashes.iter().take(length).copied().collect()
+    /// Returns range of `self.hashes`.
+    pub fn hashes_range(&self, range: Range<usize>) -> Vec<B256> {
+        self.hashes.range(range).copied().collect()
     }
 
     /// Trims and caches the leftmost `count` leaves.
@@ -329,6 +379,16 @@ where
     /// Returns index of the leftmost untrimmed leaf.
     pub fn start_index(&self) -> usize {
         self.start_index
+    }
+
+    /// Returns the size of the tree.
+    pub fn binary_tree_size(&self) -> usize {
+        self.binary_tree_size
+    }
+
+    /// Returns cache.
+    pub fn cache(&self) -> &[Option<B256>] {
+        &self.cache
     }
 }
 
