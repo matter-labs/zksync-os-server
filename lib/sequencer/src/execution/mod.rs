@@ -8,7 +8,7 @@ use anyhow::Context;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use tokio::sync::mpsc::Sender;
-use zk_os_forward_system::run::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_storage_api::{
@@ -84,7 +84,7 @@ pub async fn run_sequencer_actor<
             block_output
                 .published_preimages
                 .iter()
-                .map(|(k, v, _)| (*k, v)),
+                .map(|(k, v)| (*k, v)),
         )?;
 
         tracing::debug!(block_number, "Added to state. Adding to repos...");

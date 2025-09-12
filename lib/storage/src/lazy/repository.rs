@@ -5,8 +5,8 @@ use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 use std::ops::Div;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
-use zk_os_forward_system::run::BlockOutput;
 use zksync_os_genesis::Genesis;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::notifications::{BlockNotification, SubscribeToBlocks};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta, WriteRepository,

@@ -1,9 +1,9 @@
 use crate::metrics::STORAGE_VIEW_METRICS;
 use crate::{Diff, PersistentStorageMap};
+use alloy::primitives::B256;
 use dashmap::DashMap;
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::ReadStorage;
+use zksync_os_interface::traits::ReadStorage;
 
 /// Storage View valid for a specific block (`block`)
 /// It represents the state immediately after block `block`.
@@ -25,7 +25,7 @@ pub struct StorageMapView {
 impl ReadStorage for StorageMapView {
     /// Reads `key` by scanning block diffs from `block` down to `base_block + 1`,
     /// then falling back to the persistence
-    fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
+    fn read(&mut self, key: B256) -> Option<B256> {
         let diffs_latency_observer = STORAGE_VIEW_METRICS.access[&"diff"].start();
         let total_latency_observer = STORAGE_VIEW_METRICS.access[&"total"].start();
 

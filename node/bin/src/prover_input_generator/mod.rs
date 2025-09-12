@@ -6,9 +6,11 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
-use zk_ee::common_structs::ProofData;
-use zk_os_forward_system::run::test_impl::TxListSource;
-use zk_os_forward_system::run::{BlockOutput, StorageCommitment, generate_proof_input};
+use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
+use zk_os_forward_system::run::{
+    StorageCommitment, convert::FromInterface, generate_proof_input, test_impl::TxListSource,
+};
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
@@ -156,7 +158,7 @@ fn compute_prover_input(
 
     let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let initial_storage_commitment = StorageCommitment {
-        root: fixed_bytes_to_bytes32(root_hash),
+        root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
         next_free_slot: leaf_count,
     };
 
@@ -171,9 +173,10 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
+
     let prover_input = generate_proof_input(
         PathBuf::from(bin_path),
-        replay_record.block_context,
+        BlockMetadataFromOracle::from_interface(replay_record.block_context),
         ProofData {
             state_root_view: initial_storage_commitment,
             last_block_timestamp,

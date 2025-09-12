@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
-use zk_os_forward_system::run::BlockContext;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]

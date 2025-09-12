@@ -1,12 +1,10 @@
 mod preimages;
 mod storage;
 
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{B256, BlockNumber};
 use std::path::PathBuf;
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{
-    LeafProof, PreimageSource, ReadStorage, ReadStorageTree, StorageWrite,
-};
+use zksync_os_interface::traits::{PreimageSource, ReadStorage};
+use zksync_os_interface::types::StorageWrite;
 use zksync_os_storage_api::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
 
 use preimages::FullDiffsPreimages;
@@ -68,29 +66,14 @@ pub struct StateViewFD {
 }
 
 impl ReadStorage for StateViewFD {
-    fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
+    fn read(&mut self, key: B256) -> Option<B256> {
         self.storage.read_at(self.block, key)
     }
 }
 
 impl PreimageSource for StateViewFD {
-    fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
+    fn get_preimage(&mut self, hash: B256) -> Option<Vec<u8>> {
         self.preimages.get(hash)
-    }
-}
-
-// temporarily implement ReadStorageTree as interface requires that
-impl ReadStorageTree for StateViewFD {
-    fn tree_index(&mut self, _key: Bytes32) -> Option<u64> {
-        unreachable!("VM forward run should not invoke the tree")
-    }
-
-    fn merkle_proof(&mut self, _tree_index: u64) -> LeafProof {
-        unreachable!("VM forward run should not invoke the tree")
-    }
-
-    fn prev_tree_index(&mut self, _key: Bytes32) -> u64 {
-        unreachable!("VM forward run should not invoke the tree")
     }
 }
 
@@ -120,7 +103,7 @@ impl WriteState for FullDiffsState {
         new_preimages: J,
     ) -> anyhow::Result<()>
     where
-        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>,
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
     {
         self.storage.add_block(block_number, storage_diffs)?;
         self.preimages.add(new_preimages)?;

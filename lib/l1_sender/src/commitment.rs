@@ -5,9 +5,9 @@ use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{BlockContext, BlockOutput};
+use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{L2_TO_L1_TREE_SIZE, L2ToL1Log, ZkEnvelope, ZkTransaction};
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
@@ -154,12 +154,19 @@ impl CommitBatchInfo {
             }
 
             for tx_output in block_output.tx_results.clone().into_iter().flatten() {
-                encoded_l2_l1_logs.extend(
-                    tx_output
-                        .l2_to_l1_logs
-                        .into_iter()
-                        .map(|log_with_preimage| log_with_preimage.log.encode()),
-                );
+                encoded_l2_l1_logs.extend(tx_output.l2_to_l1_logs.into_iter().map(
+                    |log_with_preimage| {
+                        let log = L2ToL1Log {
+                            l2_shard_id: log_with_preimage.log.l2_shard_id,
+                            is_service: log_with_preimage.log.is_service,
+                            tx_number_in_block: log_with_preimage.log.tx_number_in_block,
+                            sender: log_with_preimage.log.sender,
+                            key: log_with_preimage.log.key,
+                            value: log_with_preimage.log.value,
+                        };
+                        log.encode()
+                    },
+                ));
             }
         }
 

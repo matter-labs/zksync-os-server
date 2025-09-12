@@ -13,8 +13,6 @@ use alloy::rpc::types::trace::otterscan::{
 use alloy::rpc::types::{Header, Log};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use ruint::aliases::B160;
-use zk_ee::utils::Bytes32;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::types::{RpcBlockConvert, ZkApiTransaction};
 use zksync_os_storage_api::{StoredTxData, ViewState};
@@ -62,10 +60,10 @@ impl<RpcStorage: ReadRpcStorage> OtsNamespace<RpcStorage> {
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let mut view = self.storage.state_view_at(block_number)?;
-        let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
+        let Some(props) = view.get_account(address) else {
             return Ok(false);
         };
-        Ok(props.bytecode_hash != Bytes32::ZERO)
+        Ok(!props.bytecode_hash.is_zero())
     }
 
     fn get_block_details_by_id_impl(&self, block_id: BlockId) -> EthResult<BlockDetails> {

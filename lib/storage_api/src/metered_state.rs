@@ -1,5 +1,5 @@
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::{LeafProof, PreimageSource, ReadStorage, ReadStorageTree};
+use alloy::primitives::B256;
+use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 use zksync_os_observability::{ComponentStateHandle, StateLabel};
 
 pub trait StateAccessLabel: StateLabel {
@@ -26,29 +26,13 @@ impl<T: StateAccessLabel, V> MeteredViewState<T, V> {
 }
 
 impl<T: StateAccessLabel, V: ReadStorage> ReadStorage for MeteredViewState<T, V> {
-    fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
+    fn read(&mut self, key: B256) -> Option<B256> {
         self.with_state(T::read_storage_state(), |view| view.read(key))
     }
 }
 
 impl<T: StateAccessLabel, V: PreimageSource> PreimageSource for MeteredViewState<T, V> {
-    fn get_preimage(&mut self, hash: Bytes32) -> Option<Vec<u8>> {
+    fn get_preimage(&mut self, hash: B256) -> Option<Vec<u8>> {
         self.with_state(T::read_preimage_state(), |view| view.get_preimage(hash))
-    }
-}
-
-impl<T: StateAccessLabel, V: ReadStorageTree> ReadStorageTree for MeteredViewState<T, V> {
-    fn tree_index(&mut self, key: Bytes32) -> Option<u64> {
-        self.with_state(T::read_storage_state(), |view| view.tree_index(key))
-    }
-
-    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
-        self.with_state(T::read_storage_state(), |view| {
-            view.merkle_proof(tree_index)
-        })
-    }
-
-    fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
-        self.with_state(T::read_storage_state(), |view| view.prev_tree_index(key))
     }
 }

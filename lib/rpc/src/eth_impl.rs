@@ -22,9 +22,8 @@ use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use std::convert::identity;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_code};
-use zk_os_forward_system::run::ReadStorage;
+use zksync_os_interface::traits::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
@@ -236,7 +235,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         Ok(self
             .storage
             .state_view_at(block_number)?
-            .get_account(B160::from_be_bytes(address.into_array()))
+            .get_account(address)
             .as_ref()
             .map(get_balance)
             .unwrap_or(U256::ZERO))
@@ -256,12 +255,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
 
         let flat_key = derive_flat_storage_key(
             &B160::from_be_bytes(address.into_array()),
-            &Bytes32::from(key.as_b256().0),
+            &(key.as_b256().0.into()),
         );
         let mut state = self.storage.state_view_at(block_number)?;
-        Ok(B256::from(
-            state.read(flat_key).unwrap_or_default().as_u8_array(),
-        ))
+        Ok(state
+            .read(flat_key.as_u8_array().into())
+            .unwrap_or_default())
     }
 
     fn transaction_count_impl(
@@ -303,7 +302,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
 
         // todo(#36): distinguish between N/A blocks and actual missing accounts
         let mut view = self.storage.state_view_at(block_number)?;
-        let Some(props) = view.get_account(B160::from_be_bytes(address.into_array())) else {
+        let Some(props) = view.get_account(address) else {
             return Ok(Bytes::default());
         };
         let bytecode = get_code(&mut view, &props);

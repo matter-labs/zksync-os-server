@@ -2,7 +2,7 @@ use alloy::primitives::B256;
 use std::fmt::Display;
 use std::pin::Pin;
 use std::time::Duration;
-use zk_ee::system::metadata::BlockMetadataFromOracle as BlockContext;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::TxStream;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1TxSerialId, ZkTransaction};

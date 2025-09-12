@@ -14,10 +14,8 @@ use reth_trie_common::{
     AccountProof, HashedPostState, HashedStorage, MultiProof, MultiProofTargets, StorageMultiProof,
     StorageProof, TrieInput,
 };
-use ruint::aliases::B160;
 use std::fmt::Debug;
 use std::sync::Arc;
-use zk_ee::utils::Bytes32;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
@@ -104,11 +102,11 @@ impl<ReadState: ReadStateHistory> AccountReader for ZkState<ReadState> {
             .state_handle
             .state_view_at(self.latest_block)
             .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?
-            .get_account(B160::from_be_bytes(address.into_array()))
+            .get_account(*address)
             .map(|props| Account {
                 nonce: get_nonce(&props),
                 balance: get_balance(&props),
-                bytecode_hash: if props.bytecode_hash == Bytes32::ZERO {
+                bytecode_hash: if props.bytecode_hash.is_zero() {
                     None
                 } else {
                     Some(B256::from_slice(&props.bytecode_hash.as_u8_array()))

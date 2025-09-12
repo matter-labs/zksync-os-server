@@ -15,6 +15,7 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_genesis.workspace = true
 
+zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "rlp"] }

@@ -1,14 +1,11 @@
 use crate::metrics::REPOSITORIES_METRICS;
-use crate::shared::alloy_header;
 use alloy::consensus::Sealed;
 use alloy::eips::Encodable2718;
-use alloy::primitives::{
-    Address, B256, BlockHash, BlockNumber, Bloom, Log, LogData, TxHash, TxNonce,
-};
+use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
-use zk_os_forward_system::run::{BlockOutput, ExecutionResult};
+use zksync_os_interface::types::{BlockOutput, ExecutionResult};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
@@ -98,11 +95,15 @@ impl RepositoryInMemory {
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
             stored_txs.push((tx_hash, stored_tx));
         }
-        let (mut block_output, hash) = sealed_block_output.into_parts();
-        block_output.header.logs_bloom = block_bloom.into_array();
+        let (block_output, hash) = sealed_block_output.into_parts();
+        let header = {
+            let mut h = block_output.header.unseal();
+            h.logs_bloom = block_bloom;
+            h
+        };
         let block = Arc::new(Sealed::new_unchecked(
             alloy::consensus::Block {
-                header: alloy_header(&block_output.header),
+                header,
                 body: alloy::consensus::BlockBody {
                     transactions: tx_hashes,
                     ommers: vec![],
@@ -374,21 +375,6 @@ fn transaction_to_api_data(
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
-    let logs = tx_output
-        .logs
-        .iter()
-        .map(|log| Log {
-            address: Address::from(log.address.to_be_bytes()),
-            data: LogData::new(
-                log.topics
-                    .iter()
-                    .map(|topic| B256::from(topic.as_u8_array()))
-                    .collect(),
-                log.data.clone().into(),
-            )
-            .unwrap(),
-        })
-        .collect::<Vec<_>>();
     let l2_to_l1_logs = tx_output
         .l2_to_l1_logs
         .iter()
@@ -396,9 +382,9 @@ fn transaction_to_api_data(
             l2_shard_id: l2_to_l1_log.log.l2_shard_id,
             is_service: l2_to_l1_log.log.is_service,
             tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
-            sender: Address::new(l2_to_l1_log.log.sender.to_be_bytes()),
-            key: B256::new(l2_to_l1_log.log.key.as_u8_array()),
-            value: B256::new(l2_to_l1_log.log.value.as_u8_array()),
+            sender: l2_to_l1_log.log.sender,
+            key: l2_to_l1_log.log.key,
+            value: l2_to_l1_log.log.value,
         })
         .collect();
     let receipt = ZkReceiptEnvelope::from_typed(
@@ -407,21 +393,19 @@ fn transaction_to_api_data(
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
             // todo
             cumulative_gas_used: 7777,
-            logs,
+            logs: tx_output.logs.clone(),
             l2_to_l1_logs,
         },
     );
     let meta = TxMeta {
-        block_hash: B256::from(block_output.hash()),
+        block_hash: block_output.hash(),
         block_number: block_output.header.number,
         block_timestamp: block_output.header.timestamp,
         tx_index_in_block: index as u64,
-        effective_gas_price: block_output.header.base_fee_per_gas as u128,
+        effective_gas_price: block_output.header.base_fee_per_gas.unwrap() as u128,
         number_of_logs_before_this_tx,
         gas_used: tx_output.gas_used,
-        contract_address: tx_output
-            .contract_address
-            .map(|a| Address::new(a.to_be_bytes())),
+        contract_address: tx_output.contract_address,
     };
 
     StoredTxData { tx, receipt, meta }
