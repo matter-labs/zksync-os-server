@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
+use zksync_os_l1_sender::commitment::PubdataDestination;
 use zksync_os_l1_sender::config::BatchDaInputMode;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -30,6 +31,7 @@ pub struct GaplessCommitter {
     latency_tracker: ComponentStateHandle<GenericComponentState>,
     //  == config ==
     da_input_mode: BatchDaInputMode,
+    pubdata_destination: PubdataDestination,
 }
 
 impl GaplessCommitter {
@@ -39,6 +41,7 @@ impl GaplessCommitter {
         proof_storage: ProofStorage,
         commit_batch_sender: mpsc::Sender<CommitCommand>,
         da_input_mode: BatchDaInputMode,
+        pubdata_destination: PubdataDestination,
     ) -> Self {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("gapless_committer", GenericComponentState::WaitingRecv);
@@ -50,6 +53,7 @@ impl GaplessCommitter {
             commit_batch_sender,
             latency_tracker,
             da_input_mode,
+            pubdata_destination,
         }
     }
 
@@ -99,6 +103,7 @@ impl GaplessCommitter {
                 .send(CommitCommand::new(
                     stored_batch.batch_envelope(),
                     self.da_input_mode,
+                    self.pubdata_destination,
                 ))
                 .await?;
             self.latency_tracker

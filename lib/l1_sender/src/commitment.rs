@@ -12,12 +12,12 @@ use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
-pub enum PubdataSource {
+pub enum PubdataDestination {
     Calldata = 0,
     Blobs = 1,
 }
 
-impl TryFrom<u8> for PubdataSource {
+impl TryFrom<u8> for PubdataDestination {
     type Error = ();
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -139,7 +139,7 @@ impl CommitBatchInfo {
         chain_id: u64,
         chain_address: Address,
         batch_number: u64,
-        pubdata_source: PubdataSource,
+        pubdata_source: PubdataDestination,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -206,7 +206,7 @@ impl CommitBatchInfo {
         // Ok(hasher.finalize().into())
 
         let (number_blobs, pubdata, linear_hashes) = match pubdata_source {
-            PubdataSource::Calldata => {
+            PubdataDestination::Calldata => {
                 let kzg_info = KzgInfo::new(&total_pubdata);
                 let blob_commitment = kzg_info.to_blob_commitment();
 
@@ -223,7 +223,7 @@ impl CommitBatchInfo {
                     linear_hash.0.to_vec(),
                 )
             }
-            PubdataSource::Blobs => {
+            PubdataDestination::Blobs => {
                 let (pubdata_commitments, linear_hashes) = total_pubdata
                     .chunks(ZK_SYNC_BYTES_PER_BLOB)
                     .fold((vec![], vec![]), |(commitments, linear_hashes), blob| {

@@ -1,5 +1,5 @@
 use std::ops::RangeInclusive;
-use zksync_os_l1_sender::l1_discovery::L1State;
+use zksync_os_l1_sender::{commitment::PubdataDestination, l1_discovery::L1State};
 
 #[allow(dead_code)] // some fields are only used for logging (`Debug`)
 #[derive(Debug, Clone)]
@@ -13,6 +13,7 @@ pub struct NodeStateOnStartup {
     pub last_committed_block: u64,
     pub last_proved_block: u64,
     pub last_executed_block: u64,
+    pub pubdata_destination: PubdataDestination,
 }
 
 impl NodeStateOnStartup {

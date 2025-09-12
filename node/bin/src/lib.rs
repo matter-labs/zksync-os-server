@@ -57,7 +57,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
-use zksync_os_l1_sender::{run_l1_sender, run_l1_sender_blobs};
+use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
@@ -201,6 +201,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_committed_block,
         last_proved_block,
         last_executed_block,
+        pubdata_destination: config.l1_sender_config.pubdata_destination,
     };
 
     let desired_starting_block = [
@@ -660,6 +661,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone>(
         batch_storage.clone(),
         batch_for_commit_sender,
         node_state_on_startup.l1_state.da_input_mode,
+        node_state_on_startup.pubdata_destination,
     );
 
     tasks.spawn(
@@ -767,7 +769,7 @@ fn run_l1_senders(
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");
     }
-    let l1_committer = run_l1_sender_blobs(
+    let l1_committer = run_l1_sender(
         batch_for_commit_receiver,
         batch_for_snark_sender,
         l1_state.validator_timelock,

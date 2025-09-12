@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
+use zksync_os_l1_sender::commitment::PubdataDestination;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -217,6 +218,10 @@ pub struct L1SenderConfig {
     /// How often to poll L1 for new blocks.
     #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
+
+    #[config(default_t = PubdataDestination::Calldata)]
+    #[config(with = Serde![str])]
+    pub pubdata_destination: PubdataDestination,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -251,8 +256,9 @@ pub struct BatcherConfig {
     #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
 
-    #[config(default_t = 0)]
-    pub pubdata_source: u8,
+    #[config(default_t = PubdataDestination::Calldata)]
+    #[config(with = Serde![str])]
+    pub pubdata_destination: PubdataDestination,
 }
 
 /// Only used on the Main Node.
