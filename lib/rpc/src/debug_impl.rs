@@ -1,3 +1,4 @@
+use crate::eth_call_handler::{EthCallError, EthCallHandler};
 use crate::result::{ToRpcResult, unimplemented_rpc_err};
 use crate::{ReadRpcStorage, sandbox};
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -18,11 +19,15 @@ use zksync_os_storage_api::{RepositoryError, StateError};
 
 pub struct DebugNamespace<RpcStorage> {
     storage: RpcStorage,
+    eth_call_handler: EthCallHandler<RpcStorage>,
 }
 
-impl<RpcStorage> DebugNamespace<RpcStorage> {
-    pub fn new(storage: RpcStorage) -> Self {
-        Self { storage }
+impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
+    pub fn new(storage: RpcStorage, eth_call_handler: EthCallHandler<RpcStorage>) -> Self {
+        Self {
+            storage,
+            eth_call_handler,
+        }
     }
 }
 
@@ -123,6 +128,37 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             }
         })
     }
+
+    fn debug_trace_call_impl(
+        &self,
+        request: TransactionRequest,
+        block_id: Option<BlockId>,
+        opts: Option<GethDebugTracingCallOptions>,
+    ) -> DebugResult<GethTrace> {
+        let opts = opts.unwrap_or_default();
+        let GethDebugTracingCallOptions {
+            tracing_options,
+            state_overrides,
+            block_overrides,
+        } = opts;
+        let Some(tracer) = tracing_options.tracer else {
+            return Err(DebugError::UnsupportedDefaultTracer);
+        };
+        if tracer != GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer) {
+            return Err(DebugError::UnsupportedTracer(tracer));
+        }
+        let call_config = tracing_options
+            .tracer_config
+            .into_call_config()
+            .map_err(|_| DebugError::InvalidTracerConfig)?;
+        Ok(self.eth_call_handler.call_trace_impl(
+            request,
+            block_id,
+            call_config,
+            state_overrides,
+            block_overrides.map(Box::new),
+        )?)
+    }
 }
 
 #[async_trait]
@@ -184,11 +220,12 @@ impl<RpcStorage: ReadRpcStorage> DebugApiServer for DebugNamespace<RpcStorage> {
 
     async fn debug_trace_call(
         &self,
-        _request: TransactionRequest,
-        _block_id: Option<BlockId>,
-        _opts: Option<GethDebugTracingCallOptions>,
+        request: TransactionRequest,
+        block_id: Option<BlockId>,
+        opts: Option<GethDebugTracingCallOptions>,
     ) -> RpcResult<GethTrace> {
-        Err(unimplemented_rpc_err())
+        self.debug_trace_call_impl(request, block_id, opts)
+            .to_rpc_result()
     }
 
     async fn debug_trace_call_many(
@@ -243,4 +280,6 @@ pub enum DebugError {
     Repository(#[from] RepositoryError),
     #[error(transparent)]
     State(#[from] StateError),
+    #[error(transparent)]
+    Call(#[from] EthCallError),
 }

@@ -1,13 +1,14 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
 use crate::rpc_storage::ReadRpcStorage;
-use crate::sandbox::execute;
+use crate::sandbox::{call_trace_simulate, execute};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, Transaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
+use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_interface::{
@@ -20,10 +21,16 @@ use zksync_os_types::{L2Envelope, L2Transaction};
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
 
+#[derive(Clone, Debug)]
 pub struct EthCallHandler<RpcStorage> {
     config: RpcConfig,
     storage: RpcStorage,
     chain_id: u64,
+}
+
+struct ExecutionEnv {
+    block_context: BlockContext,
+    transaction: L2Transaction,
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
@@ -147,13 +154,13 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(Recovered::new_unchecked(tx, from))
     }
 
-    pub fn call_impl(
+    fn prepare_execution_env(
         &self,
         request: TransactionRequest,
         block: Option<BlockId>,
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
-    ) -> Result<Bytes, EthCallError> {
+    ) -> Result<ExecutionEnv, EthCallError> {
         if state_overrides.is_some() {
             return Err(EthCallError::StateOverridesNotSupported);
         }
@@ -165,23 +172,64 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthCallError::BlockNotFound(block_id));
         };
-        tracing::info!(?block_id, block_number, "resolved block id");
-
-        // using previous block context
         let block_context = self
             .storage
             .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
-        let tx = self.create_tx_from_request(request, &block_context)?;
+        let transaction = self.create_tx_from_request(request, &block_context)?;
+        Ok(ExecutionEnv {
+            transaction,
+            block_context,
+        })
+    }
 
-        let storage_view = self.storage.state_view_at(block_number)?;
+    pub fn call_impl(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> Result<Bytes, EthCallError> {
+        let execution_env =
+            self.prepare_execution_env(request, block, state_overrides, block_overrides)?;
+        let storage_view = self
+            .storage
+            .state_view_at(execution_env.block_context.block_number)?;
 
-        let res = execute(tx, block_context, storage_view)
-            .map_err(EthCallError::ForwardSubsystemError)?
-            .map_err(EthCallError::InvalidTransaction)?;
+        let res = execute(
+            execution_env.transaction,
+            execution_env.block_context,
+            storage_view,
+        )
+        .map_err(EthCallError::ForwardSubsystemError)?
+        .map_err(EthCallError::InvalidTransaction)?;
 
         Ok(Bytes::copy_from_slice(res.as_returned_bytes()))
+    }
+
+    pub fn call_trace_impl(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        call_config: CallConfig,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> Result<GethTrace, EthCallError> {
+        let execution_env =
+            self.prepare_execution_env(request, block, state_overrides, block_overrides)?;
+        let storage_view = self
+            .storage
+            .state_view_at(execution_env.block_context.block_number)?;
+
+        call_trace_simulate(
+            execution_env.transaction,
+            execution_env.block_context,
+            storage_view,
+            call_config,
+        )
+        .map(GethTrace::CallTracer)
+        .map_err(|err| EthCallError::ForwardSubsystemError(anyhow::anyhow!(err)))
     }
 
     pub fn estimate_gas_impl(

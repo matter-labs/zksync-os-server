@@ -11,7 +11,7 @@ on:
 # Cancel new runs for PRs only
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Default environment variables
 env:

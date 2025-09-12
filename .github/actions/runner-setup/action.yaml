@@ -62,6 +62,17 @@ runs:
         which cmake
         cmake --version
 
+    - name: Install yq
+      if: ${{ contains(runner.name, 'matterlabs') }}
+      shell: 'bash -ex {0}'
+      env:
+        YQ_DOWNLOAD_URL: https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
+      run: |
+        wget "${YQ_DOWNLOAD_URL}"
+        mv yq_linux_amd64 yq
+        chmod +x yq
+        echo "${PWD}" >> "${GITHUB_PATH}"
+
     - name: Install Rust toolchain
       uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
       env:

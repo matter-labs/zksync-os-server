@@ -19,6 +19,13 @@ pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
             AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
         })
     }
+
+    /// Get account's nonce by its address.
+    ///
+    /// Returns `None` if the account doesn't exist
+    fn account_nonce(&mut self, address: Address) -> Option<u64> {
+        self.get_account(address).map(|a| a.nonce)
+    }
 }
 
 impl<T: ReadStorage + PreimageSource + Send + Clone> ViewState for T {}
