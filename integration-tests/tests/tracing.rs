@@ -1,7 +1,9 @@
+use alloy::eips::BlockId;
 use alloy::network::Ethereum;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::PendingTransactionBuilder;
 use alloy::providers::ext::DebugApi;
+use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, GethDebugTracingOptions};
 use alloy::sol_types::{Revert, SolCall, SolError};
 use std::collections::HashMap;
@@ -154,7 +156,7 @@ async fn call_trace_transaction() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn check_equivalency<
+async fn check_tx_equivalency<
     Fut: Future<Output = anyhow::Result<PendingTransactionBuilder<Ethereum>>>,
 >(
     name: &str,
@@ -170,6 +172,39 @@ async fn check_equivalency<
         .await?
         .expect_call_trace()
         .await?;
+    assert_eq_call_frames(&l1_call_frame, &l2_call_frame);
+    tracing::info!(name, "successful trace equivalence");
+    Ok(())
+}
+
+async fn check_call_equivalency<Fut: Future<Output = anyhow::Result<TransactionRequest>>>(
+    name: &str,
+    tester: &Tester,
+    f: impl Fn(EthDynProvider) -> Fut,
+) -> anyhow::Result<()> {
+    tracing::info!(name, "checking trace equivalence");
+    let l1_tx_request = f(tester.l1_provider.clone()).await?;
+    let l1_call_frame = tester
+        .l1_provider
+        .debug_trace_call(
+            l1_tx_request,
+            BlockId::latest(),
+            GethDebugTracingOptions::call_tracer(CallConfig::default()).into(),
+        )
+        .await?
+        .try_into_call_frame()
+        .expect("not a call frame");
+    let l2_tx_request = f(tester.l2_provider.clone()).await?;
+    let l2_call_frame = tester
+        .l2_provider
+        .debug_trace_call(
+            l2_tx_request,
+            BlockId::latest(),
+            GethDebugTracingOptions::call_tracer(CallConfig::default()).into(),
+        )
+        .await?
+        .try_into_call_frame()
+        .expect("not a call frame");
     assert_eq_call_frames(&l1_call_frame, &l2_call_frame);
     tracing::info!(name, "successful trace equivalence");
     Ok(())
@@ -238,7 +273,7 @@ async fn call_trace_transaction_equivalency() -> anyhow::Result<()> {
     let calculate_value = U256::from(24);
     let times = U256::from(10);
 
-    check_equivalency("multi-subcall", &tester, |provider| async move {
+    check_tx_equivalency("multi-subcall", &tester, |provider| async move {
         let secondary_contract = TracingSecondary::deploy(provider.clone(), secondary_data).await?;
         let primary_contract =
             TracingPrimary::deploy(provider, *secondary_contract.address()).await?;
@@ -251,8 +286,38 @@ async fn call_trace_transaction_equivalency() -> anyhow::Result<()> {
     })
     .await?;
 
-    check_equivalency("create", &tester, |provider| async move {
+    check_tx_equivalency("create", &tester, |provider| async move {
         Ok(EventEmitter::deploy_builder(provider).send().await?)
+    })
+    .await?;
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn call_trace_equivalency() -> anyhow::Result<()> {
+    // Test that the `debug_traceCall` output is equivalent to L1 output (as produced by anvil).
+    let tester = Tester::setup().await?;
+    // Init data for `TracingSecondary`
+    let secondary_data = U256::from(42);
+    // Call value for `TracingPrimary::multiCalculate`
+    let calculate_value = U256::from(24);
+    let times = U256::from(10);
+
+    check_call_equivalency("multi-subcall", &tester, |provider| async move {
+        let secondary_contract = TracingSecondary::deploy(provider.clone(), secondary_data).await?;
+        let primary_contract =
+            TracingPrimary::deploy(provider, *secondary_contract.address()).await?;
+        anyhow::Ok(
+            primary_contract
+                .multiCalculate(calculate_value, times)
+                .into_transaction_request(),
+        )
+    })
+    .await?;
+
+    check_call_equivalency("create", &tester, |provider| async move {
+        Ok(EventEmitter::deploy_builder(provider).into_transaction_request())
     })
     .await?;
 

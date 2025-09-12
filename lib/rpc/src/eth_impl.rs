@@ -1,4 +1,3 @@
-use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::ReadRpcStorage;
@@ -47,10 +46,14 @@ pub struct EthNamespace<RpcStorage, Mempool> {
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
-    pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool, chain_id: u64) -> Self {
+    pub fn new(
+        storage: RpcStorage,
+        mempool: Mempool,
+        eth_call_handler: EthCallHandler<RpcStorage>,
+        chain_id: u64,
+    ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
 
-        let eth_call_handler = EthCallHandler::new(config, storage.clone(), chain_id);
         Self {
             tx_handler,
             eth_call_handler,

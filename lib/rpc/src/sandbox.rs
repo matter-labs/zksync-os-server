@@ -41,6 +41,37 @@ pub fn execute(
     .map_err(Box::new)
 }
 
+pub fn call_trace_simulate(
+    tx: L2Transaction,
+    mut block_context: BlockContext,
+    state_view: impl ViewState,
+    call_config: CallConfig,
+) -> Result<CallFrame, Box<ForwardSubsystemError>> {
+    let mut tracer = CallTracer::new_with_config(
+        call_config.with_log.unwrap_or_default(),
+        call_config.only_top_call.unwrap_or_default(),
+    );
+    let encoded_tx = tx.encode();
+
+    block_context.eip1559_basefee = U256::from(0);
+
+    let _ = simulate_tx(
+        encoded_tx,
+        block_context,
+        state_view.clone(),
+        state_view,
+        &mut tracer,
+    )
+    .map_err(Box::new)?;
+
+    Ok(std::mem::take(
+        tracer
+            .transactions
+            .last_mut()
+            .expect("no transaction traced"),
+    ))
+}
+
 pub fn call_trace(
     txs: Vec<ZkTransaction>,
     block_context: BlockContext,
