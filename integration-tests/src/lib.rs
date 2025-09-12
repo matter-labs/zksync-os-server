@@ -15,7 +15,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_bin::config::{
     Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
@@ -70,6 +70,7 @@ impl Tester {
             self.l1_wallet.clone(),
             false,
             Some(self.replay_url.clone()),
+            None,
             Some(self.object_store_path.clone()),
         )
         .await
@@ -81,6 +82,7 @@ impl Tester {
         l1_wallet: EthereumWallet,
         enable_prover: bool,
         main_node_replay_url: Option<String>,
+        block_time: Option<Duration>,
         object_store_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         (|| async {
@@ -94,7 +96,7 @@ impl Tester {
                 .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "retrying connection to L1 node");
+            tracing::info!(%err, ?dur, "retrying connection to L1 node");
         })
         .await?;
 
@@ -102,11 +104,13 @@ impl Tester {
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let replay_locked_port = LockedPort::acquire_unused().await?;
+        let status_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
+        let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
         let rocksdb_path = tempfile::tempdir()?;
@@ -120,11 +124,14 @@ impl Tester {
             l1_rpc_url: l1_address.clone(),
             ..Default::default()
         };
-        let sequencer_config = SequencerConfig {
+        let mut sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
             block_replay_download_address: main_node_replay_url,
             ..Default::default()
         };
+        if let Some(block_time) = block_time {
+            sequencer_config.block_time = block_time;
+        }
         let rpc_config = RpcConfig {
             address: l2_rpc_address,
             ..Default::default()
@@ -148,10 +155,15 @@ impl Tester {
             },
             ..Default::default()
         };
+
+        let status_server_config = StatusServerConfig {
+            address: status_address,
+        };
+
         let config = Config {
             general_config,
             genesis_config: GenesisConfig {
-                genesis_input_path: "../genesis/genesis.json".into(),
+                genesis_input_path: concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
                 ..Default::default()
             },
             rpc_config,
@@ -165,6 +177,7 @@ impl Tester {
                 ..Default::default()
             },
             prover_api_config,
+            status_server_config,
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
@@ -175,8 +188,10 @@ impl Tester {
             tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
-                app_bin_path: Some("../multiblock_batch.bin".parse().unwrap()),
+                app_bin_path: Some(concat!(env!("WORKSPACE_DIR"), "/multiblock_batch.bin").into()),
                 circuit_limit: 10000,
+                iterations: None,
+                path: None,
             }));
         }
 
@@ -203,7 +218,7 @@ impl Tester {
                 .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "retrying connection to L2 node");
+            tracing::info!(%err, ?dur, "retrying connection to L2 node");
         })
         .await?;
 
@@ -223,7 +238,7 @@ impl Tester {
                 .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "waiting for L2 account to become rich");
+            tracing::info!(%err, ?dur, "waiting for L2 account to become rich");
         })
         .await?;
 
@@ -251,6 +266,7 @@ impl Tester {
 #[derive(Default)]
 pub struct TesterBuilder {
     enable_prover: bool,
+    block_time: Option<Duration>,
 }
 
 impl TesterBuilder {
@@ -260,15 +276,21 @@ impl TesterBuilder {
         self
     }
 
+    pub fn block_time(mut self, block_time: Duration) -> Self {
+        self.block_time = Some(block_time);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Tester> {
         let l1_locked_port = LockedPort::acquire_unused().await?;
         let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+
         let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg("../zkos-l1-state.json")
+                .arg(concat!(env!("WORKSPACE_DIR"), "/zkos-l1-state.json"))
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
@@ -279,6 +301,7 @@ impl TesterBuilder {
             l1_wallet,
             self.enable_prover,
             None,
+            self.block_time,
             None,
         )
         .await

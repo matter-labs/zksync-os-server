@@ -52,6 +52,8 @@ jobs:
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        env:
+          DOCKER_METADATA_SHORT_SHA_LENGTH: 7
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}
@@ -60,7 +62,7 @@ jobs:
             type=raw,value=${{ inputs.tag_name }},enable=${{ inputs.tag_name != '' }}
             type=ref,event=tag
             type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-            type=sha,prefix=,suffix={{date 'YYYYMMDD-HHmmss' tz='Europe/Lisbon'}},format=short,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=sha,format=short,prefix=,suffix=-{{date 'x'}},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
             type=ref,event=pr
 
       - name: Define whether to save cache

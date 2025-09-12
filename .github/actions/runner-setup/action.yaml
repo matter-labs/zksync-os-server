@@ -5,9 +5,10 @@ description: 'Setup self-hosted runner for zksync workflows execution.'
 inputs:
   foundry_version:
     type: string
-    description: 'Version of foundry-zksync to use.'
+    description: 'Version of foundry to use.'
     required: false
-    default: 'nightly'
+    # Pinned to a specific stable version to avoid breaking changes.
+    default: 'v1.3.4'
   enable_cache:
     type: string
     description: 'Whether to enable cache.'
@@ -35,17 +36,42 @@ runs:
   using: composite
   steps:
 
-    - name: Install linux packages
-      if: ${{ !contains(runner.name, 'matterlabs') }}
-      uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
-      with:
-        packages: libclang-19-dev
-        version: 1.0
-
     - name: Install linux packages (matterlabs)
+      shell: 'bash -ex {0}'
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        if command -v sudo >/dev/null 2>&1; then
+          SUDO=sudo
+        fi
+        ${SUDO} apt update && ${SUDO} apt install -y libclang-dev wget jq libssl-dev pkg-config
+        echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> "${GITHUB_PATH}"
+
+    - name: Install cmake
       if: ${{ contains(runner.name, 'matterlabs') }}
       shell: 'bash -ex {0}'
-      run: sudo apt update && sudo apt install -y libclang-dev
+      env:
+        CMAKE_VERSION: '4.1.1'
+        CMAKE_URL: 'https://github.com/Kitware/CMake/releases/download/'
+      run: |
+        CMAKE_FILENAME="cmake-${CMAKE_VERSION}-linux-x86_64"
+        wget --no-verbose "${CMAKE_URL}/v${CMAKE_VERSION}/${CMAKE_FILENAME}.tar.gz"
+        tar xzf "${CMAKE_FILENAME}.tar.gz"
+        echo "${PWD}/${CMAKE_FILENAME}/bin" >> "${GITHUB_PATH}"
+        export PATH="${PWD}/${CMAKE_FILENAME}/bin:${PATH}"
+        which cmake
+        cmake --version
+
+    - name: Install yq
+      if: ${{ contains(runner.name, 'matterlabs') }}
+      shell: 'bash -ex {0}'
+      env:
+        YQ_DOWNLOAD_URL: https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
+      run: |
+        wget "${YQ_DOWNLOAD_URL}"
+        mv yq_linux_amd64 yq
+        chmod +x yq
+        echo "${PWD}" >> "${GITHUB_PATH}"
 
     - name: Install Rust toolchain
       uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2

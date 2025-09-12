@@ -38,6 +38,8 @@ Use `zksync-os-integration` branch from`zksync-era`.
 
 IMPORTANT: the contracts deployed will come from the zksync-era/contracts directory. So if you want to test any changes to contracts, you have to put them there.
 
+Make sure that your zkstack was compiled from 'main' branch of era, and is relatively fresh (after September 10).
+
 Run this from the directory **above** zksync-era.
 ```
 mkdir zkstack-playground && cd zkstack-playground
@@ -86,23 +88,21 @@ done
 ```
 cd local_v1
 zkstack ecosystem init --deploy-paymaster=false --deploy-erc20=false --observability=false \
-  --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --chain era1 \
-  --server-db-url=postgres://invalid --server-db-name=invalid
+  --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --chain era1 --zksync-os
 ```
-WARNING: when you see the tool failing on postgres - it is ok, as the chain got registered.
 
 
 ### Start sequencer
 
 After this, you can finally run the sequencer:
 ```
-sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo run --release
+general_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era1 cargo run --release
 ```
 
-the `sequencer_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
+the `general_zkstack_cli_config_dir` config option will read the YAML files and set the proper addresses and private keys.
 Alternatively, you need to set:
 * `l1_sender_operator_commit_pk` to the operator private key of `wallets.yaml` of `zkstack` tool output, 
-* `l1_sender_operator_prove_pk` and `l1_sender_operator_execute_pk` to arbitrary funded L1 wallets,
+* `l1_sender_operator_prove_pk` and `l1_sender_operator_execute_pk` to respective wallets from `wallets.yaml`,
 * `l1_sender_bridgehub_address` to `bridgehub_proxy_addr` in `contracts.yaml` of `zkstack` tool output
 * (if running validium) `l1_sender_da_input_mode` to `validium`
 
@@ -114,6 +114,8 @@ If you restart anvil, you have to repeat a subset of steps from above, to re-cre
 * you might also want to restart the sequencer - it will figure out the state on L1, and commit missing batches.
 
 ## Regenerate L1 state
+
+Note: There is an [experimental tool](https://github.com/mm-zk/zksync_tools/tree/main/zkos/update_state_json) that can run these commands for you. If it turns out to be useful, we might make it more permanent. 
 
 L1 state is checked in into this repo under `zkos-l1-state.json`. To regenerate it from scratch, run the following commands:
 ```
@@ -137,7 +139,7 @@ Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--
 Update values in `L1SenderConfig`:
 * `bridgehub_address` -> `bridgehub_proxy_addr` in `contracts.yaml` of `zkstack` tool output
 * `operator_commit_pk` -> `operator_private_key` in `wallets.yaml`
-* `operator_prove_pk`, `operator_execute_pk` -> any funded L1 addresses (e.g. `blob_operator_private_key` and `deployer_private_key` from wallets.yaml)
+* `operator_prove_pk`, `operator_execute_pk` -> `prove_operator` and `execute_operarator` keys from wallets.yaml
 
 
 ## Running multiple chains
@@ -163,5 +165,5 @@ zkstack chain init --deploy-paymaster=false  \
 And start the sequencer.
 
 ```shell
-sequencer_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era2 cargo run --release
+general_zkstack_cli_config_dir=../zkstack-playground/local_v1/chains/era2 cargo run --release
 ```

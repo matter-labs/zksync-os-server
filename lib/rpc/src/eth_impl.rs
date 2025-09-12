@@ -1,8 +1,6 @@
-use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
-use crate::metrics::API_METRICS;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
-use crate::rpc_storage::ReadRpcStorage;
+use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::tx_handler::TxHandler;
 use alloy::consensus::Account;
 use alloy::consensus::transaction::Recovered;
@@ -25,13 +23,12 @@ use ruint::aliases::B160;
 use std::convert::identity;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
-use zk_os_api::helpers::{get_balance, get_code, get_nonce};
+use zk_os_api::helpers::{get_balance, get_code};
 use zk_os_forward_system::run::ReadStorage;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
     RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
-    convert_envelope_to_api,
 };
 use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_types::{L2Envelope, ZkReceiptEnvelope};
@@ -49,10 +46,14 @@ pub struct EthNamespace<RpcStorage, Mempool> {
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
-    pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool, chain_id: u64) -> Self {
+    pub fn new(
+        storage: RpcStorage,
+        mempool: Mempool,
+        eth_call_handler: EthCallHandler<RpcStorage>,
+        chain_id: u64,
+    ) -> Self {
         let tx_handler = TxHandler::new(mempool.clone());
 
-        let eth_call_handler = EthCallHandler::new(config, storage.clone(), chain_id);
         Self {
             tx_handler,
             eth_call_handler,
@@ -268,21 +269,29 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         address: Address,
         block_id: Option<BlockId>,
     ) -> EthResult<U256> {
-        // todo(#36): re-implement, move to a state handler
-        let block_id = block_id.unwrap_or_default();
-        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
-            return Err(EthError::BlockNotFound(block_id));
-        };
-
-        // todo(#36): distinguish between N/A blocks and actual missing accounts
-        let nonce = self
+        let on_chain_account_nonce = self
             .storage
-            .state_view_at(block_number)?
-            .get_account(B160::from_be_bytes(address.into_array()))
-            .as_ref()
-            .map(get_nonce)
+            .state_at_block_id_or_latest(block_id)?
+            .account_nonce(address)
             .unwrap_or(0);
-        Ok(U256::from(nonce))
+
+        if block_id == Some(BlockId::pending())
+            && let Some(highest_pool_tx) = self
+                .mempool
+                .get_highest_consecutive_transaction_by_sender(address, on_chain_account_nonce)
+        {
+            // Pending block id has special meaning in `eth_getTransactionCount`: it takes pending
+            // mempool transactions into account. We take highest tx in the pool and use its nonce + 1
+            // (on chain nonce is increased after tx gets executed).
+            let next_tx_nonce = highest_pool_tx
+                .nonce()
+                .checked_add(1)
+                .ok_or(EthError::NonceMaxValue)?;
+
+            Ok(U256::from(next_tx_nonce))
+        } else {
+            Ok(U256::from(on_chain_account_nonce))
+        }
     }
 
     fn get_code_impl(&self, address: Address, block_id: Option<BlockId>) -> EthResult<Bytes> {
@@ -517,13 +526,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        let latency_observer = API_METRICS.response_time[&"call"].start();
-        let r = self
-            .eth_call_handler
+        self.eth_call_handler
             .call_impl(request, block_number, state_overrides, block_overrides)
-            .to_rpc_result();
-        latency_observer.observe();
-        r
+            .to_rpc_result()
     }
 
     async fn call_many(
@@ -552,13 +557,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        let latency_observer = API_METRICS.response_time[&"estimate_gas"].start();
-        let result = self
+        Ok(self
             .eth_call_handler
             .estimate_gas_impl(request, block_number, state_override)
-            .to_rpc_result()?;
-        latency_observer.observe();
-        Ok(result)
+            .to_rpc_result()?)
     }
 
     async fn gas_price(&self) -> RpcResult<U256> {
@@ -604,16 +606,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
     }
 
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        let latency_observer = API_METRICS.response_time[&"send_raw_transaction"].start();
-
-        let r = self
-            .tx_handler
+        self.tx_handler
             .send_raw_transaction_impl(bytes)
             .await
-            .to_rpc_result();
-        latency_observer.observe();
-
-        r
+            .to_rpc_result()
     }
 
     async fn sign(&self, _address: Address, _message: Bytes) -> RpcResult<Bytes> {
@@ -697,7 +693,7 @@ pub fn build_api_receipt(
 
 pub fn build_api_tx(tx: zksync_os_types::ZkTransaction, meta: Option<&TxMeta>) -> ZkApiTransaction {
     ZkApiTransaction {
-        inner: tx.inner.map(convert_envelope_to_api),
+        inner: tx.inner,
         block_hash: meta.map(|meta| meta.block_hash),
         block_number: meta.map(|meta| meta.block_number),
         transaction_index: meta.map(|meta| meta.tx_index_in_block),
@@ -714,6 +710,13 @@ pub enum EthError {
     /// Block could not be found by its id (hash/number/tag).
     #[error("block not found")]
     BlockNotFound(BlockId),
+    /// Returned if the nonce of a transaction is too high
+    /// Incrementing the nonce would lead to invalid state (overflow)
+    #[error("nonce has max value")]
+    NonceMaxValue,
+
+    #[error(transparent)]
+    RpcStorage(#[from] RpcStorageError),
 
     #[error(transparent)]
     Repository(#[from] RepositoryError),
