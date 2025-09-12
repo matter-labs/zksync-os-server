@@ -1,5 +1,5 @@
 use crate::metrics::REPOSITORIES_METRICS;
-use alloy::consensus::Sealed;
+use alloy::consensus::{Sealed, Transaction};
 use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use dashmap::DashMap;
@@ -79,6 +79,7 @@ impl RepositoryInMemory {
 
         // Add transaction receipts to the transaction receipt repository
         let mut log_index = 0;
+        let mut cumulative_gas_used = 0;
         let mut block_bloom = Bloom::default();
         let mut stored_txs = Vec::new();
         let hash = BlockHash::from(block_output.header.hash());
@@ -89,9 +90,11 @@ impl RepositoryInMemory {
                 &sealed_block_output,
                 tx_index,
                 log_index,
+                cumulative_gas_used,
                 tx,
             ));
             log_index += stored_tx.receipt.logs().len() as u64;
+            cumulative_gas_used += stored_tx.meta.gas_used;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
             stored_txs.push((tx_hash, stored_tx));
         }
@@ -371,6 +374,7 @@ fn transaction_to_api_data(
     block_output: &Sealed<BlockOutput>,
     index: usize,
     number_of_logs_before_this_tx: u64,
+    cumulative_gas_used_before_this_tx: u64,
     tx: ZkTransaction,
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
@@ -391,8 +395,7 @@ fn transaction_to_api_data(
         tx.tx_type(),
         ZkReceipt {
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
-            // todo
-            cumulative_gas_used: 7777,
+            cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
             logs: tx_output.logs.clone(),
             l2_to_l1_logs,
         },
@@ -402,7 +405,10 @@ fn transaction_to_api_data(
         block_number: block_output.header.number,
         block_timestamp: block_output.header.timestamp,
         tx_index_in_block: index as u64,
-        effective_gas_price: block_output.header.base_fee_per_gas.unwrap() as u128,
+        effective_gas_price: tx
+            .inner
+            .inner()
+            .effective_gas_price(block_output.header.base_fee_per_gas),
         number_of_logs_before_this_tx,
         gas_used: tx_output.gas_used,
         contract_address: tx_output.contract_address,
