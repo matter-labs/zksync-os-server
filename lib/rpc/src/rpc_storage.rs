@@ -5,7 +5,7 @@ use zk_os_forward_system::run::{PreimageSource, ReadStorageTree};
 use zksync_os_storage_api::notifications::SubscribeToBlocks;
 use zksync_os_storage_api::{
     ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
-    RepositoryResult, StateResult,
+    RepositoryError, RepositoryResult, StateError, StateResult, ViewState,
 };
 
 pub trait ReadRpcStorage: ReadStateHistory + Clone {
@@ -77,6 +77,17 @@ pub trait ReadRpcStorage: ReadStateHistory + Clone {
         // two actions below.
         let block_hash_or_number = self.resolve_block_hash_or_number(block_id);
         self.get_block_by_hash_or_number(block_hash_or_number)
+    }
+
+    fn state_at_block_id_or_latest(
+        &self,
+        block_id: Option<BlockId>,
+    ) -> RpcStorageResult<impl ViewState> {
+        let block_id = block_id.unwrap_or_default();
+        let Some(block_number) = self.resolve_block_number(block_id)? else {
+            return Err(RpcStorageError::BlockNotFound);
+        };
+        Ok(self.state_view_at(block_number)?)
     }
 }
 
@@ -164,4 +175,20 @@ impl<
     fn block_range_available(&self) -> RangeInclusive<u64> {
         self.state.block_range_available()
     }
+}
+
+/// RPC storage result type.
+pub type RpcStorageResult<Ok> = Result<Ok, RpcStorageError>;
+
+/// Generic error type for RPC storage.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum RpcStorageError {
+    /// Block could not be found.
+    #[error("block not found")]
+    BlockNotFound,
+
+    #[error(transparent)]
+    Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    State(#[from] StateError),
 }

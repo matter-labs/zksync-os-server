@@ -1,5 +1,5 @@
-use alloy::primitives::BlockNumber;
 use alloy::primitives::ruint::aliases::B160;
+use alloy::primitives::{Address, BlockNumber};
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
@@ -18,6 +18,14 @@ pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
         self.read(key).map(|hash| {
             AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
         })
+    }
+
+    /// Get account's nonce by its address.
+    ///
+    /// Returns `None` if the account doesn't exist
+    fn account_nonce(&mut self, address: Address) -> Option<u64> {
+        self.get_account(B160::from_be_bytes(address.into_array()))
+            .map(|a| a.nonce)
     }
 }
 

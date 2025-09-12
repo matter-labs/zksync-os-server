@@ -70,6 +70,7 @@ impl Tester {
             self.l1_wallet.clone(),
             false,
             Some(self.replay_url.clone()),
+            None,
             Some(self.object_store_path.clone()),
         )
         .await
@@ -81,6 +82,7 @@ impl Tester {
         l1_wallet: EthereumWallet,
         enable_prover: bool,
         main_node_replay_url: Option<String>,
+        block_time: Option<Duration>,
         object_store_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         (|| async {
@@ -94,7 +96,7 @@ impl Tester {
                 .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "retrying connection to L1 node");
+            tracing::info!(%err, ?dur, "retrying connection to L1 node");
         })
         .await?;
 
@@ -122,11 +124,14 @@ impl Tester {
             l1_rpc_url: l1_address.clone(),
             ..Default::default()
         };
-        let sequencer_config = SequencerConfig {
+        let mut sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
             block_replay_download_address: main_node_replay_url,
             ..Default::default()
         };
+        if let Some(block_time) = block_time {
+            sequencer_config.block_time = block_time;
+        }
         let rpc_config = RpcConfig {
             address: l2_rpc_address,
             ..Default::default()
@@ -213,7 +218,7 @@ impl Tester {
                 .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "retrying connection to L2 node");
+            tracing::info!(%err, ?dur, "retrying connection to L2 node");
         })
         .await?;
 
@@ -233,7 +238,7 @@ impl Tester {
                 .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "waiting for L2 account to become rich");
+            tracing::info!(%err, ?dur, "waiting for L2 account to become rich");
         })
         .await?;
 
@@ -261,12 +266,18 @@ impl Tester {
 #[derive(Default)]
 pub struct TesterBuilder {
     enable_prover: bool,
+    block_time: Option<Duration>,
 }
 
 impl TesterBuilder {
     #[cfg(feature = "prover-tests")]
     pub fn enable_prover(mut self) -> Self {
         self.enable_prover = true;
+        self
+    }
+
+    pub fn block_time(mut self, block_time: Duration) -> Self {
+        self.block_time = Some(block_time);
         self
     }
 
@@ -290,6 +301,7 @@ impl TesterBuilder {
             l1_wallet,
             self.enable_prover,
             None,
+            self.block_time,
             None,
         )
         .await
