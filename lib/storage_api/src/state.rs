@@ -1,21 +1,21 @@
 use alloy::primitives::ruint::aliases::B160;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::{Address, B256, BlockNumber};
 use std::fmt::Debug;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties, address_into_special_storage_key,
 };
-use zk_os_forward_system::run::{PreimageSource, ReadStorageTree, StorageWrite};
+use zksync_os_interface::traits::{PreimageSource, ReadStorage};
+use zksync_os_interface::types::StorageWrite;
 
 /// Read-only view on a state from a specific block.
-pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
-    fn get_account(&mut self, address: B160) -> Option<AccountProperties> {
+pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
+    fn get_account(&mut self, address: Address) -> Option<AccountProperties> {
         let key = derive_flat_storage_key(
             &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
-            &address_into_special_storage_key(&address),
+            &address_into_special_storage_key(&B160::from_be_bytes(address.into_array())),
         );
-        self.read(key).map(|hash| {
+        self.read(B256::from(key.as_u8_array())).map(|hash| {
             AccountProperties::decode(&self.get_preimage(hash).unwrap().try_into().unwrap())
         })
     }
@@ -24,12 +24,11 @@ pub trait ViewState: ReadStorageTree + PreimageSource + Send + Clone {
     ///
     /// Returns `None` if the account doesn't exist
     fn account_nonce(&mut self, address: Address) -> Option<u64> {
-        self.get_account(B160::from_be_bytes(address.into_array()))
-            .map(|a| a.nonce)
+        self.get_account(address).map(|a| a.nonce)
     }
 }
 
-impl<T: ReadStorageTree + PreimageSource + Send + Clone> ViewState for T {}
+impl<T: ReadStorage + PreimageSource + Send + Clone> ViewState for T {}
 
 /// Read-only history of state views.
 pub trait ReadStateHistory: Debug + Send + Sync + 'static {
@@ -51,7 +50,7 @@ pub trait WriteState: Send + Sync + 'static {
         new_preimages: J,
     ) -> anyhow::Result<()>
     where
-        J: IntoIterator<Item = (Bytes32, &'a Vec<u8>)>;
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>;
 }
 
 /// State reader result type.

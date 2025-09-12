@@ -15,10 +15,12 @@ zksync_os_mempool.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
+zksync_os_multivm.workspace = true
 
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 zk_os_forward_system.workspace = true
+zksync_os_interface.workspace = true
 
 reth-primitives.workspace = true
 reth-execution-types = { workspace = true }

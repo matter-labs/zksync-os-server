@@ -12,8 +12,7 @@ use tokio::pin;
 use tokio::time::{Instant, Sleep};
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
-use zk_ee::system::metadata::BlockMetadataFromOracle;
-use zk_os_forward_system::run::BlockContext;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_sequencer::model::blocks::BlockCommand;
@@ -71,7 +70,12 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub fn new(rocks_db_path: PathBuf, chain_id: u64, node_version: semver::Version) -> Self {
+    pub fn new(
+        rocks_db_path: PathBuf,
+        chain_id: u64,
+        node_version: semver::Version,
+        protocol_version: u32,
+    ) -> Self {
         let db =
             RocksDB::<BlockReplayColumnFamily>::new(&rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME))
                 .expect("Failed to open BlockReplayWAL")
@@ -84,7 +88,7 @@ impl BlockReplayStorage {
             );
             this.append_replay_unchecked(ReplayRecord {
                 // todo: save real genesis here once we have genesis logic
-                block_context: BlockMetadataFromOracle {
+                block_context: BlockContext {
                     chain_id,
                     block_number: 0,
                     block_hashes: Default::default(),
@@ -96,6 +100,7 @@ impl BlockReplayStorage {
                     gas_limit: 100_000_000,
                     pubdata_limit: 100_000_000,
                     mix_hash: Default::default(),
+                    protocol_version,
                 },
                 starting_l1_priority_id: 0,
                 transactions: vec![],
@@ -262,12 +267,14 @@ impl ReadReplay for BlockReplayStorage {
             last_processed_l1_tx_result,
             txs_result,
             block_output_hash_result,
+            node_version_result,
         ) {
             (
                 Some(bytes_context),
                 Some(bytes_starting_l1_tx),
                 Some(bytes_txs),
                 Some(bytes_block_output_hash),
+                Some(node_version),
             ) => Some(ReplayRecord {
                 block_context: bincode::serde::decode_from_slice(
                     &bytes_context,
@@ -285,17 +292,13 @@ impl ReadReplay for BlockReplayStorage {
                     .expect("Failed to deserialize transactions")
                     .0,
                 previous_block_timestamp,
-                node_version: node_version_result
-                    .map(|bytes| {
-                        String::from_utf8(bytes)
-                            .expect("Failed to deserialize node version")
-                            .parse()
-                            .expect("Failed to parse node version")
-                    })
-                    .unwrap_or_else(|| semver::Version::new(0, 1, 0)),
+                node_version: String::from_utf8(node_version)
+                    .expect("Failed to deserialize node version")
+                    .parse()
+                    .expect("Failed to parse node version"),
                 block_output_hash: B256::from_slice(&bytes_block_output_hash),
             }),
-            (None, None, None, None) => None,
+            (None, None, None, None, None) => None,
             _ => panic!("Inconsistent state: Context and Txs must be written atomically"),
         }
     }

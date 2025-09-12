@@ -153,18 +153,18 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                     let index = child_index >> (P::INTERNAL_NODE_DEPTH - depth - 1);
 
                     i -= 1;
-                    sibling_hashes[i] = fixed_bytes_to_bytes32(hashes[skip + (index ^ 1)]);
+                    sibling_hashes[i] = hashes[skip + (index ^ 1)].0.into();
                 }
             }
 
             i -= 1;
-            sibling_hashes[i] = fixed_bytes_to_bytes32(
-                current_node
-                    .children
-                    .get(child_index ^ 1)
-                    .map(|x| x.hash)
-                    .unwrap_or(self.tree.hasher.empty_subtree_hash(i as u8)),
-            );
+            sibling_hashes[i] = current_node
+                .children
+                .get(child_index ^ 1)
+                .map(|x| x.hash)
+                .unwrap_or(self.tree.hasher.empty_subtree_hash(i as u8))
+                .0
+                .into();
 
             let Some(child) = current_node.children.get(child_index) else {
                 break Leaf::default();
@@ -187,15 +187,14 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
         };
 
         for i in 0..i {
-            sibling_hashes[i] =
-                fixed_bytes_to_bytes32(self.tree.hasher.empty_subtree_hash(i as u8));
+            sibling_hashes[i] = self.tree.hasher.empty_subtree_hash(i as u8).0.into();
         }
 
         LeafProof::new(
             tree_index,
             FlatStorageLeaf {
-                key: fixed_bytes_to_bytes32(leaf.key),
-                value: fixed_bytes_to_bytes32(leaf.value),
+                key: leaf.key.0.into(),
+                value: leaf.value.0.into(),
                 next: leaf.next_index,
             },
             sibling_hashes,

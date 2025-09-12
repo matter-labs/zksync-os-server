@@ -1,10 +1,9 @@
+use alloy::primitives::B256;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use zk_ee::utils::Bytes32;
-use zk_os_forward_system::run::StorageWrite;
+use zksync_os_interface::types::StorageWrite;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
 
@@ -70,13 +69,12 @@ impl FullDiffsStorage {
             self.latest_block() + 1
         );
 
-        let per_key: HashMap<Bytes32, Bytes32> =
-            writes.into_iter().map(|w| (w.key, w.value)).collect();
+        let per_key: HashMap<B256, B256> = writes.into_iter().map(|w| (w.key, w.value)).collect();
 
         let mut batch = self.rocks.new_write_batch();
         for (k, v) in per_key.into_iter() {
             let key = Self::key_for_storage_write(&block_number, k);
-            batch.put_cf(StorageCF::Data, &key, v.as_u8_array_ref());
+            batch.put_cf(StorageCF::Data, &key, v.as_slice());
         }
         batch.put_cf(
             StorageCF::Meta,
@@ -88,7 +86,7 @@ impl FullDiffsStorage {
         Ok(())
     }
 
-    pub fn read_at(&self, block_number: u64, key: Bytes32) -> Option<Bytes32> {
+    pub fn read_at(&self, block_number: u64, key: B256) -> Option<B256> {
         if block_number > self.latest_block() {
             return None;
         }
@@ -107,18 +105,18 @@ impl FullDiffsStorage {
             // If the very first item has a different prefix,
             // it means there are no writes for this key <= block and we
             // can return None immediately.
-            if &k[..32] != key.as_u8_array_ref() {
+            if &k[..32] != key.as_slice() {
                 return None;
             }
             let arr: [u8; 32] = v.as_ref().try_into().ok()?;
-            return Some(Bytes32::from(arr));
+            return Some(B256::from(arr));
         }
         None
     }
 
-    fn key_for_storage_write(block_number: &u64, k: Bytes32) -> Vec<u8> {
+    fn key_for_storage_write(block_number: &u64, k: B256) -> Vec<u8> {
         let mut key = Vec::with_capacity(40);
-        key.extend_from_slice(k.as_u8_array_ref());
+        key.extend_from_slice(k.as_slice());
         key.extend_from_slice(&block_number.to_be_bytes());
         key
     }

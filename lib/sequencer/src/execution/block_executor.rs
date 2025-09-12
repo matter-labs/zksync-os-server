@@ -8,7 +8,8 @@ use futures::StreamExt;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
-use zk_os_forward_system::run::{BlockOutput, InvalidTransaction};
+use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{MeteredViewState, ReadStateHistory, ReplayRecord, WriteState};
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
@@ -300,6 +301,7 @@ pub enum SealReason {
     NativeCycles,
     Pubdata,
     L2ToL1Logs,
+    Other,
 }
 
 fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
@@ -309,6 +311,7 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PriorityFeeGreaterThanMaxFee
         | InvalidTransaction::BaseFeeGreaterThanMaxFee
         | InvalidTransaction::CallerGasLimitMoreThanBlock
+        | InvalidTransaction::CallerGasLimitMoreThanTxLimit
         | InvalidTransaction::CallGasCostMoreThanGasLimit
         | InvalidTransaction::RejectCallerWithCode
         | InvalidTransaction::OverflowPaymentInTransaction
@@ -333,7 +336,12 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::PaymasterReturnDataTooShort
         | InvalidTransaction::PaymasterInvalidMagic
         | InvalidTransaction::PaymasterContextInvalid
-        | InvalidTransaction::PaymasterContextOffsetTooLong => TxRejectionMethod::Purge,
+        | InvalidTransaction::PaymasterContextOffsetTooLong
+        | InvalidTransaction::AuthListIsEmpty
+        | InvalidTransaction::BlobElementIsNotSupported
+        | InvalidTransaction::EIP7623IntrinsicGasIsTooLow
+        | InvalidTransaction::NativeResourcesAreTooExpensive
+        | InvalidTransaction::OtherUnrecoverable(_) => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
@@ -349,5 +357,6 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         InvalidTransaction::BlockL2ToL1LogsLimitReached => {
             TxRejectionMethod::SealBlock(SealReason::L2ToL1Logs)
         }
+        InvalidTransaction::OtherLimitReached(_) => TxRejectionMethod::SealBlock(SealReason::Other),
     }
 }

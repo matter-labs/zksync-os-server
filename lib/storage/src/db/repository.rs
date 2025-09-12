@@ -1,7 +1,5 @@
 use crate::metrics::REPOSITORIES_METRICS;
-use crate::shared::alloy_header;
 use alloy::consensus::Sealed;
-use alloy::primitives::B256;
 use alloy::{
     consensus::{Block, Transaction},
     eips::{Decodable2718, Encodable2718},
@@ -85,17 +83,17 @@ impl RepositoryDb {
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
         let latest_block_number = latest_block_number.unwrap_or_else(|| {
             let header = genesis.state().header.clone();
-            let hash = header.hash();
+            let hash = header.hash_slow();
             let block = Sealed::new_unchecked(
                 Block {
-                    header: alloy_header(&header),
+                    header,
                     body: alloy::consensus::BlockBody {
                         transactions: vec![],
                         ommers: vec![],
                         withdrawals: None,
                     },
                 },
-                B256::from_slice(&hash),
+                hash,
             );
             Self::write_block_inner(&db, &block, &[]);
 

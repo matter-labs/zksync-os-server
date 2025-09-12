@@ -1,0 +1,16 @@
+[package]
+name = "zksync_os_multivm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_interface.workspace = true
+zk_os_forward_system.workspace = true
+anyhow.workspace = true
+semver.workspace = true

@@ -10,10 +10,11 @@ use alloy::primitives::{Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use ruint::aliases::B160;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zk_os_forward_system::run::errors::ForwardSubsystemError;
-use zk_os_forward_system::run::{BlockContext, ExecutionResult, InvalidTransaction};
+use zksync_os_interface::{
+    error::InvalidTransaction,
+    types::{BlockContext, ExecutionResult},
+};
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{RepositoryError, StateError};
 use zksync_os_types::{L2Envelope, L2Transaction};
@@ -76,7 +77,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         } else {
             self.storage
                 .state_view_at(block_context.block_number)?
-                .get_account(B160::from_be_bytes(from.unwrap_or_default().into_array()))
+                .get_account(from.unwrap_or_default())
                 .as_ref()
                 .map(get_nonce)
                 .unwrap_or_default()
@@ -228,7 +229,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             call_config,
         )
         .map(GethTrace::CallTracer)
-        .map_err(EthCallError::ForwardSubsystemError)
+        .map_err(|err| EthCallError::ForwardSubsystemError(anyhow::anyhow!(err)))
     }
 
     pub fn estimate_gas_impl(
@@ -282,9 +283,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let balance = self
                 .storage
                 .state_view_at(block_context.block_number)?
-                .get_account(B160::from_be_bytes(
-                    request.from.unwrap_or_default().into_array(),
-                ))
+                .get_account(request.from.unwrap_or_default())
                 .as_ref()
                 .map(get_balance)
                 .unwrap_or_default();
@@ -509,7 +508,7 @@ pub enum EthCallError {
     // refactoring.
     /// Internal error propagated by ZKsync OS. Boxed due to its large size.
     #[error("ZKsync OS error: {0:?}")]
-    ForwardSubsystemError(Box<ForwardSubsystemError>),
+    ForwardSubsystemError(anyhow::Error),
     /// Transaction is invalid according to ZKsync OS.
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),

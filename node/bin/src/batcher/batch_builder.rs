@@ -1,5 +1,5 @@
 use alloy::primitives::Address;
-use zk_os_forward_system::run::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
 use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};

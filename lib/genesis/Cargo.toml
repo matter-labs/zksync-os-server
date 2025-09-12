@@ -24,4 +24,3 @@ anyhow.workspace = true
 zksync_os_types.workspace = true
 zksync_os_l1_watcher.workspace = true
 zksync_os_contract_interface.workspace = true
-

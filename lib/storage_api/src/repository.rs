@@ -1,7 +1,7 @@
 use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
-use zk_os_forward_system::run::BlockOutput;
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
 
