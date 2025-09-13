@@ -26,3 +26,16 @@ If you do any change to era-contracts, we should update zkos-l1-state.json (espe
 WARNING: instructions above assume that you didn't change genesis hash (any change to L2Upgrade Handler, ComplexUpgrader or WrappedBasedToken might change it).
 If you did, then you have to regenerate hashes, which is a longer process.
   
+## Updating genesis
+
+There are 3 contracts that are part of genesis -- L2ComplexUpgrader, L2GenesisUpgrade, L2WrappedBaseToken. If any of them have changed, you'll have to regenerage genesis.
+
+Currently it is a little bit of a frustrating process, but we plan to improve it in near future.
+
+* Step 1: run parts from updating era contracts: Run the tool above, and confirm that genesis.json was really updated.
+* Step 2: compute "genesis hash" - when you start the server **with new genesis.json** created in the step above - add a print here: https://github.com/matter-labs/zksync-os-server/blob/main/node/bin/src/batcher/util.rs#L36 to get the hash value.
+* Step 3: Put the new hash value into: https://github.com/matter-labs/zksync-era/blob/zksync-os-integration/etc/env/file_based/genesis.yaml
+* Step 4: Re-run the Step 1. Make sure to use zksync-era with the Step3, as new genesis is used inside CTM registration, so it will impact the state.json contents.
+* Step 5: check that everything works -- you should be able to run anvil with the new state (`anvil --load_state zkos-l1-state.json`) and zksync-os-server **with new genesis.json** (it normally loads it from local directory).
+
+https://github.com/matter-labs/zksync-os-server/blob/main/node/bin/src/batcher/util.rs#L36
