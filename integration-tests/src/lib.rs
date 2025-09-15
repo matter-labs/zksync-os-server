@@ -17,7 +17,6 @@ use zksync_os_bin::config::{
     Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_multivm::apps::create_temp_file;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -186,7 +185,7 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            let file = create_temp_file(zksync_os_multivm::apps::v1::MULTIBLOCK_BATCH)?;
+            let file = zksync_os_multivm::apps::create_temp_file(zksync_os_multivm::apps::v1::MULTIBLOCK_BATCH)?;
             tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
