@@ -176,6 +176,13 @@ jobs:
       - name: Build and archive test
         env:
           CUDAARCHS: 80
+          # This is a special mandatory hack to transfer test binary from one machine to another.
+          # We must use a dummy `./` path addition in the workspace path /home/runner/_work
+          # to prevent GitHub Actions to replace it to the mapped `/__w` folder in the docker container.
+          # This is required to make sure that the paths to workspace artifacts like zkos-l1-state.json
+          # are correct inside prebuilt binary.
+          # This variable overwrites the default relative `./` in the .cargo/config.toml.
+          WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
         run: |
           cargo nextest archive --release --profile ci -p zksync_os_integration_tests \
             --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
