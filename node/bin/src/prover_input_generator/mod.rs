@@ -7,10 +7,6 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
-use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
-use zk_os_forward_system::run::{
-    StorageCommitment, convert::FromInterface, generate_proof_input, test_impl::TxListSource,
-};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
@@ -139,7 +135,6 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
                             read_state,
                             tree,
                             file.path().to_path_buf(),
-                            replay_record.previous_block_timestamp,
                         );
                         (block_output, replay_record, prover_input)
                     })
@@ -168,41 +163,48 @@ fn compute_prover_input(
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
     bin_path: PathBuf,
-    last_block_timestamp: u64,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
-
-    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
-    let initial_storage_commitment = StorageCommitment {
-        root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-        next_free_slot: leaf_count,
-    };
-
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
-
+    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let transactions = replay_record
         .transactions
         .iter()
         .map(|tx| tx.clone().encode())
         .collect::<VecDeque<_>>();
-    let list_source = TxListSource { transactions };
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
+    let prover_input = match replay_record.block_context.protocol_version {
+        1 => {
+            use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
+            use zk_os_forward_system::run::{
+                StorageCommitment, convert::FromInterface, generate_proof_input,
+                test_impl::TxListSource,
+            };
 
-    let prover_input = generate_proof_input(
-        bin_path,
-        BlockMetadataFromOracle::from_interface(replay_record.block_context),
-        ProofData {
-            state_root_view: initial_storage_commitment,
-            last_block_timestamp,
-        },
-        tree_view,
-        state_view,
-        list_source,
-    )
-    .expect("proof gen failed");
+            let initial_storage_commitment = StorageCommitment {
+                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+                next_free_slot: leaf_count,
+            };
 
+            let list_source = TxListSource { transactions };
+
+            generate_proof_input(
+                bin_path,
+                BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                ProofData {
+                    state_root_view: initial_storage_commitment,
+                    last_block_timestamp: replay_record.previous_block_timestamp,
+                },
+                tree_view,
+                state_view,
+                list_source,
+            )
+            .expect("proof gen failed")
+        }
+        v => panic!("Unsupported protocol version: {v}"),
+    };
     let latency = prover_input_generation_latency.observe();
 
     tracing::info!(
