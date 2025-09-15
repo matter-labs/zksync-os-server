@@ -185,7 +185,9 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            let file = zksync_os_multivm::apps::create_temp_file(zksync_os_multivm::apps::v1::MULTIBLOCK_BATCH)?;
+            let file = zksync_os_multivm::apps::create_temp_file(
+                zksync_os_multivm::apps::v1::MULTIBLOCK_BATCH,
+            )?;
             tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                 base_url: prover_api_url.clone(),
                 enabled_logging: true,
