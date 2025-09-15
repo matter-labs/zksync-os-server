@@ -185,19 +185,21 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            tokio::task::spawn(async move {
+            let base_url = prover_api_url.clone();
+            tokio::task::spawn(async {
                 let file = zksync_os_multivm::apps::create_temp_file(
                     zksync_os_multivm::apps::v1::MULTIBLOCK_BATCH,
                 )
                 .unwrap();
                 zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
-                    base_url: prover_api_url.clone(),
+                    base_url,
                     enabled_logging: true,
                     app_bin_path: Some(file.path().to_path_buf()),
                     circuit_limit: 10000,
                     iterations: None,
                     path: None,
                 })
+                .await
             });
         }
 
