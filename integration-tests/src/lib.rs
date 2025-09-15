@@ -188,7 +188,8 @@ impl Tester {
             tokio::task::spawn(async move {
                 let file = zksync_os_multivm::apps::create_temp_file(
                     zksync_os_multivm::apps::v1::MULTIBLOCK_BATCH,
-                )?;
+                )
+                .unwrap();
                 zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                     base_url: prover_api_url.clone(),
                     enabled_logging: true,
