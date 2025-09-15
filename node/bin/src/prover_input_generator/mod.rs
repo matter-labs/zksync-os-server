@@ -1,5 +1,6 @@
 use anyhow::Result;
-use futures::{StreamExt, TryStreamExt};
+use futures::future::Either;
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,14 +16,17 @@ use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
+use zksync_os_multivm::apps::create_temp_file;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
+    // == state ==
+    bin_bytes: &'static [u8],
+
     // == config ==
-    bin_path: &'static str,
     maximum_in_flight_blocks: usize,
     first_block_to_process: u64,
 
@@ -55,10 +59,10 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         read_state: ReadState,
     ) -> Self {
         // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
-        let bin_path = if enable_logging {
-            concat!(env!("WORKSPACE_DIR"), "/server_app_logging_enabled.bin")
+        let bin_bytes = if enable_logging {
+            zksync_os_multivm::apps::v1::SERVER_APP_LOGGING_ENABLED
         } else {
-            concat!(env!("WORKSPACE_DIR"), "/server_app.bin")
+            zksync_os_multivm::apps::v1::SERVER_APP
         };
 
         Self {
@@ -66,7 +70,7 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
             blocks_for_batcher_sender,
             first_block_to_process,
             persistent_tree,
-            bin_path,
+            bin_bytes,
             maximum_in_flight_blocks,
             read_state,
         }
@@ -118,19 +122,31 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
                 );
                 let read_state = self.read_state.clone();
 
-                tokio::task::spawn_blocking(move || {
-                    let prover_input = compute_prover_input(
-                        &replay_record,
-                        read_state,
-                        tree,
-                        self.bin_path,
-                        replay_record.previous_block_timestamp,
-                    );
-                    (block_output, replay_record, prover_input)
-                })
+                let file = match create_temp_file(self.bin_bytes) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Either::Left(futures::future::err::<
+                            (BlockOutput, ReplayRecord, ProverInput),
+                            _,
+                        >(anyhow::anyhow!(e)));
+                    }
+                };
+
+                Either::Right(
+                    tokio::task::spawn_blocking(move || {
+                        let prover_input = compute_prover_input(
+                            &replay_record,
+                            read_state,
+                            tree,
+                            file.path().to_path_buf(),
+                            replay_record.previous_block_timestamp,
+                        );
+                        (block_output, replay_record, prover_input)
+                    })
+                    .map_err(|e| anyhow::anyhow!(e)),
+                )
             })
             .buffered(self.maximum_in_flight_blocks)
-            .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(|(block_output, replay_record, prover_input)| async {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 tracing::debug!(
@@ -151,7 +167,7 @@ fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
-    bin_path: &'static str,
+    bin_path: PathBuf,
     last_block_timestamp: u64,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
@@ -175,7 +191,7 @@ fn compute_prover_input(
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
 
     let prover_input = generate_proof_input(
-        PathBuf::from(bin_path),
+        bin_path,
         BlockMetadataFromOracle::from_interface(replay_record.block_context),
         ProofData {
             state_root_view: initial_storage_commitment,

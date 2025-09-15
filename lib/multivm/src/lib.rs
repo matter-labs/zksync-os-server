@@ -10,6 +10,8 @@ use zksync_os_interface::traits::{
 use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
 
+pub mod apps;
+
 pub fn run_block<S: ReadStorage, PS: PreimageSource, TS: TxSource, TR: TxResultCallback>(
     block_context: BlockContext,
     storage: S,

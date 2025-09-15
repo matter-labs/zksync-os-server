@@ -11033,6 +11033,7 @@ dependencies = [
  "zksync_os_bin",
  "zksync_os_contract_interface",
  "zksync_os_fri_prover",
+ "zksync_os_multivm",
  "zksync_os_object_store",
  "zksync_os_rpc_api",
  "zksync_os_state_full_diffs",
@@ -11156,7 +11157,7 @@ version = "0.4.0-non-semver-compat"
 dependencies = [
  "anyhow",
  "forward_system",
- "semver 1.0.26",
+ "tempfile",
  "zksync_os_interface",
 ]
 
