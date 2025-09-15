@@ -629,13 +629,25 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
             .map(report_exit("Batcher")),
     );
 
+    let prover_input_generation_first_block_to_process = if config
+        .prover_input_generator_config
+        .force_process_old_blocks
+    {
+        // Prover input generator will (re)process all the blocks replayed by the node on startup - at least `min_blocks_to_replay`.
+        // Note that it doesn't always start from zero.
+        0
+    } else {
+        // Prover input generator will skip the blocks that are already FRI proved and committed to L1.
+        batcher_subsystem_first_block_to_process
+    };
+
     tracing::info!("Initializing ProverInputGenerator");
     let prover_input_generator = ProverInputGenerator::new(
         config.prover_input_generator_config.logging_enabled,
         config
             .prover_input_generator_config
             .maximum_in_flight_blocks,
-        batcher_subsystem_first_block_to_process,
+        prover_input_generation_first_block_to_process,
         blocks_for_batcher_subsystem_receiver,
         blocks_for_batcher_sender,
         persistent_tree,

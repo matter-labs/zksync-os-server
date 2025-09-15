@@ -272,6 +272,12 @@ pub struct ProverInputGeneratorConfig {
     /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
     #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
+
+    /// Normally, the Prover input generator skips the blocks that are already FRI proved and committed to L1.
+    /// When this option is enabled, it will reprocess all the blocks replayed by the node on startup.
+    /// The number of blocks to replay on startup is configurable via `min_blocks_to_replay`.
+    #[config(default_t = false)]
+    pub force_process_old_blocks: bool,
 }
 
 /// Only used on the Main Node.
