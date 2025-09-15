@@ -217,6 +217,13 @@ pub struct L1SenderConfig {
     /// How often to poll L1 for new blocks.
     #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
+
+    /// Whether L1 senders are enabled.
+    /// Only affects the Main Node.
+    /// Only useful for debug. When L1 senders are disabled,
+    /// the node will eventually halt as produced batches are not processed further.
+    #[config(default_t = true)]
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -294,7 +301,7 @@ pub struct ProverApiConfig {
     pub job_timeout: Duration,
 
     /// Max difference between the oldest and newest batch number being proven
-    /// If the difference is larger than this, provers will not be assigned new jobs.
+    /// If the difference is larger than this, provers will not be assigned new jobs - only retries.
     /// We use max range instead of length limit to avoid having one old batch stuck -
     /// otherwise GaplessCommitter's buffer would grow indefinitely.
     #[config(default_t = 10)]

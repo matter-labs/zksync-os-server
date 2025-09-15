@@ -692,20 +692,24 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         run_fake_snark_provers(&config.prover_api_config, tasks, snark_job_manager);
     }
 
-    let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
-        config.l1_sender_config,
-        l1_provider,
-        batch_for_commit_receiver,
-        batch_for_snark_sender,
-        batch_for_l1_proving_receiver,
-        batch_for_priority_tree_sender,
-        batch_for_execute_receiver,
-        fully_processed_batch_sender,
-        &node_state_on_startup.l1_state,
-    );
-    tasks.spawn(l1_committer.map(report_exit("L1 committer")));
-    tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
-    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    if config.l1_sender_config.enabled {
+        let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
+            config.l1_sender_config,
+            l1_provider,
+            batch_for_commit_receiver,
+            batch_for_snark_sender,
+            batch_for_l1_proving_receiver,
+            batch_for_priority_tree_sender,
+            batch_for_execute_receiver,
+            fully_processed_batch_sender,
+            &node_state_on_startup.l1_state,
+        );
+        tasks.spawn(l1_committer.map(report_exit("L1 committer")));
+        tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
+        tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    } else {
+        tracing::warn!("Starting without L1 senders! `l1_sender_enabled` config is false");
+    }
 
     let priority_tree_manager = PriorityTreeManager::new(
         block_replay_storage.clone(),
