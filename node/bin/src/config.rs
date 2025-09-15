@@ -82,7 +82,7 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x8abe81b32447cb856f59ea2eaa86cce16c7f0aed".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0x70968ad336b957311e3c1c63e36d05035e356f68".parse().unwrap())]
     pub bridgehub_address: Address,
 
     /// Chain ID of the chain node operates on.
@@ -187,19 +187,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x05d5245e318830488c255f360648d65a50ad4674c52885394db378075afb5e60".into())]
+    #[config(alias = "operator_private_key", default_t = "0x13a60a4e493eca17ffcbe16bf1fc139b77bccc73c1b5459010a2b706bbd62602".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x733eaf1f179b70f772d6a97ee54c95c4c47f95dbfee17a1114f8b87667a257b5".into())]
+    #[config(default_t = "0xf669493eeb9dcc776188ad8227b833979b689e67b7b52d25cf2e5ab1f3d00317".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x99ad14669413f6204ec62705cea0323f97383edc5b8d8334f9173aefd7de4c57".into())]
+    #[config(default_t = "0x5d57343476407c385818c9f793c7960bc96b8ce9ab924f3e1384baf54a1589a2".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
