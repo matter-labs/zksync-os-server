@@ -7,6 +7,7 @@ pub mod block_replay_storage;
 pub mod config;
 mod metadata;
 mod node_state_on_startup;
+mod noop_l1_sender;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
@@ -22,6 +23,7 @@ use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
+use crate::noop_l1_sender::run_noop_l1_sender;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
@@ -721,6 +723,21 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         tasks.spawn(l1_executor.map(report_exit("L1 executor")));
     } else {
         tracing::warn!("Starting without L1 senders! `l1_sender_enabled` config is false");
+        tasks.spawn(
+            run_noop_l1_sender(batch_for_commit_receiver, batch_for_snark_sender)
+                .map(report_exit("L1 committer")),
+        );
+        tasks.spawn(
+            run_noop_l1_sender(
+                batch_for_l1_proving_receiver,
+                batch_for_priority_tree_sender,
+            )
+            .map(report_exit("L1 committer")),
+        );
+        tasks.spawn(
+            run_noop_l1_sender(batch_for_execute_receiver, fully_processed_batch_sender)
+                .map(report_exit("L1 committer")),
+        );
     }
 
     let priority_tree_manager = PriorityTreeManager::new(
