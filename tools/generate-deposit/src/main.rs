@@ -9,6 +9,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 
 use clap::Parser;
+use zksync_os_types::REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -59,8 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(bridgehub_address, l1_provider.clone(), l2_chain_id);
-    let gas_limit = U256::from(500_000);
-    let gas_per_pubdata = U256::from(800);
+    let gas_limit = 500_000;
     let max_priority_fee_per_gas = l1_provider.get_max_priority_fee_per_gas().await?;
     let base_l1_fees_data = l1_provider
         .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
@@ -73,9 +73,9 @@ async fn main() -> anyhow::Result<()> {
     let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
-            U256::from(max_fee_per_gas + max_priority_fee_per_gas),
+            max_fee_per_gas + max_priority_fee_per_gas,
             gas_limit,
-            gas_per_pubdata,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
         )
         .await?;
     let l1_deposit_request = bridgehub
@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
             amount,
             vec![],
             gas_limit,
-            gas_per_pubdata,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
             l1_wallet.default_signer().address(),
         )
         .value(amount + tx_base_cost)

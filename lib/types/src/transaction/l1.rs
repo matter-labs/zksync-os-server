@@ -22,6 +22,12 @@ pub type L1PriorityEnvelope = L1Envelope<L1PriorityTxType>;
 pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
 pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
 
+// The L1->L2 transactions are required to have the following gas per pubdata byte.
+pub const REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE: u64 = 800;
+
+// The minimal L1->L2 transaction gas limit enforced by L1 contracts to be extra safe.
+pub const L1_TX_MINIMAL_GAS_LIMIT: u64 = 200_000;
+
 pub trait L1TxType: Clone + Send + Sync + Debug + 'static {
     const TX_TYPE: u8;
 }
@@ -85,7 +91,7 @@ pub struct L1Tx<T: L1TxType> {
     /// The set of L2 bytecode hashes whose preimages were shown on L1.
     pub factory_deps: Vec<B256>,
 
-    _marker: std::marker::PhantomData<T>,
+    pub marker: std::marker::PhantomData<T>,
 }
 
 impl<T: L1TxType> Typed2718 for L1Tx<T> {
@@ -150,7 +156,7 @@ impl<T: L1TxType> RlpEcdsaDecodableTx for L1Tx<T> {
             refund_recipient: Decodable::decode(buf)?,
             input: Decodable::decode(buf)?,
             factory_deps: Decodable::decode(buf)?,
-            _marker: std::marker::PhantomData,
+            marker: std::marker::PhantomData,
         })
     }
 }
@@ -423,7 +429,7 @@ impl<T: L1TxType> TryFrom<L2CanonicalTransaction> for L1Envelope<T> {
             refund_recipient: Address::from_slice(&tx.reserved[1].to_be_bytes::<32>()[12..]),
             input: tx.data,
             factory_deps: tx.factoryDeps.into_iter().map(B256::from).collect(),
-            _marker: std::marker::PhantomData,
+            marker: std::marker::PhantomData,
         };
         Ok(L1Envelope {
             inner: Signed::new_unchecked(

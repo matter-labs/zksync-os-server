@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_contract_interface.workspace = true
+zksync_os_types.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "signer-local", "reqwest"] }
 anyhow.workspace = true
