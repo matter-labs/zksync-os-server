@@ -1,11 +1,11 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::config::BatchDaInputMode;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 
 #[derive(Debug)]
 pub struct CommitCommand {
