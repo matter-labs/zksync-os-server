@@ -78,7 +78,7 @@ jobs:
           RUSTC_BOOTSTRAP: 1
         run: |
           # pin to a specific version to avoid breaking changes
-          cargo install cargo-llvm-cov@0.6.18
+          cargo install --locked cargo-llvm-cov@0.6.18
           # Run regression tests with code coverage
           cargo llvm-cov --lcov --output-path lcov.info \
             nextest --workspace --exclude zksync_os_integration_tests ${NEXTEST_ITERATIONS}
