@@ -11,7 +11,7 @@ use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
-use zksync_os_multivm::LATEST_PROTOCOL_VERSION;
+use zksync_os_multivm::LATEST_ZKSYNC_OS_EXECUTION_VERSION;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
@@ -97,7 +97,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    protocol_version: LATEST_PROTOCOL_VERSION,
+                    zksync_os_execution_version: LATEST_ZKSYNC_OS_EXECUTION_VERSION,
                 };
                 PreparedBlockCommand {
                     block_context,

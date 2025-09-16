@@ -9,7 +9,7 @@ use bincode::{Decode, Encode};
 use alloy::primitives::{B256, U256, Address};
 
 // Differences from v1:
-// - added `protocol_version` to `BlockContext`
+// - added `zksync_os_execution_version` to `BlockContext`
 // - changed `coinbase` type from `B160` to `Address`
 
 /// The format ReplayRecords are currently sent in
@@ -44,7 +44,7 @@ pub struct BlockContext {
     pub pubdata_limit: u64,
     #[bincode(with_serde)]
     pub mix_hash: U256,
-    pub protocol_version: u32,
+    pub zksync_os_execution_version: u32,
 }
 
 pub struct BlockHashes(pub [U256; 256]);

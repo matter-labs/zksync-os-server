@@ -158,7 +158,7 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let prover_input = match replay_record.block_context.protocol_version {
+    let prover_input = match replay_record.block_context.zksync_os_execution_version {
         1 => {
             use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
             use zk_os_forward_system::run::{
@@ -192,7 +192,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        v => panic!("Unsupported protocol version: {v}"),
+        v => panic!("Unsupported ZKsync OS execution version: {v}"),
     };
     let latency = prover_input_generation_latency.observe();
 

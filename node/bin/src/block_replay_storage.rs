@@ -74,7 +74,7 @@ impl BlockReplayStorage {
         rocks_db_path: PathBuf,
         chain_id: u64,
         node_version: semver::Version,
-        protocol_version: u32,
+        zksync_os_execution_version: u32,
     ) -> Self {
         let db =
             RocksDB::<BlockReplayColumnFamily>::new(&rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME))
@@ -100,7 +100,7 @@ impl BlockReplayStorage {
                     gas_limit: 100_000_000,
                     pubdata_limit: 100_000_000,
                     mix_hash: Default::default(),
-                    protocol_version,
+                    zksync_os_execution_version,
                 },
                 starting_l1_priority_id: 0,
                 transactions: vec![],

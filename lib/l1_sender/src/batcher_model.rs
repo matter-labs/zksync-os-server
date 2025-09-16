@@ -24,11 +24,11 @@ pub struct BatchMetadata {
     pub first_block_number: u64,
     pub last_block_number: u64,
     pub tx_count: usize,
-    #[serde(default = "default_protocol_version")]
-    pub protocol_version: u32,
+    #[serde(default = "default_zksync_os_execution_version")]
+    pub zksync_os_execution_version: u32,
 }
 
-fn default_protocol_version() -> u32 {
+fn default_zksync_os_execution_version() -> u32 {
     1
 }
 
