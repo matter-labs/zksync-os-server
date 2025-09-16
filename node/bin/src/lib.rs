@@ -66,6 +66,7 @@ use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::run_sequencer_actor;
+use zksync_os_sequencer::fee::FeeEstimator;
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::in_memory::Finality;
@@ -74,6 +75,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     ReplayRecord, RepositoryBlock, WriteState,
 };
+use zksync_os_types::fee::Pubdata;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -351,6 +353,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
         genesis,
+        FeeEstimator::new(
+            Pubdata(config.sequencer_config.block_pubdata_limit_bytes),
+            l1_provider.clone().erased(),
+        ),
     );
 
     // ========== Start Sequencer ===========

@@ -13,3 +13,5 @@ pub use transaction::{
     L1TxSerialId, L1TxType, L1UpgradeEnvelope, L1UpgradeTx, L2Envelope, L2Transaction,
     UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
+
+pub mod fee;
