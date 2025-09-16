@@ -1,4 +1,5 @@
 use alloy::providers::DynProvider;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_types::fee::{FeePerGas, Gas, GasPerPubdata, Pubdata};
 
 /// The amount of gas we need to pay for each non-zero pubdata byte.
@@ -23,13 +24,19 @@ pub struct BlockFee {
 
 pub struct FeeEstimator {
     max_pubdata_per_batch: Pubdata,
+    batch_da_input_mode: BatchDaInputMode,
     _l1_provider: DynProvider,
 }
 
 impl FeeEstimator {
-    pub fn new(max_pubdata_per_batch: Pubdata, l1_provider: DynProvider) -> Self {
+    pub fn new(
+        max_pubdata_per_batch: Pubdata,
+        batch_da_input_mode: BatchDaInputMode,
+        l1_provider: DynProvider,
+    ) -> Self {
         Self {
             max_pubdata_per_batch,
+            batch_da_input_mode,
             _l1_provider: l1_provider,
         }
     }
@@ -49,7 +56,11 @@ impl FeeEstimator {
 
         let l1_gas_per_pubdata = L1_GAS_PER_CALLDATA_PUBDATA_BYTE;
         let l1_batch_overhead_per_pubdata = L1_BATCH_OVERHEAD / self.max_pubdata_per_batch;
-        let gas_per_pubdata = l1_gas_per_pubdata + l1_batch_overhead_per_pubdata;
+        let gas_per_pubdata = match self.batch_da_input_mode {
+            BatchDaInputMode::Rollup => l1_gas_per_pubdata + l1_batch_overhead_per_pubdata,
+            // Validium almost never closes batches because of pubdata so we don't account for it
+            BatchDaInputMode::Validium => l1_gas_per_pubdata,
+        };
 
         // fixme: temporary workaround while we use gasPerPubdata=1 for all Ethereum transactions
         let gas_per_pubdata = gas_per_pubdata.min(GasPerPubdata(1));

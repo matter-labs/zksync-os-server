@@ -355,6 +355,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis,
         FeeEstimator::new(
             Pubdata(config.sequencer_config.block_pubdata_limit_bytes),
+            node_startup_state.l1_state.da_input_mode,
             l1_provider.clone().erased(),
         ),
     );
