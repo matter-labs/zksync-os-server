@@ -22,6 +22,9 @@ jobs:
   cargo-audit:
     runs-on: ubuntu-latest
     steps:
+      # Pre-install cargo-audit to avoid using nightly toolchain after checking out code
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Run cargo audit
