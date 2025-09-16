@@ -8,6 +8,7 @@ pub mod config;
 mod l1_provider;
 mod metadata;
 mod node_state_on_startup;
+mod noop_l1_sender;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
@@ -24,6 +25,7 @@ use crate::config::{Config, L1SenderConfig, ProverApiConfig};
 use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
+use crate::noop_l1_sender::run_noop_l1_sender;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
@@ -626,13 +628,25 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
             .map(report_exit("Batcher")),
     );
 
+    let prover_input_generation_first_block_to_process = if config
+        .prover_input_generator_config
+        .force_process_old_blocks
+    {
+        // Prover input generator will (re)process all the blocks replayed by the node on startup - at least `min_blocks_to_replay`.
+        // Note that it doesn't always start from zero.
+        0
+    } else {
+        // Prover input generator will skip the blocks that are already FRI proved and committed to L1.
+        batcher_subsystem_first_block_to_process
+    };
+
     tracing::info!("Initializing ProverInputGenerator");
     let prover_input_generator = ProverInputGenerator::new(
         config.prover_input_generator_config.logging_enabled,
         config
             .prover_input_generator_config
             .maximum_in_flight_blocks,
-        batcher_subsystem_first_block_to_process,
+        prover_input_generation_first_block_to_process,
         blocks_for_batcher_subsystem_receiver,
         blocks_for_batcher_sender,
         persistent_tree,
@@ -689,20 +703,39 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         run_fake_snark_provers(&config.prover_api_config, tasks, snark_job_manager);
     }
 
-    let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
-        config.l1_sender_config,
-        l1_provider,
-        batch_for_commit_receiver,
-        batch_for_snark_sender,
-        batch_for_l1_proving_receiver,
-        batch_for_priority_tree_sender,
-        batch_for_execute_receiver,
-        fully_processed_batch_sender,
-        &node_state_on_startup.l1_state,
-    );
-    tasks.spawn(l1_committer.map(report_exit("L1 committer")));
-    tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
-    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    if config.l1_sender_config.enabled {
+        let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
+            config.l1_sender_config,
+            l1_provider,
+            batch_for_commit_receiver,
+            batch_for_snark_sender,
+            batch_for_l1_proving_receiver,
+            batch_for_priority_tree_sender,
+            batch_for_execute_receiver,
+            fully_processed_batch_sender,
+            &node_state_on_startup.l1_state,
+        );
+        tasks.spawn(l1_committer.map(report_exit("L1 committer")));
+        tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
+        tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    } else {
+        tracing::warn!("Starting without L1 senders! `l1_sender_enabled` config is false");
+        tasks.spawn(
+            run_noop_l1_sender(batch_for_commit_receiver, batch_for_snark_sender)
+                .map(report_exit("L1 committer")),
+        );
+        tasks.spawn(
+            run_noop_l1_sender(
+                batch_for_l1_proving_receiver,
+                batch_for_priority_tree_sender,
+            )
+            .map(report_exit("L1 committer")),
+        );
+        tasks.spawn(
+            run_noop_l1_sender(batch_for_execute_receiver, fully_processed_batch_sender)
+                .map(report_exit("L1 committer")),
+        );
+    }
 
     let priority_tree_manager = PriorityTreeManager::new(
         block_replay_storage.clone(),
