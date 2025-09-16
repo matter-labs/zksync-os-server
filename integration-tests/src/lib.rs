@@ -114,7 +114,6 @@ impl Tester {
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
         let rocksdb_path = tempfile::tempdir()?;
-        let app_bin_path = tempfile::tempdir()?;
         let (stop_sender, stop_receiver) = watch::channel(false);
         // Create a handle to run the sequencer in the background
         let object_store_path =
@@ -175,7 +174,7 @@ impl Tester {
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
-                app_bin_unpack_path: app_bin_path.path().to_path_buf(),
+                app_bin_unpack_path: rocksdb_path.path().to_path_buf().join("apps"),
                 ..Default::default()
             },
             prover_api_config,
@@ -188,8 +187,9 @@ impl Tester {
         #[cfg(feature = "prover-tests")]
         if enable_prover {
             let base_url = prover_api_url.clone();
-            let app_bin_path =
-                zksync_os_multivm::apps::v1::multiblock_batch_path(app_bin_path.path());
+            let app_bin_path = zksync_os_multivm::apps::v1::multiblock_batch_path(
+                &rocksdb_path.path().join("apps"),
+            );
             tokio::task::spawn(async move {
                 zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                     base_url,
