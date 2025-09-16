@@ -129,6 +129,10 @@ impl ZkTransaction {
         self.inner.to()
     }
 
+    pub fn gas_limit(&self) -> u64 {
+        self.inner.gas_limit()
+    }
+
     pub const fn tx_type(&self) -> ZkTxType {
         self.inner.inner().tx_type()
     }
