@@ -88,6 +88,10 @@ impl<ReadState: ReadStateHistory + Clone> StateProviderFactory for ZkClient<Read
     fn pending_state_by_hash(&self, _block_hash: B256) -> ProviderResult<Option<StateProviderBox>> {
         todo!()
     }
+
+    fn maybe_pending(&self) -> ProviderResult<Option<StateProviderBox>> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
