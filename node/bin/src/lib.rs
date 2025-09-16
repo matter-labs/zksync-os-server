@@ -5,6 +5,7 @@ mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
+mod l1_provider;
 mod metadata;
 mod node_state_on_startup;
 pub mod prover_api;
@@ -20,6 +21,7 @@ use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
+use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
@@ -35,8 +37,7 @@ use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::network::EthereumWallet;
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
-use alloy::signers::local::PrivateKeySigner;
+use alloy::providers::{Provider, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::StreamExt;
@@ -127,11 +128,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = ProviderBuilder::new()
-        .wallet(EthereumWallet::new(PrivateKeySigner::random()))
-        .connect(&config.general_config.l1_rpc_url)
-        .await
-        .expect("failed to connect to L1 api");
+    let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
 
     tracing::info!("Reading L1 state");
     let mut l1_state = get_l1_state(
