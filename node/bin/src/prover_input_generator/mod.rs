@@ -1,6 +1,5 @@
 use anyhow::Result;
-use futures::future::Either;
-use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,19 +11,17 @@ use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
-use zksync_os_multivm::apps::create_temp_file;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
-    // == state ==
-    bin_bytes: &'static [u8],
-
     // == config ==
+    enable_logging: bool,
     maximum_in_flight_blocks: usize,
     first_block_to_process: u64,
+    app_bin_base_path: PathBuf,
 
     // == plumbing ==
     // inbound
@@ -44,6 +41,7 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         // == config ==
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
+        app_bin_base_path: PathBuf,
         first_block_to_process: u64,
 
         // == plumbing ==
@@ -54,20 +52,14 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
         read_state: ReadState,
     ) -> Self {
-        // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
-        let bin_bytes = if enable_logging {
-            zksync_os_multivm::apps::v1::SERVER_APP_LOGGING_ENABLED
-        } else {
-            zksync_os_multivm::apps::v1::SERVER_APP
-        };
-
         Self {
+            enable_logging,
+            maximum_in_flight_blocks,
+            app_bin_base_path,
+            first_block_to_process,
             block_receiver,
             blocks_for_batcher_sender,
-            first_block_to_process,
             persistent_tree,
-            bin_bytes,
-            maximum_in_flight_blocks,
             read_state,
         }
     }
@@ -117,31 +109,21 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
                     replay_record.transactions.len(),
                 );
                 let read_state = self.read_state.clone();
-
-                let file = match create_temp_file(self.bin_bytes) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        return Either::Left(futures::future::err::<
-                            (BlockOutput, ReplayRecord, ProverInput),
-                            _,
-                        >(anyhow::anyhow!(e)));
-                    }
-                };
-
-                Either::Right(
-                    tokio::task::spawn_blocking(move || {
-                        let prover_input = compute_prover_input(
-                            &replay_record,
-                            read_state,
-                            tree,
-                            file.path().to_path_buf(),
-                        );
-                        (block_output, replay_record, prover_input)
-                    })
-                    .map_err(|e| anyhow::anyhow!(e)),
-                )
+                let enable_logging = self.enable_logging;
+                let app_bin_base_path = self.app_bin_base_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    let prover_input = compute_prover_input(
+                        &replay_record,
+                        read_state,
+                        tree,
+                        app_bin_base_path,
+                        enable_logging,
+                    );
+                    (block_output, replay_record, prover_input)
+                })
             })
             .buffered(self.maximum_in_flight_blocks)
+            .map_err(|e| anyhow::anyhow!(e))
             .try_for_each(|(block_output, replay_record, prover_input)| async {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 tracing::debug!(
@@ -162,7 +144,8 @@ fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
-    bin_path: PathBuf,
+    app_bin_base_path: PathBuf,
+    enable_logging: bool,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
@@ -189,6 +172,12 @@ fn compute_prover_input(
             };
 
             let list_source = TxListSource { transactions };
+
+            let bin_path = if enable_logging {
+                zksync_os_multivm::apps::v1::server_app_logging_enabled_path(&app_bin_base_path)
+            } else {
+                zksync_os_multivm::apps::v1::server_app_path(&app_bin_base_path)
+            };
 
             generate_proof_input(
                 bin_path,

@@ -635,6 +635,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         config
             .prover_input_generator_config
             .maximum_in_flight_blocks,
+        config.prover_input_generator_config.app_bin_unpack_path,
         batcher_subsystem_first_block_to_process,
         blocks_for_batcher_subsystem_receiver,
         blocks_for_batcher_sender,
