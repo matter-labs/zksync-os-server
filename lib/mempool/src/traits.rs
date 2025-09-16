@@ -1,8 +1,8 @@
 use alloy::consensus::EthereumTxEnvelope;
 use alloy::consensus::transaction::Recovered;
-use alloy::primitives::TxHash;
 use reth_transaction_pool::{
-    EthPooledTransaction, PoolResult, PoolTransaction, TransactionOrigin, TransactionPoolExt,
+    AddedTransactionOutcome, EthPooledTransaction, PoolResult, PoolTransaction, TransactionOrigin,
+    TransactionPoolExt,
 };
 use std::fmt::Debug;
 use zksync_os_types::L2Transaction;
@@ -16,7 +16,7 @@ pub trait L2TransactionPool:
     fn add_l2_transaction(
         &self,
         transaction: L2Transaction,
-    ) -> impl Future<Output = PoolResult<TxHash>> + Send {
+    ) -> impl Future<Output = PoolResult<AddedTransactionOutcome>> + Send {
         let (envelope, signer) = transaction.into_parts();
         let envelope = EthereumTxEnvelope::try_from(envelope)
             .expect("tried to insert an EIP-4844 transaction without sidecar into mempool");
