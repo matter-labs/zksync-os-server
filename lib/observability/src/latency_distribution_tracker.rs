@@ -5,7 +5,14 @@ use std::time::{Duration, Instant};
 
 /// Helper to track what we spend time on within any continuous/linear, potentially pipelined operation
 /// Stages must have a deterministic and linear order.
-/// Currently only used to track Batch stages (e.g. committing to l1, proving etc)
+///
+/// Currently only used to track Batch stages (e.g. committing to l1, proving etc):
+/// 2025-09-15T16:26:50.305797Z  INFO zksync_os_bin::batch_sink: ▶▶▶ Batch has been fully processed
+/// batch_number=1 latency_tracker=total: 27.470830125s (ProveL1TxSent: 947.967416ms (3.45%);
+/// SnarkProvedFake: 1.015951917s (3.70%); ExecuteL1TxSent: 1.225118875s (4.46%);
+/// ExecuteL1TxMined: 10.730509125s (39.06%); ProveL1TxMined: 13.551282792s (49.33%); )
+/// tx_count=7 block_from=1 block_to=2 proof=Fake
+///
 /// Can potentially be used for Block stages (eg with consensus), but:
 /// * currently there is no pipelining within block production, so there is little value
 /// * block stages are not linear - we alternate between WaitingForTxs and VmExecuting.

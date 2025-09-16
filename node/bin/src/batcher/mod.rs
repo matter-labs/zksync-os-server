@@ -93,10 +93,11 @@ impl Batcher {
             prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
             tracing::info!(
-                number = batch_envelope.batch_number(),
+                batch_number = batch_envelope.batch_number(),
                 block_from = batch_envelope.batch.first_block_number,
                 block_to = batch_envelope.batch.last_block_number,
                 tx_count = batch_envelope.batch.tx_count,
+                block_count = batch_envelope.batch.last_block_number - batch_envelope.batch.first_block_number + 1,
                 new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                 "Batch created"
             );

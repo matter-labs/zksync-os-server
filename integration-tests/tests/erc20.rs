@@ -14,7 +14,7 @@ use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
 use zksync_os_integration_tests::contracts::{IL2AssetRouter, L1AssetRouter, TestERC20};
 use zksync_os_integration_tests::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
 use zksync_os_integration_tests::provider::ZksyncApi;
-use zksync_os_types::{L2ToL1Log, ZkTxType};
+use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType};
 
 #[test_log::test(tokio::test)]
 async fn erc20_deposit() -> anyhow::Result<()> {
@@ -204,13 +204,12 @@ async fn deposit_erc20(
         .await?;
     let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
 
-    let l2_gas_limit = U256::from(1_500_000);
-    let l2_gas_per_pubdata = U256::from(800);
+    let l2_gas_limit = 1_500_000;
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
-            U256::from(max_fee_per_gas + max_priority_fee_per_gas),
+            max_fee_per_gas + max_priority_fee_per_gas,
             l2_gas_limit,
-            l2_gas_per_pubdata,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
         )
         .await?;
     let shared_bridge_address = bridgehub.shared_bridge_address().await?;
@@ -232,7 +231,7 @@ async fn deposit_erc20(
             tx_base_cost,
             U256::ZERO,
             l2_gas_limit,
-            l2_gas_per_pubdata,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
             to,
             shared_bridge_address,
             U256::ZERO,

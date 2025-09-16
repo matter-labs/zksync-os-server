@@ -6,7 +6,7 @@ use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{BlockContext, TxOutput};
 use zksync_os_multivm::simulate_tx;
 use zksync_os_storage_api::ViewState;
-use zksync_os_types::{L2Transaction, ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
 // For tracing.
 use zk_ee::{
@@ -32,7 +32,7 @@ pub const STACK_SIZE: usize = 1024;
 pub const ERGS_PER_GAS: u64 = 256;
 
 pub fn execute(
-    tx: L2Transaction,
+    tx: ZkTransaction,
     mut block_context: BlockContext,
     state_view: impl ViewState,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
@@ -44,7 +44,7 @@ pub fn execute(
 }
 
 pub fn call_trace_simulate(
-    tx: L2Transaction,
+    tx: ZkTransaction,
     mut block_context: BlockContext,
     state_view: impl ViewState,
     call_config: CallConfig,
