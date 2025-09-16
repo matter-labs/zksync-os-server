@@ -11,7 +11,9 @@ use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
 use zksync_os_integration_tests::provider::ZksyncApi;
-use zksync_os_types::{L2ToL1Log, ZkTxType};
+use zksync_os_types::{
+    L1PriorityTxType, L1TxType, L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType,
+};
 
 #[test_log::test(tokio::test)]
 async fn l1_deposit() -> anyhow::Result<()> {
@@ -28,7 +30,6 @@ async fn l1_deposit() -> anyhow::Result<()> {
         270,
     );
     let amount = U256::from(100);
-    let gas_per_pubdata = U256::from(800);
     let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;
     let base_l1_fees_data = tester
         .l1_provider
@@ -44,7 +45,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
         .l2_provider
         .estimate_gas(
             TransactionRequest::default()
-                .transaction_type(127)
+                .transaction_type(L1PriorityTxType::TX_TYPE)
                 .from(alice)
                 .to(alice)
                 .value(amount),
@@ -53,9 +54,9 @@ async fn l1_deposit() -> anyhow::Result<()> {
 
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
-            U256::from(max_fee_per_gas + max_priority_fee_per_gas),
-            U256::from(gas_limit),
-            gas_per_pubdata,
+            max_fee_per_gas + max_priority_fee_per_gas,
+            gas_limit,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
         )
         .await?;
     let l1_deposit_request = bridgehub
@@ -64,8 +65,8 @@ async fn l1_deposit() -> anyhow::Result<()> {
             alice,
             amount,
             vec![],
-            U256::from(gas_limit),
-            gas_per_pubdata,
+            gas_limit,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
             alice,
         )
         .value(amount + tx_base_cost)

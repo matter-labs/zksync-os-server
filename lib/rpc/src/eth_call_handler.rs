@@ -18,7 +18,7 @@ use zksync_os_interface::{
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{RepositoryError, StateError};
 use zksync_os_types::{
-    L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
+    L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType,
 };
 
@@ -402,10 +402,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         };
 
         if tx.tx_type() == ZkTxType::L1 {
-            // L1 contracts enforce higher minimal limit for extra security
-            gas_used = gas_used.max(200_000);
-            lowest_gas_limit = lowest_gas_limit.max(200_000);
-            highest_gas_limit = highest_gas_limit.max(200_000);
+            // L1 contracts enforce a higher minimal limit for extra security
+            gas_used = gas_used.max(L1_TX_MINIMAL_GAS_LIMIT);
+            lowest_gas_limit = lowest_gas_limit.max(L1_TX_MINIMAL_GAS_LIMIT);
+            highest_gas_limit = highest_gas_limit.max(L1_TX_MINIMAL_GAS_LIMIT);
         }
 
         // Pick a point that's close to the estimated gas

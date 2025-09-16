@@ -10991,6 +10991,7 @@ dependencies = [
  "clap",
  "tokio",
  "zksync_os_contract_interface",
+ "zksync_os_types",
 ]
 
 [[package]]

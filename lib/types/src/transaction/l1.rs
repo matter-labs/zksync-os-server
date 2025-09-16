@@ -22,8 +22,11 @@ pub type L1PriorityEnvelope = L1Envelope<L1PriorityTxType>;
 pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
 pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
 
-// The L1->L2 are required to have the following gas per pubdata byte.
+// The L1->L2 transactions are required to have the following gas per pubdata byte.
 pub const REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE: u64 = 800;
+
+// The minimal L1->L2 transaction gas limit enforced by L1 contracts to be extra safe.
+pub const L1_TX_MINIMAL_GAS_LIMIT: u64 = 200_000;
 
 pub trait L1TxType: Clone + Send + Sync + Debug + 'static {
     const TX_TYPE: u8;

@@ -238,8 +238,8 @@ impl<P: Provider + Clone> Bridgehub<P> {
         l2_contract: Address,
         l2_value: U256,
         l2_calldata: Vec<u8>,
-        l2_gas_limit: U256,
-        l2_gas_per_pubdata_byte_limit: U256,
+        l2_gas_limit: u64,
+        l2_gas_per_pubdata_byte_limit: u64,
         refund_recipient: Address,
     ) -> SolCallBuilder<&P, requestL2TransactionDirectCall> {
         self.instance
@@ -249,8 +249,8 @@ impl<P: Provider + Clone> Bridgehub<P> {
                 l2Contract: l2_contract,
                 l2Value: l2_value,
                 l2Calldata: l2_calldata.into(),
-                l2GasLimit: l2_gas_limit,
-                l2GasPerPubdataByteLimit: l2_gas_per_pubdata_byte_limit,
+                l2GasLimit: U256::from(l2_gas_limit),
+                l2GasPerPubdataByteLimit: U256::from(l2_gas_per_pubdata_byte_limit),
                 factoryDeps: vec![],
                 refundRecipient: refund_recipient,
             })
@@ -261,8 +261,8 @@ impl<P: Provider + Clone> Bridgehub<P> {
         &self,
         mint_value: U256,
         l2_value: U256,
-        l2_gas_limit: U256,
-        l2_gas_per_pubdata_byte_limit: U256,
+        l2_gas_limit: u64,
+        l2_gas_per_pubdata_byte_limit: u64,
         refund_recipient: Address,
         second_bridge_address: Address,
         second_bridge_value: U256,
@@ -273,8 +273,8 @@ impl<P: Provider + Clone> Bridgehub<P> {
                 chainId: U256::try_from(self.l2_chain_id).unwrap(),
                 mintValue: mint_value,
                 l2Value: l2_value,
-                l2GasLimit: l2_gas_limit,
-                l2GasPerPubdataByteLimit: l2_gas_per_pubdata_byte_limit,
+                l2GasLimit: U256::from(l2_gas_limit),
+                l2GasPerPubdataByteLimit: U256::from(l2_gas_per_pubdata_byte_limit),
                 refundRecipient: refund_recipient,
                 secondBridgeAddress: second_bridge_address,
                 secondBridgeValue: second_bridge_value,
@@ -284,16 +284,16 @@ impl<P: Provider + Clone> Bridgehub<P> {
 
     pub async fn l2_transaction_base_cost(
         &self,
-        gas_price: U256,
-        l2_gas_limit: U256,
-        l2_gas_per_pubdata_byte_limit: U256,
+        gas_price: u128,
+        l2_gas_limit: u64,
+        l2_gas_per_pubdata_byte_limit: u64,
     ) -> alloy::contract::Result<U256> {
         self.instance
             .l2TransactionBaseCost(
-                U256::try_from(self.l2_chain_id).unwrap(),
-                gas_price,
-                l2_gas_limit,
-                l2_gas_per_pubdata_byte_limit,
+                U256::from(self.l2_chain_id),
+                U256::from(gas_price),
+                U256::from(l2_gas_limit),
+                U256::from(l2_gas_per_pubdata_byte_limit),
             )
             .call()
             .await
