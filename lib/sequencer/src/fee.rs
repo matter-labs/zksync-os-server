@@ -13,6 +13,7 @@ const L1_GAS_PER_CALLDATA_PUBDATA_BYTE: GasPerPubdata = GasPerPubdata(17);
 /// * Commit 136_131 gas - https://sepolia.etherscan.io/tx/0x46bb5074df6201dca4f06e7d02e1f16bd1ad1449d226b83b884f6f9bc570061c
 /// * Prove 72_417 gas - https://sepolia.etherscan.io/tx/0xb311f31d9e093916fd03389b9e97f38a1642d90e269fb4b97973edc5acd5a584
 /// * Execute 96_116 gas - https://sepolia.etherscan.io/tx/0x44a2f3969df78cdc20b878d143f8b696b05c17d65b822567864f4774c9768711
+///
 /// Total is 304_664, but we pick 350_000 to provide safe margin
 const L1_BATCH_OVERHEAD: Gas = Gas(350_000);
 
