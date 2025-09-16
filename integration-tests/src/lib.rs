@@ -48,6 +48,8 @@ pub struct Tester {
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
 
+    tempdir: tempfile::TempDir,
+
     // Needed to be able to connect external nodes
     l1_address: String,
     replay_url: String,
@@ -113,14 +115,15 @@ impl Tester {
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
-        let rocksdb_path = tempfile::tempdir()?;
+        let tempdir = tempfile::tempdir()?;
+        let rocks_db_path = tempdir.path().join("rocksdb");
+        let app_bin_unpack_path = tempdir.path().join("apps");
+        let object_store_path = object_store_path.unwrap_or(tempdir.path().join("object_store"));
         let (stop_sender, stop_receiver) = watch::channel(false);
-        // Create a handle to run the sequencer in the background
-        let object_store_path =
-            object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
 
+        // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            rocks_db_path,
             l1_rpc_url: l1_address.clone(),
             ..Default::default()
         };
@@ -174,7 +177,7 @@ impl Tester {
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
-                app_bin_unpack_path: rocksdb_path.path().to_path_buf().join("apps"),
+                app_bin_unpack_path: app_bin_unpack_path.clone(),
                 ..Default::default()
             },
             prover_api_config,
@@ -187,9 +190,8 @@ impl Tester {
         #[cfg(feature = "prover-tests")]
         if enable_prover {
             let base_url = prover_api_url.clone();
-            let app_bin_path = zksync_os_multivm::apps::v1::multiblock_batch_path(
-                &rocksdb_path.path().join("apps"),
-            );
+            let app_bin_path =
+                zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
             tokio::task::spawn(async move {
                 zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                     base_url,
@@ -267,6 +269,7 @@ impl Tester {
             l1_address,
             replay_url,
             object_store_path,
+            tempdir,
         })
     }
 }
