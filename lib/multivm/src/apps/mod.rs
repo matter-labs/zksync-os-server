@@ -1,8 +1,14 @@
 pub mod v1 {
-    pub const SERVER_APP: &[u8] = include_bytes!("./v1/server_app.bin");
-    pub const SERVER_APP_LOGGING_ENABLED: &[u8] =
-        include_bytes!("./v1/server_app_logging_enabled.bin");
-    pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!("./v1/multiblock_batch.bin");
+    pub const SERVER_APP: &[u8] =
+        include_bytes!(concat!(env!("ZKSYNC_OS_SOURCE_PATH"), "/server_app.bin"));
+    pub const SERVER_APP_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
+        env!("ZKSYNC_OS_SOURCE_PATH"),
+        "/server_app_logging_enabled.bin"
+    ));
+    pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
+        env!("ZKSYNC_OS_SOURCE_PATH"),
+        "/multiblock_batch.bin"
+    ));
 }
 
 pub fn create_temp_file(data: &[u8]) -> std::io::Result<tempfile::NamedTempFile> {
