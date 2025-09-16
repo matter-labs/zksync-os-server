@@ -125,14 +125,14 @@ serde_yaml = "0.9"
 secrecy = "0.10.3"
 
 # Reth dependencies
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-trie-common = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.5.0-non-semver-compat", path = "lib/contract_interface" }
