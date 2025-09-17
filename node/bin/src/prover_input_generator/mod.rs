@@ -154,6 +154,7 @@ fn compute_prover_input(
     bin_path: &'static str,
     last_block_timestamp: u64,
 ) -> Vec<u32> {
+    return Default::default();
     let block_number = replay_record.block_context.block_number;
 
     let (root_hash, leaf_count) = tree_view.root_info().unwrap();
