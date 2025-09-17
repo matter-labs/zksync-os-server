@@ -42,7 +42,7 @@ impl From<ReplayWireFormatV1> for ReplayRecord {
                 gas_limit,
                 pubdata_limit,
                 mix_hash,
-                zksync_os_execution_version: 1, // hardcoded for v1
+                execution_version: 1, // hardcoded for v1
             },
             starting_l1_priority_id,
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
@@ -75,7 +75,7 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
             gas_limit,
             pubdata_limit,
             mix_hash,
-            zksync_os_execution_version,
+            execution_version,
         } = block_context;
         Self {
             block_context: BlockContext {
@@ -90,7 +90,7 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
                 gas_limit,
                 pubdata_limit,
                 mix_hash,
-                zksync_os_execution_version,
+                execution_version,
             },
             starting_l1_priority_id,
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
@@ -123,7 +123,7 @@ impl From<ReplayRecord> for ReplayWireFormatV2 {
             gas_limit,
             pubdata_limit,
             mix_hash,
-            zksync_os_execution_version,
+            execution_version,
         } = block_context;
         Self {
             block_context: super::v2::BlockContext {
@@ -138,7 +138,7 @@ impl From<ReplayRecord> for ReplayWireFormatV2 {
                 gas_limit,
                 pubdata_limit,
                 mix_hash,
-                zksync_os_execution_version,
+                execution_version,
             },
             starting_l1_priority_id,
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),

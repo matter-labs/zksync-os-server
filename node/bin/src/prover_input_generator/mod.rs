@@ -158,7 +158,7 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let prover_input = match replay_record.block_context.zksync_os_execution_version {
+    let prover_input = match replay_record.block_context.execution_version {
         1 => {
             use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
             use zk_os_forward_system::run::{

@@ -12,7 +12,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub l2_to_l1_logs_count: u64,
     pub block_count: u64,
 
-    pub zksync_os_execution_versions: HashSet<u32>,
+    pub execution_versions: HashSet<u32>,
 
     // Limits
     pub blocks_per_batch_limit: u64,
@@ -37,8 +37,8 @@ impl BatchInfoAccumulator {
             .map(|tx_result| tx_result.as_ref().map_or(0, |tx| tx.l2_to_l1_logs.len()))
             .sum::<usize>() as u64;
         self.block_count += 1;
-        self.zksync_os_execution_versions
-            .insert(replay_record.block_context.zksync_os_execution_version);
+        self.execution_versions
+            .insert(replay_record.block_context.execution_version);
 
         self
     }
@@ -70,8 +70,8 @@ impl BatchInfoAccumulator {
             return true;
         }
 
-        if self.zksync_os_execution_versions.len() > 1 {
-            BATCHER_METRICS.seal_reason[&"zksync_os_execution_version_change"].inc();
+        if self.execution_versions.len() > 1 {
+            BATCHER_METRICS.seal_reason[&"execution_version_change"].inc();
             tracing::debug!("Batcher: ZKsync OS version changed within the batch");
             return true;
         }

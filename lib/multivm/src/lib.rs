@@ -1,6 +1,6 @@
 //! This module provides a unified interface for running blocks and simulating transactions.
 //! When adding new ZKsync OS execution version, make sure it is handled in `run_block` and `simulate_tx` methods.
-//! Also, update the `LATEST_ZKSYNC_OS_EXECUTION_VERSION` constant accordingly.
+//! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
 use zk_os_forward_system::run::RunBlockForward;
 use zksync_os_interface::error::InvalidTransaction;
@@ -19,7 +19,7 @@ pub fn run_block<S: ReadStorage, PS: PreimageSource, TS: TxSource, TR: TxResultC
     tx_source: TS,
     tx_result_callback: TR,
 ) -> Result<BlockOutput, anyhow::Error> {
-    match block_context.zksync_os_execution_version {
+    match block_context.execution_version {
         1 => {
             let object = RunBlockForward {};
             object
@@ -43,7 +43,7 @@ pub fn simulate_tx<S: ReadStorage, PS: PreimageSource>(
     storage: S,
     preimage_source: PS,
 ) -> Result<Result<TxOutput, InvalidTransaction>, anyhow::Error> {
-    match block_context.zksync_os_execution_version {
+    match block_context.execution_version {
         1 => {
             let object = RunBlockForward {};
             object
@@ -54,4 +54,4 @@ pub fn simulate_tx<S: ReadStorage, PS: PreimageSource>(
     }
 }
 
-pub const LATEST_ZKSYNC_OS_EXECUTION_VERSION: u32 = 1;
+pub const LATEST_EXECUTION_VERSION: u32 = 1;
