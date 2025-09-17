@@ -16,7 +16,7 @@ pub use traits::L2TransactionPool;
 
 use reth_transaction_pool::blobstore::NoopBlobStore;
 use reth_transaction_pool::validate::EthTransactionValidatorBuilder;
-use reth_transaction_pool::{CoinbaseTipOrdering, PoolConfig};
+use reth_transaction_pool::{CoinbaseTipOrdering, PoolConfig, SubPoolLimit};
 
 pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory>(
     client: Client,
@@ -30,6 +30,20 @@ pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + State
             .build(blob_store),
         CoinbaseTipOrdering::default(),
         blob_store,
-        PoolConfig::default(),
+        PoolConfig {
+            queued_limit: SubPoolLimit {
+                max_txs: usize::MAX,
+                max_size: usize::MAX,
+            },
+            pending_limit: SubPoolLimit {
+                max_txs: usize::MAX,
+                max_size: usize::MAX,
+            },
+            basefee_limit: SubPoolLimit {
+                max_txs: usize::MAX,
+                max_size: usize::MAX,
+            },
+            ..Default::default()
+        },
     )
 }
