@@ -62,7 +62,7 @@ use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
-use zksync_os_multivm::LATEST_PROTOCOL_VERSION;
+use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -125,7 +125,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.general_config.rocks_db_path.clone(),
         config.genesis_config.chain_id,
         node_version.clone(),
-        LATEST_PROTOCOL_VERSION,
+        LATEST_EXECUTION_VERSION,
     );
 
     // This is the only place where we initialize L1 provider, every component shares the same
@@ -646,6 +646,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         config
             .prover_input_generator_config
             .maximum_in_flight_blocks,
+        config.prover_input_generator_config.app_bin_unpack_path,
         prover_input_generation_first_block_to_process,
         blocks_for_batcher_subsystem_receiver,
         blocks_for_batcher_sender,

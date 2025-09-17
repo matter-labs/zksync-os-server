@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
+use zksync_os_storage_api::ReplayRecord;
 
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
@@ -9,6 +11,8 @@ pub(crate) struct BatchInfoAccumulator {
     pub pubdata_bytes: u64,
     pub l2_to_l1_logs_count: u64,
     pub block_count: u64,
+
+    pub execution_versions: HashSet<u32>,
 
     // Limits
     pub blocks_per_batch_limit: u64,
@@ -24,7 +28,7 @@ impl BatchInfoAccumulator {
         }
     }
 
-    pub fn add(&mut self, block_output: &BlockOutput) -> &Self {
+    pub fn add(&mut self, block_output: &BlockOutput, replay_record: &ReplayRecord) -> &Self {
         self.native_cycles += block_output.computaional_native_used;
         self.pubdata_bytes += block_output.pubdata.len() as u64;
         self.l2_to_l1_logs_count += block_output
@@ -33,13 +37,15 @@ impl BatchInfoAccumulator {
             .map(|tx_result| tx_result.as_ref().map_or(0, |tx| tx.l2_to_l1_logs.len()))
             .sum::<usize>() as u64;
         self.block_count += 1;
+        self.execution_versions
+            .insert(replay_record.block_context.execution_version);
 
         self
     }
 
     /// Checks if the batch should be sealed based on the content of the blocks.
     /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
-    pub fn is_batch_limit_reached(&self) -> bool {
+    pub fn should_seal(&self) -> bool {
         if self.block_count > self.blocks_per_batch_limit {
             BATCHER_METRICS.seal_reason[&"blocks_per_batch"].inc();
             tracing::debug!("Batcher: reached blocks per batch limit");
@@ -61,6 +67,12 @@ impl BatchInfoAccumulator {
         if self.l2_to_l1_logs_count > MAX_NUMBER_OF_LOGS {
             BATCHER_METRICS.seal_reason[&"l2_l1_logs"].inc();
             tracing::debug!("Batcher: reached max number of L2 to L1 logs");
+            return true;
+        }
+
+        if self.execution_versions.len() > 1 {
+            BATCHER_METRICS.seal_reason[&"execution_version_change"].inc();
+            tracing::debug!("Batcher: ZKsync OS version changed within the batch");
             return true;
         }
 
