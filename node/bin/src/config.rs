@@ -53,7 +53,7 @@ pub struct GeneralConfig {
     pub prometheus_port: u16,
 
     /// State backend to use. When changed, a replay of all blocks may be needed.
-    #[config(default_t = StateBackendConfig::FullDiffs)]
+    #[config(default_t = StateBackendConfig::Compacted)]
     #[config(with = Serde![str])]
     pub state_backend: StateBackendConfig,
 
@@ -63,7 +63,7 @@ pub struct GeneralConfig {
     ///
     /// Currently, it affects both the storage logs (for Compacted state impl - see `state` crate for details)
     /// and repositories (see `repositories` package in this crate)
-    #[config(default_t = 512)]
+    #[config(default_t = 4)]
     pub blocks_to_retain_in_memory: usize,
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
@@ -116,12 +116,12 @@ pub struct SequencerConfig {
 
     /// Defines the block time for the sequencer.
     /// One of the block Seal Criteria. Only affects the Main Node.
-    #[config(default_t = Duration::from_millis(100))]
+    #[config(default_t = Duration::from_millis(1000))]
     pub block_time: Duration,
 
     /// Max number of transactions in a block.
     /// One of the block Seal Criteria. Only affects the Main Node.
-    #[config(default_t = 1000)]
+    #[config(default_t = 10_000)]
     pub max_transactions_in_block: usize,
 
     /// Max gas used per block.
@@ -131,7 +131,7 @@ pub struct SequencerConfig {
 
     /// Max pubdata bytes per block.
     /// One of the block Seal Criteria. Only affects the Main Node.
-    #[config(default_t = 110_000)]
+    #[config(default_t = 1_110_000)]
     pub block_pubdata_limit_bytes: u64,
 
     /// Path to the directory where block dumps for unexpected failures will be saved.
@@ -222,7 +222,7 @@ pub struct L1SenderConfig {
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
     /// the node will eventually halt as produced batches are not processed further.
-    #[config(default_t = true)]
+    #[config(default_t = false)]
     pub enabled: bool,
 }
 
@@ -251,11 +251,11 @@ pub struct MempoolConfig {
 #[config(derive(Default))]
 pub struct BatcherConfig {
     /// How long to keep a batch open before sealing it.
-    #[config(default_t = Duration::from_secs(1))]
+    #[config(default_t = Duration::from_secs(180))]
     pub batch_timeout: Duration,
 
     /// Max number of blocks per batch
-    #[config(default_t = 10)]
+    #[config(default_t = 10_000)]
     pub blocks_per_batch_limit: u64,
 }
 
