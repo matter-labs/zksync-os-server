@@ -8,8 +8,8 @@ use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
-use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -48,10 +48,13 @@ pub struct Tester {
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
 
+    #[allow(dead_code)]
+    tempdir: Arc<tempfile::TempDir>,
+    main_node_tempdir: Arc<tempfile::TempDir>,
+
     // Needed to be able to connect external nodes
     l1_address: String,
     replay_url: String,
-    object_store_path: PathBuf,
 }
 
 impl Tester {
@@ -71,7 +74,7 @@ impl Tester {
             false,
             Some(self.replay_url.clone()),
             None,
-            Some(self.object_store_path.clone()),
+            Some(self.main_node_tempdir.clone()),
         )
         .await
     }
@@ -83,7 +86,7 @@ impl Tester {
         enable_prover: bool,
         main_node_replay_url: Option<String>,
         block_time: Option<Duration>,
-        object_store_path: Option<PathBuf>,
+        main_node_tempdir: Option<Arc<tempfile::TempDir>>,
     ) -> anyhow::Result<Self> {
         (|| async {
             // Wait for L1 node to get up and be able to respond.
@@ -113,14 +116,19 @@ impl Tester {
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
-        let rocksdb_path = tempfile::tempdir()?;
+        let tempdir = tempfile::tempdir()?;
+        let rocks_db_path = tempdir.path().join("rocksdb");
+        let app_bin_unpack_path = tempdir.path().join("apps");
+        let object_store_path = main_node_tempdir
+            .as_ref()
+            .map(|t| t.path())
+            .unwrap_or(tempdir.path())
+            .join("object_store");
         let (stop_sender, stop_receiver) = watch::channel(false);
-        // Create a handle to run the sequencer in the background
-        let object_store_path =
-            object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
 
+        // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            rocks_db_path,
             l1_rpc_url: l1_address.clone(),
             ..Default::default()
         };
@@ -174,6 +182,7 @@ impl Tester {
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
+                app_bin_unpack_path: app_bin_unpack_path.clone(),
                 ..Default::default()
             },
             prover_api_config,
@@ -185,14 +194,20 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
-                base_url: prover_api_url.clone(),
-                enabled_logging: true,
-                app_bin_path: Some(concat!(env!("WORKSPACE_DIR"), "/multiblock_batch.bin").into()),
-                circuit_limit: 10000,
-                iterations: None,
-                path: None,
-            }));
+            let base_url = prover_api_url.clone();
+            let app_bin_path =
+                zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
+            tokio::task::spawn(async move {
+                zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
+                    base_url,
+                    enabled_logging: true,
+                    app_bin_path: Some(app_bin_path),
+                    circuit_limit: 10000,
+                    iterations: None,
+                    path: None,
+                })
+                .await
+            });
         }
 
         let l2_wallet = EthereumWallet::new(
@@ -247,6 +262,7 @@ impl Tester {
             .connect(&l2_rpc_ws_url)
             .await?;
 
+        let tempdir = Arc::new(tempdir);
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
@@ -258,7 +274,8 @@ impl Tester {
             main_task,
             l1_address,
             replay_url,
-            object_store_path,
+            tempdir: tempdir.clone(),
+            main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
         })
     }
 }

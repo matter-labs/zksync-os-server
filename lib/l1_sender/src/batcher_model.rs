@@ -24,6 +24,12 @@ pub struct BatchMetadata {
     pub first_block_number: u64,
     pub last_block_number: u64,
     pub tx_count: usize,
+    #[serde(default = "default_execution_version")]
+    pub execution_version: u32,
+}
+
+fn default_execution_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Serialize, Deserialize)]
