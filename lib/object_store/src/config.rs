@@ -36,26 +36,6 @@ impl Default for ObjectStoreConfig {
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
 #[config(tag = "mode")]
 pub enum ObjectStoreMode {
-    /// Writable GCS bucket with ambient authentication.
-    #[config(alias = "Gcs")]
-    GCS {
-        /// Name or URL of the bucket.
-        bucket_base_url: String,
-    },
-    /// Publicly available GCS bucket.
-    #[config(alias = "GcsAnonymousReadOnly")]
-    GCSAnonymousReadOnly {
-        /// Name or URL of the bucket.
-        bucket_base_url: String,
-    },
-    /// GCS bucket with credential file authentication.
-    #[config(alias = "GcsWithCredentialFile")]
-    GCSWithCredentialFile {
-        /// Name or URL of the bucket.
-        bucket_base_url: String,
-        /// Path to the credentials file.
-        gcs_credential_file_path: PathBuf,
-    },
     /// Publicly available S3-compatible bucket.
     S3AnonymousReadOnly {
         /// Name or URL of the bucket.
@@ -93,11 +73,13 @@ mod tests {
 
     use super::*;
 
-    fn expected_gcs_config(bucket_base_url: &str) -> ObjectStoreConfig {
+    fn expected_s3_config(bucket_base_url: &str) -> ObjectStoreConfig {
         ObjectStoreConfig {
-            mode: ObjectStoreMode::GCSWithCredentialFile {
+            mode: ObjectStoreMode::S3WithCredentialFile {
                 bucket_base_url: bucket_base_url.to_owned(),
-                gcs_credential_file_path: "/path/to/credentials.json".into(),
+                s3_credential_file_path: "/path/to/credentials.json".into(),
+                endpoint: Some("http://localhost:9000".to_owned()),
+                region: Some("us-east-2".to_owned()),
             },
             max_retries: 5,
             local_mirror_path: Some("/var/cache".into()),
@@ -108,8 +90,10 @@ mod tests {
     fn parsing_from_env() {
         let env = r#"
             OBJECT_STORE_BUCKET_BASE_URL="/base/url"
-            OBJECT_STORE_MODE="GCSWithCredentialFile"
-            OBJECT_STORE_GCS_CREDENTIAL_FILE_PATH="/path/to/credentials.json"
+            OBJECT_STORE_MODE="S3WithCredentialFile"
+            OBJECT_STORE_S3_CREDENTIAL_FILE_PATH="/path/to/credentials.json"
+            OBJECT_STORE_ENDPOINT="http://localhost:9000"
+            OBJECT_STORE_REGION="us-east-2"
             OBJECT_STORE_MAX_RETRIES="5"
             OBJECT_STORE_LOCAL_MIRROR_PATH="/var/cache"
         "#;
@@ -118,7 +102,7 @@ mod tests {
             .strip_prefix("OBJECT_STORE_");
 
         let config: ObjectStoreConfig = test_complete(env).unwrap();
-        assert_eq!(config, expected_gcs_config("/base/url"));
+        assert_eq!(config, expected_s3_config("/base/url"));
     }
 
     #[test]
@@ -144,7 +128,9 @@ mod tests {
     fn public_bucket_from_env() {
         let env = r#"
             PUBLIC_OBJECT_STORE_BUCKET_BASE_URL="/public_base_url"
-            PUBLIC_OBJECT_STORE_MODE="GCSAnonymousReadOnly"
+            PUBLIC_OBJECT_STORE_MODE="S3AnonymousReadOnly"
+            PUBLIC_OBJECT_STORE_ENDPOINT="http://localhost:9000"
+            PUBLIC_OBJECT_STORE_REGION="us-east-2"
             PUBLIC_OBJECT_STORE_MAX_RETRIES="3"
             PUBLIC_OBJECT_STORE_LOCAL_MIRROR_PATH=/var/cache
         "#;
@@ -156,8 +142,10 @@ mod tests {
         assert_eq!(config.max_retries, 3);
         assert_eq!(
             config.mode,
-            ObjectStoreMode::GCSAnonymousReadOnly {
+            ObjectStoreMode::S3AnonymousReadOnly {
                 bucket_base_url: "/public_base_url".to_owned(),
+                endpoint: Some("http://localhost:9000".to_owned()),
+                region: Some("us-east-2".to_owned()),
             }
         );
     }
@@ -187,8 +175,10 @@ mod tests {
     #[test]
     fn public_bucket_from_yaml_with_enum_coercion() {
         let yaml = r"
-          gcs_anonymous_read_only:
+          s3_anonymous_read_only:
             bucket_base_url: /public_base_url
+            endpoint: http://localhost:9000
+            region: us-east-2
           max_retries: 3
         ";
         let yaml = Yaml::new("test.yml", serde_yaml::from_str(yaml).unwrap()).unwrap();
@@ -196,8 +186,10 @@ mod tests {
         assert_eq!(config.max_retries, 3);
         assert_eq!(
             config.mode,
-            ObjectStoreMode::GCSAnonymousReadOnly {
+            ObjectStoreMode::S3AnonymousReadOnly {
                 bucket_base_url: "/public_base_url".to_owned(),
+                endpoint: Some("http://localhost:9000".to_owned()),
+                region: Some("us-east-2".to_owned()),
             }
         );
     }

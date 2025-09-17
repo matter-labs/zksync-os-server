@@ -6,7 +6,6 @@ use tokio::sync::OnceCell;
 
 use crate::{
     file::FileBackedObjectStore,
-    gcs::{GoogleCloudStore, GoogleCloudStoreAuthMode},
     mirror::MirroringObjectStore,
     retries::StoreWithRetries,
     s3::{S3Store, S3StoreAuthMode},
@@ -63,42 +62,6 @@ impl ObjectStoreFactory {
     ) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
         tracing::trace!("Initializing object store with configuration {config:?}");
         match &config.mode {
-            ObjectStoreMode::GCS { bucket_base_url } => {
-                let store = StoreWithRetries::try_new(config.max_retries, || {
-                    GoogleCloudStore::new(
-                        GoogleCloudStoreAuthMode::Authenticated,
-                        bucket_base_url.clone(),
-                    )
-                })
-                .await?;
-                Self::wrap_mirroring(store, config.local_mirror_path.as_deref()).await
-            }
-            ObjectStoreMode::GCSWithCredentialFile {
-                bucket_base_url,
-                gcs_credential_file_path,
-            } => {
-                let store = StoreWithRetries::try_new(config.max_retries, || {
-                    GoogleCloudStore::new(
-                        GoogleCloudStoreAuthMode::AuthenticatedWithCredentialFile(
-                            gcs_credential_file_path.clone(),
-                        ),
-                        bucket_base_url.clone(),
-                    )
-                })
-                .await?;
-                Self::wrap_mirroring(store, config.local_mirror_path.as_deref()).await
-            }
-            ObjectStoreMode::GCSAnonymousReadOnly { bucket_base_url } => {
-                let store = StoreWithRetries::try_new(config.max_retries, || {
-                    GoogleCloudStore::new(
-                        GoogleCloudStoreAuthMode::Anonymous,
-                        bucket_base_url.clone(),
-                    )
-                })
-                .await?;
-                Self::wrap_mirroring(store, config.local_mirror_path.as_deref()).await
-            }
-
             ObjectStoreMode::S3WithCredentialFile {
                 bucket_base_url,
                 s3_credential_file_path,

@@ -216,7 +216,7 @@ pub async fn run(
         // this method is only used in prover e2e test -
         // it shouldn't be here otherwise. If we want to expose FRI proofs,
         // we need to extract FRI cache to a separate service
-        .route("/prover-jobs/FRI/:block", get(get_fri_proof))
+        .route("/prover-jobs/FRI/{block}", get(get_fri_proof))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
         .with_state(app_state)
