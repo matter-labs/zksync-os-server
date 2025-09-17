@@ -44,6 +44,12 @@ pub struct GeneralConfig {
     #[config(default_t = 10)]
     pub min_blocks_to_replay: usize,
 
+    /// Force a concrete block number to start replaying from.
+    /// For FullDiffs backend can be any historical block already committed
+    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
+    #[config(default_t = None)]
+    pub force_starting_block_number: Option<u64>,
+
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
