@@ -590,7 +590,8 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     fn write_inner(&self, raw_batch: rocksdb::WriteBatch) -> Result<(), rocksdb::Error> {
         if self.sync_writes {
             let mut options = WriteOptions::new();
-            options.set_sync(true);
+            options.set_sync(false);
+            options.disable_wal(true);
             self.inner.db.write_opt(raw_batch, &options)
         } else {
             self.inner.db.write(raw_batch)
