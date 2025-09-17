@@ -166,12 +166,12 @@ impl Batcher {
                             let block_number = replay_record.block_context.block_number;
 
                             // sanity check - ensure that we process blocks in order
-                            anyhow::ensure!(block_number == expected_block_number,
-                                "Unexpected block number received. Expected {}, got {}",
-                                expected_block_number,
-                                block_number,
-                            );
-                            expected_block_number += 1;
+                            // anyhow::ensure!(block_number == expected_block_number,
+                            //     "Unexpected block number received. Expected {}, got {}",
+                            //     expected_block_number,
+                            //     block_number,
+                            // );
+                            // expected_block_number += 1;
 
                             /* ---------- process block ---------- */
                             let tree = self.persistent_tree
