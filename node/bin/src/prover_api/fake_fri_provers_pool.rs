@@ -47,7 +47,7 @@ impl FakeFriProversPool {
                 loop {
                     // Only take inbound items whose age >= min_age.
                     match jm.pick_next_job(min_age) {
-                        Some((batch_number, _prover_input)) => {
+                        Some((batch_number, _execution_version, _prover_input)) => {
                             // Emulate proving work.
                             let start = Instant::now();
                             sleep(compute_time).await;

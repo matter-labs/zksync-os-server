@@ -11315,7 +11315,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "forward_system",
- "tempfile",
+ "semver 1.0.26",
  "zksync_os_interface",
 ]
 
