@@ -52,15 +52,15 @@ impl Diff {
 
 impl StorageMap {
     pub fn view_at(&self, block_number: u64) -> StateResult<StorageMapView> {
-        let latest_block = self.latest_block.load(Ordering::Relaxed);
+        let latest_block = self.latest_block.load(Ordering::SeqCst);
         let persistent_block_upper_bound = self
             .persistent_storage_map
             .persistent_block_upper_bound
-            .load(Ordering::Relaxed);
+            .load(Ordering::SeqCst);
         let persistent_block_lower_bound = self
             .persistent_storage_map
             .persistent_block_lower_bound
-            .load(Ordering::Relaxed);
+            .load(Ordering::SeqCst);
         tracing::debug!(
             "Creating StorageMapView for block {} with persistence bounds {} to {} and latest block {}",
             block_number,
@@ -106,7 +106,7 @@ impl StorageMap {
     pub fn add_diff(&self, block_number: u64, writes: Vec<StorageWrite>) {
         let total_latency_observer = STORAGE_MAP_METRICS.add_diff.start();
 
-        let latest_memory_block = self.latest_block.load(Ordering::Relaxed);
+        let latest_memory_block = self.latest_block.load(Ordering::SeqCst);
 
         assert!(
             block_number <= latest_memory_block + 1,
@@ -144,14 +144,14 @@ impl StorageMap {
             // currently no-op as we don't allow changes
             self.diffs.insert(block_number, Arc::new(new_diff));
         }
-        self.latest_block.store(block_number, Ordering::Relaxed);
+        self.latest_block.store(block_number, Ordering::SeqCst);
         total_latency_observer.observe();
     }
 
     /// Moves elements from `diffs` to the persistence
     /// Only acts if there are more than `blocks_to_retain` blocks in memory
     pub fn compact(&self) {
-        let latest_block = self.latest_block.load(Ordering::Relaxed);
+        let latest_block = self.latest_block.load(Ordering::SeqCst);
         let compacting_until = latest_block.saturating_sub(self.blocks_to_retain as u64);
 
         let initial_persistent_block_upper_bound =

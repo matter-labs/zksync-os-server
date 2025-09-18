@@ -67,8 +67,8 @@ impl PersistentStorageMap {
         let started_at = Instant::now();
 
         let (prev_persisted, initial_upper) = (
-            self.persistent_block_lower_bound.load(Ordering::Relaxed),
-            self.persistent_block_upper_bound.load(Ordering::Relaxed),
+            self.persistent_block_lower_bound.load(Ordering::SeqCst),
+            self.persistent_block_upper_bound.load(Ordering::SeqCst),
         );
 
         assert_eq!(
@@ -97,10 +97,10 @@ impl PersistentStorageMap {
 
         // todo: two atomics may be redundant
         self.persistent_block_upper_bound
-            .store(new_block_number, Ordering::Relaxed);
+            .store(new_block_number, Ordering::SeqCst);
         self.rocks.write(batch).expect("RocksDB write failed");
         self.persistent_block_lower_bound
-            .store(new_block_number, Ordering::Relaxed);
+            .store(new_block_number, Ordering::SeqCst);
 
         STORAGE_MAP_METRICS
             .compact
@@ -115,7 +115,7 @@ impl PersistentStorageMap {
     }
 
     pub fn persistent_block_upper_bound(&self) -> u64 {
-        self.persistent_block_upper_bound.load(Ordering::Relaxed)
+        self.persistent_block_upper_bound.load(Ordering::SeqCst)
     }
 
     pub fn get(&self, key: B256) -> Option<B256> {

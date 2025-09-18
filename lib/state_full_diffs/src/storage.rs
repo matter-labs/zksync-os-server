@@ -58,7 +58,7 @@ impl FullDiffsStorage {
     }
 
     pub fn latest_block(&self) -> u64 {
-        self.latest_block.load(Ordering::Relaxed)
+        self.latest_block.load(Ordering::SeqCst)
     }
 
     pub fn add_block(&self, block_number: u64, writes: Vec<StorageWrite>) -> anyhow::Result<()> {
@@ -82,7 +82,7 @@ impl FullDiffsStorage {
             block_number.to_be_bytes().as_ref(),
         );
         self.rocks.write(batch)?;
-        self.latest_block.store(block_number, Ordering::Relaxed);
+        self.latest_block.store(block_number, Ordering::SeqCst);
         Ok(())
     }
 
