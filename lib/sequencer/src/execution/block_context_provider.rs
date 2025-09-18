@@ -1,4 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
+use crate::fee::FeeEstimator;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{BlockHash, TxHash, U256};
@@ -36,6 +37,7 @@ pub struct BlockContextProvider<Mempool> {
     pubdata_limit: u64,
     node_version: semver::Version,
     genesis: Genesis,
+    fee_estimator: FeeEstimator,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -51,6 +53,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         pubdata_limit: u64,
         node_version: semver::Version,
         genesis: Genesis,
+        fee_estimator: FeeEstimator,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -63,6 +66,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             pubdata_limit,
             node_version,
             genesis,
+            fee_estimator,
         }
     }
 
@@ -81,13 +85,14 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 // Create stream:
                 // - For block #1 genesis upgrade tx goes first.
                 // - L1 transactions first, then L2 transactions.
+                let block_fee = self.fee_estimator.estimate().await?;
                 let best_txs =
                     best_transactions(&self.l2_mempool, &mut self.l1_transactions, upgrade_tx);
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
-                    eip1559_basefee: U256::from(1000),
+                    eip1559_basefee: U256::from(block_fee.fee_per_gas.0),
                     native_price: U256::from(1),
-                    gas_per_pubdata: Default::default(),
+                    gas_per_pubdata: U256::from(block_fee.gas_per_pubdata.0),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,

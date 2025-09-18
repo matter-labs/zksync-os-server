@@ -14,3 +14,5 @@ pub use transaction::{
     L2Transaction, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope,
     ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
+
+pub mod fee;

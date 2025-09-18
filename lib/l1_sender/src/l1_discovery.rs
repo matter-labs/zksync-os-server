@@ -1,4 +1,3 @@
-use crate::config::BatchDaInputMode;
 use crate::metrics::L1_STATE_METRICS;
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
@@ -7,6 +6,7 @@ use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Display;
 use std::time::Duration;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_contract_interface::{Bridgehub, PubdataPricingMode};
 
 #[derive(Debug, Clone)]
