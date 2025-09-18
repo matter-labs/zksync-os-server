@@ -59,3 +59,17 @@ pub mod v1 {
         .clone()
     }
 }
+
+pub fn multiblock_batch_bytes(execution_version: u32) -> &'static [u8] {
+    match execution_version {
+        1 => v1::MULTIBLOCK_BATCH,
+        _ => panic!("Unsupported execution version: {}", execution_version),
+    }
+}
+
+pub fn supported_airbender_versions(execution_version: u32) -> Vec<semver::Version> {
+    match execution_version {
+        1 => vec![semver::Version::new(0, 4, 4)],
+        _ => panic!("Unsupported execution version: {}", execution_version),
+    }
+}

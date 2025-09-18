@@ -96,10 +96,10 @@ impl FriJobManager {
     ///
     /// `min_inbound_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
-    pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(u64, ProverInput)> {
+    pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(u64, u32, ProverInput)> {
         // 1) Prefer a timed-out reassignment
-        if let Some((batch_number, prover_input)) = self.assigned_jobs.pick_timed_out_job() {
-            return Some((batch_number, prover_input));
+        if let Some(res) = self.assigned_jobs.pick_timed_out_job() {
+            return Some(res);
         }
 
         if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
@@ -128,6 +128,7 @@ impl FriJobManager {
                 Ok(env) => {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let batch_number = env.batch_number();
+                    let execution_version = env.batch.execution_version;
                     let prover_input = env.data.clone();
                     tracing::info!(
                         batch_number,
@@ -136,7 +137,7 @@ impl FriJobManager {
                         "Assigned a new job from inbound channel"
                     );
                     self.assigned_jobs.insert(env);
-                    Some((batch_number, prover_input))
+                    Some((batch_number, execution_version, prover_input))
                 }
                 Err(_) => None,
             }

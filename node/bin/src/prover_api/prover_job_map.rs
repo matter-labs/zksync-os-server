@@ -48,7 +48,7 @@ impl ProverJobMap {
     ///   Races are possible if multiple threads call this at the same time.
     ///   Some calls may return `None` even if others observe a timed‑out job.
     ///   This is acceptable; callers will simply poll again.
-    pub fn pick_timed_out_job(&self) -> Option<(u64, ProverInput)> {
+    pub fn pick_timed_out_job(&self) -> Option<(u64, u32, ProverInput)> {
         let now = Instant::now();
 
         // Single scan to locate the minimal eligible key.
@@ -76,6 +76,7 @@ impl ProverJobMap {
             entry.assigned_at = now;
             return Some((
                 entry.batch_envelope.batch_number(),
+                entry.batch_envelope.batch.execution_version,
                 entry.batch_envelope.data.clone(),
             ));
         }

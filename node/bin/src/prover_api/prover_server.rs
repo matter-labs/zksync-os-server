@@ -21,6 +21,7 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 #[derive(Debug, Serialize, Deserialize)]
 struct NextFriProverJobPayload {
     block_number: u64,
+    execution_version: u32,
     prover_input: String, // base64‑encoded little‑endian u32 array
 }
 
@@ -55,6 +56,12 @@ struct ProverQuery {
     id: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct ExecutionVersionResponse {
+    multiblock_batch_bytes: Vec<u8>,
+    supported_airbender_versions: Vec<semver::Version>,
+}
+
 // ───────────── Application state ─────────────
 #[derive(Clone)]
 struct AppState {
@@ -69,10 +76,11 @@ async fn pick_fri_job(State(state): State<AppState>) -> Response {
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
-        Some((block, input)) => {
+        Some((block_number, execution_version, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(NextFriProverJobPayload {
-                block_number: block,
+                block_number,
+                execution_version,
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
             .into_response()
@@ -197,6 +205,18 @@ async fn status(State(state): State<AppState>) -> Response {
     let status = state.fri_job_manager.status();
     Json(status).into_response()
 }
+
+async fn execution_version(Path(version): Path<u32>, State(_state): State<AppState>) -> Response {
+    let multiblock_batch_bytes = zksync_os_multivm::apps::multiblock_batch_bytes(version);
+    let supported_airbender_versions =
+        zksync_os_multivm::apps::supported_airbender_versions(version);
+    Json(ExecutionVersionResponse {
+        multiblock_batch_bytes: multiblock_batch_bytes.to_vec(),
+        supported_airbender_versions,
+    })
+    .into_response()
+}
+
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
@@ -211,6 +231,7 @@ pub async fn run(
 
     let app = Router::new()
         .route("/prover-jobs/status", get(status))
+        .route("/prover-jobs/versions/:version", get(execution_version))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
         // this method is only used in prover e2e test -

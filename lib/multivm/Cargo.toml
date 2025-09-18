@@ -15,7 +15,7 @@ build = "build.rs"
 zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
 anyhow.workspace = true
-tempfile.workspace = true
+semver.workspace = true
 
 [build-dependencies]
 cargo_metadata = { workspace = true, default-features = false }
