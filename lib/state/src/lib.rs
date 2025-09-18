@@ -56,7 +56,7 @@ impl StateHandle {
 
         let persistent_preimages = PersistentPreimages::new(preimages_db, genesis).await;
 
-        let storage_map_block = storage_map.latest_block.load(Ordering::Relaxed);
+        let storage_map_block = storage_map.latest_block.load(Ordering::SeqCst);
         let preimages_block = persistent_preimages.rocksdb_block_number();
 
         tracing::info!(
@@ -123,7 +123,7 @@ impl ReadStateHistory for StateHandle {
     }
 
     fn block_range_available(&self) -> RangeInclusive<u64> {
-        self.compacted_block_number()..=self.storage_map.latest_block.load(Ordering::Relaxed)
+        self.compacted_block_number()..=self.storage_map.latest_block.load(Ordering::SeqCst)
     }
 }
 
