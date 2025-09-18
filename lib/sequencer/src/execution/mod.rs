@@ -8,6 +8,7 @@ use anyhow::Context;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use tokio::sync::mpsc::Sender;
+use tokio::task::JoinHandle;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::ComponentStateReporter;
@@ -39,6 +40,7 @@ pub async fn run_sequencer_actor<
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for("sequencer", SequencerState::WaitingForCommand);
+    let mut prev_rep: Option<JoinHandle<()>> = None;
     loop {
         latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
@@ -90,10 +92,18 @@ pub async fn run_sequencer_actor<
         tracing::debug!(block_number, "Added to state. Adding to repos...");
         latency_tracker.enter_state(SequencerState::AddingToRepos);
 
-        // todo: do not call if api is not enabled.
-        repositories
-            .populate(block_output.clone(), replay_record.transactions.clone())
-            .await;
+        if let Some(e) = prev_rep {
+            e.await.expect("ouch");
+        }
+
+        let repos = repositories.clone();            // Arc<dyn WriteRepository + Send + Sync + 'static>
+        let b = block_output.clone();
+        let rr = replay_record.transactions.clone();
+
+        prev_rep = Some(tokio::spawn(async move {
+            // repos is moved (owned) by this future, so borrows of &*repos are valid
+            repos.populate(b, rr).await;
+        }));
 
         tracing::debug!(block_number, "Added to repos. Updating mempools...",);
         latency_tracker.enter_state(SequencerState::UpdatingMempool);
