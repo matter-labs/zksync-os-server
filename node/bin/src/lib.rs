@@ -350,6 +350,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
         genesis,
+        config.sequencer_config.fee_collector_address,
     );
 
     // ========== Start Sequencer ===========
