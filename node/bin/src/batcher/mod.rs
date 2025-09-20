@@ -2,6 +2,7 @@ use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
 use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::primitives::Address;
+use anyhow::Context;
 use std::pin::Pin;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
@@ -83,6 +84,17 @@ impl Batcher {
             .handle_for("batcher", GenericComponentState::WaitingRecv);
 
         let mut first_block_in_batch = self.first_block_to_process;
+
+        // Skip blocks that were already processed
+        while self
+            .block_receiver
+            .peek_recv(|(b, _, _)| b.header.number <= first_block_in_batch)
+            .await
+            .context("channel closed while skipping already processed blocks")?
+        {
+            self.block_receiver.recv().await;
+        }
+
         loop {
             let batch_envelope = self
                 .create_batch(&prev_batch_info, &latency_tracker, first_block_in_batch)
@@ -166,11 +178,11 @@ impl Batcher {
                             let block_number = replay_record.block_context.block_number;
 
                             // sanity check - ensure that we process blocks in order
-                            // anyhow::ensure!(block_number == expected_block_number,
-                            //     "Unexpected block number received. Expected {}, got {}",
-                            //     expected_block_number,
-                            //     block_number,
-                            // );
+                            anyhow::ensure!(block_number == expected_block_number,
+                                "Unexpected block number received. Expected {}, got {}",
+                                expected_block_number,
+                                block_number,
+                            );
                             expected_block_number += 1;
 
                             /* ---------- process block ---------- */
