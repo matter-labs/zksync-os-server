@@ -279,6 +279,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(report_exit("L1 execute watcher")),
     );
 
+    let prev_replay_record = block_replay_storage.get_replay_record(starting_block - 1);
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
         first_replay_record.is_some() || starting_block == 1,
@@ -336,9 +337,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // ========== Start BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
 
-    let previous_block_timestamp: u64 = first_replay_record
+    let previous_block_timestamp: u64 = prev_replay_record
         .as_ref()
-        .map_or(0, |record| record.previous_block_timestamp); // if no previous block, assume genesis block
+        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
 
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
