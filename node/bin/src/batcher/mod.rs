@@ -88,7 +88,7 @@ impl Batcher {
         // Skip blocks that were already processed
         while self
             .block_receiver
-            .peek_recv(|(b, _, _)| b.header.number <= first_block_in_batch)
+            .peek_recv(|(b, _, _)| b.header.number < first_block_in_batch)
             .await
             .context("channel closed while skipping already processed blocks")?
         {
