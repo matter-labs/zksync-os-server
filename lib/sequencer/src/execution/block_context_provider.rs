@@ -6,6 +6,7 @@ use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+use tracing::warn;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
@@ -124,12 +125,12 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                         ZkEnvelope::Upgrade(_) => {}
                     }
                 }
-                anyhow::ensure!(
-                    self.previous_block_timestamp == record.previous_block_timestamp,
-                    "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
-                    self.previous_block_timestamp,
-                    record.previous_block_timestamp
-                );
+                if self.previous_block_timestamp != record.previous_block_timestamp {
+                    warn!(
+                        "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
+                        self.previous_block_timestamp, record.previous_block_timestamp
+                    )
+                }
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted,
