@@ -338,7 +338,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let previous_block_timestamp: u64 = first_replay_record
         .as_ref()
-        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
+        .map_or(0, |record| record.previous_block_timestamp); // if no previous block, assume genesis block
 
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
