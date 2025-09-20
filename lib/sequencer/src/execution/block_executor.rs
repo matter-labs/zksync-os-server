@@ -24,6 +24,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     state: R,
     latency_tracker: &ComponentStateHandle<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
+    tracing::debug!(command = ?command, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
 

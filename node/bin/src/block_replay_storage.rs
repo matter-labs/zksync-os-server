@@ -171,13 +171,11 @@ impl BlockReplayStorage {
     pub fn replay_commands_from(&self, start: u64) -> BoxStream<BlockCommand> {
         let latest = self.latest_block().unwrap_or(0);
         let stream = stream::iter(start..=latest).filter_map(move |block_num| {
-            let record = self.get_replay_record(block_num);
-            match record {
-                Some(record) => {
-                    futures::future::ready(Some(BlockCommand::Replay(Box::new(record))))
-                }
-                None => futures::future::ready(None),
-            }
+            let record = self.get_replay_record(block_num).expect(&format!(
+                "Cannot find block {} in BlockReplayStorage",
+                block_num
+            ));
+            futures::future::ready(Some(BlockCommand::Replay(Box::new(record))))
         });
         Box::pin(stream)
     }

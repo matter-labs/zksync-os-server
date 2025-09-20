@@ -1,5 +1,5 @@
 use alloy::primitives::B256;
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::time::Duration;
 use zksync_os_interface::types::BlockContext;
@@ -76,6 +76,21 @@ pub struct PreparedBlockCommand<'a> {
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
     pub expected_block_output_hash: Option<B256>,
     pub previous_block_timestamp: u64,
+}
+impl<'a> Debug for PreparedBlockCommand<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedBlockCommand")
+            .field("block_context", &self.block_context)
+            .field("seal_policy", &self.seal_policy)
+            .field("invalid_tx_policy", &self.invalid_tx_policy)
+            // .field("tx_source", &"<skipped>")
+            .field("starting_l1_priority_id", &self.starting_l1_priority_id)
+            .field("metrics_label", &self.metrics_label)
+            .field("node_version", &self.node_version)
+            .field("expected_block_output_hash", &self.expected_block_output_hash)
+            .field("previous_block_timestamp", &self.previous_block_timestamp)
+            .finish()
+    }
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.
