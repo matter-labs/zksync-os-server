@@ -124,6 +124,12 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                         ZkEnvelope::Upgrade(_) => {}
                     }
                 }
+                anyhow::ensure!(
+                    self.previous_block_timestamp == record.previous_block_timestamp,
+                    "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
+                    self.previous_block_timestamp,
+                    record.previous_block_timestamp
+                );
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted,
