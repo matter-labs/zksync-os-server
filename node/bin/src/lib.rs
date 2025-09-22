@@ -609,7 +609,8 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     .await
     .expect("reschedule not executed batches");
 
-    let batcher_subsystem_first_block_to_process = node_state_on_startup.last_l1_committed_block + 1;
+    let batcher_subsystem_first_block_to_process =
+        node_state_on_startup.last_l1_committed_block + 1;
     tracing::info!("Initializing Batcher");
     let batcher = Batcher::new(
         config.genesis_config.chain_id,
