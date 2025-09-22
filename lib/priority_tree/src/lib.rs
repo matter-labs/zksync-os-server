@@ -78,7 +78,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         batch_storage: BatchStorage,
         mut proved_batch_envelopes_receiver: Option<mpsc::Receiver<BatchEnvelope<FriProof>>>,
         mut proved_batch_numbers_receiver: Option<mpsc::Receiver<u64>>,
-        priority_ops_count_sender: mpsc::Sender<(u64, u64, usize)>,
+        priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
         execute_batches_sender: Option<mpsc::Sender<ExecuteCommand>>,
     ) -> anyhow::Result<()> {
         assert!(
@@ -171,8 +171,12 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                 );
 
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
-                priority_ops_count_sender
-                    .send((batch_number, last_block_number, priority_op_count))
+                priority_ops_internal_sender
+                    .send((
+                        batch_number,
+                        last_block_number,
+                        first_priority_op_id_in_batch.map(|id| id + priority_op_count - 1),
+                    ))
                     .await
                     .context("failed to send priority ops count")?;
                 latency_tracker.enter_state(GenericComponentState::Processing);
@@ -225,7 +229,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
     pub async fn keep_caching(
         self,
         mut executed_batch_numbers_receiver: mpsc::Receiver<u64>,
-        mut priority_ops_count_receiver: mpsc::Receiver<(u64, u64, usize)>,
+        mut priority_ops_internal_receiver: mpsc::Receiver<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {
         let latency_tracker = ComponentStateReporter::global().handle_for(
             "priority_tree_manager#keep_caching",
@@ -238,10 +242,11 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                 .recv()
                 .await
                 .context("`executed_batch_numbers_receiver` closed")?;
-            let (batch_number, last_block_number, priority_ops_count) = priority_ops_count_receiver
-                .recv()
-                .await
-                .context("`priority_ops_count_receiver` closed")?;
+            let (batch_number, last_block_number, last_priority_op_id) =
+                priority_ops_internal_receiver
+                    .recv()
+                    .await
+                    .context("`priority_ops_internal_receiver` closed")?;
             assert_eq!(
                 batch_number, new_executed_batch_number,
                 "Channels are out of sync"
@@ -249,13 +254,16 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
 
             latency_tracker.enter_state(GenericComponentState::Processing);
             let mut tree = self.merkle_tree.lock().await;
-            if priority_ops_count > 0 {
-                tree.trim_start(priority_ops_count);
+            if let Some(last_priority_op_id) = last_priority_op_id {
+                let leaves_to_trim = (last_priority_op_id + 1)
+                    .checked_sub(tree.start_index())
+                    .unwrap();
+                tree.trim_start(leaves_to_trim);
+                self.db
+                    .cache_tree(&tree, last_block_number)
+                    .context("failed to cache tree")?;
+                tracing::debug!(batch_number, "cached priority tree");
             }
-            self.db
-                .cache_tree(&tree, last_block_number)
-                .context("failed to cache tree")?;
-            tracing::debug!(batch_number, "cached priority tree");
         }
     }
 }

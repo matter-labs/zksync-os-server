@@ -44,6 +44,14 @@ pub struct GeneralConfig {
     #[config(default_t = 10)]
     pub min_blocks_to_replay: usize,
 
+    /// Force a block number to start replaying from.
+    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
+    /// For FullDiffs backend:
+    ///     On EN: can be any historical block number;
+    ///     On Main Node: any historical block number up to the last l1 committed one.
+    #[config(default_t = None)]
+    pub force_starting_block_number: Option<u64>,
+
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
@@ -334,7 +342,7 @@ pub struct FakeFriProversConfig {
     pub enabled: bool,
 
     /// Number of fake provers to run in parallel.
-    #[config(default_t = 10)]
+    #[config(default_t = 5)]
     pub workers: usize,
 
     /// Amount of time it takes to compute a proof for one batch.

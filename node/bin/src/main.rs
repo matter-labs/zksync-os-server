@@ -29,6 +29,7 @@ pub async fn main() {
 
     // =========== load configs ===========
     let config = build_configs();
+    tracing::info!(?config, "Loaded config");
 
     let prometheus: PrometheusExporterConfig =
         PrometheusExporterConfig::pull(config.general_config.prometheus_port);
