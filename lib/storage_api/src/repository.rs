@@ -55,12 +55,12 @@ pub trait ReadRepository: Send + Sync + 'static {
     }
 }
 
-pub trait WriteRepository: ReadRepository + Send  + Clone{
+pub trait WriteRepository: ReadRepository {
     fn populate(
         &self,
         block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
-    ) -> impl Future<Output = ()> + Send;
+    ) -> impl Future<Output = ()>;
 }
 
 /// Repository result type.
