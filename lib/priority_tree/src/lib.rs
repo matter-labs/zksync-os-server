@@ -259,11 +259,11 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                     .checked_sub(tree.start_index())
                     .unwrap();
                 tree.trim_start(leaves_to_trim);
+                self.db
+                    .cache_tree(&tree, last_block_number)
+                    .context("failed to cache tree")?;
+                tracing::debug!(batch_number, "cached priority tree");
             }
-            self.db
-                .cache_tree(&tree, last_block_number)
-                .context("failed to cache tree")?;
-            tracing::debug!(batch_number, "cached priority tree");
         }
     }
 }
