@@ -533,8 +533,8 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         tokio::sync::mpsc::channel::<ExecuteCommand>(5);
 
     // Channel between `PriorityTree` tasks
-    let (priority_txs_count_sender, priority_txs_count_receiver) =
-        tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
+    let (priority_txs_internal_sender, priority_txs_internal_receiver) =
+        tokio::sync::mpsc::channel::<(u64, u64, Option<usize>)>(1000);
 
     // Channel for `PriorityTree` cache task
     let (executed_batch_numbers_sender, executed_batch_numbers_receiver) =
@@ -757,7 +757,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
                 batch_storage.clone(),
                 Some(batch_for_priority_tree_receiver),
                 None,
-                priority_txs_count_sender,
+                priority_txs_internal_sender,
                 Some(batch_for_execute_sender),
             )
             .map(report_exit(
@@ -778,7 +778,10 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     // Run task that persists PriorityTree for executed batches and drops old data.
     tasks.spawn(
         priority_tree_manager
-            .keep_caching(executed_batch_numbers_receiver, priority_txs_count_receiver)
+            .keep_caching(
+                executed_batch_numbers_receiver,
+                priority_txs_internal_receiver,
+            )
             .map(report_exit("priority_tree_manager#keep_caching")),
     );
 
@@ -808,8 +811,8 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     );
 
     // Channel between `PriorityTree` tasks
-    let (priority_txs_count_sender, priority_txs_count_receiver) =
-        tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
+    let (priority_txs_internal_sender, priority_txs_internal_receiver) =
+        tokio::sync::mpsc::channel::<(u64, u64, Option<usize>)>(1000);
 
     // Input channels for `PriorityTree` tasks
     let (executed_batch_numbers_sender_1, executed_batch_numbers_receiver_1) =
@@ -873,7 +876,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
                 batch_storage.clone(),
                 None,
                 Some(executed_batch_numbers_receiver_1),
-                priority_txs_count_sender,
+                priority_txs_internal_sender,
                 None,
             )
             .map(report_exit(
@@ -897,7 +900,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         priority_tree_manager
             .keep_caching(
                 executed_batch_numbers_receiver_2,
-                priority_txs_count_receiver,
+                priority_txs_internal_receiver,
             )
             .map(report_exit("priority_tree_manager#keep_caching")),
     );
