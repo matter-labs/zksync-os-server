@@ -334,7 +334,7 @@ pub struct FakeFriProversConfig {
     pub enabled: bool,
 
     /// Number of fake provers to run in parallel.
-    #[config(default_t = 10)]
+    #[config(default_t = 5)]
     pub workers: usize,
 
     /// Amount of time it takes to compute a proof for one batch.
