@@ -248,10 +248,17 @@ impl ReadReplay for BlockReplayStorage {
             .db
             .get_cf(BlockReplayColumnFamily::Txs, &key)
             .expect("Failed to read from Txs CF");
-        let previous_block_timestamp = self
-            .get_context(block_number)
-            .map(|context| context.timestamp)
-            .unwrap_or(0);
+        // todo: save `previous_block_timestamp` as another column in the next breaking change to
+        //       replay record format
+        let previous_block_timestamp = if block_number == 0 {
+            // Genesis does not have previous block and this value should never be used, but we
+            // return `0` here for the flow to work.
+            0
+        } else {
+            self.get_context(block_number - 1)
+                .map(|context| context.timestamp)
+                .unwrap_or(0)
+        };
 
         let node_version_result = self
             .db
