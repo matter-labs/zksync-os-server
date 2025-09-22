@@ -5,6 +5,7 @@ mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
+mod en_remote_config;
 mod l1_provider;
 mod metadata;
 mod node_state_on_startup;
@@ -22,6 +23,7 @@ use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
+use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -52,7 +54,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use zksync_os_genesis::Genesis;
+use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -105,6 +107,35 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!(version = %node_version, role, "Initializing Node");
 
+    let (bridgehub_address, chain_id, genesis_input_source) =
+        if config.sequencer_config.is_main_node() {
+            let genesis_input_source: Arc<dyn GenesisInputSource> =
+                Arc::new(FileGenesisInputSource::new(
+                    config
+                        .genesis_config
+                        .genesis_input_path
+                        .clone()
+                        .expect("Missing `genesis_input_path`"),
+                ));
+            (
+                config
+                    .genesis_config
+                    .bridgehub_address
+                    .expect("Missing `bridgehub_address`"),
+                config.genesis_config.chain_id.expect("Missing `chain_id`"),
+                genesis_input_source,
+            )
+        } else {
+            let main_node_rpc_url = config
+                .general_config
+                .main_node_rpc_url
+                .clone()
+                .expect("Missing `main_node_rpc_url` in external node config");
+            load_remote_config(&main_node_rpc_url, &config.genesis_config)
+                .await
+                .unwrap()
+        };
+
     let (blocks_for_batcher_subsystem_sender, blocks_for_batcher_subsystem_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(5);
 
@@ -123,7 +154,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let block_replay_storage = BlockReplayStorage::new(
         config.general_config.rocks_db_path.clone(),
-        config.genesis_config.chain_id,
+        chain_id,
         node_version.clone(),
         LATEST_EXECUTION_VERSION,
     );
@@ -133,17 +164,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
 
     tracing::info!("Reading L1 state");
-    let mut l1_state = get_l1_state(
-        &l1_provider,
-        config.genesis_config.bridgehub_address,
-        config.genesis_config.chain_id,
-    )
-    .await
-    .expect("Failed to read L1 state");
+    let mut l1_state = get_l1_state(&l1_provider, bridgehub_address, chain_id)
+        .await
+        .expect("Failed to read L1 state");
     if config.sequencer_config.is_main_node() {
         // On a main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         l1_state = l1_state
-            .wait_to_finalize(&l1_provider, config.genesis_config.chain_id)
+            .wait_to_finalize(&l1_provider, chain_id)
             .await
             .expect("failed to wait for L1 state finalization");
     }
@@ -156,7 +183,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     ));
 
     let genesis = Genesis::new(
-        config.genesis_config.genesis_input_path.clone(),
+        genesis_input_source.clone(),
         l1_provider.clone().erased(),
         l1_state.diamond_proxy,
     );
@@ -170,22 +197,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.general_config.blocks_to_retain_in_memory,
         config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
-    );
+    )
+    .await;
 
     let state = State::new(&config.general_config, &genesis).await;
 
     tracing::info!("Initializing mempools");
     let l2_mempool = zksync_os_mempool::in_memory(
-        ZkClient::new(
-            repositories.clone(),
-            state.clone(),
-            config.genesis_config.chain_id,
-        ),
+        ZkClient::new(repositories.clone(), state.clone(), chain_id),
         config.mempool_config.max_tx_input_bytes,
     );
 
     let (tree_manager, persistent_tree) =
-        TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis);
+        TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis).await;
 
     let (last_committed_block, last_proved_block, last_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
@@ -319,10 +343,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
-            config.genesis_config.chain_id,
+            chain_id,
             node_startup_state.l1_state.bridgehub,
             rpc_storage,
             l2_mempool.clone(),
+            genesis_input_source,
         )
         .map(report_exit("JSON-RPC server")),
     );
@@ -345,7 +370,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
-        config.genesis_config.chain_id,
+        chain_id,
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
@@ -435,6 +460,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             &mut tasks,
             state,
             finality_storage,
+            chain_id,
             _stop_receiver.clone(),
         )
         .await;
@@ -504,6 +530,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     tasks: &mut JoinSet<()>,
     state: State,
     finality: Finality,
+    chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
 ) {
     // Batcher-specific async channels
@@ -612,7 +639,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     let batcher_subsystem_first_block_to_process = node_state_on_startup.last_committed_block + 1;
     tracing::info!("Initializing Batcher");
     let batcher = Batcher::new(
-        config.genesis_config.chain_id,
+        chain_id,
         node_state_on_startup.l1_state.diamond_proxy,
         batcher_subsystem_first_block_to_process,
         node_state_on_startup.repositories_persisted_block,

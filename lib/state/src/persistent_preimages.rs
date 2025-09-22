@@ -43,6 +43,7 @@ impl PersistentPreimages {
             let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
             let iter = genesis
                 .state()
+                .await
                 .preimages
                 .iter()
                 .chain(force_deploy_preimages.iter())
