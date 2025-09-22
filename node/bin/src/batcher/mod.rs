@@ -113,7 +113,8 @@ impl Batcher {
             );
 
             tracing::debug!(
-                da_commitment=?batch_envelope.batch.commit_batch_info.operator_da_input,
+                batch_number = batch_envelope.batch_number(),
+                da_commitment = ?batch_envelope.batch.commit_batch_info.operator_da_input,
                 "Batch da_input",
             );
 
