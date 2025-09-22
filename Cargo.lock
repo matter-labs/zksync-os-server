@@ -10954,6 +10954,7 @@ dependencies = [
  "vise",
  "zk_ee",
  "zksync_os_api",
+ "zksync_os_contract_interface",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_l1_sender",

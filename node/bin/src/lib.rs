@@ -17,6 +17,7 @@ mod state_initializer;
 pub mod tree_manager;
 mod util;
 pub mod zkstack_config;
+use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
@@ -600,10 +601,18 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         );
 
     // Channel between `L1ProofSubmitter` and `PriorityTree`
-    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
+    let (batch_for_priority_tree_sender, mut batch_for_priority_tree_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
             proven_not_executed_batches.len().max(10),
         );
+
+    tokio::spawn(async move {
+        loop {
+            let next = batch_for_priority_tree_receiver.recv().await.unwrap();
+            let command = ExecuteCommand::new(vec![next], vec![PriorityOpsBatchInfo::default()]);
+            batch_for_execute_sender.send(command).await.unwrap();
+        }
+    });
 
     reschedule_committed_not_proved_batches(committed_not_proven_batches, &batch_for_snark_sender)
         .await
@@ -743,50 +752,50 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         );
     }
 
-    let priority_tree_manager = PriorityTreeManager::new(
-        block_replay_storage.clone(),
-        node_state_on_startup.last_executed_block,
-        Path::new(
-            &config
-                .general_config
-                .rocks_db_path
-                .join(PRIORITY_TREE_DB_NAME),
-        ),
-    )
-    .unwrap();
+    // let priority_tree_manager = PriorityTreeManager::new(
+    //     block_replay_storage.clone(),
+    //     node_state_on_startup.last_executed_block,
+    //     Path::new(
+    //         &config
+    //             .general_config
+    //             .rocks_db_path
+    //             .join(PRIORITY_TREE_DB_NAME),
+    //     ),
+    // )
+    // .unwrap();
     // Run task that adds new txs to PriorityTree and prepares `ExecuteCommand`s.
-    tasks.spawn(
-        priority_tree_manager
-            .clone()
-            .prepare_execute_commands(
-                batch_storage.clone(),
-                Some(batch_for_priority_tree_receiver),
-                None,
-                priority_txs_count_sender,
-                Some(batch_for_execute_sender),
-            )
-            .map(report_exit(
-                "priority_tree_manager#prepare_execute_commands",
-            )),
-    );
+    // tasks.spawn(
+    //     priority_tree_manager
+    //         .clone()
+    //         .prepare_execute_commands(
+    //             batch_storage.clone(),
+    //             Some(batch_for_priority_tree_receiver),
+    //             None,
+    //             priority_txs_count_sender,
+    //             Some(batch_for_execute_sender),
+    //         )
+    //         .map(report_exit(
+    //             "priority_tree_manager#prepare_execute_commands",
+    //         )),
+    // );
     // Auxiliary task that yields a channel of executed batch numbers.
-    tasks.spawn(
-        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
-            executed_batch_numbers_sender,
-            batch_storage.clone(),
-            finality,
-            None,
-            node_state_on_startup.l1_state.last_executed_batch + 1,
-        )
-        .map(report_exit("send_executed_batch_numbers")),
-    );
+    // tasks.spawn(
+    //     util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
+    //         executed_batch_numbers_sender,
+    //         batch_storage.clone(),
+    //         finality,
+    //         None,
+    //         node_state_on_startup.l1_state.last_executed_batch + 1,
+    //     )
+    //     .map(report_exit("send_executed_batch_numbers")),
+    // );
     // Run task that persists PriorityTree for executed batches and drops old data.
-    tasks.spawn(
-        priority_tree_manager
-            .keep_caching(executed_batch_numbers_receiver, priority_txs_count_receiver)
-            .map(report_exit("priority_tree_manager#keep_caching")),
-    );
-
+    // tasks.spawn(
+    //     priority_tree_manager
+    //         .keep_caching(executed_batch_numbers_receiver, priority_txs_count_receiver)
+    //         .map(report_exit("priority_tree_manager#keep_caching")),
+    // );
+    //
     tasks.spawn(
         BatchSink::new(fully_processed_batch_receiver)
             .run()
