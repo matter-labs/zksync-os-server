@@ -2,6 +2,7 @@ use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
@@ -24,6 +25,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     state: R,
     latency_tracker: &ComponentStateHandle<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
+    tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
 
@@ -245,7 +247,11 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         "Block sealed in block executor"
     );
 
-    tracing::debug!(?output, "Block output");
+    tracing::debug!(
+        output = ?BlockOutputDebug(&output),
+        block_number = output.header.number,
+        "Block output"
+    );
 
     let block_hash_output = hash_block_output(&output);
 

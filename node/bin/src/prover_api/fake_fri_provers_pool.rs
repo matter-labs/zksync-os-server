@@ -5,7 +5,7 @@ use tokio::time::{Instant, sleep};
 
 use crate::prover_api::fri_job_manager::FriJobManager;
 
-const POLL_INTERVAL_MS: u64 = 100;
+const POLL_INTERVAL_MS: u64 = 250;
 const PROVER_LABEL: &str = "fake_prover";
 
 /// Emulates a pool of provers:
