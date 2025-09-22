@@ -913,10 +913,10 @@ fn block_hashes_for_first_block(repositories: &RepositoryManager) -> BlockHashes
     block_hashes
 }
 
-fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T, E>) {
+fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E>) {
     move |result| match result {
         Ok(_) => tracing::warn!("{name} unexpectedly exited"),
-        Err(e) => tracing::error!("{name} failed: {e:#}"),
+        Err(e) => tracing::error!("{name} failed: {e:#?}"),
     }
 }
 
