@@ -187,7 +187,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (tree_manager, persistent_tree) =
         TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis);
 
-    let (last_committed_block, last_proved_block, last_executed_block) =
+    let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
 
     let node_startup_state = NodeStateOnStartup {
@@ -199,16 +199,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .last_processed_block()
             .expect("cannot read tree last processed block after initialization"),
         repositories_persisted_block: repositories.get_latest_block(),
-        last_committed_block,
-        last_proved_block,
-        last_executed_block,
+        last_l1_committed_block,
+        last_l1_proved_block,
+        last_l1_executed_block,
     };
 
     let desired_starting_block = [
         node_startup_state
             .block_replay_storage_last_block
             .saturating_sub(config.general_config.min_blocks_to_replay as u64),
-        node_startup_state.last_committed_block + 1,
+        node_startup_state.last_l1_committed_block + 1,
         node_startup_state.repositories_persisted_block + 1,
         node_startup_state.tree_last_block + 1,
         state.block_range_available().end() + 1,
@@ -239,8 +239,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing L1 Watchers");
     let finality_storage = Finality::new(FinalityStatus {
-        last_committed_block,
-        last_executed_block,
+        last_committed_block: last_l1_committed_block,
+        last_executed_block: last_l1_executed_block,
     });
 
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -609,7 +609,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     .await
     .expect("reschedule not executed batches");
 
-    let batcher_subsystem_first_block_to_process = node_state_on_startup.last_committed_block + 1;
+    let batcher_subsystem_first_block_to_process = node_state_on_startup.last_l1_committed_block + 1;
     tracing::info!("Initializing Batcher");
     let batcher = Batcher::new(
         config.genesis_config.chain_id,
@@ -740,7 +740,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
 
     let priority_tree_manager = PriorityTreeManager::new(
         block_replay_storage.clone(),
-        node_state_on_startup.last_executed_block,
+        node_state_on_startup.last_l1_executed_block,
         Path::new(
             &config
                 .general_config
@@ -818,7 +818,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         tokio::sync::mpsc::channel::<u64>(1000);
 
     let last_ready_block = node_state_on_startup
-        .last_executed_block
+        .last_l1_executed_block
         .min(node_state_on_startup.block_replay_storage_last_block);
     let batch_of_last_ready_block = batch_storage
         .get_batch_by_block_number(last_ready_block)
