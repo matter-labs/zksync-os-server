@@ -163,6 +163,12 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                         }
                     }
                 }
+                tracing::debug!(
+                    batch_number,
+                    last_block_number,
+                    priority_op_count,
+                    "Processing batch in priority tree manager"
+                );
 
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 priority_ops_count_sender
@@ -181,6 +187,12 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                         - merkle_tree.start_index();
                     start..(start + priority_op_count)
                 };
+                tracing::trace!(
+                    "getting merkle paths for priority ops range {range:?}, merkle_tree.start_index() = {}, merkle_tree.length() = {}",
+                    merkle_tree.start_index(),
+                    merkle_tree.length(),
+                );
+
                 let (_, left, right) = merkle_tree.merkle_root_and_paths_for_range(range.clone());
                 let hashes = merkle_tree.hashes_range(range);
                 priority_ops.push(PriorityOpsBatchInfo {
