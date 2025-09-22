@@ -99,6 +99,12 @@ impl FriJobManager {
     pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(u64, ProverInput)> {
         // 1) Prefer a timed-out reassignment
         if let Some((batch_number, prover_input)) = self.assigned_jobs.pick_timed_out_job() {
+            tracing::info!(
+                batch_number,
+                assigned_jobs_count = self.assigned_jobs.len(),
+                ?min_inbound_age,
+                "Assigned a timed out job"
+            );
             return Some((batch_number, prover_input));
         }
 
