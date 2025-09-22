@@ -204,22 +204,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_executed_block,
     };
 
-    let desired_starting_block = [
-        node_startup_state
-            .block_replay_storage_last_block
-            .saturating_sub(config.general_config.min_blocks_to_replay as u64),
-        node_startup_state.last_committed_block + 1,
-        node_startup_state.repositories_persisted_block + 1,
-        node_startup_state.tree_last_block + 1,
-        state.block_range_available().end() + 1,
-    ]
-    .into_iter()
-    .min()
-    .unwrap();
+    let desired_starting_block = if let Some(forced_starting_block_number) =
+        config.general_config.force_starting_block_number
+    {
+        forced_starting_block_number
+    } else {
+        [
+            node_startup_state
+                .block_replay_storage_last_block
+                .saturating_sub(config.general_config.min_blocks_to_replay as u64),
+            node_startup_state.last_committed_block + 1,
+            node_startup_state.repositories_persisted_block + 1,
+            node_startup_state.tree_last_block + 1,
+            state.block_range_available().end() + 1,
+        ]
+        .into_iter()
+        .min()
+        .unwrap()
+    };
 
     let starting_block = if desired_starting_block < state.block_range_available().start() + 1 {
         tracing::warn!(
             desired_starting_block,
+            config.general_config.force_starting_block_number,
             min_block_available_in_state = state.block_range_available().start() + 1,
             "Desired starting block is not available in state. Starting from zero."
         );
@@ -230,6 +237,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!(
         config.general_config.min_blocks_to_replay,
+        config.general_config.force_starting_block_number,
         ?node_startup_state,
         starting_block,
         "Node state on startup"
@@ -370,7 +378,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             let block_stream = if let Some(replay_download_address) =
                 &sequencer_config.block_replay_download_address
             {
-                // External Node
+                // External Node - start streaming from the Main Node, ignoring the local `block_replay_storage`.
                 match replay_receiver(starting_block, replay_download_address).await {
                     Ok(stream) => stream,
                     Err(e) => {
@@ -379,7 +387,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     }
                 }
             } else {
-                // Main Node
+                // Main Node - replay from `block_replay_storage`, then produce new blocks.
                 command_source(
                     &block_replay_storage,
                     starting_block,
