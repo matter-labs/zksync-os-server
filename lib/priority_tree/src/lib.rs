@@ -164,7 +164,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                     }
                 }
                 tracing::debug!(
-                    batch_number, last_block_number, priority_op_count
+                    batch_number, last_block_number, priority_op_count,
                     "Processing batch in priority tree manager"
                 );
 
