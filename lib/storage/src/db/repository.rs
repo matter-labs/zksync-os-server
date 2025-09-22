@@ -75,14 +75,16 @@ pub struct RepositoryDb {
 }
 
 impl RepositoryDb {
-    pub fn new(db_path: &Path, genesis: &Genesis) -> Self {
+    pub async fn new(db_path: &Path, genesis: &Genesis) -> Self {
         let db = RocksDB::<RepositoryCF>::new(db_path).expect("Failed to open db");
         let latest_block_number = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()));
-        let latest_block_number = latest_block_number.unwrap_or_else(|| {
-            let header = genesis.state().header.clone();
+        let latest_block_number = if let Some(n) = latest_block_number {
+            n
+        } else {
+            let header = genesis.state().await.header.clone();
             let hash = header.hash_slow();
             let block = Sealed::new_unchecked(
                 Block {
@@ -98,7 +100,7 @@ impl RepositoryDb {
             Self::write_block_inner(&db, &block, &[]);
 
             0
-        });
+        };
 
         Self {
             db,

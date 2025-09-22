@@ -3,6 +3,7 @@ use alloy::primitives::{Address, TxHash};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
+use zksync_os_genesis::GenesisInput;
 
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "zks"))]
 #[cfg_attr(feature = "server", rpc(server, client, namespace = "zks"))]
@@ -16,4 +17,7 @@ pub trait ZksApi {
         tx_hash: TxHash,
         index: Index,
     ) -> RpcResult<Option<L2ToL1LogProof>>;
+
+    #[method(name = "getGenesis")]
+    async fn get_genesis(&self) -> RpcResult<GenesisInput>;
 }

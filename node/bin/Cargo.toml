@@ -15,6 +15,7 @@ zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_rocksdb.workspace = true
 zksync_os_rpc.workspace = true
+zksync_os_rpc_api.workspace = true
 zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
@@ -74,3 +75,4 @@ axum.workspace = true
 http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
+jsonrpsee = { workspace = true, default-features = false, features = ["client"] }
