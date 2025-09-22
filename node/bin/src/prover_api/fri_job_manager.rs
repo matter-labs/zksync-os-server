@@ -149,7 +149,7 @@ impl FriJobManager {
         } else {
             // in fact, we could wait for mutex to unlock -
             // but we return early and let prover poll again
-            tracing::debug!("inbound receiver is contended; returning None");
+            tracing::trace!("inbound receiver is contended; returning None");
             None
         }
     }
