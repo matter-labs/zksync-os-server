@@ -1,10 +1,10 @@
-use crate::config::BatchDaInputMode;
 use alloy::primitives::{Address, B256, Bytes, FixedBytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
 use zk_ee::utils::Bytes32;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_types::{L2_TO_L1_TREE_SIZE, L2ToL1Log, ZkEnvelope, ZkTransaction};

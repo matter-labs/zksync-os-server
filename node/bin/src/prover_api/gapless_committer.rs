@@ -1,16 +1,16 @@
 use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_l1_sender::config::BatchDaInputMode;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
 
 /// Receives Batches with proofs - potentially out of order;
-/// Fixes the order (by filling in the `buffer` field);  
+/// Fixes the order (by filling in the `buffer` field);
 /// Sends batches downstream:
 ///   * First to the `proof_storage`
 ///   * Then to the `l1sender_handle`
