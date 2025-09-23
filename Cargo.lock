@@ -9160,6 +9160,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
+name = "string-literal-const-replace"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9d8c20f3adde7f809b9037020f249cb735dabaa7d8faa6b1f5ab7f12baf400"
+dependencies = [
+ "proc-macro2 1.0.95",
+ "quote 1.0.40",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11250,7 +11261,6 @@ dependencies = [
  "serde",
  "time",
  "tokio",
- "tracing",
  "vise",
  "zk_ee",
  "zksync_os_contract_interface",
@@ -11258,6 +11268,7 @@ dependencies = [
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
+ "zksync_os_tracing",
  "zksync_os_types",
 ]
 
@@ -11591,6 +11602,7 @@ name = "zksync_os_tracing"
 version = "0.6.4-non-semver-compat"
 dependencies = [
  "serde",
+ "string-literal-const-replace",
  "tracing",
  "tracing-logfmt",
  "tracing-subscriber 0.3.20",

@@ -8,6 +8,7 @@ use backon::{ConstantBuilder, Retryable};
 use std::fmt::Display;
 use std::time::Duration;
 use zksync_os_contract_interface::{Bridgehub, PubdataPricingMode};
+use zksync_os_tracing::{Value, info};
 
 #[derive(Debug, Clone)]
 pub struct L1State {
@@ -72,7 +73,7 @@ impl L1State {
 
 /// Waits until provided function returns consistent values for both `latest` and `pending` block ids.
 async fn wait_to_finalize<
-    T: PartialEq + tracing::Value + Display,
+    T: PartialEq + Value + Display,
     Fut: Future<Output = alloy::contract::Result<T>>,
 >(
     f: impl Fn(BlockId) -> Fut,
@@ -100,10 +101,9 @@ async fn wait_to_finalize<
     })
     .retry(RETRY_BUILDER)
     .notify(|last_value, _| {
-        tracing::info!(
+        info!(
             pending_value,
-            last_value,
-            "encountered a pending state change on L1; waiting for it to finalize"
+            last_value, "encountered a pending state change on L1; waiting for it to finalize"
         );
     })
     .await;

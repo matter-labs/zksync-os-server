@@ -3,6 +3,17 @@
 mod formatter;
 pub use formatter::LogFormat;
 
+#[macro_use]
+mod macros;
+
+#[doc(hidden)]
+pub use string_literal_const_replace::string_literal_replace as __string_literal_replace;
+
+#[doc(hidden)]
+pub use tracing as __tracing;
+
+pub use tracing::Value;
+
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::Directive;

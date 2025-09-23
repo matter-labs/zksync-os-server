@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
+use zksync_os_tracing::info;
 
 const OHBENDER_PROOF_TYPE: i32 = 2;
 const FAKE_PROOF_TYPE: i32 = 3;
@@ -138,7 +139,7 @@ impl ProofCommand {
         // todo: remove tostring
         let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos);
 
-        tracing::info!(">> public input: {}", public_input);
+        info!(">> public input: {}", public_input);
 
         let proof: Vec<U256> = match &self.proof {
             SnarkProof::Fake => {
