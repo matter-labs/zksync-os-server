@@ -44,11 +44,11 @@ impl ProverApi {
         })
         .retry(
             ConstantBuilder::default()
-                .with_delay(Duration::from_secs(30))
-                .with_max_times(40),
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
         )
         .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(?err, ?dur, "proof not ready yet, retrying");
+            tracing::info!(%err, ?dur, "proof not ready yet, retrying");
         })
         .await
     }
