@@ -25,6 +25,7 @@ zksync_os_object_store.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_tracing.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
@@ -51,7 +52,6 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
 thiserror.workspace = true
 itertools.workspace = true
 futures.workspace = true
