@@ -113,9 +113,10 @@ impl TreeManager {
                     }
 
                     tracing::debug!(
-                        "Processing {} storage writes in tree for block {}",
+                        "Processing {} storage writes in tree for block {}, {:?}",
                         block_output.storage_writes.len(),
-                        block_number
+                        block_number,
+                        block_output.storage_writes
                     );
 
                     // Convert StorageWrite to TreeEntry

@@ -9,7 +9,7 @@ use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 use zksync_os_interface::types::StorageWrite;
 
 /// Read-only view on a state from a specific block.
-pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
+pub trait ViewState: ReadStorage + PreimageSource + Send + Clone + Debug {
     fn get_account(&mut self, address: Address) -> Option<AccountProperties> {
         let key = derive_flat_storage_key(
             &ACCOUNT_PROPERTIES_STORAGE_ADDRESS,
@@ -28,7 +28,7 @@ pub trait ViewState: ReadStorage + PreimageSource + Send + Clone {
     }
 }
 
-impl<T: ReadStorage + PreimageSource + Send + Clone> ViewState for T {}
+impl<T: ReadStorage + PreimageSource + Send + Clone + Debug> ViewState for T {}
 
 /// Read-only history of state views.
 pub trait ReadStateHistory: Debug + Send + Sync + 'static {

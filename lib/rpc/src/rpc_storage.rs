@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use alloy::eips::{BlockHashOrNumber, BlockId, BlockNumberOrTag};
 use alloy::primitives::BlockNumber;
 use std::ops::RangeInclusive;
@@ -168,7 +169,7 @@ impl<
     fn state_view_at(
         &self,
         block_number: BlockNumber,
-    ) -> StateResult<impl ReadStorage + PreimageSource + Clone> {
+    ) -> StateResult<impl ReadStorage + PreimageSource + Clone + Debug> {
         self.state.state_view_at(block_number)
     }
 

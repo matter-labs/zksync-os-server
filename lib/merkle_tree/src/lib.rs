@@ -263,7 +263,9 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         tracing::debug!(
             ?elapsed,
             inserts = update.inserts.len(),
+            inserts_full = ?update.inserts,
             updates = update.updates.len(),
+            updates_full = ?update.updates,
             reads = read_keys.map(|keys| keys.len() - update.missing_reads_count),
             missing_reads = read_keys.is_some().then_some(update.missing_reads_count),
             loaded_internal_nodes = patch.loaded_internal_nodes_count(),

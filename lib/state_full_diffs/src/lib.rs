@@ -67,13 +67,17 @@ pub struct StateViewFD {
 
 impl ReadStorage for StateViewFD {
     fn read(&mut self, key: B256) -> Option<B256> {
-        self.storage.read_at(self.block, key)
+        let res = self.storage.read_at(self.block, key);
+        println!("STORAGE READ {}: key: {key:?}, res: {res:?}", self.block);
+        res
     }
 }
 
 impl PreimageSource for StateViewFD {
     fn get_preimage(&mut self, hash: B256) -> Option<Vec<u8>> {
-        self.preimages.get(hash)
+        let res = self.preimages.get(hash);
+        println!("GET PREIMAGE {}: hash: {hash:?}, res: {res:?}", self.block);
+        res
     }
 }
 

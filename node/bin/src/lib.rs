@@ -49,9 +49,12 @@ use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use alloy::hex;
+use alloy::primitives::b256;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
@@ -173,6 +176,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     let state = State::new(&config.general_config, &genesis).await;
+    use zksync_os_interface::traits::PreimageSource;
+    let x = state.state_view_at(3622).unwrap().get_preimage(b256!("0xb2ee63606c711bb034aef80bfe98b72262ad3fa7d6aa60c5f2f7a578b9cbbad2"));
+    let h = hex::encode(x.clone().unwrap());
+    let p = AccountProperties::decode(&x.unwrap().try_into().unwrap());
+    tracing::error!("HERE!: {h}, {p:?}");
 
     tracing::info!("Initializing mempools");
     let l2_mempool = zksync_os_mempool::in_memory(
@@ -457,6 +465,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             &mut tasks,
             finality_storage,
             _stop_receiver.clone(),
+
+            persistent_tree,
+            state,
         )
         .await;
     };
@@ -804,7 +815,9 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
 /// Only for EN - we still populate channels destined for the batcher subsystem -
 /// need to drain them to not get stuck
 #[allow(clippy::too_many_arguments)]
-async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
+async fn run_en_batcher_tasks<Finality: ReadFinality + Clone,
+    State: ReadStateHistory + Clone
+>(
     config: Config,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
@@ -813,11 +826,14 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     tasks: &mut JoinSet<()>,
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
+
+    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
+    state: State,
 ) {
-    // Drain `blocks_for_batcher_subsystem_receiver`.
-    tokio::spawn(
-        async move { while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {} },
-    );
+    // // Drain `blocks_for_batcher_subsystem_receiver`.
+    // tokio::spawn(
+    //     async move { while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {} },
+    // );
 
     // Channel between `PriorityTree` tasks
     let (priority_txs_internal_sender, priority_txs_internal_receiver) =
@@ -912,6 +928,27 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
                 priority_txs_internal_receiver,
             )
             .map(report_exit("priority_tree_manager#keep_caching")),
+    );
+
+
+    let (blocks_for_batcher_sender, _blocks_for_batcher_receiver) =
+        tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord, ProverInput)>(10);
+    let prover_input_generator = ProverInputGenerator::new(
+        config.prover_input_generator_config.logging_enabled,
+        config
+            .prover_input_generator_config
+            .maximum_in_flight_blocks,
+        config.prover_input_generator_config.app_bin_unpack_path,
+        3622, // block to process
+        blocks_for_batcher_subsystem_receiver,
+        blocks_for_batcher_sender,
+        persistent_tree,
+        state.clone(),
+    );
+    tasks.spawn(
+        prover_input_generator
+            .run_loop()
+            .map(report_exit("ProverInputGenerator")),
     );
 }
 

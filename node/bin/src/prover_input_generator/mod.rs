@@ -3,6 +3,7 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
+use alloy::hex;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
@@ -73,18 +74,18 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         );
         ReceiverStream::new(self.block_receiver)
             // skip the blocks that were already committed
-            .skip_while(|(_, replay_record)| {
+            .filter(|(_, replay_record)| {
                 let block_number = replay_record.block_context.block_number;
                 async move {
-                    if block_number < self.first_block_to_process {
+                    if block_number != self.first_block_to_process {
                         tracing::debug!(
                             "Skipping block {} as it's below the first block to process {}",
                             block_number,
                             self.first_block_to_process
                         );
-                        true
-                    } else {
                         false
+                    } else {
+                        true
                     }
                 }
             })
@@ -148,7 +149,9 @@ fn compute_prover_input(
     enable_logging: bool,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
+    dbg!(&state_handle);
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
+    dbg!(&state_view);
     let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let transactions = replay_record
         .transactions
@@ -201,6 +204,9 @@ fn compute_prover_input(
         "Completed prover input computation in {:?}.",
         latency
     );
+    let bytes: Vec<u8> = prover_input.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let res = hex::encode(&bytes);
+    tracing::info!("0x{res}");
 
     prover_input
 }

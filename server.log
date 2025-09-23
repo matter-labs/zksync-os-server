@@ -1,0 +1,2274 @@
+warning: /Users/mp/zksync-os/forward_system/Cargo.toml: `default-features` is ignored for zksync_os_interface, since `default-features` was not specified for `workspace.dependencies.zksync_os_interface`, this could become a hard error in the future
+warning: unused import: `P256VerifyErrors`
+  --> /Users/mp/zksync-os/system_hooks/src/lib.rs:47:27
+   |
+47 |             ModExpErrors, P256VerifyErrors, RipeMd160Errors, Secp256k1ECRecoverErrors,
+   |                           ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: `system_hooks` (lib) generated 1 warning (run `cargo fix --lib -p system_hooks` to apply 1 suggestion)
+   Compiling zksync_os_merkle_tree v0.6.4-non-semver-compat (/Users/mp/zksync-os-server/lib/merkle_tree)
+   Compiling zksync_os_state_full_diffs v0.6.4-non-semver-compat (/Users/mp/zksync-os-server/lib/state_full_diffs)
+   Compiling zksync_os_l1_sender v0.6.4-non-semver-compat (/Users/mp/zksync-os-server/lib/l1_sender)
+   Compiling zksync_os_priority_tree v0.6.4-non-semver-compat (/Users/mp/zksync-os-server/lib/priority_tree)
+   Compiling zksync_os_bin v0.6.4-non-semver-compat (/Users/mp/zksync-os-server/node/bin)
+warning: variable does not need to be mutable
+   --> node/bin/src/lib.rs:816:5
+    |
+816 |     mut blocks_for_batcher_subsystem_receiver: Receiver<(BlockOutput, ReplayRecord)>,
+    |     ----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     |
+    |     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: `zksync_os_bin` (lib) generated 1 warning (run `cargo fix --lib -p zksync_os_bin` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 31.91s
+     Running `target/release/zksync_os_bin`
+[2m2025-09-23T13:51:33.020465Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Loaded config [3mconfig[0m[2m=[0mConfig { general_config: GeneralConfig { l1_rpc_url: "https://sepolia.infura.io/v3/28056883cf0d432fb4d95459eff33f4f", min_blocks_to_replay: 10, force_starting_block_number: None, rocks_db_path: "./db/en", prometheus_port: 3312, state_backend: FullDiffs, blocks_to_retain_in_memory: 512, zkstack_cli_config_dir: None }, genesis_config: GenesisConfig { bridgehub_address: 0xc4fd2580c3487bba18d63f50301020132342fdbd, chain_id: 8022833, genesis_input_path: "./genesis/genesis.json" }, rpc_config: RpcConfig { address: "0.0.0.0:3051", eth_call_gas: 10000000, max_connections: 1000, max_request_size: 15, max_response_size: 24, max_blocks_per_filter: 100000, max_logs_per_response: 20000, stale_filter_ttl: 900s }, mempool_config: MempoolConfig { max_tx_input_bytes: 134217728 }, sequencer_config: SequencerConfig { block_replay_download_address: Some("localhost:3053"), block_replay_server_address: "0.0.0.0:3054", block_time: 100ms, max_transactions_in_block: 1000, block_gas_limit: 100000000, block_pubdata_limit_bytes: 110000, block_dump_path: "./db/block_dumps" }, l1_sender_config: L1SenderConfig { operator_commit_pk: SecretBox<str>([REDACTED]), operator_prove_pk: SecretBox<str>([REDACTED]), operator_execute_pk: SecretBox<str>([REDACTED]), max_fee_per_gas_gwei: 101, max_priority_fee_per_gas_gwei: 2, command_limit: 16, poll_interval: 100ms, enabled: true }, l1_watcher_config: L1WatcherConfig { max_blocks_to_process: 100, poll_interval: 100ms }, batcher_config: BatcherConfig { batch_timeout: 1s, blocks_per_batch_limit: 10 }, prover_input_generator_config: ProverInputGeneratorConfig { logging_enabled: true, maximum_in_flight_blocks: 16, force_process_old_blocks: false, app_bin_unpack_path: "./db/app_bins" }, prover_api_config: ProverApiConfig { address: "0.0.0.0:3124", fake_fri_provers: FakeFriProversConfig { enabled: true, workers: 5, compute_time: 2s, min_age: 3s }, fake_snark_provers: FakeSnarkProversConfig { enabled: true, max_batch_age: 10s }, job_timeout: 300s, max_assigned_batch_range: 10, max_fris_per_snark: 10, object_store: ObjectStoreConfig { mode: S3AnonymousReadOnly { bucket_base_url: "zksync-os-testnet-testnet-alpha-fri-proofs", endpoint: Some("https://hel1.your-objectstorage.com"), region: None }, max_retries: 5, local_mirror_path: None } }, status_server_config: StatusServerConfig { address: "0.0.0.0:3071" } }
+[2m2025-09-23T13:51:33.021748Z[0m [32m INFO[0m [2mvise_exporter::exporter[0m[2m:[0m Created metrics exporter with 112 metrics in 21 groups from crates zksync_os_bin 0.6.4-non-semver-compat, zksync_os_state 0.6.4-non-semver-compat, zksync_os_storage 0.6.4-non-semver-compat, zksync_os_rpc 0.6.4-non-semver-compat, zksync_os_object_store 0.6.4-non-semver-compat, ...
+[2m2025-09-23T13:51:33.021799Z[0m [32m INFO[0m [2mvise_exporter::exporter[0m[2m:[0m Starting Prometheus exporter web server on 0.0.0.0:3312
+[2m2025-09-23T13:51:33.022247Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing Node [3mversion[0m[2m=[0m0.6.4-non-semver-compat [3mrole[0m[2m=[0m"external_node"
+[2m2025-09-23T13:51:33.022356Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing BatchStorage
+[2m2025-09-23T13:51:33.023567Z[0m [32m INFO[0m [1mobject_store::Request::retry[0m[1m{[0m[3mself[0m[2m=[0mNew [3mstore[0m[2m=[0m"zksync_os_object_store::s3::S3Store" [3mmax_retries[0m[2m=[0m5[1m}[0m[2m:[0m [2mzksync_os_object_store::s3[0m[2m:[0m using S3 endpoint defined in storage config [3mendpoint[0m[2m=[0mhttps://hel1.your-objectstorage.com
+[2m2025-09-23T13:51:33.159805Z[0m [33m WARN[0m [1mobject_store::Request::retry[0m[1m{[0m[3mself[0m[2m=[0mNew [3mstore[0m[2m=[0m"zksync_os_object_store::s3::S3Store" [3mmax_retries[0m[2m=[0m5[1m}[0m[2m:[0m [2maws_config::imds::region[0m[2m:[0m failed to load region from IMDS [3merr[0m[2m=[0mfailed to load IMDS session token: dispatch failure: io error: client error (Connect): tcp connect error: No route to host (os error 65) (FailedToLoadToken(FailedToLoadToken { source: DispatchFailure(DispatchFailure { source: ConnectorError { kind: Io, source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 169.254.169.254:80, Os { code: 65, kind: HostUnreachable, message: "No route to host" })), connection: Unknown } }) }))
+[2m2025-09-23T13:51:33.160609Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing BlockReplayStorage
+[2m2025-09-23T13:51:33.168902Z[0m [32m INFO[0m [2mzksync_os_rocksdb::db[0m[2m:[0m Initialized RocksDB `block_replay_wal` at `./db/en/block_replay_wal` with RocksDBOptions { block_cache_capacity: None, include_indices_and_filters_in_block_cache: false, large_memtable_capacity: None, stalled_writes_retries: StalledWritesRetries { max_batch_size: 134217728, timeout: 10s, start_interval: 50ms, max_interval: 2s, scale_factor: 1.5 }, max_open_files: None }
+[2m2025-09-23T13:51:33.170134Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Reading L1 state
+[2m2025-09-23T13:51:34.982875Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m L1 state [3ml1_state[0m[2m=[0mL1State { bridgehub: 0xc4fd2580c3487bba18d63f50301020132342fdbd, diamond_proxy: 0x02b1ac1cf0a592aefd3c2246b2431388365db272, validator_timelock: 0x73b668d8374ddb42c9e2f46fd5b754ac215495bc, last_committed_batch: 3621, last_proved_batch: 3621, last_executed_batch: 3621, da_input_mode: Rollup }
+[2m2025-09-23T13:51:34.983310Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing TreeManager
+[2m2025-09-23T13:51:34.997811Z[0m [32m INFO[0m [2mzksync_os_rocksdb::db[0m[2m:[0m Initialized RocksDB `zkos_merkle_tree` at `./db/en/tree` with RocksDBOptions { block_cache_capacity: Some(134217728), include_indices_and_filters_in_block_cache: false, large_memtable_capacity: Some(268435456), stalled_writes_retries: StalledWritesRetries { max_batch_size: 134217728, timeout: 10s, start_interval: 50ms, max_interval: 2s, scale_factor: 1.5 }, max_open_files: None }
+[2m2025-09-23T13:51:34.997925Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing RepositoryManager
+[2m2025-09-23T13:51:35.013822Z[0m [32m INFO[0m [2mzksync_os_rocksdb::db[0m[2m:[0m Initialized RocksDB `repository` at `./db/en/repository` with RocksDBOptions { block_cache_capacity: None, include_indices_and_filters_in_block_cache: false, large_memtable_capacity: None, stalled_writes_retries: StalledWritesRetries { max_batch_size: 134217728, timeout: 10s, start_interval: 50ms, max_interval: 2s, scale_factor: 1.5 }, max_open_files: None }
+[2m2025-09-23T13:51:35.020657Z[0m [32m INFO[0m [2mzksync_os_rocksdb::db[0m[2m:[0m Initialized RocksDB `state_full_diffs` at `./db/en/state_full_diffs` with RocksDBOptions { block_cache_capacity: None, include_indices_and_filters_in_block_cache: false, large_memtable_capacity: None, stalled_writes_retries: StalledWritesRetries { max_batch_size: 134217728, timeout: 10s, start_interval: 50ms, max_interval: 2s, scale_factor: 1.5 }, max_open_files: None }
+[2m2025-09-23T13:51:35.020711Z[0m [32m INFO[0m [2mzksync_os_state_full_diffs::storage[0m[2m:[0m initialized full diffs storage [3mlatest_block[0m[2m=[0m3670
+[2m2025-09-23T13:51:35.027520Z[0m [32m INFO[0m [2mzksync_os_rocksdb::db[0m[2m:[0m Initialized RocksDB `preimages_full_diffs` at `./db/en/preimages_full_diffs` with RocksDBOptions { block_cache_capacity: None, include_indices_and_filters_in_block_cache: false, large_memtable_capacity: None, stalled_writes_retries: StalledWritesRetries { max_batch_size: 134217728, timeout: 10s, start_interval: 50ms, max_interval: 2s, scale_factor: 1.5 }, max_open_files: None }
+[2m2025-09-23T13:51:35.027546Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing mempools
+[2m2025-09-23T13:51:35.028159Z[0m [34mDEBUG[0m [2mzksync_os_merkle_tree[0m[2m:[0m initialized Merkle tree [3minfo[0m[2m=[0mMerkleTreeInfo { hasher: "Blake2s256", depth: 64, internal_node_depth: 3 } [3mmanifest[0m[2m=[0mSome(Manifest { version_count: 3671, tags: TreeTags { architecture: "AmortizedLinkedListMT", depth: 64, internal_node_depth: 3, hasher: "Blake2s256" } })
+[2m2025-09-23T13:51:35.028245Z[0m [32m INFO[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m Loaded tree with last processed block at Some(3670)
+[2m2025-09-23T13:51:37.408602Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Node state on startup [3mconfig.general_config.min_blocks_to_replay[0m[2m=[0m10 [3mnode_startup_state[0m[2m=[0mNodeStateOnStartup { is_main_node: false, l1_state: L1State { bridgehub: 0xc4fd2580c3487bba18d63f50301020132342fdbd, diamond_proxy: 0x02b1ac1cf0a592aefd3c2246b2431388365db272, validator_timelock: 0x73b668d8374ddb42c9e2f46fd5b754ac215495bc, last_committed_batch: 3621, last_proved_batch: 3621, last_executed_batch: 3621, da_input_mode: Rollup }, state_block_range_available: 0..=3670, block_replay_storage_last_block: 3670, tree_last_block: 3670, repositories_persisted_block: 3670, last_l1_committed_block: 3621, last_l1_proved_block: 3621, last_l1_executed_block: 3621 } [3mstarting_block[0m[2m=[0m3622
+[2m2025-09-23T13:51:37.408681Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing L1 Watchers
+[2m2025-09-23T13:51:45.729862Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::commit_watcher[0m[2m:[0m initializing L1 commit watcher [3mcurrent_l1_block[0m[2m=[0m9263041 [3mlast_committed_batch[0m[2m=[0m3621 [3mconfig.max_blocks_to_process[0m[2m=[0m100 [3mconfig.poll_interval[0m[2m=[0m100ms [3mzk_chain_address[0m[2m=[0m0x02b1ac1cf0a592aefd3c2246b2431388365db272
+[2m2025-09-23T13:51:51.909653Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::commit_watcher[0m[2m:[0m resolved on L1 [3mlast_l1_block[0m[2m=[0m9262374
+[2m2025-09-23T13:51:52.380298Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::watcher[0m[2m:[0m received new events [3mevent_count[0m[2m=[0m1
+[2m2025-09-23T13:52:00.151648Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::execute_watcher[0m[2m:[0m initializing L1 execute watcher [3mcurrent_l1_block[0m[2m=[0m9263042 [3mlast_executed_batch[0m[2m=[0m3621 [3mconfig.max_blocks_to_process[0m[2m=[0m100 [3mconfig.poll_interval[0m[2m=[0m100ms [3mzk_chain_address[0m[2m=[0m0x02b1ac1cf0a592aefd3c2246b2431388365db272
+[2m2025-09-23T13:52:06.536728Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::execute_watcher[0m[2m:[0m resolved on L1 [3mlast_l1_block[0m[2m=[0m9262396
+[2m2025-09-23T13:52:06.539050Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::tx_watcher[0m[2m:[0m initializing L1 transaction watcher [3mconfig.max_blocks_to_process[0m[2m=[0m100 [3mconfig.poll_interval[0m[2m=[0m100ms [3mzk_chain_address[0m[2m=[0m0x02b1ac1cf0a592aefd3c2246b2431388365db272
+[2m2025-09-23T13:52:06.942888Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::watcher[0m[2m:[0m received new events [3mevent_count[0m[2m=[0m1
+[2m2025-09-23T13:52:13.368649Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::tx_watcher[0m[2m:[0m resolved on L1 [3mnext_l1_block[0m[2m=[0m9262066
+[2m2025-09-23T13:52:13.368839Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m Initializing BlockContextProvider
+[2m2025-09-23T13:52:13.368859Z[0m [32m INFO[0m [2mzksync_os_rpc[0m[2m:[0m Starting JSON-RPC server at 0.0.0.0:3051
+[2m2025-09-23T13:52:13.370145Z[0m [32m INFO[0m [2mzksync_os_status_server[0m[2m:[0m [3mrunning a status server[0m[2m=[0m0.0.0.0:3071
+[2m2025-09-23T13:52:13.639887Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3622 [3mcmd[0m[2m=[0m"Replay block 3622 (1 txs); strating l1 priority id: 43"
+STORAGE READ 3621: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x1fa6013cb1c7e4bb2f984f64a5279fc8d41fc6490d2ec8a53f1e919b14ccb708)
+GET PREIMAGE 3621: hash: 0x1fa6013cb1c7e4bb2f984f64a5279fc8d41fc6490d2ec8a53f1e919b14ccb708, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 6, 237, 16, 128, 118, 138, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3621: key: 0xd6a29170f8ad0aeb9128d90b6a220d345fa3990beec6efb9e21436782bd54e25, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3621: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3621: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3621: key: 0x7afcd778289a607f00346fa72dd30683efc49de73fc9cd6405fe601aaf75e116, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3621: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3621: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3621: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3621: key: 0xe5dbb29ffb3506a09d3129ac8ce03d2f3191f797c848847f4b7a66f24473fbdb, res: None
+STORAGE READ 3621: key: 0xf8eb87c83bd56e2843028e7c59bb863c612c39ef0d653d2c8c76170883d34f6d, res: None
+[2m2025-09-23T13:52:13.642475Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3622 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76170 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:13.642757Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3622 as it's already processed
+[2m2025-09-23T13:52:13.644138Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3623 [3mcmd[0m[2m=[0m"Replay block 3623 (1 txs); strating l1 priority id: 43"
+STORAGE READ 3622: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x86dacc0dde1b73d688b29477db103d0186a30dda357120f938f0d6f5d64aff20)
+GET PREIMAGE 3622: hash: 0x86dacc0dde1b73d688b29477db103d0186a30dda357120f938f0d6f5d64aff20, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 12, 86, 150, 180, 80, 90, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3622: key: 0xd6a29170f8ad0aeb9128d90b6a220d345fa3990beec6efb9e21436782bd54e25, res: Some(0x2e1963f0715eab03880bc11732b9304b3a6f37a8dcf86e8348253dbfe393edaa)
+GET PREIMAGE 3622: hash: 0x2e1963f0715eab03880bc11732b9304b3a6f37a8dcf86e8348253dbfe393edaa, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 77, 45, 115, 138, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3622: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3622: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x9ee0f5c63a3bff90af994c0d9441faa21ba2cbf50fa27135d93fcadbaf4ea660)
+GET PREIMAGE 3622: hash: 0x9ee0f5c63a3bff90af994c0d9441faa21ba2cbf50fa27135d93fcadbaf4ea660, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 82, 57, 216, 5, 229, 84, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:13.644673Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3623 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:13.644924Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3624 [3mcmd[0m[2m=[0m"Replay block 3624 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:13.644942Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3623 as it's already processed
+STORAGE READ 3623: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xba4b334e68bb7a23e74c2e9aa05d38cb2c09f48018843208de2a4842ef7bbf4c)
+GET PREIMAGE 3623: hash: 0xba4b334e68bb7a23e74c2e9aa05d38cb2c09f48018843208de2a4842ef7bbf4c, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 12, 105, 176, 37, 218, 170, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3623: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x20604ccf8246693e9a5c8b68dd92b9f62464880c5075e885813cebf81963014c)
+GET PREIMAGE 3623: hash: 0x20604ccf8246693e9a5c8b68dd92b9f62464880c5075e885813cebf81963014c, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 45, 115, 236, 7, 229, 52, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3623: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3623: key: 0x8156c890b24ac47b2778b086721b0100c8d5f2f2f097cceaa9b70025b1a2549d, res: None
+[2m2025-09-23T13:52:13.645234Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3624 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:13.645443Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3625 [3mcmd[0m[2m=[0m"Replay block 3625 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:13.645455Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3624 as it's already processed
+STORAGE READ 3624: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xae95a4f96bbd3fb63194676006b210ea71438f36d841b73218a7c5a62c4ac014)
+GET PREIMAGE 3624: hash: 0xae95a4f96bbd3fb63194676006b210ea71438f36d841b73218a7c5a62c4ac014, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 12, 124, 201, 151, 100, 250, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3624: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x72b7d34a801d08d92efa518818286a341770417c0cc3989ae03fa816189e1d1a)
+GET PREIMAGE 3624: hash: 0x72b7d34a801d08d92efa518818286a341770417c0cc3989ae03fa816189e1d1a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 76, 170, 30, 238, 246, 228, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3624: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3624: key: 0x656248e2ae936617840b106efba9dd97380aa375043ab15762461c83174b607b, res: None
+[2m2025-09-23T13:52:13.645771Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3625 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:13.645824Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3625 as it's already processed
+[2m2025-09-23T13:52:13.646107Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3626 [3mcmd[0m[2m=[0m"Replay block 3626 (1 txs); strating l1 priority id: 43"
+STORAGE READ 3625: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xe99db4fe560c7bcadb031c558ebe9998c657c09f23e49c3b50e050d7954d9fa6)
+GET PREIMAGE 3625: hash: 0xe99db4fe560c7bcadb031c558ebe9998c657c09f23e49c3b50e050d7954d9fa6, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 12, 187, 96, 135, 214, 174, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3625: key: 0x8156c890b24ac47b2778b086721b0100c8d5f2f2f097cceaa9b70025b1a2549d, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3625: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3625: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3625: key: 0x656248e2ae936617840b106efba9dd97380aa375043ab15762461c83174b607b, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3625: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3625: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3625: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3625: key: 0xe7f8a1b3c369d99e893b4b7c011f6ab66e4e3d095f983bbecb85fe327ca88896, res: None
+STORAGE READ 3625: key: 0xe7125bc3a09bc985abcf3b01b23a03f8e2d2ea7bb05a0668103ccb307d9a10fb, res: None
+[2m2025-09-23T13:52:13.646444Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3626 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76198 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:13.646572Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3627 [3mcmd[0m[2m=[0m"Replay block 3627 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:13.646583Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3626 as it's already processed
+STORAGE READ 3626: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x1416dd812b5dfa76a551988fc8c0999fc5893dbda31fa1de0c6e3c74dd746141)
+GET PREIMAGE 3626: hash: 0x1416dd812b5dfa76a551988fc8c0999fc5893dbda31fa1de0c6e3c74dd746141, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 18, 37, 105, 30, 74, 94, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3626: key: 0x8156c890b24ac47b2778b086721b0100c8d5f2f2f097cceaa9b70025b1a2549d, res: Some(0x750e9f7e5df1a2e1dbf0b7b6933b2567f495169ad9a0a1b0d52b0322700d7655)
+GET PREIMAGE 3626: hash: 0x750e9f7e5df1a2e1dbf0b7b6933b2567f495169ad9a0a1b0d52b0322700d7655, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 76, 171, 16, 240, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3626: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3626: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x43f7f6ac500efbb43a8ff86b4876645e834189d4644efc7b38ddb1e195ab7025)
+GET PREIMAGE 3626: hash: 0x43f7f6ac500efbb43a8ff86b4876645e834189d4644efc7b38ddb1e195ab7025, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 76, 107, 135, 254, 133, 48, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:13.646843Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3627 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:13.679912Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::watcher[0m[2m:[0m received new events [3mevent_count[0m[2m=[0m1
+[2m2025-09-23T13:52:15.188416Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::watcher[0m[2m:[0m received new events [3mevent_count[0m[2m=[0m2
+[2m2025-09-23T13:52:16.089415Z[0m [32m INFO[0m [2mzksync_os_l1_watcher::watcher[0m[2m:[0m received new events [3mevent_count[0m[2m=[0m2
+[2m2025-09-23T13:52:23.612224Z[0m [32m INFO[0m [2mzksync_os_rocksdb::db[0m[2m:[0m Initialized RocksDB `priority_tree` at `./db/en/priority_txs_tree` with RocksDBOptions { block_cache_capacity: None, include_indices_and_filters_in_block_cache: false, large_memtable_capacity: None, stalled_writes_retries: StalledWritesRetries { max_batch_size: 134217728, timeout: 10s, start_interval: 50ms, max_interval: 2s, scale_factor: 1.5 }, max_open_files: None }
+[2m2025-09-23T13:52:23.836002Z[0m [32m INFO[0m [2mzksync_os_priority_tree[0m[2m:[0m re-built priority tree [3mlast_executed_block[0m[2m=[0m3621 [3mroot[0m[2m=[0m0x48ad02db72f83d7bf289b51e408abf6dbad395ab9e435f67894707d26f3e2c1c [3mtime_taken[0m[2m=[0m228.692208ms
+[2m2025-09-23T13:52:23.836087Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m All components initialized in 50.814019792s
+[node/bin/src/prover_input_generator/mod.rs:151:5] &state_handle = FullDiffsState {
+    storage: FullDiffsStorage {
+        rocks: RocksDB {
+            inner: RocksDBInner {
+                [2m2025-09-23T13:52:23.836250Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3628 [3mcmd[0m[2m=[0m"Replay block 3628 (1 txs); strating l1 priority id: 43"
+db: RocksDB { path: "./db/en/state_full_diffs" },
+                db_name: "[2m2025-09-23T13:52:23.836324Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3627 as it's already processed
+state_full_diffs",
+                cf_names: {
+                    "data",
+                    "meta",
+                },
+                _registry_entry: RegistryEntry,
+                _caches: RocksDBCaches { .. },
+            },
+            sync_writes: false,
+            stalled_writes_retries: StalledWritesRetries {
+                max_batch_size: 134217728,
+                timeout: 10STORAGE READ 3627: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x15a8f768c57451bba013fb5edc7dd0e93c687174fc61a920f84e2c958b8d46b0)
+s,
+        GET PREIMAGE 3627: hash: 0x15a8f768c57451bba013fb5edc7dd0e93c687174fc61a920f84e2c958b8d46b0, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 18, 56, 130, 143, 212, 174, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        start_interval: 50msSTORAGE READ 3627: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x294710861481f734748558420bca540ae96684c1bb39968c3feeccb2f9d8abfc)
+,
+                max_interval: 2s,
+                scale_factor: GET PREIMAGE 3627: hash: 0x294710861481f734748558420bca540ae96684c1bb39968c3feeccb2f9d8abfc, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 39, 165, 25, 157, 235, 48, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+1.5,
+            },
+            _cf: PhantomData<zksync_os_state_full_diffs::storage::StorageCF>,
+        },
+        latest_block: 3670,
+    },
+    preimages: FullDiffsPreimages {
+        rocks: STORAGE READ 3627: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+RocksDB {
+            inner: RocksDBInner {
+                db: RocksDB { path: "./db/en/preimages_full_diffs" },
+                db_name: "preimages_full_diffs",
+                cf_names: {
+                    "storage",
+                },
+                _registry_entry: RegistryEntry,
+                _caches: RocksDBCaches { .. },
+            },
+            sync_writes: false,
+            stalled_writes_retries: StalledWritesRetries {
+                max_batch_size: 134217728,
+                timeout: 10s,
+                start_interval: 50ms,
+                max_interval: 2s,
+                scale_factor: 1.5,
+            },
+            _cf: PhantomData<zksync_os_state_full_diffs::preimages::PreimagesCF>,
+        },
+    },
+}
+[node/bin/src/prover_input_generator/mod.rs:153:5] &state_view = StateViewFD {
+    storage: FullDiffsStorage {
+        rocks: RocksDB {
+            inner: RocksDBInner {
+                db: RocksDB { path: "./db/en/state_full_diffs" },
+                db_name: "state_full_diffs",
+                cf_names: {
+                STORAGE READ 3627: key: 0xa65f757a9f6ea80598870f459ea700b1710b12bba42c4953cf03f7204ea3b764, res: None
+    "data",
+                    "meta",
+                },
+                _registry_entry: RegistryEntry,
+                _caches: RocksDBCaches { .. },
+            },
+            sync_writes: false,
+            stalled_writes_retries: StalledWritesRetries {
+                max_batch_size: 134217728,
+                timeout: 10s,
+                start_interval: 50ms,
+                max_interval: 2s,
+                scale_factor: 1.5,
+            },
+            _cf: PhantomData<zksync_os_state_full_diffs::storage::StorageCF>,
+        },
+        latest_block: 3670,
+[2m2025-09-23T13:52:23.837120Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3628 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+    },
+    preimages: FullDiffsPreimages {
+        rocks: RocksDB {
+            inner: RocksDBInner {
+                db: RocksDB { path: "./db/en/preimages_full_diffs" },
+                db_name: "preimages_full_diffs",
+                cf_names: {
+                    "storage",
+                },
+                _registry_entry: RegistryEntry,
+                _caches: RocksDBCaches { .. },
+            },
+            sync_writes: false,
+            stalled_writes_retries: StalledWritesRetries {
+                max_batch_size: 134217728,
+                timeout: 10s,
+                start_interval: 50ms,
+                max_interval: 2s,
+                scale_factor: 1.5,
+            },
+            _cf: PhantomData<zksync_os_state_full_diffs::preimages::PreimagesCF>,
+        },
+    },
+    block: 3621,
+}
+[2m2025-09-23T13:52:23.837366Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3629 [3mcmd[0m[2m=[0m"Replay block 3629 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.837426Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3628 as it's already processed
+STORAGE READ 3628: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x5f799b44e2c3af960039ae24cdd26b5dfd748924c205314b1679e409e91fa0fb)
+GET PREIMAGE 3628: hash: 0x5f799b44e2c3af960039ae24cdd26b5dfd748924c205314b1679e409e91fa0fb, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 18, 75, 156, 1, 94, 254, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3628: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x117925f5523c86bcfe730feedf155bbbf2d0dea6875427561a56300502aa2e08)
+GET PREIMAGE 3628: hash: 0x117925f5523c86bcfe730feedf155bbbf2d0dea6875427561a56300502aa2e08, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 70, 219, 76, 132, 252, 224, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3628: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3628: key: 0x591433d5ae6a558969496402a9819920e7be67fd6d338a5bf6cfe205f975c75a, res: None
+[2m2025-09-23T13:52:23.837899Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3629 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.838047Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3630 [3mcmd[0m[2m=[0m"Replay block 3630 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.838065Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3629 as it's already processed
+STORAGE READ 3629: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x915052d566c4a385579dd9fa90422b679ebca59da7e643ef8fd46dbe72b0d77a)
+GET PREIMAGE 3629: hash: 0x915052d566c4a385579dd9fa90422b679ebca59da7e643ef8fd46dbe72b0d77a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 18, 138, 50, 241, 208, 178, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3629: key: 0xa65f757a9f6ea80598870f459ea700b1710b12bba42c4953cf03f7204ea3b764, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3629: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3629: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3629: key: 0x591433d5ae6a558969496402a9819920e7be67fd6d338a5bf6cfe205f975c75a, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3629: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3629: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3629: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3629: key: 0x8b2b3462872e3dda29114a2bab9eb092a259e36aa6d091bf3c0fe00546a6b122, res: None
+STORAGE READ 3629: key: 0x6ff4ec6dc57c215aaf09b3a2d447232ef206edf229fb504caf2091b284f3f2f1, res: None
+[2m2025-09-23T13:52:23.838810Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3630 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76198 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.838936Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3631 [3mcmd[0m[2m=[0m"Replay block 3631 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.838948Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3630 as it's already processed
+ZK RISC-V simulator is starting
+STORAGE READ 3630: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x9640aab02d8b52b391194f7dca3dcbc4d6b50b21944dd1f31ab35c0391744ff7)
+GET PREIMAGE 3630: hash: 0x9640aab02d8b52b391194f7dca3dcbc4d6b50b21944dd1f31ab35c0391744ff7, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 23, 244, 59, 136, 68, 98, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3630: key: 0xa65f757a9f6ea80598870f459ea700b1710b12bba42c4953cf03f7204ea3b764, res: Some(0x750e9f7e5df1a2e1dbf0b7b6933b2567f495169ad9a0a1b0d52b0322700d7655)
+GET PREIMAGE 3630: hash: 0x750e9f7e5df1a2e1dbf0b7b6933b2567f495169ad9a0a1b0d52b0322700d7655, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 76, 171, 16, 240, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3630: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3630: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xa519d78533120edd8ecb049988a20ae9c9a8d021b2eb92436c367253651efe07)
+GET PREIMAGE 3630: hash: 0xa519d78533120edd8ecb049988a20ae9c9a8d021b2eb92436c367253651efe07, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 70, 156, 181, 148, 139, 44, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.839229Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3631 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.839315Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3631 as it's already processed
+[/Users/mp/.cargo/git/checkouts/zksync-airbender-8ab8222a00c65218/c23fd00/risc_v_simulator/src/sim/mod.rs:192:13] path.as_ref() = [2m2025-09-23T13:52:23.839354Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3632 [3mcmd[0m[2m=[0m"Replay block 3632 (1 txs); strating l1 priority id: 43"
+"./db/app_bins/v1/server_app_logging_enabled.bin"
+STORAGE READ 3631: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x2df438884651fc7505d47446cd73e9e0fde791cee949b1e78f83e4a34a034e40)
+[/Users/mp/.cargo/git/checkouts/zksync-airbender-8ab8222a00c65218/c23fd00/risc_v_simulator/src/sim/mod.rs:198:13] buffer.len() / 4 = GET PREIMAGE 3631: hash: 0x2df438884651fc7505d47446cd73e9e0fde791cee949b1e78f83e4a34a034e40, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 24, 7, 84, 249, 206, 178, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+242247
+STORAGE READ 3631: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xec6c8350675015895037a2249e7c1a72029f4342b716e63b6665209e39242c59)
+GET PREIMAGE 3631: hash: 0xec6c8350675015895037a2249e7c1a72029f4342b716e63b6665209e39242c59, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 33, 214, 71, 51, 241, 44, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3631: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3631: key: 0x1ba018a17c66015aa0852f93d12c42b776203e07a07025b6511ccafe7c13f0e7, res: None
+[2m2025-09-23T13:52:23.839837Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3632 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.839932Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3633 [3mcmd[0m[2m=[0m"Replay block 3633 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.839944Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3632 as it's already processed
+STORAGE READ 3632: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xafa2f155153ac7d08d6be9a467bf3d32640c5bf1896be0624e6830386d7334d3)
+GET PREIMAGE 3632: hash: 0xafa2f155153ac7d08d6be9a467bf3d32640c5bf1896be0624e6830386d7334d3, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 24, 26, 110, 107, 89, 2, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3632: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xce4945c9d90aa917653a1de6f5d7cea151c8dbc9163e4d6b66d7103cfab41640)
+GET PREIMAGE 3632: hash: 0xce4945c9d90aa917653a1de6f5d7cea151c8dbc9163e4d6b66d7103cfab41640, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 65, 12, 122, 27, 2, 220, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3632: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3632: key: 0xca082e913364e9dcc09f071d4b3a67a47a09ba10b6dad18ee2cfbc63b7dd3a0a, res: None
+[2m2025-09-23T13:52:23.840264Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3633 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.840347Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3634 [3mcmd[0m[2m=[0m"Replay block 3634 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.840364Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3633 as it's already processed
+STORAGE READ 3633: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x6ce93ec896f2310dc931cd85cb86ff0828ca58437cdf32c370274c8859911a84)
+GET PREIMAGE 3633: hash: 0x6ce93ec896f2310dc931cd85cb86ff0828ca58437cdf32c370274c8859911a84, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 24, 89, 5, 91, 202, 182, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3633: key: 0x1ba018a17c66015aa0852f93d12c42b776203e07a07025b6511ccafe7c13f0e7, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3633: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3633: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3633: key: 0xca082e913364e9dcc09f071d4b3a67a47a09ba10b6dad18ee2cfbc63b7dd3a0a, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3633: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3633: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3633: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3633: key: 0xb06d56c935080155bb0fa4ef264f1c6ce3f7e3f270608f7b6cc7438b25ea832f, res: None
+STORAGE READ 3633: key: 0x1ad63adf4ac80eac8a67f3dd96a809091ec2656614838a3e722266155d98f8ff, res: None
+[2m2025-09-23T13:52:23.840734Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3634 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76198 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.840838Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3635 [3mcmd[0m[2m=[0m"Replay block 3635 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.840848Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3634 as it's already processed
+STORAGE READ 3634: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x5ef19bbee628800499de6cfdd1df14f5b124daa8caae0bc30158ae7b4d64746d)
+GET PREIMAGE 3634: hash: 0x5ef19bbee628800499de6cfdd1df14f5b124daa8caae0bc30158ae7b4d64746d, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 29, 195, 13, 242, 62, 102, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3634: key: 0x1ba018a17c66015aa0852f93d12c42b776203e07a07025b6511ccafe7c13f0e7, res: Some(0x750e9f7e5df1a2e1dbf0b7b6933b2567f495169ad9a0a1b0d52b0322700d7655)
+GET PREIMAGE 3634: hash: 0x750e9f7e5df1a2e1dbf0b7b6933b2567f495169ad9a0a1b0d52b0322700d7655, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 76, 171, 16, 240, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3634: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3634: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x02c194a866114e620205e455d42c68f29479674a26f41722fafcff765b291acc)
+GET PREIMAGE 3634: hash: 0x02c194a866114e620205e455d42c68f29479674a26f41722fafcff765b291acc, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 64, 205, 227, 42, 145, 40, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.841107Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3635 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.841201Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3636 [3mcmd[0m[2m=[0m"Replay block 3636 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.841211Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3635 as it's already processed
+STORAGE READ 3635: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x273718f8dc72766c1ee6800a27427b742fb2fe7723f922e0f0e35b9f42dad463)
+GET PREIMAGE 3635: hash: 0x273718f8dc72766c1ee6800a27427b742fb2fe7723f922e0f0e35b9f42dad463, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 29, 214, 39, 99, 200, 182, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3635: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xad71c91dee4398b0f4eca5be310114c6f01f3206b6b3e2f59139c2c10f11f56f)
+GET PREIMAGE 3635: hash: 0xad71c91dee4398b0f4eca5be310114c6f01f3206b6b3e2f59139c2c10f11f56f, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 28, 7, 116, 201, 247, 40, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3635: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3635: key: 0x81501134336d53d17b98e1b95c616314e12d10a124739bae13ae21694e0496f9, res: None
+[2m2025-09-23T13:52:23.841463Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3636 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.841545Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3637 [3mcmd[0m[2m=[0m"Replay block 3637 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.841554Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3636 as it's already processed
+STORAGE READ 3636: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xfa4924778171afbac5d5eefa50b8e9d7ed123eb885390d24b72dbf2256846926)
+GET PREIMAGE 3636: hash: 0xfa4924778171afbac5d5eefa50b8e9d7ed123eb885390d24b72dbf2256846926, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 29, 233, 64, 213, 83, 6, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3636: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x5b1d386e22024f1754c343c6d0a6af88ac76a82ccb45ae2092c28b2b56b72511)
+GET PREIMAGE 3636: hash: 0x5b1d386e22024f1754c343c6d0a6af88ac76a82ccb45ae2092c28b2b56b72511, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 59, 61, 167, 177, 8, 216, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3636: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3636: key: 0xd95a7dc164c84d3296c798e3f6b496e2c7bd3d39c274947ae1f4028178a62303, res: None
+[2m2025-09-23T13:52:23.841821Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3637 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.841906Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3638 [3mcmd[0m[2m=[0m"Replay block 3638 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.841920Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3637 as it's already processed
+UART: Entry routine is done, moving into payload
+
+UART: Enter proving bootloader
+UART: Allocator init is complete
+UART: Oracle init is complete
+UART: IO implementer init is complete
+STORAGE READ 3637: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xcf3a2a1c9049b564edc7f0581bb2bd250d9576c9251f346dea6ccfa5cd83ec21)
+GET PREIMAGE 3637: hash: 0xcf3a2a1c9049b564edc7f0581bb2bd250d9576c9251f346dea6ccfa5cd83ec21, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 30, 39, 215, 197, 196, 186, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3637: key: 0x81501134336d53d17b98e1b95c616314e12d10a124739bae13ae21694e0496f9, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3637: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3637: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3637: key: 0xd95a7dc164c84d3296c798e3f6b496e2c7bd3d39c274947ae1f4028178a62303, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3637: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3637: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3637: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3637: key: 0xfb66b1cb845465df0e11f4606555fc74e45fb1ac52f9cfdffbf1a24e6fe138a8, res: None
+STORAGE READ 3637: key: 0x9efa57694e73e0508348a78729da55745cd0efe22ed8e8f633166f995a0c60ef, res: None
+[2m2025-09-23T13:52:23.842327Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3638 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m253 [3mcumulative_gas_used[0m[2m=[0m75899 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.842435Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3639 [3mcmd[0m[2m=[0m"Replay block 3639 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.842468Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3638 as it's already processed
+STORAGE READ 3638: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x3702496b30f2b02006561e462d6c1edf8ca225defe860fbcc8f753a1b9a9fa8b)
+GET PREIMAGE 3638: hash: 0x3702496b30f2b02006561e462d6c1edf8ca225defe860fbcc8f753a1b9a9fa8b, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 35, 140, 112, 8, 113, 210, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3638: key: 0x81501134336d53d17b98e1b95c616314e12d10a124739bae13ae21694e0496f9, res: Some(0x46eb5f397072357cb683b77f7434fc41c7de95791ee213d977f065bbf7465497)
+GET PREIMAGE 3638: hash: 0x46eb5f397072357cb683b77f7434fc41c7de95791ee213d977f065bbf7465497, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 82, 27, 100, 182, 232, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3638: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3638: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xf93f940f3472c8dac6ab28f9fe5f3dfeb5b27f8fe4de65397faad6c87d9d43e7)
+GET PREIMAGE 3638: hash: 0xf93f940f3472c8dac6ab28f9fe5f3dfeb5b27f8fe4de65397faad6c87d9d43e7, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 58, 255, 16, 192, 151, 36, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3621: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x1fa6013cb1c7e4bb2f984f64a5279fc8d41fc6490d2ec8a53f1e919b14ccb708)
+[2m2025-09-23T13:52:23.842792Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3639 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+GET PREIMAGE 3621: hash: 0x1fa6013cb1c7e4bb2f984f64a5279fc8d41fc6490d2ec8a53f1e919b14ccb708, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 6, 237, 16, 128, 118, 138, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: ====================================
+
+UART: TX execution begins
+
+UART: Start global frame
+
+[2m2025-09-23T13:52:23.842907Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3640 [3mcmd[0m[2m=[0m"Replay block 3640 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.842927Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3639 as it's already processed
+STORAGE READ 3639: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xdb952d3d6564fcd2a44b295ea766cc74d3d6e9b9299249ce9db2ff94428aab53)
+GET PREIMAGE 3639: hash: 0xdb952d3d6564fcd2a44b295ea766cc74d3d6e9b9299249ce9db2ff94428aab53, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 35, 159, 137, 121, 252, 34, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3639: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x325714ffc2206158a51f52340766e7101d4e2a840687b996dac9b0355172b300)
+GET PREIMAGE 3639: hash: 0x325714ffc2206158a51f52340766e7101d4e2a840687b996dac9b0355172b300, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 22, 62, 18, 179, 195, 188, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3639: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3639: key: 0xc3cf610f30406bed93c5ac9a91df8f9f2d56a768e75060d7650d0b295eb88a58, res: None
+STORAGE READ 3621: key: 0xd6a29170f8ad0aeb9128d90b6a220d345fa3990beec6efb9e21436782bd54e25, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+[2m2025-09-23T13:52:23.843233Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3640 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+GET PREIMAGE 3621: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.843318Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3641 [3mcmd[0m[2m=[0m"Replay block 3641 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.843335Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3640 as it's already processed
+STORAGE READ 3640: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x8786433a887b78cce42e88e18fc4e50b446074184f30a2fdf91e25afc80ada37)
+GET PREIMAGE 3640: hash: 0x8786433a887b78cce42e88e18fc4e50b446074184f30a2fdf91e25afc80ada37, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 35, 178, 162, 235, 134, 114, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3640: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x096995aff6dddec69622950ce9b598e04a4d49dbcbca7225a0614580c937b64e)
+GET PREIMAGE 3640: hash: 0x096995aff6dddec69622950ce9b598e04a4d49dbcbca7225a0614580c937b64e, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 53, 116, 69, 154, 213, 108, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3640: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3640: key: 0x6ce1ac49065407eb0b0463298976425cd50dfc67d442dd099f7e79ac2de44ff4, res: None
+[2m2025-09-23T13:52:23.843588Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3641 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.843673Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3642 [3mcmd[0m[2m=[0m"Replay block 3642 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.843686Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3641 as it's already processed
+UART: Start of validation
+
+STORAGE READ 3641: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xa7d17008afbf140b6bb08e3ad1836a54ed24489da913875689e4848d63aa1f5d)
+GET PREIMAGE 3641: hash: 0xa7d17008afbf140b6bb08e3ad1836a54ed24489da913875689e4848d63aa1f5d, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 35, 241, 57, 219, 248, 38, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3641: key: 0xc3cf610f30406bed93c5ac9a91df8f9f2d56a768e75060d7650d0b295eb88a58, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3641: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3641: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3641: key: 0x6ce1ac49065407eb0b0463298976425cd50dfc67d442dd099f7e79ac2de44ff4, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3641: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3641: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3641: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3641: key: 0x7c39f726fc5ad10d25c9ea4070b51b518282af4ae6c681667aa0c4142150cb6f, res: None
+STORAGE READ 3641: key: 0x81a4e660c9818ea3d13cf417d4afaf7ef50f5f4df46360e27a3fe71cc271049e, res: None
+[2m2025-09-23T13:52:23.844108Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3642 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76130 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.844278Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3643 [3mcmd[0m[2m=[0m"Replay block 3643 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.844296Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3642 as it's already processed
+STORAGE READ 3642: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xef0927dc0d44cd795e31f00bd6a80b18ae0bf76cd565524c3d11fc5406d85b25)
+GET PREIMAGE 3642: hash: 0xef0927dc0d44cd795e31f00bd6a80b18ae0bf76cd565524c3d11fc5406d85b25, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 41, 90, 5, 204, 26, 182, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3642: key: 0xc3cf610f30406bed93c5ac9a91df8f9f2d56a768e75060d7650d0b295eb88a58, res: Some(0x46fe27f74ffd10c43eddfa893f6214e29539a870bb9ccc39b95a7da719b2dcad)
+GET PREIMAGE 3642: hash: 0x46fe27f74ffd10c43eddfa893f6214e29539a870bb9ccc39b95a7da719b2dcad, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 77, 231, 183, 65, 112, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3642: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3642: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x285ded693ec70ac541bc7bef18ef9d48e4fc0fc4d15623355a1d5bbdd35c2a96)
+GET PREIMAGE 3642: hash: 0x285ded693ec70ac541bc7bef18ef9d48e4fc0fc4d15623355a1d5bbdd35c2a96, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 53, 53, 174, 170, 99, 184, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.844587Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3643 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.844692Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3644 [3mcmd[0m[2m=[0m"Replay block 3644 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.844702Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3643 as it's already processed
+STORAGE READ 3643: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xfc49689fdb3201b39485c118ab0d273cb5ac6ed873d14a50c03a2a8c081fba22)
+GET PREIMAGE 3643: hash: 0xfc49689fdb3201b39485c118ab0d273cb5ac6ed873d14a50c03a2a8c081fba22, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 41, 109, 31, 61, 165, 6, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3643: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x3a88d300a799bfde80de31b59220112713e084f5be8299220a7c8913ad5d799a)
+GET PREIMAGE 3643: hash: 0x3a88d300a799bfde80de31b59220112713e084f5be8299220a7c8913ad5d799a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 16, 112, 124, 240, 26, 216, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3643: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3643: key: 0xeb0688af9e8dc9035465b25cced41cb7a7cba687a5829679d0048395734bd215, res: None
+[2m2025-09-23T13:52:23.844965Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3644 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.845055Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3645 [3mcmd[0m[2m=[0m"Replay block 3645 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.845064Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3644 as it's already processed
+STORAGE READ 3644: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x660c84e1683b897470618cda8db55dc454ac4e373c0fb9579d95a7091fd4b16c)
+GET PREIMAGE 3644: hash: 0x660c84e1683b897470618cda8db55dc454ac4e373c0fb9579d95a7091fd4b16c, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 41, 128, 56, 175, 47, 86, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3644: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xf57752ed7b8d7169f90248f3cc0cbef1aa5f40ac7373b4bff85583def18ad220)
+GET PREIMAGE 3644: hash: 0xf57752ed7b8d7169f90248f3cc0cbef1aa5f40ac7373b4bff85583def18ad220, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 47, 166, 175, 215, 44, 136, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3644: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3644: key: 0xbf6ea3926ef94c37796eda44f89c21b0b8fc1e8c2c91a7d16b95a5b3179bf65f, res: None
+[2m2025-09-23T13:52:23.845361Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3645 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.845442Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3646 [3mcmd[0m[2m=[0m"Replay block 3646 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.845451Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3645 as it's already processed
+STORAGE READ 3645: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xd1dde43c0ecb4bdc2f0ee95e32c3e20aa8f2eb32691f3b9188aa8e0dfd36bb6a)
+GET PREIMAGE 3645: hash: 0xd1dde43c0ecb4bdc2f0ee95e32c3e20aa8f2eb32691f3b9188aa8e0dfd36bb6a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 41, 190, 207, 159, 161, 10, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3645: key: 0xeb0688af9e8dc9035465b25cced41cb7a7cba687a5829679d0048395734bd215, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3645: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3645: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3645: key: 0xbf6ea3926ef94c37796eda44f89c21b0b8fc1e8c2c91a7d16b95a5b3179bf65f, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3645: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3645: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3645: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3645: key: 0x2fca909e67e314cb76c72b19ce090693b946dd37adb69ef974e835395e1aaae3, res: None
+UART: Transaction was validated, can collect fees
+
+STORAGE READ 3645: key: 0x03ba3b5aaf552c848c885ae26b2576818f54e5b319cde4a6a9097cc1021cb23a, res: None
+STORAGE READ 3621: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+[2m2025-09-23T13:52:23.846306Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3646 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76142 [3mpurged_txs_len[0m[2m=[0m0
+UART: Validation completed
+
+UART: Start global frame
+
+[2m2025-09-23T13:52:23.846398Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3647 [3mcmd[0m[2m=[0m"Replay block 3647 (1 txs); strating l1 priority id: 43"
+UART: Start of execution
+
+[2m2025-09-23T13:52:23.846417Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3646 as it's already processed
+UART: Start global frame
+
+UART: Begin execution
+
+STORAGE READ 3646: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xd34a15e6b9e7132f7fc5de7a15eecdd0d31b1970f605d16e1cb56a49395ae6b6)
+GET PREIMAGE 3646: hash: 0xd34a15e6b9e7132f7fc5de7a15eecdd0d31b1970f605d16e1cb56a49395ae6b6, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 47, 39, 211, 112, 224, 250, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3621: key: 0x7afcd778289a607f00346fa72dd30683efc49de73fc9cd6405fe601aaf75e116, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+STORAGE READ 3646: key: 0xeb0688af9e8dc9035465b25cced41cb7a7cba687a5829679d0048395734bd215, res: Some(0x12cf000d36b6999fc98035212c09ff7de135b88e695e501b75d7ecff3d19581f)
+GET PREIMAGE 3646: hash: 0x12cf000d36b6999fc98035212c09ff7de135b88e695e501b75d7ecff3d19581f, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 77, 175, 214, 36, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+GET PREIMAGE 3621: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+STORAGE READ 3646: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3646: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xfcd5f14a4c6cc60c8ef761dfbdfa7dd02e9ed9b2caeb4bca0617695480a48995)
+GET PREIMAGE 3646: hash: 0xfcd5f14a4c6cc60c8ef761dfbdfa7dd02e9ed9b2caeb4bca0617695480a48995, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 47, 104, 24, 230, 186, 212, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+GET PREIMAGE 3621: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: Start global frame
+
+UART: Instructions executed = 
+UART: 12
+UART: 
+Final instruction result = 
+UART: ExternalCall
+UART: 
+
+[2m2025-09-23T13:52:23.846713Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3647 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+STORAGE READ 3621: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+UART: Start global frame
+
+[2m2025-09-23T13:52:23.846799Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3648 [3mcmd[0m[2m=[0m"Replay block 3648 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.846809Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3647 as it's already processed
+UART: Call to special address returned, success = 
+UART: true
+UART: 
+
+UART: Returndata = 
+UART: 01
+UART: Finish global frame, revert = 
+UART: false
+UART: 
+
+UART: Return from call or deployment, success = 
+UART: true
+UART: 
+
+STORAGE READ 3647: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xdcdfa62cb0b11eef9b1070d2f5d1b3ea2ba966304da2b5cf44a679ccb08cf82e)
+GET PREIMAGE 3647: hash: 0xdcdfa62cb0b11eef9b1070d2f5d1b3ea2ba966304da2b5cf44a679ccb08cf82e, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 47, 58, 236, 226, 107, 74, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3647: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x93be3bc9930533f87f1c0d78e4c81f8453bc7cbd9b5f4054844cf7cff632e151)
+GET PREIMAGE 3647: hash: 0x93be3bc9930533f87f1c0d78e4c81f8453bc7cbd9b5f4054844cf7cff632e151, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 10, 162, 175, 75, 84, 148, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3647: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3647: key: 0xe6a8f358b2f19fce1ac1040f18e9c4453fe8ad37ff169aed41d88a3d10d6c994, res: None
+STORAGE READ 3621: key: 0xe5dbb29ffb3506a09d3129ac8ce03d2f3191f797c848847f4b7a66f24473fbdb, res: None
+[2m2025-09-23T13:52:23.847059Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3648 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+UART: Instructions executed = 
+UART: 15
+UART: 
+Final instruction result = 
+UART: ExternalCall
+UART: 
+
+STORAGE READ 3621: key: 0xf8eb87c83bd56e2843028e7c59bb863c612c39ef0d653d2c8c76170883d34f6d, res: None
+[2m2025-09-23T13:52:23.847152Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3649 [3mcmd[0m[2m=[0m"Replay block 3649 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.847167Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3648 as it's already processed
+UART: Start global frame
+
+UART: Instructions executed = 
+UART: 11
+UART: 
+Final instruction result = 
+UART: Return
+UART: 
+
+STORAGE READ 3648: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xedb9c31e7830a52d9fe785e0d6033425c80c89ca3a3b7f7a7d4ea3c60c1f4929)
+GET PREIMAGE 3648: hash: 0xedb9c31e7830a52d9fe785e0d6033425c80c89ca3a3b7f7a7d4ea3c60c1f4929, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 47, 78, 6, 83, 245, 154, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3648: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x3e5cefb640932c13c34f60cd6db0525def7510e2cb216ced3d6f64ac906457ae)
+GET PREIMAGE 3648: hash: 0x3e5cefb640932c13c34f60cd6db0525def7510e2cb216ced3d6f64ac906457ae, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 41, 216, 226, 50, 102, 68, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3648: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3648: key: 0x2920981e60af52dceec3c3c30ea9a5376dcf289b3efd6c9c1cd79c8e620c309b, res: None
+UART: Finish global frame, revert = 
+UART: false
+UART: 
+
+UART: Returndata = 
+UART: 
+UART: Return from call or deployment, success = 
+UART: true
+UART: 
+
+[2m2025-09-23T13:52:23.847428Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3649 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+UART: Instructions executed = 
+UART: 1
+UART: 
+Final instruction result = 
+UART: Stop
+UART: 
+
+UART: Finish global frame, revert = 
+UART: false
+UART: 
+
+UART: Returndata = 
+UART: 
+UART: Finish global frame, revert = 
+UART: false
+UART: 
+
+UART: 
+UART: Main TX body successful = 
+UART: true
+UART: 
+
+UART: Resources to refund = 
+UART: BaseResources
+UART:  { 
+UART: ergs
+UART: : 
+UART: Ergs
+UART: (
+[2m2025-09-23T13:52:23.847521Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3650 [3mcmd[0m[2m=[0m"Replay block 3650 (1 txs); strating l1 priority id: 43"
+UART: 108500480
+UART: )
+UART: , 
+[2m2025-09-23T13:52:23.847530Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3649 as it's already processed
+UART: native
+UART: : 
+UART: DecreasingNative
+UART: (
+UART: 34357570842
+UART: )
+UART:  }
+UART: 
+
+UART: Transaction execution completed
+
+STORAGE READ 3649: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x60731dcc9ad756a992dff1ad0aec1539582cc483c02bcebafbe56e1d647bcddc)
+GET PREIMAGE 3649: hash: 0x60731dcc9ad756a992dff1ad0aec1539582cc483c02bcebafbe56e1d647bcddc, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 47, 140, 157, 68, 103, 78, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3649: key: 0xe6a8f358b2f19fce1ac1040f18e9c4453fe8ad37ff169aed41d88a3d10d6c994, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3649: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3649: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3649: key: 0x2920981e60af52dceec3c3c30ea9a5376dcf289b3efd6c9c1cd79c8e620c309b, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3649: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3649: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: Checking gas for pubdata, resources_for_pubdata: 
+STORAGE READ 3649: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+UART: BaseResources
+UART:  { 
+UART: ergs
+UART: : 
+UART: Ergs
+UART: (
+UART: 0
+UART: )
+STORAGE READ 3649: key: 0x5faee4bc44c4ae53d72cf6752457ad219bb6c9576ead1bec74943d13b92d0a3e, res: None
+UART: , 
+UART: native
+UART: : 
+UART: DecreasingNative
+UART: (
+UART: 0
+UART: )
+UART:  }
+UART: , resources: 
+UART: BaseResources
+UART:  { 
+UART: ergs
+UART: : 
+UART: Ergs
+UART: (
+STORAGE READ 3649: key: 0x98d92878823fc03b46bea3a8310e7c1dbf93fd2cff6e5d8422c3a5609a2e6c31, res: None
+UART: 108500480
+UART: )
+UART: , 
+UART: native
+UART: : 
+UART: DecreasingNative
+UART: (
+UART: 9999999997832474
+UART: )
+UART:  }
+UART: 
+
+UART: Finish global frame, revert = 
+UART: false
+UART: 
+
+UART: Start of refund
+
+UART: Gas refund: 
+UART: 423830
+UART: 
+
+UART: Finish global frame, revert = 
+UART: false
+UART: 
+
+[2m2025-09-23T13:52:23.847946Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3650 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m269 [3mcumulative_gas_used[0m[2m=[0m76346 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.848054Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3651 [3mcmd[0m[2m=[0m"Replay block 3651 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.848064Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3650 as it's already processed
+UART: TX execution ends
+
+UART: ====================================
+
+STORAGE READ 3650: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x7dc6b45bf0ce07142c1cb9e02b8dc4b3a9cbed22063c9f4028c751b1bc830b35)
+GET PREIMAGE 3650: hash: 0x7dc6b45bf0ce07142c1cb9e02b8dc4b3a9cbed22063c9f4028c751b1bc830b35, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 52, 249, 87, 8, 154, 158, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3650: key: 0xe6a8f358b2f19fce1ac1040f18e9c4453fe8ad37ff169aed41d88a3d10d6c994, res: Some(0x31336b4c4e2dc82da0cbe294162558f3469977fbe21e10b159a8efec6ae6dd63)
+GET PREIMAGE 3650: hash: 0x31336b4c4e2dc82da0cbe294162558f3469977fbe21e10b159a8efec6ae6dd63, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 219, 73, 249, 227, 48, 176, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3650: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3650: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x268ec62a5426cc0b88ac37f32e800cd0495d78e7e12135d12c35ee32a5feab48)
+GET PREIMAGE 3650: hash: 0x268ec62a5426cc0b88ac37f32e800cd0495d78e7e12135d12c35ee32a5feab48, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 41, 154, 75, 65, 244, 144, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.848311Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3651 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.848409Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3652 [3mcmd[0m[2m=[0m"Replay block 3652 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.848419Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3651 as it's already processed
+UART: Bootloader completed
+
+UART: Bootloader execution is complete, will proceed with applying changes
+
+STORAGE READ 3651: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xc4d80bf24029ef464cbe227d7cc44efdf9416ccb8699d5a2ed2aa00aeb43442b)
+GET PREIMAGE 3651: hash: 0xc4d80bf24029ef464cbe227d7cc44efdf9416ccb8699d5a2ed2aa00aeb43442b, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 53, 12, 112, 122, 36, 238, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3651: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xda25af8f90e4b0ed029ba59ac9a1b230b7931b3d35c02601064b05e920eef336)
+GET PREIMAGE 3651: hash: 0xda25af8f90e4b0ed029ba59ac9a1b230b7931b3d35c02601064b05e920eef336, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110, 4, 209, 43, 179, 154, 240, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3651: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3651: key: 0x2cbcfaf524aa6fcba12811ffc5221175c937eb97fc42d7494130d202233dcbbf, res: None
+[2m2025-09-23T13:52:23.848675Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3652 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.848753Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3653 [3mcmd[0m[2m=[0m"Replay block 3653 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.848761Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3652 as it's already processed
+UART: PI calculation: state commitment before 
+UART: ChainStateCommitment
+UART:  { 
+UART: state_root
+UART: : 
+UART: 0x
+UART: 0
+UART: 110dd88
+UART: ceee89ad
+STORAGE READ 3652: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xbd109c48c5f0f96e07e341498669f5bfa1d9d7d271e116c2d5c5e006b65c3fc7)
+GET PREIMAGE 3652: hash: 0xbd109c48c5f0f96e07e341498669f5bfa1d9d7d271e116c2d5c5e006b65c3fc7, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 53, 31, 137, 235, 175, 62, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: b100069d
+STORAGE READ 3652: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x4bd8971999cee0f69474eb709ee618a832768089816f5734cb9670afa16130aa)
+UART: 96a2ac75
+GET PREIMAGE 3652: hash: 0x4bd8971999cee0f69474eb709ee618a832768089816f5734cb9670afa16130aa, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 36, 7, 94, 154, 172, 160, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 6dd596bf
+UART: 866ee6a0
+STORAGE READ 3652: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: fca4c6ac
+UART: 56873f4c
+UART: , 
+UART: next_free_slot
+STORAGE READ 3652: key: 0xceaecae34f03bc87e593afeb56b3f29852a8a9519a7e6a97da5f69cf132d2abc, res: None
+UART: : 
+UART: 7889
+UART: , 
+UART: block_number
+UART: : 
+UART: 3621
+UART: , 
+UART: last_256_block_hashes_blake
+UART: : 
+UART: 0x
+UART: 7cd91c8b
+UART: cfcd5b9a
+UART: 6e46b115
+UART: 820029c9
+UART: cafdfc74
+UART: 594eabce
+UART: d3d6daf8
+UART: 693120f1
+UART: , 
+UART: last_block_timestamp
+UART: : 
+UART: 1758626734
+UART:  }
+UART: 
+
+[2m2025-09-23T13:52:23.849043Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3653 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.849128Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3654 [3mcmd[0m[2m=[0m"Replay block 3654 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.849136Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3653 as it's already processed
+STORAGE READ 3653: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x049991b4fe714c2ff6b35f8db1af34be9aa6e4fe515af9a10734ad28461606ad)
+GET PREIMAGE 3653: hash: 0x049991b4fe714c2ff6b35f8db1af34be9aa6e4fe515af9a10734ad28461606ad, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 53, 94, 32, 220, 32, 242, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3653: key: 0x2cbcfaf524aa6fcba12811ffc5221175c937eb97fc42d7494130d202233dcbbf, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3653: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3653: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3653: key: 0xceaecae34f03bc87e593afeb56b3f29852a8a9519a7e6a97da5f69cf132d2abc, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3653: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3653: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3653: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3653: key: 0xa8f2ca86d533fe43ad87cc7e5db997635cc99e2ceda23d29de9f692fea436de9, res: None
+STORAGE READ 3653: key: 0x7436327dd7d5934c261dc7f32b3b380ae8b3a6852e858620cbeea9e82c9dadc1, res: None
+UART: checking empty read for address = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.849521Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3654 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m293 [3mcumulative_gas_used[0m[2m=[0m84564 [3mpurged_txs_len[0m[2m=[0m0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 8003
+UART: , key = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.849615Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3655 [3mcmd[0m[2m=[0m"Replay block 3655 (1 txs); strating l1 priority id: 43"
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.849657Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3654 as it's already processed
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 5
+UART: 
+
+STORAGE READ 3654: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x9ed97f4fd90d957ff8eeff06e06b55fae23fd49e63191375b0885c5231fcb7d1)
+GET PREIMAGE 3654: hash: 0x9ed97f4fd90d957ff8eeff06e06b55fae23fd49e63191375b0885c5231fcb7d1, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 59, 96, 86, 171, 190, 146, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3654: key: 0x2cbcfaf524aa6fcba12811ffc5221175c937eb97fc42d7494130d202233dcbbf, res: Some(0x997b02c7fe7d455d1106f7c691162f5eb1a0b2993a48619733e046ce7a358e28)
+GET PREIMAGE 3654: hash: 0x997b02c7fe7d455d1106f7c691162f5eb1a0b2993a48619733e046ce7a358e28, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 218, 180, 125, 215, 198, 96, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3654: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3654: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xea959b23c4295c0488d0e6d7a3c500589117e3e92d96ea5a7d516e3da3b5414a)
+GET PREIMAGE 3654: hash: 0xea959b23c4295c0488d0e6d7a3c500589117e3e92d96ea5a7d516e3da3b5414a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 35, 200, 199, 170, 58, 236, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.849907Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3655 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.849989Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3656 [3mcmd[0m[2m=[0m"Replay block 3656 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.850003Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3655 as it's already processed
+STORAGE READ 3655: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x620b877a1928f91860f4c64e931b35dbe22cbf48193d97464bdcbd438ca168b7)
+GET PREIMAGE 3655: hash: 0x620b877a1928f91860f4c64e931b35dbe22cbf48193d97464bdcbd438ca168b7, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 59, 115, 112, 29, 72, 226, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3655: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x9663bc1327a6a5e9f3a9301459427873656797d1729ab4e0ead5e75910b5bf17)
+GET PREIMAGE 3655: hash: 0x9663bc1327a6a5e9f3a9301459427873656797d1729ab4e0ead5e75910b5bf17, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 254, 106, 44, 16, 118, 252, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3655: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3655: key: 0x1b0e68a7fb45634c02b149f6741cd542a349719ce9f78bb9806e8a34391d3beb, res: None
+[2m2025-09-23T13:52:23.850249Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3656 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.850327Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3657 [3mcmd[0m[2m=[0m"Replay block 3657 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.850335Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3656 as it's already processed
+STORAGE READ 3656: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x0c45180da8eb995d11382484a0c08a0ff4fc4cc95282a973db5d4d1b2334cdfa)
+GET PREIMAGE 3656: hash: 0x0c45180da8eb995d11382484a0c08a0ff4fc4cc95282a973db5d4d1b2334cdfa, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 59, 134, 137, 142, 211, 50, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3656: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x1a50a1d31b024e2b17d64b0d378ff751a25955317500a9268d981a7b3338eabb)
+GET PREIMAGE 3656: hash: 0x1a50a1d31b024e2b17d64b0d378ff751a25955317500a9268d981a7b3338eabb, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 29, 160, 94, 247, 136, 172, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3656: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3656: key: 0xcf06c4b5aa86b3bfeb72e14388652b8c0cdc1c91740f8d8e887a3ed46b36bb42, res: None
+[2m2025-09-23T13:52:23.850585Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3657 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.850672Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3658 [3mcmd[0m[2m=[0m"Replay block 3658 (1 txs); strating l1 priority id: 43"
+UART: checking empty read for address = 
+[2m2025-09-23T13:52:23.850681Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3657 as it's already processed
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3657: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x8a9ed3674dd2e893a1859e91f3ff7120653e565f200befdede0a9284a0d02a74)
+UART: 0
+UART: 0
+GET PREIMAGE 3657: hash: 0x8a9ed3674dd2e893a1859e91f3ff7120653e565f200befdede0a9284a0d02a74, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 59, 197, 32, 127, 68, 230, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3657: key: 0x1b0e68a7fb45634c02b149f6741cd542a349719ce9f78bb9806e8a34391d3beb, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3657: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3657: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: 8003
+UART: , key = 
+STORAGE READ 3657: key: 0xcf06c4b5aa86b3bfeb72e14388652b8c0cdc1c91740f8d8e887a3ed46b36bb42, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+UART: 0x
+GET PREIMAGE 3657: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3657: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3657: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3657: key: 0x754cbfdb160ed3fc863a7de890570035d882f76a71e08633d6d1868b841b8db3, res: None
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3657: key: 0xc185fccaef6e9e845727555fecce283ed947f479bfac25bc6422c2b53bf5e3e0, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 8001
+UART: 
+
+[2m2025-09-23T13:52:23.851131Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3658 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m293 [3mcumulative_gas_used[0m[2m=[0m84530 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.851221Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3659 [3mcmd[0m[2m=[0m"Replay block 3659 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.851230Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3658 as it's already processed
+STORAGE READ 3658: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xac898e3e4bead820b4486126d771eb75eeaabe864a7182bbbb94eea24274ab79)
+GET PREIMAGE 3658: hash: 0xac898e3e4bead820b4486126d771eb75eeaabe864a7182bbbb94eea24274ab79, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 65, 198, 183, 251, 185, 246, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3658: key: 0x1b0e68a7fb45634c02b149f6741cd542a349719ce9f78bb9806e8a34391d3beb, res: Some(0xd84b2bb76034f8720291c3c7b8b5bcec23e0869fdcc6a67ce6c45365962d14cb)
+GET PREIMAGE 3658: hash: 0xd84b2bb76034f8720291c3c7b8b5bcec23e0869fdcc6a67ce6c45365962d14cb, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 218, 181, 28, 42, 238, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3658: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3658: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x7866024df8cf9622dccf86be4738d81692c25dca0a3f68861f9557c9b41f561c)
+GET PREIMAGE 3658: hash: 0x7866024df8cf9622dccf86be4738d81692c25dca0a3f68861f9557c9b41f561c, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 29, 97, 200, 7, 22, 248, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+[2m2025-09-23T13:52:23.851490Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3659 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.851571Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3660 [3mcmd[0m[2m=[0m"Replay block 3660 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.851580Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3659 as it's already processed
+STORAGE READ 3659: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x2f43038d15b984c33ad3929b0f5322e2a7f0afb5af9e1bd96593b9af174895b9)
+GET PREIMAGE 3659: hash: 0x2f43038d15b984c33ad3929b0f5322e2a7f0afb5af9e1bd96593b9af174895b9, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 65, 217, 209, 109, 68, 70, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3659: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x76d41a1c8afad0665bb5bc7863de5688d403e9fa299d7f3d6a546deb88ffcc98)
+GET PREIMAGE 3659: hash: 0x76d41a1c8afad0665bb5bc7863de5688d403e9fa299d7f3d6a546deb88ffcc98, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 248, 3, 202, 192, 123, 152, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3659: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3659: key: 0xe44c3e41bd96bee40fecad2719e5bb94944a415666d8eb854528d04222b12d83, res: None
+[2m2025-09-23T13:52:23.851830Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3660 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+UART: applying repeated write for address = 
+UART: 0x
+[2m2025-09-23T13:52:23.851910Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3661 [3mcmd[0m[2m=[0m"Replay block 3661 (1 txs); strating l1 priority id: 43"
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.851925Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3660 as it's already processed
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3660: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xc977f43c903a76cd2b0bae3e81bca68ce215698c4c730671db5735203c6d85d1)
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3660: hash: 0xc977f43c903a76cd2b0bae3e81bca68ce215698c4c730671db5735203c6d85d1, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 65, 236, 234, 222, 206, 150, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3660: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x8cc948f06725715e00f83da9cfd0a0e272d654b274cd49f4886ca5c933d12e0a)
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3660: hash: 0x8cc948f06725715e00f83da9cfd0a0e272d654b274cd49f4886ca5c933d12e0a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 27, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 23, 57, 253, 167, 141, 72, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3660: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: 0
+UART: 8003
+UART: , key = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3660: key: 0x38cb00e42c34a85ab0907f190974f1aac5319115e05824c84159d41998dbdfb1, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: , value 
+UART: 0x
+UART: 1fa6013c
+[2m2025-09-23T13:52:23.852255Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3661 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+UART: b1c7e4bb
+UART: 2f984f64
+UART: a5279fc8
+UART: d41fc649
+UART: 0
+UART: d2ec8a5
+UART: 3f1e919b
+UART: 14ccb708
+UART:  -> 
+UART: 0x
+UART: 86dacc0d
+UART: de1b73d6
+UART: 88b29477
+UART: db103d01
+UART: 86a30dda
+UART: 357120f9
+UART: 38f0d6f5
+UART: d64aff20
+UART: 
+
+[2m2025-09-23T13:52:23.852342Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3662 [3mcmd[0m[2m=[0m"Replay block 3662 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.852351Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3661 as it's already processed
+STORAGE READ 3661: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x3249c17d0d07a1bc7b25362e98d9fab751e2be13f39a2975ebc29d7e864db440)
+UART: ||repeated_index = 
+GET PREIMAGE 3661: hash: 0x3249c17d0d07a1bc7b25362e98d9fab751e2be13f39a2975ebc29d7e864db440, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 66, 43, 129, 207, 64, 74, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 77
+STORAGE READ 3661: key: 0xe44c3e41bd96bee40fecad2719e5bb94944a415666d8eb854528d04222b12d83, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3661: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: applying repeated write for address = 
+STORAGE READ 3661: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: 0x
+UART: 0
+UART: 0
+STORAGE READ 3661: key: 0x38cb00e42c34a85ab0907f190974f1aac5319115e05824c84159d41998dbdfb1, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3661: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3661: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3661: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3661: key: 0x3164339484c573ce9e1a6a4ed05da184e143ec7ac40deb8f8ff5db2368501a31, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 8003
+UART: , key = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.852716Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3662 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m2 [3mpreimages[0m[2m=[0m2 [3mpubdata_bytes[0m[2m=[0m128 [3mcumulative_gas_used[0m[2m=[0m500000 [3mpurged_txs_len[0m[2m=[0m0
+UART: 0
+UART: 0
+UART: 0
+UART: 5212ec60
+UART: 1d678e7b
+UART: 5726015e
+UART: fe26e9eb
+UART: 38e30759
+UART: , value 
+UART: 0x
+UART: 140322c3
+UART: 6f2d2d22
+UART: a2cfa7cc
+UART: 6013db63
+UART: 3b78e99b
+UART: d7ebe5c0
+UART: 0
+UART: 5623243
+UART: a0364ed8
+UART:  -> 
+UART: 0x
+UART: 2e1963f0
+[2m2025-09-23T13:52:23.852799Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3663 [3mcmd[0m[2m=[0m"Replay block 3663 (1 txs); strating l1 priority id: 43"
+UART: 715eab03
+[2m2025-09-23T13:52:23.852809Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3662 as it's already processed
+UART: 880bc117
+UART: 32b9304b
+UART: 3a6f37a8
+UART: dcf86e83
+UART: 48253dbf
+UART: e393edaa
+UART: 
+
+STORAGE READ 3662: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x411f840e9e0f57e235a1c7c270b6f64072fed413b7068f24c3dfb9c1f6141482)
+GET PREIMAGE 3662: hash: 0x411f840e9e0f57e235a1c7c270b6f64072fed413b7068f24c3dfb9c1f6141482, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 101, 178, 116, 63, 1, 74, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3662: key: 0xe44c3e41bd96bee40fecad2719e5bb94944a415666d8eb854528d04222b12d83, res: Some(0x838c72eb64d3d4eebb49860e89a0761843ac18105058ad720baf20cb64645a14)
+GET PREIMAGE 3662: hash: 0x838c72eb64d3d4eebb49860e89a0761843ac18105058ad720baf20cb64645a14, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 189, 47, 193, 55, 163, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3662: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3662: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x3b73430bc70b402d80b67f57040a0dd75573bf3a7b1eb76ef85b79b154bc7484)
+UART: ||repeated_index = 
+GET PREIMAGE 3662: hash: 0x3b73430bc70b402d80b67f57040a0dd75573bf3a7b1eb76ef85b79b154bc7484, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 22, 251, 102, 183, 27, 148, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 7887
+UART: applying repeated write for address = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.853063Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3663 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 8003
+UART: , key = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.853146Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3664 [3mcmd[0m[2m=[0m"Replay block 3664 (1 txs); strating l1 priority id: 43"
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.853155Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3663 as it's already processed
+UART: 0
+UART: 0
+UART: bf1fc215
+UART: 4486a84f
+UART: 13c1eac2
+UART: 213dac65
+UART: 5b67bbbf
+UART: , value 
+UART: 0x
+UART: 51cfe18e
+UART: e2bc7b1b
+UART: ecb94cba
+UART: 999e179f
+UART: 36fefa7d
+UART: 7c2ce4fc
+UART: bddbc743
+UART: 92aeec2a
+UART:  -> 
+UART: 0x
+UART: 1b6d2d0c
+UART: 4a5dda64
+STORAGE READ 3663: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x6a818a7199132fd328ff750a70f54806ebeb2d7de6c8dccbdc2c0a1c943f646a)
+UART: 81ac4bdc
+GET PREIMAGE 3663: hash: 0x6a818a7199132fd328ff750a70f54806ebeb2d7de6c8dccbdc2c0a1c943f646a, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 101, 197, 141, 176, 139, 154, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 34505b55
+STORAGE READ 3663: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xb39333f179289faf727f9a2b23ebf9f843146e16fb46b40ec0c9ecf7d6bc9cad)
+UART: a141a713
+GET PREIMAGE 3663: hash: 0xb39333f179289faf727f9a2b23ebf9f843146e16fb46b40ec0c9ecf7d6bc9cad, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 212, 24, 14, 125, 52, 68, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 8001390c
+UART: 4fd3dfe9
+STORAGE READ 3663: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: 3babd7bc
+UART: 
+
+UART: ||repeated_index = 
+UART: 7888
+UART: applying initial write for address = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3663: key: 0x954643120b8d3a71673a0abaddddd41b8ee4b58a816dfe30d2ce5ede4fd5ad9d, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 8003
+UART: , key = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.853588Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3664 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: d92ae792
+UART: eb245864
+UART: e2eb7962
+UART: e2b50c80
+UART: e291379c
+UART: , value 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.853684Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3665 [3mcmd[0m[2m=[0m"Replay block 3665 (1 txs); strating l1 priority id: 43"
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.853696Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3664 as it's already processed
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART:  -> 
+STORAGE READ 3664: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x70a22670ed1a909f4137d03610f87822ad2944846a47ec0e07ca09347811810c)
+UART: 0x
+GET PREIMAGE 3664: hash: 0x70a22670ed1a909f4137d03610f87822ad2944846a47ec0e07ca09347811810c, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 101, 216, 167, 34, 21, 234, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 9abb4443
+UART: 17e7e92c
+STORAGE READ 3664: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xfef2d950dd1715107dc52de057111f88419ffd6e99672840a67d3da2218452e2)
+UART: 80ca3517
+GET PREIMAGE 3664: hash: 0xfef2d950dd1715107dc52de057111f88419ffd6e99672840a67d3da2218452e2, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 95, 243, 78, 65, 100, 69, 244, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 31661cd8
+UART: 681f9620
+STORAGE READ 3664: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: 1fead67c
+UART: c9481779
+UART: 433f2836
+UART: 
+
+STORAGE READ 3664: key: 0x3a3f729d6997522aedfbd53124de1e99363932b0d3358e3924c45e54741774e8, res: None
+[2m2025-09-23T13:52:23.854009Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3665 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.854091Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3666 [3mcmd[0m[2m=[0m"Replay block 3666 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.854099Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3665 as it's already processed
+STORAGE READ 3665: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0xd4a6516abb06310f9d7e265566f58d473948c115313ce7f830c7253221368ff1)
+GET PREIMAGE 3665: hash: 0xd4a6516abb06310f9d7e265566f58d473948c115313ce7f830c7253221368ff1, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 102, 23, 62, 18, 135, 158, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3665: key: 0x954643120b8d3a71673a0abaddddd41b8ee4b58a816dfe30d2ce5ede4fd5ad9d, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3665: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3665: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3665: key: 0x3a3f729d6997522aedfbd53124de1e99363932b0d3358e3924c45e54741774e8, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3665: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3665: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3665: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3665: key: 0x441e7c32b1281c9fa11699550f325a6aae44b7390b7036a4652c45456df4f701, res: None
+STORAGE READ 3665: key: 0xc1a0588041a49f95a5e1fc9caa420e2705678d5fc755adde1c478df773d88e36, res: None
+[2m2025-09-23T13:52:23.854427Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3666 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m293 [3mcumulative_gas_used[0m[2m=[0m82562 [3mpurged_txs_len[0m[2m=[0m0
+UART: ||initial_index = 
+UART: 7889
+UART: applying initial write for address = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.854518Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3667 [3mcmd[0m[2m=[0m"Replay block 3667 (1 txs); strating l1 priority id: 43"
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.854530Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3666 as it's already processed
+UART: bf1fc215
+UART: 4486a84f
+UART: 13c1eac2
+UART: 213dac65
+UART: 5b67bbbf
+UART: , key = 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3666: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x6c97461fdbc34b86f8b07dd135490b9cff2cab4444166de09c350d4a5ee6a84d)
+UART: 0
+UART: 0
+GET PREIMAGE 3666: hash: 0x6c97461fdbc34b86f8b07dd135490b9cff2cab4444166de09c350d4a5ee6a84d, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 107, 245, 9, 88, 43, 46, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+STORAGE READ 3666: key: 0x954643120b8d3a71673a0abaddddd41b8ee4b58a816dfe30d2ce5ede4fd5ad9d, res: Some(0x66939d8622a8668ea229a1d88cc07f7348ae790987e4fb736ea2df4093f2b06f)
+UART: 0
+UART: 0
+GET PREIMAGE 3666: hash: 0x66939d8622a8668ea229a1d88cc07f7348ae790987e4fb736ea2df4093f2b06f, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 218, 216, 232, 97, 192, 112, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3666: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3666: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xa9a60ae5a449e3b28f8254457eaa4ff325d473a0b1826a240e53790e877c23cc)
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+GET PREIMAGE 3666: hash: 0xa9a60ae5a449e3b28f8254457eaa4ff325d473a0b1826a240e53790e877c23cc, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 95, 243, 15, 170, 115, 212, 64, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: , value 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.854846Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3667 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m162 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART:  -> 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.854933Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3668 [3mcmd[0m[2m=[0m"Replay block 3668 (1 txs); strating l1 priority id: 43"
+UART: 0
+UART: 0
+[2m2025-09-23T13:52:23.854958Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3667 as it's already processed
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+STORAGE READ 3667: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x7841028ee895e2ee48dacf52c789f80e667d6f4e6a994a8b43a27a3f50aad10d)
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 1
+UART: 
+
+GET PREIMAGE 3667: hash: 0x7841028ee895e2ee48dacf52c789f80e667d6f4e6a994a8b43a27a3f50aad10d, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 108, 8, 34, 201, 181, 126, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3667: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0xb7f45f0969e683b451cc220385850ddb271cdee39c9ae7d507f9178100840a75)
+GET PREIMAGE 3667: hash: 0xb7f45f0969e683b451cc220385850ddb271cdee39c9ae7d507f9178100840a75, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 205, 213, 121, 100, 10, 96, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3667: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3667: key: 0x93a88f5afa0eb55a2083d9e1a5238b3ff2f2a7a37b612000eb240de264c1afbc, res: None
+[2m2025-09-23T13:52:23.855241Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3668 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m3 [3mpubdata_bytes[0m[2m=[0m170 [3mcumulative_gas_used[0m[2m=[0m21000 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.855322Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3669 [3mcmd[0m[2m=[0m"Replay block 3669 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.855331Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3668 as it's already processed
+STORAGE READ 3668: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x422c07e8ae44583061e53093f23bdda49ad8e7d3e8b97bc555dd15a822c01200)
+GET PREIMAGE 3668: hash: 0x422c07e8ae44583061e53093f23bdda49ad8e7d3e8b97bc555dd15a822c01200, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 108, 27, 60, 59, 63, 206, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3668: key: 0xdd9a27cdd40ad23882906fdf08086ebf4290394e3d11dcdce4596f2ec4f2dc54, res: Some(0x1e0c5d6960ad7ba7190f050e3d697a2f0dd983b6d829ed9fe7b42e59d9640b67)
+GET PREIMAGE 3668: hash: 0x1e0c5d6960ad7ba7190f050e3d697a2f0dd983b6d829ed9fe7b42e59d9640b67, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 95, 237, 11, 172, 75, 28, 16, 250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3668: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3668: key: 0x776ccb79993fca2d64f7d290fbf7830f598581a9c7e22fa1aa1ab788eee701ad, res: None
+UART: ||initial_index = 
+UART: 7890
+[2m2025-09-23T13:52:23.855608Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3669 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m3 [3mpreimages[0m[2m=[0m4 [3mpubdata_bytes[0m[2m=[0m278 [3mcumulative_gas_used[0m[2m=[0m68818 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.855701Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution[0m[2m:[0m starting command. Turning into PreparedCommand.. [3mblock_number[0m[2m=[0m3670 [3mcmd[0m[2m=[0m"Replay block 3670 (1 txs); strating l1 priority id: 43"
+[2m2025-09-23T13:52:23.855709Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3669 as it's already processed
+STORAGE READ 3669: key: 0xc1198a72505f46d722ed8e0ca0f9bfe42ba3a2d868a618d9d55a80ba9255f761, res: Some(0x8bf86bef4070760eaf96af0a4e3a8acefd3dafbd63ae6ee6eb54b6fa7ca38299)
+GET PREIMAGE 3669: hash: 0x8bf86bef4070760eaf96af0a4e3a8acefd3dafbd63ae6ee6eb54b6fa7ca38299, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 108, 89, 211, 43, 177, 130, 198, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3669: key: 0x93a88f5afa0eb55a2083d9e1a5238b3ff2f2a7a37b612000eb240de264c1afbc, res: Some(0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8)
+GET PREIMAGE 3669: hash: 0x140322c36f2d2d22a2cfa7cc6013db633b78e99bd7ebe5c005623243a0364ed8, res: Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 224, 182, 179, 167, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3669: key: 0xd09d318e3f0801c976edf5e4cbb181eb7338a9585e56ecb9382d6bd7dda1ae15, res: None
+STORAGE READ 3669: key: 0x776ccb79993fca2d64f7d290fbf7830f598581a9c7e22fa1aa1ab788eee701ad, res: Some(0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a)
+GET PREIMAGE 3669: hash: 0x51cfe18ee2bc7b1becb94cba999e179f36fefa7d7c2ce4fcbddbc74392aeec2a, res: Some([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 46, 80, 167, 242, 164, 151, 54, 163, 80, 75, 231, 52, 252, 30, 159, 135, 69, 79, 54, 185, 85, 37, 0, 114, 198, 236, 8, 187, 123, 97, 223, 0, 0, 0, 74, 0, 0, 0, 16, 113, 17, 241, 74, 25, 85, 70, 28, 79, 225, 137, 77, 114, 174, 45, 211, 199, 46, 249, 27, 78, 10, 201, 119, 91, 251, 225, 238, 218, 170, 222, 225, 0, 0, 0, 74])
+GET PREIMAGE 3669: hash: 0x962e50a7f2a49736a3504be734fc1e9f87454f36b955250072c6ec08bb7b61df, res: Some([54, 96, 0, 96, 0, 55, 96, 0, 96, 0, 54, 96, 0, 96, 0, 96, 5, 90, 241, 96, 0, 85, 127, 96, 16, 56, 3, 96, 16, 96, 0, 57, 96, 16, 56, 3, 96, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 82, 61, 96, 0, 96, 16, 62, 61, 96, 16, 1, 96, 0, 96, 0, 240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+STORAGE READ 3669: key: 0x85146d09b794ab3be4487791105e8600b4ea9134ff7ff3cac54a3c3108e2f058, res: None
+STORAGE READ 3669: key: 0x0ba2c849feef3118811813db5b13762064898cc3c8d2fa50eb75574bea443355, res: None
+STORAGE READ 3669: key: 0xf0a3dae938d98d625a7febe59c47ad81513d069291d6b976a018950c4d73001b, res: None
+[2m2025-09-23T13:52:23.856156Z[0m [32m INFO[0m [2mzksync_os_sequencer::execution::block_executor[0m[2m:[0m Block sealed in block executor [3mblock_number[0m[2m=[0m3670 [3mcommand[0m[2m=[0m"replay" [3mseal_reason[0m[2m=[0mReplay [3mtx_count[0m[2m=[0m1 [3mstorage_writes[0m[2m=[0m5 [3mpreimages[0m[2m=[0m5 [3mpubdata_bytes[0m[2m=[0m293 [3mcumulative_gas_used[0m[2m=[0m82416 [3mpurged_txs_len[0m[2m=[0m0
+[2m2025-09-23T13:52:23.856204Z[0m [34mDEBUG[0m [2mzksync_os_bin::tree_manager[0m[2m:[0m skipping block 3670 as it's already processed
+UART: PI calculation: state commitment after 
+UART: ChainStateCommitment
+UART:  { 
+UART: state_root
+UART: : 
+UART: 0x
+UART: cee92b98
+UART: 613e7ef3
+UART: df709bca
+UART: 573e3728
+UART: 11d7c497
+UART: 6c483d3b
+UART: 77d4a954
+UART: a7175b91
+UART: , 
+UART: next_free_slot
+UART: : 
+UART: 7891
+UART: , 
+UART: block_number
+UART: : 
+UART: 3622
+UART: , 
+UART: last_256_block_hashes_blake
+UART: : 
+UART: 0x
+UART: fc15c4a9
+UART: e680c8c0
+UART: e56d7aee
+UART: cbab2bc9
+UART: 936b632e
+UART: a1d80ca3
+UART: f227fa86
+UART: 5cb35eaf
+UART: , 
+UART: last_block_timestamp
+UART: : 
+UART: 1758626734
+UART:  }
+UART: 
+
+UART: PI calculation: batch output 
+UART: BatchOutput
+UART:  { 
+UART: chain_id
+UART: : 
+UART: 8022833
+UART: , 
+UART: first_block_timestamp
+UART: : 
+UART: 1758626734
+UART: , 
+UART: last_block_timestamp
+UART: : 
+UART: 1758626734
+UART: , 
+UART: used_l2_da_validator_address
+UART: : 
+UART: Bits
+UART: (
+UART: 0
+UART: )
+UART: , 
+UART: pubdata_commitment
+UART: : 
+UART: 0x
+UART: 9fbcad80
+UART: 15cc91e1
+UART: eeed42d0
+UART: 55959e37
+UART: 60a13961
+UART: 5d94e83b
+UART: 26506f2c
+UART: 449fd0e5
+UART: , 
+UART: number_of_layer_1_txs
+UART: : 
+UART: 0
+UART: , 
+UART: priority_operations_hash
+UART: : 
+UART: 0x
+UART: c5d24601
+UART: 86f7233c
+UART: 927e7db2
+UART: dcc703c0
+UART: e500b653
+UART: ca82273b
+UART: 7bfad804
+UART: 5d85a470
+UART: , 
+UART: l2_logs_tree_root
+UART: : 
+UART: 0x
+UART: 692f35c9
+UART: 9f9c6988
+UART: 52289ffe
+UART: cf07f6dd
+UART: 45770904
+UART: 521149d7
+UART: 9aa85aae
+UART: 598fa375
+UART: , 
+UART: upgrade_tx_hash
+UART: : 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: , 
+UART: interop_root_rolling_hash
+UART: : 
+UART: 0x
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART: 0
+UART:  }
+UART: 
+
+UART: PI calculation: final batch public input 
+UART: BatchPublicInput
+UART:  { 
+UART: state_before
+UART: : 
+UART: 0x
+UART: 3203be73
+UART: 96056a72
+UART: 4bb5db28
+UART: f8c6712f
+UART: 3e2fb322
+UART: 0
+UART: 35c7002
+UART: 67d0c4b2
+UART: 90b8f600
+UART: , 
+UART: state_after
+UART: : 
+UART: 0x
+UART: 0
+UART: d410324
+UART: 836725d8
+UART: f9b33014
+UART: 7e72c226
+UART: 347b818f
+UART: 6f2d01e3
+UART: 43a1edfb
+UART: b4744d9a
+UART: , 
+UART: batch_output
+UART: : 
+UART: 0x
+UART: e46f022a
+UART: a01f70bd
+UART: 5899f99c
+UART: f1bef0c1
+UART: f92d50e2
+UART: 6b7d94a7
+UART: b21aebdc
+UART: 2d8a29f5
+UART:  }
+UART: 
+
+UART: PI calculation: final batch public input hash 
+UART: 0x
+UART: 8ebf7ccf
+UART: b9562f12
+UART: 26506a91
+UART: c30e68aa
+UART: 213db89d
+UART: 7e2df09a
+UART: 13241417
+UART: 889456dd
+UART: 
+
+Took 1508766 cycles to finish
+[2m2025-09-23T13:52:23.858244Z[0m [32m INFO[0m [2mzksync_os_bin::prover_input_generator[0m[2m:[0m Completed prover input computation in 20.587ms. [3mblock_number[0m[2m=[0m3622
+[2m2025-09-23T13:52:23.858359Z[0m [31mERROR[0m [2mzksync_os_bin[0m[2m:[0m ProverInputGenerator failed: SendError { .. }
+[2m2025-09-23T13:52:23.858432Z[0m [32m INFO[0m [2mzksync_os_bin[0m[2m:[0m One of the subsystems exited - exiting process.
+[2m2025-09-23T13:52:23.858536Z[0m [33m WARN[0m [2mzksync_os_bin[0m[2m:[0m Main task unexpectedly exited

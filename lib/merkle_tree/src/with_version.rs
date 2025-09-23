@@ -102,10 +102,12 @@ impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
 
 impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorage for MerkleTreeVersion<DB, P> {
     fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
-        self.tree_index(key).and_then(|index| {
+        let res = self.tree_index(key).and_then(|index| {
             self.traverse_to_leaf(index)
                 .map(|Leaf { value, .. }| fixed_bytes_to_bytes32(value))
-        })
+        });
+        println!("STORAGE READ {}: key: {key:?}, res: {res:?}", self.block);
+        res
     }
 }
 
