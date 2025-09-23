@@ -6,6 +6,7 @@ use alloy::transports::{RpcError, TransportErrorKind, TransportResult};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
 use std::time::Duration;
+use zksync_os_tracing::{debug, error, trace};
 
 /// Maximum number of retries for fetching a block.
 const MAX_RETRIES: usize = 3;
@@ -44,20 +45,20 @@ impl NewBlocks {
         let stream = stream! {
         'task: loop {
             let Some(block_number) = numbers_stream.next().await else {
-                tracing::debug!("polling stream ended");
+                debug!("polling stream ended");
                 break 'task;
             };
-            tracing::trace!(%block_number, "got block number");
+            trace!(%block_number, "got block number");
             if block_number < self.next_yield {
-                tracing::debug!(block_number, self.next_yield, "not advanced yet");
+                debug!(block_number, self.next_yield, "not advanced yet");
                 continue 'task;
             }
 
             for number in self.next_yield..=block_number {
-                tracing::debug!(number, "fetching block");
+                debug!(number, "fetching block");
                 match retry_get_block(&self.provider, number).await {
                     Ok(block) => {
-                        tracing::debug!(number=self.next_yield, "yielding block");
+                        debug!(number=self.next_yield, "yielding block");
                         self.next_yield += 1;
                         yield Ok(block);
                     }
@@ -80,21 +81,21 @@ async fn retry_get_block(provider: &DynProvider, number: BlockNumber) -> Transpo
         let block = match provider.get_block_by_number(number.into()).await {
             Ok(Some(block)) => block,
             Err(RpcError::Transport(err)) if retries > 0 => {
-                tracing::debug!(number, %err, "failed to fetch block, retrying");
+                debug!(number, %err, "failed to fetch block, retrying");
                 retries -= 1;
                 continue;
             }
             Ok(None) if retries > 0 => {
-                tracing::debug!(number, "failed to fetch block (doesn't exist), retrying");
+                debug!(number, "failed to fetch block (doesn't exist), retrying");
                 retries -= 1;
                 continue;
             }
             Err(err) => {
-                tracing::error!(number, %err, "failed to fetch block");
+                error!(number, %err, "failed to fetch block");
                 return Err(err);
             }
             Ok(None) => {
-                tracing::error!(number, "failed to fetch block (doesn't exist)");
+                error!(number, "failed to fetch block (doesn't exist)");
                 return Err(TransportErrorKind::custom_str("block does not exist"));
             }
         };

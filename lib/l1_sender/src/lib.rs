@@ -31,6 +31,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use zksync_os_observability::ComponentStateReporter;
+use zksync_os_tracing::*;
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -86,7 +87,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         latency_tracker.enter_state(L1SenderState::SendingToL1);
         let range = Input::display_range(&cmd_buffer); // Only for logging
         let command_name = Input::NAME;
-        tracing::info!(command_name, range, "Sending l1 transactions...");
+        info!(command_name, range, "Sending l1 transactions...");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(cmd_buffer.len() as u64);
         // It's important to preserve the order of commands -
         // so that we send them downstream also in order.
@@ -113,19 +114,16 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
             // but this is not necessary for now - we wait for them to be included in parallel
             .try_collect::<HashMap<TxHash, Input>>()
             .await?;
-        tracing::info!(command_name, range, "Sent to L1. Waiting for inclusion...");
+        info!(command_name, range, "Sent to L1. Waiting for inclusion...");
         latency_tracker.enter_state(L1SenderState::WaitingL1Inclusion);
         let mined_envelopes = heartbeat
             .wait_for_pending_txs(&provider, pending_tx_hashes)
             .await?;
         let balance = format_ether(provider.get_balance(operator_address).await?);
         let nonce = provider.get_transaction_count(operator_address).await?;
-        tracing::info!(
+        info!(
             command_name,
-            range,
-            balance,
-            nonce,
-            "All transactions included. Sending downstream.",
+            range, balance, nonce, "All transactions included. Sending downstream.",
         );
         L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
         L1_SENDER_METRICS.nonce[&command_name].set(nonce);
@@ -146,19 +144,19 @@ async fn tx_request_with_gas_fields(
     max_priority_fee_per_gas: u128,
 ) -> anyhow::Result<TransactionRequest> {
     let eip1559_est = provider.estimate_eip1559_fees().await?;
-    tracing::debug!(
+    debug!(
         eip1559_est.max_priority_fee_per_gas,
         "estimated median priority fee (20% percentile) for the last 10 blocks"
     );
     if eip1559_est.max_fee_per_gas > max_fee_per_gas {
-        tracing::warn!(
+        warn!(
             max_fee_per_gas = max_fee_per_gas,
             estimated_max_fee_per_gas = eip1559_est.max_fee_per_gas,
             "L1 sender's configured maxFeePerGas is lower than the one estimated from network"
         );
     }
     if eip1559_est.max_priority_fee_per_gas > max_priority_fee_per_gas {
-        tracing::warn!(
+        warn!(
             max_priority_fee_per_gas = max_priority_fee_per_gas,
             estimated_max_priority_fee_per_gas = eip1559_est.max_priority_fee_per_gas,
             "L1 sender's configured maxPriorityFeePerGas is lower than the one estimated from network"
@@ -195,7 +193,7 @@ async fn register_operator<
         anyhow::bail!("L1 sender's address {} has zero balance", address);
     }
 
-    tracing::info!(
+    info!(
         balance_eth = format_ether(balance),
         %address,
         "{} Initialized L1 sender",
@@ -256,7 +254,7 @@ impl Heartbeat {
             }
             let remaining_pending_txs = pending_tx_hashes.len();
             let base_fee_per_gas = block.header.base_fee_per_gas.unwrap_or_default();
-            tracing::debug!(
+            debug!(
                 block.header.number,
                 ?block.header.hash,
                 base_fee_per_gas,
@@ -279,9 +277,7 @@ impl Heartbeat {
             if let Some(res) = maybe_res {
                 break res;
             }
-            tracing::info!(
-                "L1 transaction receipt for a mined block is not available yet. Retrying..."
-            );
+            info!("L1 transaction receipt for a mined block is not available yet. Retrying...");
             tokio::time::sleep(Duration::from_millis(200)).await;
         };
         if receipt.status() {
@@ -298,7 +294,7 @@ impl Heartbeat {
                 .sum();
             let l1_transaction_fee = receipt.gas_used as u128 * receipt.effective_gas_price;
 
-            tracing::info!(
+            info!(
                 %command,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
@@ -318,7 +314,7 @@ impl Heartbeat {
 
             Ok(())
         } else {
-            tracing::error!(
+            error!(
                 %command,
                 tx_hash = ?receipt.transaction_hash,
                 l1_block_number = receipt.block_number.unwrap(),
@@ -337,7 +333,7 @@ impl Heartbeat {
                 // We print top-level call frame's output as it likely contains serialized custom
                 // error pointing to the underlying problem (i.e. starts with the error's 4byte
                 // signature).
-                tracing::error!(
+                error!(
                     ?call_frame.output,
                     ?call_frame.error,
                     ?call_frame.revert_reason,

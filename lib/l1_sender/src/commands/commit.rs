@@ -6,6 +6,7 @@ use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
+use zksync_os_tracing::debug;
 
 #[derive(Debug)]
 pub struct CommitCommand {
@@ -76,7 +77,7 @@ impl CommitCommand {
             .commit_batch_info
             .clone()
             .into_l1_commit_data(self.da_input_mode);
-        tracing::debug!(
+        debug!(
             last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
             last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
             new_batch_number = ?commit_batch_info.batchNumber,

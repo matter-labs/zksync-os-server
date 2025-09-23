@@ -9160,6 +9160,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
+name = "string-literal-const-replace"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9d8c20f3adde7f809b9037020f249cb735dabaa7d8faa6b1f5ab7f12baf400"
+dependencies = [
+ "proc-macro2 1.0.95",
+ "quote 1.0.40",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9827,6 +9838,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-logfmt"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1f47d22deb79c3f59fcf2a1f00f60cbdc05462bf17d1cd356c1fefa3f444bd"
+dependencies = [
+ "time",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber 0.3.20",
+]
+
+[[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9845,12 +9878,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -11078,7 +11114,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "tracing-subscriber 0.3.20",
  "vise",
  "zk_ee",
  "zksync_os_api",
@@ -11100,6 +11135,7 @@ dependencies = [
  "zksync_os_status_server",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_tracing",
  "zksync_os_types",
 ]
 
@@ -11225,7 +11261,6 @@ dependencies = [
  "serde",
  "time",
  "tokio",
- "tracing",
  "vise",
  "zk_ee",
  "zksync_os_contract_interface",
@@ -11233,6 +11268,7 @@ dependencies = [
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
+ "zksync_os_tracing",
  "zksync_os_types",
 ]
 
@@ -11559,6 +11595,17 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_rocksdb",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_tracing"
+version = "0.6.4-non-semver-compat"
+dependencies = [
+ "serde",
+ "string-literal-const-replace",
+ "tracing",
+ "tracing-logfmt",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
