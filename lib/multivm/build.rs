@@ -8,7 +8,7 @@ fn main() {
         if package.name.as_str() == "forward_system"
             && package.source.as_ref().is_some_and(|s| {
                 s.to_string()
-                    .contains("https://github.com/matter-labs/zksync-os?tag=v0.0.23")
+                    .contains("git+https://github.com/matter-labs/zksync-os?branch=av_fix_modexp_short_circuit#94bf0ce82352f00807aa5d1f2e3cde4111c3b0f0")
             })
         {
             let forward_system_source = package.manifest_path.parent().unwrap();
