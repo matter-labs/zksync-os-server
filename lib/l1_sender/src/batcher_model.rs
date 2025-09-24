@@ -146,3 +146,12 @@ pub struct RealSnarkProof {
     pub proof: Vec<u8>,
     pub vk: B256,
 }
+
+impl SnarkProof {
+    pub fn vk(&self) -> Option<B256> {
+        match self {
+            SnarkProof::Fake => None,
+            SnarkProof::Real(proof) => Some(proof.vk),
+        }
+    }
+}
