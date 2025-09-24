@@ -8,10 +8,11 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
+use zksync_os_multivm::apps;
 
-const OHBENDER_PROOF_TYPE: i32 = 2;
-const FAKE_PROOF_TYPE: i32 = 3;
-const FAKE_PROOF_MAGIC_VALUE: i32 = 13;
+const OHBENDER_PROOF_TYPE: u32 = 2;
+const FAKE_PROOF_TYPE: u32 = 3;
+const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
 
 #[derive(Debug)]
 pub struct ProofCommand {
@@ -134,6 +135,18 @@ impl ProofCommand {
             .iter()
             .map(|batch| StoredBatchInfo::from(batch.batch.commit_batch_info.clone()))
             .collect();
+        // todo: awful and temporary
+        let verifier_version = match self.proof.vk() {
+            // Use default verifier for fake proofs.
+            None => 0,
+            // Use default verifier for v1.
+            Some(vk) if vk == apps::v1::VERIFICATION_KEY => 0,
+            // v2 and up are available under their respective execution version.
+            Some(vk) if vk == apps::v2::VERIFICATION_KEY => 2,
+            Some(vk) => {
+                panic!("unsupported verification key: {vk}");
+            }
+        };
 
         // todo: remove tostring
         let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos);
@@ -165,8 +178,8 @@ impl ProofCommand {
                     })
                     .collect();
                 vec![
-                    // Fake proof type
-                    U256::from(OHBENDER_PROOF_TYPE),
+                    // Real proof versioned with a specific verifier
+                    U256::from(OHBENDER_PROOF_TYPE | (verifier_version << 8)),
                     // we generate SNARK proofs to always match the range perfectly.
                     U256::from(0),
                 ]

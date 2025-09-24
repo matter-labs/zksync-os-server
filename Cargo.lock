@@ -11409,6 +11409,7 @@ dependencies = [
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
+ "zksync_os_multivm",
  "zksync_os_observability",
  "zksync_os_types",
 ]
