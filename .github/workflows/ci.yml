@@ -197,6 +197,7 @@ jobs:
           # are correct inside prebuilt binary.
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
           WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
+          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release --profile ci -p zksync_os_integration_tests \
             --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
@@ -252,6 +253,9 @@ jobs:
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
+        env:
+          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
+          COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
         run: |
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \

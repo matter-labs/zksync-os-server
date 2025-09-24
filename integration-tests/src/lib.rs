@@ -199,7 +199,7 @@ impl Tester {
             let base_url = prover_api_url.clone();
             let app_bin_path =
                 zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
-            let trusted_setup_file = Path::new(&app_bin_unpack_path).join("crs/setup_compact.key");
+            let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = Path::new(&app_bin_unpack_path).join("outputs");
             tokio::task::spawn(async move {
                 zksync_os_prover_service::run(zksync_os_prover_service::Args {
