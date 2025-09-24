@@ -97,10 +97,10 @@ impl SnarkJobManager {
         }
 
         // Get proofs that were created for the same vk.
-        let first_vk = batches_with_real_proofs[0].1.vk().unwrap();
+        let first_vk = batches_with_real_proofs[0].1.snark_vk().unwrap();
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, p)| p.vk() == Some(first_vk))
+            .take_while(|(_, p)| p.snark_vk() == Some(first_vk))
             .collect();
 
         tracing::info!(
@@ -194,7 +194,7 @@ impl SnarkJobManager {
             .collect();
         let vk = consumed_batches_proven[0]
             .data
-            .vk()
+            .snark_vk()
             .expect("proven FRI proofs must be real");
 
         self.send_downstream(ProofCommand::new(

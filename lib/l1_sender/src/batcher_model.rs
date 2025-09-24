@@ -104,7 +104,7 @@ pub enum FriProof {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RealFriProof {
     pub proof: Vec<u8>,
-    pub vk: B256,
+    pub snark_vk: B256,
 }
 
 impl FriProof {
@@ -112,10 +112,10 @@ impl FriProof {
         matches!(self, FriProof::Fake)
     }
 
-    pub fn vk(&self) -> Option<B256> {
+    pub fn snark_vk(&self) -> Option<B256> {
         match self {
             FriProof::Fake => None,
-            FriProof::Real(proof) => Some(proof.vk),
+            FriProof::Real(proof) => Some(proof.snark_vk),
         }
     }
 }

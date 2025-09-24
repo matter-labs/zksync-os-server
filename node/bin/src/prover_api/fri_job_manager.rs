@@ -213,7 +213,7 @@ impl FriJobManager {
         // Prepare the envelope and send it downstream.
         let proof = RealFriProof {
             proof: proof_bytes,
-            vk: vk_for_execution_version(batch_metadata.execution_version),
+            snark_vk: vk_for_execution_version(batch_metadata.execution_version),
         };
         let envelope = removed_job
             .batch_envelope
