@@ -19,6 +19,7 @@ zksync_os_object_store.workspace = true
 zksync_os_rpc_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_l1_sender.workspace = true
 
 zksync_os_prover_service = { workspace = true, optional = true }
 

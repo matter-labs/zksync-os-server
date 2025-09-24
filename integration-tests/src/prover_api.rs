@@ -1,42 +1,56 @@
 use crate::dyn_wallet_provider::EthDynProvider;
+use crate::network::Zksync;
 use crate::provider::ZksyncApi;
-use alloy::primitives::{Address, B256, BlockNumber, U256, keccak256};
-use alloy::providers::Provider;
+use alloy::primitives::{Address, B256, BlockNumber, U160, U256, keccak256};
+use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use backon::{ConstantBuilder, Retryable};
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
 use zksync_os_contract_interface::Bridgehub;
+use zksync_os_l1_sender::l1_discovery::get_l1_state;
+
+/// Default bridgehub address from zkos-l1-state.json
+const DEFAULT_BRIDGEHUB_ADDRESS: &str = "0x70968ad336b957311e3c1c63e36d05035e356f68";
 
 pub struct ProverApi {
-    client: Client,
-    base_url: String,
+    l1_provider: EthDynProvider,
+    l2_provider: EthDynProvider,
+    l2_zk_provider: DynProvider<Zksync>,
 }
 
 impl ProverApi {
     /// Create a new client targeting the given base URL
-    pub fn new<U: Into<String>>(base_url: U) -> Self {
+    pub fn new(
+        l1_provider: EthDynProvider,
+        l2_provider: EthDynProvider,
+        l2_zk_provider: DynProvider<Zksync>,
+    ) -> Self {
         ProverApi {
-            client: Client::new(),
-            base_url: base_url.into(),
+            l1_provider,
+            l2_provider,
+            l2_zk_provider,
         }
     }
 
     /// Checks batch status by verifying that the proof has been verified on L1.
     /// Returns `true` if batch has been proven and verified on L1, `false` otherwise.
-    pub async fn check_batch_status(
-        &self,
-        batch_number: u64,
-        l1_provider: EthDynProvider,
-        l1_address: Address,
-    ) -> anyhow::Result<bool> {
+    pub async fn check_batch_status(&self, batch_number: u64) -> anyhow::Result<bool> {
+        // Try to get bridgehub address from L2, fallback to default
+        let bridgehub_address = ZksyncApi::get_bridgehub_contract(&self.l2_zk_provider)
+            .await
+            .unwrap_or_else(|_| DEFAULT_BRIDGEHUB_ADDRESS.parse().unwrap());
+        let chain_id = self.l2_provider.get_chain_id().await?;
+
+        // Get L1 state which contains diamond proxy address
+        let l1_state = get_l1_state(&self.l1_provider, bridgehub_address, chain_id).await?;
+        let diamond_proxy_address = l1_state.diamond_proxy;
+
         let blocks_verification_signature = keccak256(b"BlocksVerification(uint256,uint256)");
         let filter = Filter::new()
-            .from_block(batch_number)
-            .to_block(batch_number)
             .event_signature(blocks_verification_signature)
-            .address(l1_address);
-        let logs = l1_provider.get_logs(&filter).await?;
+            .address(diamond_proxy_address);
+        let logs = self.l1_provider.get_logs(&filter).await?;
         for log in logs {
             if log.topics().len() >= 3 {
                 // Parse previousLastVerifiedBatch (topic[1]) and currentLastVerifiedBatch (topic[2])
@@ -51,21 +65,13 @@ impl ProverApi {
                 }
             }
         }
-        
         Ok(false)
     }
 
     /// Resolves when the requested batch gets reported as proven by prover API.
-    pub async fn wait_for_batch_proven(
-        &self,
-        batch_number: u64,
-        l1_provider: EthDynProvider,
-        l1_address: Address,
-    ) -> anyhow::Result<()> {
+    pub async fn wait_for_batch_proven(&self, batch_number: u64) -> anyhow::Result<()> {
         (|| async {
-            let status = self
-                .check_batch_status(batch_number, l1_provider.clone(), l1_address)
-                .await?;
+            let status = self.check_batch_status(batch_number).await?;
             if status {
                 Ok(())
             } else {

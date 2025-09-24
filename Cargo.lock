@@ -11426,6 +11426,7 @@ dependencies = [
  "tracing",
  "zksync_os_bin",
  "zksync_os_contract_interface",
+ "zksync_os_l1_sender",
  "zksync_os_multivm",
  "zksync_os_object_store",
  "zksync_os_prover_service",

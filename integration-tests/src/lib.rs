@@ -271,12 +271,16 @@ impl Tester {
 
         let tempdir = Arc::new(tempdir);
         Ok(Tester {
-            l1_provider: EthDynProvider::new(l1_provider),
-            l2_provider: EthDynProvider::new(l2_provider),
-            l2_zk_provider: DynProvider::new(l2_zk_provider),
+            l1_provider: EthDynProvider::new(l1_provider.clone()),
+            l2_provider: EthDynProvider::new(l2_provider.clone()),
+            l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l1_wallet,
             l2_wallet,
-            prover_api: ProverApi::new(prover_api_url),
+            prover_api: ProverApi::new(
+                EthDynProvider::new(l1_provider.clone()),
+                EthDynProvider::new(l2_provider.clone()),
+                DynProvider::new(l2_zk_provider.clone()),
+            ),
             stop_sender,
             main_task,
             l1_address,
