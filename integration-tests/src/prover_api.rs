@@ -1,13 +1,11 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::provider::ZksyncApi;
-use alloy::primitives::{Address, B256, BlockNumber, U160, U256, keccak256};
+use alloy::primitives::{U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::{Filter, Log};
+use alloy::rpc::types::Filter;
 use backon::{ConstantBuilder, Retryable};
-use reqwest::{Client, StatusCode};
 use std::time::Duration;
-use zksync_os_contract_interface::Bridgehub;
 use zksync_os_l1_sender::l1_discovery::get_l1_state;
 
 /// Default bridgehub address from zkos-l1-state.json

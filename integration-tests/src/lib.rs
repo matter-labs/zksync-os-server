@@ -207,7 +207,7 @@ impl Tester {
                     app_bin_path: Some(app_bin_path),
                     circuit_limit: 10000,
                     output_dir: output_dir.to_str().unwrap().to_string(),
-                    trusted_setup_file: trusted_setup_file.to_str().unwrap().to_string(),
+                    trusted_setup_file: trusted_setup_file.to_string(),
                     iterations: Some(1),
                     fri_path: None,
                     max_snark_latency: None,
