@@ -112,24 +112,6 @@ async fn submit_fri_proof(
     }
 }
 
-async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
-    match state.proof_storage.get(block).await {
-        Ok(Some(BatchEnvelope {
-            data: FriProof::Real(proof_bytes),
-            ..
-        })) => Json(FriProofPayload {
-            block_number: block,
-            proof: general_purpose::STANDARD.encode(&proof_bytes),
-        })
-        .into_response(),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            error!("error getting proof: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
 async fn pick_snark_job(State(state): State<AppState>) -> Response {
     match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
@@ -213,10 +195,6 @@ pub async fn run(
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
-        // this method is only used in prover e2e test -
-        // it shouldn't be here otherwise. If we want to expose FRI proofs,
-        // we need to extract FRI cache to a separate service
-        .route("/prover-jobs/FRI/:block", get(get_fri_proof))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
         .with_state(app_state)

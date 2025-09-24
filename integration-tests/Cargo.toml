@@ -20,7 +20,7 @@ zksync_os_rpc_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 
-zksync_os_fri_prover = { workspace = true, optional = true }
+zksync_os_prover_service = { workspace = true, optional = true }
 
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
@@ -39,5 +39,5 @@ serde.workspace = true
 test-log.workspace = true
 
 [features]
-prover-tests = ["dep:zksync_os_fri_prover"]
-gpu-prover-tests = ["prover-tests", "zksync_os_fri_prover/gpu"]
+prover-tests = ["dep:zksync_os_prover_service"]
+gpu-prover-tests = ["prover-tests", "zksync_os_prover_service/gpu"]

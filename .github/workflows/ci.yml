@@ -171,6 +171,20 @@ jobs:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache_shared_key: 'prover-integration-tests'
 
+      - name: Check CUDA version
+        run: |
+          nvcc --version
+  
+      - name: Prepare bellman-cuda directory
+        shell: 'bash -ex {0}'
+        run: |
+          release=($(curl --silent https://api.github.com/repos/matter-labs/era-bellman-cuda/releases | jq -r '.[0] | .name, .tarball_url, .assets[0].browser_download_url'))
+          curl --silent -L "${release[1]}" --output bellman-cuda-source.tar.gz
+          curl --silent -L "${release[2]}" --output bellman-cuda.tar.gz
+          mkdir -p bellman-cuda
+          tar xvfz bellman-cuda.tar.gz -C ./bellman-cuda
+          tar xvfz bellman-cuda-source.tar.gz -C ./bellman-cuda --strip-components=1 --wildcards \*/src/
+
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
@@ -211,10 +225,29 @@ jobs:
           save_cache: 'false'
           cache_shared_key: 'prover-integration-tests'
 
+      - name: Check Nvidia driver version
+        run: |
+          nvidia-smi
+
+      - name: Prepare bellman-cuda directory
+        shell: 'bash -ex {0}'
+        run: |
+          release=($(curl --silent https://api.github.com/repos/matter-labs/era-bellman-cuda/releases | jq -r '.[0] | .name, .tarball_url, .assets[0].browser_download_url'))
+          curl --silent -L "${release[1]}" --output bellman-cuda-source.tar.gz
+          curl --silent -L "${release[2]}" --output bellman-cuda.tar.gz
+          mkdir -p bellman-cuda
+          tar xvfz bellman-cuda.tar.gz -C ./bellman-cuda
+          tar xvfz bellman-cuda-source.tar.gz -C ./bellman-cuda --strip-components=1 --wildcards \*/src/
+
       - name: Download prebuilt tests
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
+
+      - name: Download CRS setup file
+        run: |
+          mkdir -p crs
+          curl -L https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key -o crs/setup_compact.key
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute

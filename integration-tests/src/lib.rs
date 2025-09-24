@@ -150,7 +150,7 @@ impl Tester {
                 ..Default::default()
             },
             fake_snark_provers: FakeSnarkProversConfig {
-                enabled: true,
+                enabled: !enable_prover,
                 ..Default::default()
             },
             address: prover_api_address,
@@ -194,17 +194,24 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
+            use std::path::Path;
+
             let base_url = prover_api_url.clone();
             let app_bin_path =
                 zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
+            let trusted_setup_file = Path::new(&app_bin_unpack_path).join("crs/setup_compact.key");
+            let output_dir = Path::new(&app_bin_unpack_path).join("outputs");
             tokio::task::spawn(async move {
-                zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
+                zksync_os_prover_service::run(zksync_os_prover_service::Args {
                     base_url,
-                    enabled_logging: true,
                     app_bin_path: Some(app_bin_path),
                     circuit_limit: 10000,
-                    iterations: None,
-                    path: None,
+                    output_dir: output_dir.to_str().unwrap().to_string(),
+                    trusted_setup_file: trusted_setup_file.to_str().unwrap().to_string(),
+                    iterations: Some(1),
+                    fri_path: None,
+                    max_snark_latency: None,
+                    max_fris_per_snark: Some(1),
                 })
                 .await
             });
