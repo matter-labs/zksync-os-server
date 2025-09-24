@@ -133,5 +133,11 @@ impl Debug for FriProof {
 pub enum SnarkProof {
     // Fake proof for testing purposes
     Fake,
-    Real(Vec<u8>),
+    Real(RealSnarkProof),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RealSnarkProof {
+    pub proof: Vec<u8>,
+    pub vk: B256,
 }

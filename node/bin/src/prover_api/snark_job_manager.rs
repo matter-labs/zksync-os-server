@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, RealSnarkProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -188,14 +188,18 @@ impl SnarkJobManager {
             batch_to
         );
 
-        let consumed_batches_proven = consumed_batches_proven
+        let consumed_batches_proven: Vec<_> = consumed_batches_proven
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
+        let vk = consumed_batches_proven[0]
+            .data
+            .vk()
+            .expect("proven FRI proofs must be real");
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
-            SnarkProof::Real(payload),
+            SnarkProof::Real(RealSnarkProof { proof: payload, vk }),
         ))
         .await?;
         Ok(())

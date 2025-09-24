@@ -153,8 +153,9 @@ impl ProofCommand {
                     U256::from_be_bytes(public_input.0),
                 ]
             }
-            SnarkProof::Real(bytes) => {
-                let proof: Vec<U256> = bytes
+            SnarkProof::Real(real) => {
+                let proof: Vec<U256> = real
+                    .proof
                     .chunks(32)
                     .map(|chunk| {
                         let arr: [u8; 32] = chunk
