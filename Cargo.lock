@@ -11667,6 +11667,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_batch_verification"
+version = "0.9.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "alloy-rlp",
+ "anyhow",
+ "async-trait",
+ "basic_system",
+ "bincode 2.0.1",
+ "forward_system",
+ "futures",
+ "semver 1.0.26",
+ "serde",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "zk_ee",
+ "zksync_os_interface",
+ "zksync_os_observability",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_contract_interface"
 version = "0.9.1-non-semver-compat"
 dependencies = [
@@ -12196,6 +12221,7 @@ dependencies = [
  "vise",
  "zk_ee",
  "zksync-os-revm",
+ "zksync_os_batch_verification",
  "zksync_os_contract_interface",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",

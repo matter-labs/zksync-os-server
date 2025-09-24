@@ -3,7 +3,9 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, RealSnarkProof, SnarkProof};
+use zksync_os_l1_sender::batcher_model::{
+    FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
+};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::{
@@ -46,7 +48,7 @@ use crate::prover_api::fri_job_manager::FriJob;
 pub struct SnarkJobManager {
     // == plumbing ==
     // inbound
-    committed_batch_receiver: Mutex<PeekableReceiver<BatchEnvelope<FriProof>>>,
+    committed_batch_receiver: Mutex<PeekableReceiver<SignedBatchEnvelope<FriProof>>>,
     // outbound
     prove_batches_sender: Sender<ProofCommand>,
 
@@ -60,7 +62,7 @@ impl SnarkJobManager {
     pub fn new(
         // == plumbing ==
         // inbound
-        committed_batch_receiver: PeekableReceiver<BatchEnvelope<FriProof>>,
+        committed_batch_receiver: PeekableReceiver<SignedBatchEnvelope<FriProof>>,
         // outbound
         prove_batches_sender: Sender<ProofCommand>,
         // config
@@ -182,7 +184,7 @@ impl SnarkJobManager {
         // }
 
         // prove is valid - consuming proven batches
-        let consumed_batches_proven: Vec<BatchEnvelope<FriProof>> =
+        let consumed_batches_proven: Vec<SignedBatchEnvelope<FriProof>> =
             receiver.try_recv_while(usize::MAX, |envelope| envelope.batch_number() <= batch_to);
 
         // very unlikely - we just peeked the same batches
@@ -243,7 +245,7 @@ impl SnarkJobManager {
         &self,
         consume_by_timeout: Option<Duration>,
     ) -> anyhow::Result<()> {
-        let consume_if = |envelope: &BatchEnvelope<FriProof>| {
+        let consume_if = |envelope: &SignedBatchEnvelope<FriProof>| {
             envelope.data.is_fake()
                 || consume_by_timeout
                     .is_some_and(|timeout| envelope.time_since_first_block().unwrap() >= timeout)
@@ -251,7 +253,7 @@ impl SnarkJobManager {
 
         loop {
             let mut receiver = self.committed_batch_receiver.lock().await;
-            let batches_with_fake_proofs: Vec<BatchEnvelope<FriProof>> =
+            let batches_with_fake_proofs: Vec<SignedBatchEnvelope<FriProof>> =
                 receiver.try_recv_while(self.max_fris_per_snark, consume_if);
             drop(receiver);
             if batches_with_fake_proofs.is_empty() {
@@ -297,7 +299,7 @@ impl SnarkJobManager {
 
     pub async fn peek_with<R, F>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(&BatchEnvelope<FriProof>) -> R,
+        F: FnOnce(&SignedBatchEnvelope<FriProof>) -> R,
     {
         self.committed_batch_receiver.lock().await.peek_with(f)
     }

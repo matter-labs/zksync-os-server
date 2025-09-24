@@ -1,4 +1,4 @@
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::L1SenderCommand;
 use crate::config::L1SenderConfig;
 use crate::run_l1_sender;
@@ -24,7 +24,7 @@ where
     C: L1SenderCommand + Send + Sync + 'static,
 {
     type Input = C;
-    type Output = BatchEnvelope<FriProof>;
+    type Output = SignedBatchEnvelope<FriProof>;
 
     const NAME: &'static str = C::NAME;
     const OUTPUT_BUFFER_SIZE: usize = 1;

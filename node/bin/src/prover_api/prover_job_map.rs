@@ -2,12 +2,12 @@ use crate::prover_api::fri_job_manager::{FriJob, JobState};
 use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
+use zksync_os_l1_sender::batcher_model::{BatchMetadata, ProverInput, SignedBatchEnvelope};
 use zksync_os_multivm::proving_run_execution_version;
 
 #[derive(Debug)]
 pub struct AssignedJobEntry {
-    pub batch_envelope: BatchEnvelope<ProverInput>,
+    pub batch_envelope: SignedBatchEnvelope<ProverInput>,
     pub assigned_at: Instant,
 }
 
@@ -33,7 +33,7 @@ impl ProverJobMap {
 
     /// Inserts a job just assigned to a prover.
     /// If an entry already exists for the same batch number, it is overwritten.
-    pub fn insert(&self, batch_envelope: BatchEnvelope<ProverInput>) {
+    pub fn insert(&self, batch_envelope: SignedBatchEnvelope<ProverInput>) {
         let job_id = batch_envelope.batch_number();
         let job_entry = AssignedJobEntry {
             batch_envelope,

@@ -8,7 +8,7 @@ use tokio::sync::{Mutex, mpsc};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
@@ -103,7 +103,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
     pub async fn prepare_execute_commands(
         self,
         main_node_channels: Option<(
-            PeekableReceiver<BatchEnvelope<FriProof>>,
+            PeekableReceiver<SignedBatchEnvelope<FriProof>>,
             mpsc::Sender<ExecuteCommand>,
         )>,
         priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,

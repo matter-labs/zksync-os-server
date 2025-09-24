@@ -6,7 +6,7 @@ pub mod config;
 mod metrics;
 pub mod pipeline_component;
 
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::L1SenderCommand;
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
@@ -58,7 +58,7 @@ type TransactionReceiptFuture =
 pub async fn run_l1_sender<Input: L1SenderCommand>(
     // == plumbing ==
     mut inbound: PeekableReceiver<Input>,
-    outbound: Sender<BatchEnvelope<FriProof>>,
+    outbound: Sender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,
