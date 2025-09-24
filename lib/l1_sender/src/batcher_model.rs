@@ -124,7 +124,12 @@ impl Debug for FriProof {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             FriProof::Fake => write!(f, "Fake"),
-            FriProof::Real(proof) => write!(f, "Real(len: {:?})", proof.proof.len()),
+            FriProof::Real(proof) => write!(
+                f,
+                "Real(vk={:?}, len: {:?})",
+                proof.snark_vk,
+                proof.proof.len()
+            ),
         }
     }
 }
