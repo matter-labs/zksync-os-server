@@ -192,14 +192,14 @@ async fn register_operator<
     L1_STATE_METRICS.l1_operator_address[&(Input::NAME, address_string)].set(1);
 
     if balance.is_zero() {
-        anyhow::bail!("L1 sender's address {} has zero balance", address);
+        anyhow::bail!("L1 sender's address {address} has zero balance");
     }
 
     tracing::info!(
         balance_eth = format_ether(balance),
         %address,
         "{} Initialized L1 sender",
-        Input::NAME,
+        Input::NAME
     );
     Ok(address)
 }

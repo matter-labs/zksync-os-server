@@ -201,10 +201,7 @@ async fn load_genesis_upgrade_tx(
             // Assert that we don't fallback on longer chains (e.g. Sepolia)
             if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
                 anyhow::bail!(
-                    "Binary search failed with {}. Cannot default starting block to zero for a long chain. Current L1 block number: {}. Limit: {}.",
-                    err,
-                    current_l1_block,
-                    MAX_L1_BLOCKS_LOOKBEHIND,
+                    "Binary search failed with {err}. Cannot default starting block to zero for a long chain. Current L1 block number: {current_l1_block}. Limit: {MAX_L1_BLOCKS_LOOKBEHIND}."
                 )
             } else {
                 Ok((0, current_l1_block))
@@ -219,8 +216,7 @@ async fn load_genesis_upgrade_tx(
     let logs = provider.get_logs(&filter).await?;
     anyhow::ensure!(
         logs.len() == 1,
-        "Expected exactly one genesis upgrade tx log, found these {:?}",
-        logs
+        "Expected exactly one genesis upgrade tx log, found these {logs:?}"
     );
     let sol_event = GenesisUpgrade::decode_log(&logs[0].inner)?.data;
     let upgrade_tx = L1UpgradeEnvelope::try_from(sol_event._l2Transaction)?;

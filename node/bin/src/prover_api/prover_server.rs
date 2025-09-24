@@ -1,7 +1,7 @@
 use crate::prover_api::fri_job_manager::{FriJobManager, SubmitError};
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::snark_job_manager::SnarkJobManager;
-use axum::extract::{DefaultBodyLimit, Path};
+use axum::extract::DefaultBodyLimit;
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::FriProof;
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,7 +60,6 @@ struct ProverQuery {
 struct AppState {
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
-    proof_storage: ProofStorage,
 }
 
 // ───────────── HTTP handlers ─────────────
@@ -182,13 +181,12 @@ async fn status(State(state): State<AppState>) -> Response {
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
-    proof_storage: ProofStorage,
+    _proof_storage: ProofStorage,
     bind_address: String,
 ) -> anyhow::Result<()> {
     let app_state = AppState {
         fri_job_manager,
         snark_job_manager,
-        proof_storage,
     };
 
     let app = Router::new()

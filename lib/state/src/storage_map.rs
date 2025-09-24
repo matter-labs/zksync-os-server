@@ -203,8 +203,7 @@ impl StorageMap {
                 Some(diff) => aggregated_map.extend(diff.value().map.iter()),
                 None => {
                     return Err(anyhow::anyhow!(
-                        "StorageMap: compacting diffs, but no diff found for block {}",
-                        block_number
+                        "StorageMap: compacting diffs, but no diff found for block {block_number}"
                     ));
                 }
             }
