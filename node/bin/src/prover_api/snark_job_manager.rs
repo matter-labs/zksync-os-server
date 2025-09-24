@@ -30,7 +30,8 @@ use zksync_os_observability::{
 ///     - we then first consume all fake FRI proofs (turning them into a fake `SNARK`)
 ///     - afterwards, we consume real FRI proofs from the channel until:
 ///         - we stumble upon a fake FRI proof OR
-///         - after `max_fris_per_snark` batches.
+///         - after `max_fris_per_snark` batches OR
+///         - execution version changes.
 ///
 ///
 /// This way we provide the following guarantees (in this order):
@@ -94,6 +95,14 @@ impl SnarkJobManager {
         if batches_with_real_proofs.is_empty() {
             return Ok(None);
         }
+
+        // Get proofs that were created for the same vk.
+        let first_vk = batches_with_real_proofs[0].1.vk().unwrap();
+        let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
+            .into_iter()
+            .take_while(|(_, p)| p.vk() == Some(first_vk))
+            .collect();
+
         tracing::info!(
             "real SNARK proof for batches {}-{} is picked by a prover",
             batches_with_real_proofs.first().unwrap().0,

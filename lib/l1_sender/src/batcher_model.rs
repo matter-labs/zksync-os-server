@@ -1,5 +1,6 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
+use alloy::primitives::B256;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -97,12 +98,25 @@ pub type ProverInput = Vec<u32>;
 pub enum FriProof {
     // Fake proof for testing purposes
     Fake,
-    Real(Vec<u8>),
+    Real(RealFriProof),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RealFriProof {
+    pub proof: Vec<u8>,
+    pub vk: B256,
 }
 
 impl FriProof {
     pub fn is_fake(&self) -> bool {
         matches!(self, FriProof::Fake)
+    }
+
+    pub fn vk(&self) -> Option<B256> {
+        match self {
+            FriProof::Fake => None,
+            FriProof::Real(proof) => Some(proof.vk),
+        }
     }
 }
 
@@ -110,7 +124,7 @@ impl Debug for FriProof {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             FriProof::Fake => write!(f, "Fake"),
-            FriProof::Real(proof) => write!(f, "Real(len: {:?})", proof.len()),
+            FriProof::Real(proof) => write!(f, "Real(len: {:?})", proof.proof.len()),
         }
     }
 }
