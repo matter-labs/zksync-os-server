@@ -256,7 +256,7 @@ jobs:
         env:
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
           COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
-          RUST_MIN_STACK: 267108864
+          RUST_MIN_STACK: 534217728
         run: |
           ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
