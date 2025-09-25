@@ -115,11 +115,11 @@ async fn submit_fri_proof(
 async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
     match state.proof_storage.get(block).await {
         Ok(Some(BatchEnvelope {
-            data: FriProof::Real(proof_bytes),
+            data: FriProof::Real(real),
             ..
         })) => Json(FriProofPayload {
             block_number: block,
-            proof: general_purpose::STANDARD.encode(&proof_bytes),
+            proof: general_purpose::STANDARD.encode(&real.proof),
         })
         .into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
@@ -140,7 +140,7 @@ async fn pick_snark_job(State(state): State<AppState>) -> Response {
             let fri_proofs = batches
                 .into_iter()
                 .filter_map(|(batch_number, proof)| match proof {
-                    FriProof::Real(bytes) => Some(general_purpose::STANDARD.encode(bytes)),
+                    FriProof::Real(real) => Some(general_purpose::STANDARD.encode(real.proof)),
                     FriProof::Fake => {
                         // Should never happen; defensive guard
                         error!(

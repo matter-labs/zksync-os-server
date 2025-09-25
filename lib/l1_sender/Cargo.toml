@@ -15,6 +15,7 @@ zksync_os_mini_merkle_tree.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_merkle_tree.workspace = true
 zksync_os_types.workspace = true
+zksync_os_multivm.workspace = true
 
 zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
