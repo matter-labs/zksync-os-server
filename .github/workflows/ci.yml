@@ -258,6 +258,7 @@ jobs:
           COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
           RUST_MIN_STACK: 267108864
         run: |
+          ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}
