@@ -26,7 +26,8 @@ use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
+use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -210,9 +211,15 @@ impl FriJobManager {
         tracing::info!(batch_number, "Real proof accepted");
 
         // Prepare the envelope and send it downstream.
+        let proof = RealFriProof {
+            proof: proof_bytes,
+            proving_execution_version: proving_run_execution_version(
+                batch_metadata.execution_version,
+            ),
+        };
         let envelope = removed_job
             .batch_envelope
-            .with_data(FriProof::Real(proof_bytes))
+            .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);
