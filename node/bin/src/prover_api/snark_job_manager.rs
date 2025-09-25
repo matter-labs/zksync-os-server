@@ -103,7 +103,7 @@ impl SnarkJobManager {
             .unwrap_or(1); // if version is missing, assume it's 1
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, p)| p.proving_execution_version() == Some(first_version))
+            .take_while(|(_, p)| p.proving_execution_version().unwrap_or(1) == first_version)
             .collect();
 
         tracing::info!(
