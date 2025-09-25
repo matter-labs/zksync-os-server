@@ -261,7 +261,7 @@ jobs:
           RUST_MIN_STACK: 41943040
         run: |
           ulimit -s 300000
-          cargo nextest run -E 'binary(prover)' --no-capture --release \
+          cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}
 
