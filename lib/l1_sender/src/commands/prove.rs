@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
-use zksync_os_multivm::apps;
 
 const OHBENDER_PROOF_TYPE: u32 = 2;
 const FAKE_PROOF_TYPE: u32 = 3;
@@ -136,16 +135,14 @@ impl ProofCommand {
             .map(|batch| StoredBatchInfo::from(batch.batch.commit_batch_info.clone()))
             .collect();
         // todo: awful and temporary
-        let verifier_version = match self.proof.vk() {
+        let verifier_version = match self.proof.proving_execution_version() {
             // Use default verifier for fake proofs.
             None => 0,
             // Use default verifier for v1.
-            Some(vk) if vk == apps::v1::VERIFICATION_KEY => 0,
+            Some(1) => 0,
             // v2 and up are available under their respective execution version.
-            Some(vk) if vk == apps::v2::VERIFICATION_KEY => 2,
-            Some(vk) => {
-                panic!("unsupported verification key: {vk}");
-            }
+            Some(2) => 2,
+            Some(vk) => panic!("unsupported verification key: {vk}"),
         };
 
         // todo: remove tostring

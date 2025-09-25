@@ -96,11 +96,14 @@ impl SnarkJobManager {
             return Ok(None);
         }
 
-        // Get proofs that were created for the same vk.
-        let first_vk = batches_with_real_proofs[0].1.snark_vk().unwrap();
+        // Get proofs that were created for the same execution version.
+        let first_version = batches_with_real_proofs[0]
+            .1
+            .proving_execution_version()
+            .unwrap();
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, p)| p.snark_vk() == Some(first_vk))
+            .take_while(|(_, p)| p.proving_execution_version() == Some(first_version))
             .collect();
 
         tracing::info!(
@@ -192,14 +195,17 @@ impl SnarkJobManager {
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
-        let vk = consumed_batches_proven[0]
+        let proving_execution_version = consumed_batches_proven[0]
             .data
-            .snark_vk()
+            .proving_execution_version()
             .expect("proven FRI proofs must be real");
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
-            SnarkProof::Real(RealSnarkProof { proof: payload, vk }),
+            SnarkProof::Real(RealSnarkProof {
+                proof: payload,
+                proving_execution_version,
+            }),
         ))
         .await?;
         Ok(())

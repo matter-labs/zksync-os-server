@@ -27,7 +27,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
-use zksync_os_multivm::vk_for_execution_version;
+use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -213,7 +213,9 @@ impl FriJobManager {
         // Prepare the envelope and send it downstream.
         let proof = RealFriProof {
             proof: proof_bytes,
-            snark_vk: vk_for_execution_version(batch_metadata.execution_version),
+            proving_execution_version: proving_run_execution_version(
+                batch_metadata.execution_version,
+            ),
         };
         let envelope = removed_job
             .batch_envelope

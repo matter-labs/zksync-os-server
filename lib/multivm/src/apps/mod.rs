@@ -1,5 +1,4 @@
 pub mod v1 {
-    use alloy::primitives::{B256, b256};
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
@@ -59,13 +58,9 @@ pub mod v1 {
         })
         .clone()
     }
-
-    pub const VERIFICATION_KEY: B256 =
-        b256!("0x0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"); // TODO!
 }
 
 pub mod v2 {
-    use alloy::primitives::{B256, b256};
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
@@ -125,7 +120,4 @@ pub mod v2 {
         })
         .clone()
     }
-
-    pub const VERIFICATION_KEY: B256 =
-        b256!("0x0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"); // TODO!
 }

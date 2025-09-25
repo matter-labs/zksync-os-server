@@ -1,6 +1,5 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
-use alloy::primitives::B256;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -104,7 +103,7 @@ pub enum FriProof {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RealFriProof {
     pub proof: Vec<u8>,
-    pub snark_vk: B256,
+    pub proving_execution_version: u32,
 }
 
 impl FriProof {
@@ -112,10 +111,10 @@ impl FriProof {
         matches!(self, FriProof::Fake)
     }
 
-    pub fn snark_vk(&self) -> Option<B256> {
+    pub fn proving_execution_version(&self) -> Option<u32> {
         match self {
             FriProof::Fake => None,
-            FriProof::Real(proof) => Some(proof.snark_vk),
+            FriProof::Real(proof) => Some(proof.proving_execution_version),
         }
     }
 }
@@ -126,8 +125,8 @@ impl Debug for FriProof {
             FriProof::Fake => write!(f, "Fake"),
             FriProof::Real(proof) => write!(
                 f,
-                "Real(vk={:?}, len: {:?})",
-                proof.snark_vk,
+                "Real(proving_execution_version={}, len: {:?})",
+                proof.proving_execution_version,
                 proof.proof.len()
             ),
         }
@@ -144,14 +143,14 @@ pub enum SnarkProof {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RealSnarkProof {
     pub proof: Vec<u8>,
-    pub vk: B256,
+    pub proving_execution_version: u32,
 }
 
 impl SnarkProof {
-    pub fn vk(&self) -> Option<B256> {
+    pub fn proving_execution_version(&self) -> Option<u32> {
         match self {
             SnarkProof::Fake => None,
-            SnarkProof::Real(proof) => Some(proof.vk),
+            SnarkProof::Real(proof) => Some(proof.proving_execution_version),
         }
     }
 }
