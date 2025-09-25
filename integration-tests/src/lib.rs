@@ -111,7 +111,7 @@ impl Tester {
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
-        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
+        let _prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
@@ -194,13 +194,12 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            use std::path::Path;
-
-            let base_url = prover_api_url.clone();
+            let base_url = _prover_api_url.clone();
             let app_bin_path =
                 zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
-            let output_dir = Path::new(&app_bin_unpack_path).join("outputs");
+            let output_dir = tempdir.path().join("outputs");
+            std::fs::create_dir_all(&output_dir).unwrap();
             tokio::task::spawn(async move {
                 zksync_os_prover_service::run(zksync_os_prover_service::Args {
                     base_url,
@@ -212,6 +211,7 @@ impl Tester {
                     fri_path: None,
                     max_snark_latency: None,
                     max_fris_per_snark: Some(1),
+                    enabled_logging: false,
                 })
                 .await
             });

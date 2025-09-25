@@ -11358,7 +11358,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_fri_prover"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#8eef9dd1fdd6eaf9a51694099ef89b10f1380324"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#ba6ae2aeeee510b9dd440fdc5c8a187b32d30432"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -11617,7 +11617,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_prover_service"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#8eef9dd1fdd6eaf9a51694099ef89b10f1380324"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#ba6ae2aeeee510b9dd440fdc5c8a187b32d30432"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -11735,7 +11735,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_snark_prover"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#8eef9dd1fdd6eaf9a51694099ef89b10f1380324"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#ba6ae2aeeee510b9dd440fdc5c8a187b32d30432"
 dependencies = [
  "anyhow",
  "clap",
@@ -11869,7 +11869,7 @@ dependencies = [
 [[package]]
 name = "zksync_sequencer_proof_client"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#8eef9dd1fdd6eaf9a51694099ef89b10f1380324"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=ad-prover-service#ba6ae2aeeee510b9dd440fdc5c8a187b32d30432"
 dependencies = [
  "anyhow",
  "async-trait",
