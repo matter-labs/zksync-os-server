@@ -100,10 +100,10 @@ impl SnarkJobManager {
         let first_version = batches_with_real_proofs[0]
             .1
             .proving_execution_version()
-            .unwrap_or(1); // if version is missing, assume it's 1
+            .unwrap_or(2); // if version is missing, assume it's 2
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, p)| p.proving_execution_version().unwrap_or(1) == first_version)
+            .take_while(|(_, p)| p.proving_execution_version().unwrap_or(2) == first_version)
             .collect();
 
         tracing::info!(
@@ -198,7 +198,7 @@ impl SnarkJobManager {
         let proving_execution_version = consumed_batches_proven[0]
             .data
             .proving_execution_version()
-            .expect("proven FRI proofs must be real");
+            .unwrap_or(2);
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
