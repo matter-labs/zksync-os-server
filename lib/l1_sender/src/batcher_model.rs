@@ -100,6 +100,7 @@ pub enum FriProof {
     Real(RealFriProof),
 }
 
+// V1 can be dropped if there testnet-alpha will be regenerated from scratch.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealFriProof {
@@ -163,6 +164,7 @@ pub enum SnarkProof {
     Real(RealSnarkProof),
 }
 
+// V1 can be dropped if there testnet-alpha will be regenerated from scratch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealSnarkProof {
