@@ -11400,6 +11400,7 @@ dependencies = [
  "ruint",
  "secrecy",
  "serde",
+ "serde_json",
  "time",
  "tokio",
  "tracing",

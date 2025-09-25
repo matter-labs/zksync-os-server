@@ -36,3 +36,6 @@ time = { workspace = true, features = ["parsing", "formatting"] }
 itertools.workspace = true
 async-stream.workspace = true
 vise.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
