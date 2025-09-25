@@ -202,7 +202,7 @@ impl SnarkJobManager {
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
-            SnarkProof::Real(RealSnarkProof {
+            SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
                 proving_execution_version,
             }),

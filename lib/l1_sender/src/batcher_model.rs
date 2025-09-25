@@ -101,9 +101,13 @@ pub enum FriProof {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct RealFriProof {
-    pub proof: Vec<u8>,
-    pub proving_execution_version: u32,
+#[serde(untagged)]
+pub enum RealFriProof {
+    V1(Vec<u8>),
+    V2 {
+        proof: Vec<u8>,
+        proving_execution_version: u32,
+    },
 }
 
 impl FriProof {
@@ -113,8 +117,27 @@ impl FriProof {
 
     pub fn proving_execution_version(&self) -> Option<u32> {
         match self {
+            FriProof::Real(RealFriProof::V2 {
+                proving_execution_version,
+                ..
+            }) => Some(*proving_execution_version),
+            _ => None,
+        }
+    }
+
+    pub fn proof(&self) -> Option<&[u8]> {
+        match self {
+            FriProof::Real(real) => Some(real.proof()),
             FriProof::Fake => None,
-            FriProof::Real(proof) => Some(proof.proving_execution_version),
+        }
+    }
+}
+
+impl RealFriProof {
+    pub fn proof(&self) -> &[u8] {
+        match self {
+            RealFriProof::V1(proof) => proof.as_slice(),
+            RealFriProof::V2 { proof, .. } => proof.as_slice(),
         }
     }
 }
@@ -123,11 +146,11 @@ impl Debug for FriProof {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             FriProof::Fake => write!(f, "Fake"),
-            FriProof::Real(proof) => write!(
+            FriProof::Real(_) => write!(
                 f,
-                "Real(proving_execution_version={}, len: {:?})",
-                proof.proving_execution_version,
-                proof.proof.len()
+                "Real(proving_execution_version={:?}, len: {:?})",
+                self.proving_execution_version(),
+                self.proof().unwrap().len()
             ),
         }
     }
@@ -141,16 +164,39 @@ pub enum SnarkProof {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RealSnarkProof {
-    pub proof: Vec<u8>,
-    pub proving_execution_version: u32,
+#[serde(untagged)]
+pub enum RealSnarkProof {
+    V1(Vec<u8>),
+    V2 {
+        proof: Vec<u8>,
+        proving_execution_version: u32,
+    },
 }
 
 impl SnarkProof {
     pub fn proving_execution_version(&self) -> Option<u32> {
         match self {
+            SnarkProof::Real(RealSnarkProof::V2 {
+                proving_execution_version,
+                ..
+            }) => Some(*proving_execution_version),
+            _ => None,
+        }
+    }
+
+    pub fn proof(&self) -> Option<&[u8]> {
+        match self {
+            SnarkProof::Real(real) => Some(real.proof()),
             SnarkProof::Fake => None,
-            SnarkProof::Real(proof) => Some(proof.proving_execution_version),
+        }
+    }
+}
+
+impl RealSnarkProof {
+    pub fn proof(&self) -> &[u8] {
+        match self {
+            RealSnarkProof::V1(proof) => proof.as_slice(),
+            RealSnarkProof::V2 { proof, .. } => proof.as_slice(),
         }
     }
 }
