@@ -165,7 +165,7 @@ impl ProofCommand {
             }
             SnarkProof::Real(real) => {
                 let proof: Vec<U256> = real
-                    .proof
+                    .proof()
                     .chunks(32)
                     .map(|chunk| {
                         let arr: [u8; 32] = chunk

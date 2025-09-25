@@ -211,7 +211,7 @@ impl FriJobManager {
         tracing::info!(batch_number, "Real proof accepted");
 
         // Prepare the envelope and send it downstream.
-        let proof = RealFriProof {
+        let proof = RealFriProof::V2 {
             proof: proof_bytes,
             proving_execution_version: proving_run_execution_version(
                 batch_metadata.execution_version,
