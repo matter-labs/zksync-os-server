@@ -100,7 +100,7 @@ impl SnarkJobManager {
         let first_version = batches_with_real_proofs[0]
             .1
             .proving_execution_version()
-            .unwrap();
+            .unwrap_or(1); // if version is missing, assume it's 1
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
             .take_while(|(_, p)| p.proving_execution_version() == Some(first_version))
