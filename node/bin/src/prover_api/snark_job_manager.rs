@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, RealSnarkProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -30,7 +30,8 @@ use zksync_os_observability::{
 ///     - we then first consume all fake FRI proofs (turning them into a fake `SNARK`)
 ///     - afterwards, we consume real FRI proofs from the channel until:
 ///         - we stumble upon a fake FRI proof OR
-///         - after `max_fris_per_snark` batches.
+///         - after `max_fris_per_snark` batches OR
+///         - execution version changes.
 ///
 ///
 /// This way we provide the following guarantees (in this order):
@@ -94,6 +95,17 @@ impl SnarkJobManager {
         if batches_with_real_proofs.is_empty() {
             return Ok(None);
         }
+
+        // Get proofs that were created for the same execution version.
+        let first_version = batches_with_real_proofs[0]
+            .1
+            .proving_execution_version()
+            .unwrap();
+        let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
+            .into_iter()
+            .take_while(|(_, p)| p.proving_execution_version() == Some(first_version))
+            .collect();
+
         tracing::info!(
             "real SNARK proof for batches {}-{} is picked by a prover",
             batches_with_real_proofs.first().unwrap().0,
@@ -168,14 +180,21 @@ impl SnarkJobManager {
 
         tracing::info!("real SNARK proof for batches {batch_from}-{batch_to} is accepted",);
 
-        let consumed_batches_proven = consumed_batches_proven
+        let consumed_batches_proven: Vec<_> = consumed_batches_proven
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
+        let proving_execution_version = consumed_batches_proven[0]
+            .data
+            .proving_execution_version()
+            .expect("proven FRI proofs must be real");
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
-            SnarkProof::Real(payload),
+            SnarkProof::Real(RealSnarkProof::V2 {
+                proof: payload,
+                proving_execution_version,
+            }),
         ))
         .await?;
         Ok(())

@@ -196,7 +196,7 @@ impl Tester {
         if enable_prover {
             let base_url = _prover_api_url.clone();
             let app_bin_path =
-                zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
+                zksync_os_multivm::apps::v2::multiblock_batch_path(&app_bin_unpack_path);
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();

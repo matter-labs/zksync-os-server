@@ -121,7 +121,7 @@ async fn pick_snark_job(State(state): State<AppState>) -> Response {
             let fri_proofs = batches
                 .into_iter()
                 .filter_map(|(batch_number, proof)| match proof {
-                    FriProof::Real(bytes) => Some(general_purpose::STANDARD.encode(bytes)),
+                    FriProof::Real(real) => Some(general_purpose::STANDARD.encode(real.proof())),
                     FriProof::Fake => {
                         // Should never happen; defensive guard
                         error!(
