@@ -2,7 +2,7 @@ use cargo_metadata::MetadataCommand;
 
 fn main() {
     let metadata = MetadataCommand::new().exec().unwrap();
-    let versions = vec!["0.0.23", "0.0.25"];
+    let versions = vec!["0.0.25"];
 
     // Find forward_system crate and expose its path to the directory containing `app*.bin` files.
     for package in &metadata.packages {

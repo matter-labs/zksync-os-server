@@ -196,7 +196,7 @@ impl Tester {
         if enable_prover {
             let base_url = prover_api_url.clone();
             let app_bin_path =
-                zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
+                zksync_os_multivm::apps::v2::multiblock_batch_path(&app_bin_unpack_path);
             tokio::task::spawn(async move {
                 zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                     base_url,
