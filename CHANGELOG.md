@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/matter-labs/zksync-os-server/compare/v0.7.2...v0.7.3) (2025-09-26)
+
+
+### Features
+
+* configurable fee collector ([#383](https://github.com/matter-labs/zksync-os-server/issues/383)) ([2d89f45](https://github.com/matter-labs/zksync-os-server/commit/2d89f45ce0105ae31bf3c19a9ce8e74aa8077d53))
+
 ## [0.7.2](https://github.com/matter-labs/zksync-os-server/compare/v0.7.1...v0.7.2) (2025-09-25)
 
 
