@@ -198,9 +198,7 @@ jobs:
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
           WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
-          RUST_MIN_STACK: 41943040
         run: |
-          ulimit -s 300000
           cargo nextest archive --release --profile ci -p zksync_os_integration_tests \
             --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
 
@@ -216,7 +214,7 @@ jobs:
   #  Run prover integration tests on GPU machine  #
   #################################################
   prover-integration-tests:
-    runs-on: matterlabs-ci-gpu-runner
+    runs-on: matterlabs-ci-gpu-l4-runner-prover-tests
     needs: prover-integration-tests-build
     steps:
       - name: Checkout code
@@ -258,7 +256,7 @@ jobs:
         env:
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
           COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
-          RUST_MIN_STACK: 41943040
+          RUST_MIN_STACK: 267108864
         run: |
           ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
