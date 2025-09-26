@@ -1,7 +1,7 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::{BlockHash, TxHash, U256};
+use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,6 +36,7 @@ pub struct BlockContextProvider<Mempool> {
     pubdata_limit: u64,
     node_version: semver::Version,
     genesis: Genesis,
+    fee_collector_address: Address,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -51,6 +52,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         pubdata_limit: u64,
         node_version: semver::Version,
         genesis: Genesis,
+        fee_collector_address: Address,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -63,6 +65,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             pubdata_limit,
             node_version,
             genesis,
+            fee_collector_address,
         }
     }
 
@@ -91,7 +94,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
-                    coinbase: Default::default(),
+                    coinbase: self.fee_collector_address,
                     block_hashes: self.block_hashes_for_next_block,
                     gas_limit: self.gas_limit,
                     pubdata_limit: self.pubdata_limit,

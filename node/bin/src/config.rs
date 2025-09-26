@@ -145,6 +145,9 @@ pub struct SequencerConfig {
     /// Path to the directory where block dumps for unexpected failures will be saved.
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
+
+    #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
+    pub fee_collector_address: Address,
 }
 impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
