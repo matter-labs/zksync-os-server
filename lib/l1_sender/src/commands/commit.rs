@@ -1,6 +1,7 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
+use crate::commands::tx_request_with_gas_fields;
 use crate::commitment::PubdataDestination;
 use crate::config::{BatchDaInputMode, L1SenderConfig};
 use alloy::consensus::{Blob, BlobTransactionSidecar, Bytes48};
@@ -9,20 +10,23 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::TransactionRequest;
 use alloy::sol_types::{SolCall, SolValue};
-use zksync_kzg::{KzgInfo, ZK_SYNC_BYTES_PER_BLOB};
 use std::fmt::Display;
+use zksync_kzg::{KzgInfo, ZK_SYNC_BYTES_PER_BLOB};
 use zksync_os_contract_interface::IExecutor;
-use crate::commands::tx_request_with_gas_fields;
 
 #[derive(Debug)]
 pub struct CommitCommand {
     input: BatchEnvelope<FriProof>,
     da_input_mode: BatchDaInputMode,
-    pubdata_destination: PubdataDestination
+    pubdata_destination: PubdataDestination,
 }
 
 impl CommitCommand {
-    pub fn new(input: BatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode, pubdata_destination: PubdataDestination) -> Self {
+    pub fn new(
+        input: BatchEnvelope<FriProof>,
+        da_input_mode: BatchDaInputMode,
+        pubdata_destination: PubdataDestination,
+    ) -> Self {
         Self {
             input,
             da_input_mode,
@@ -50,41 +54,27 @@ impl L1SenderCommand for CommitCommand {
         operator_address: Address,
         config: &L1SenderConfig<Self>,
         to_address: Address,
-        cmd: &Self,
     ) -> anyhow::Result<TransactionRequest> {
         match self.pubdata_destination {
-            PubdataDestination::Calldata => {
-                Ok(
-                    tx_request_with_gas_fields(
-                        &provider,
-                        operator_address,
-                        config.max_fee_per_gas(),
-                        config.max_priority_fee_per_gas(),
-                    )
-                    .await?
-                    .with_to(to_address)
-                    .with_call(&cmd.solidity_call())
-                )
-            },
-            PubdataDestination::Blobs => {
-                Ok(
-                    blob_tx_request_with_gas_fields(
-                        &provider,
-                        operator_address,
-                        config.max_fee_per_gas(),
-                        config.max_priority_fee_per_gas(),
-                        self
-                            .input
-                            .batch
-                            .commit_batch_info
-                            .pubdata
-                            .clone()
-                    )
-                    .await?
-                    .with_to(to_address)
-                    .with_call(&cmd.solidity_call())
-                )
-            },
+            PubdataDestination::Calldata => Ok(tx_request_with_gas_fields(
+                &provider,
+                operator_address,
+                config.max_fee_per_gas(),
+                config.max_priority_fee_per_gas(),
+            )
+            .await?
+            .with_to(to_address)
+            .with_call(&self.solidity_call())),
+            PubdataDestination::Blobs => Ok(blob_tx_request_with_gas_fields(
+                &provider,
+                operator_address,
+                config.max_fee_per_gas(),
+                config.max_priority_fee_per_gas(),
+                self.input.batch.commit_batch_info.pubdata.clone(),
+            )
+            .await?
+            .with_to(to_address)
+            .with_call(&self.solidity_call())),
         }
     }
 }

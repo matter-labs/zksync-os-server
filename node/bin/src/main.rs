@@ -179,7 +179,7 @@ fn build_configs() -> Config {
         .expect("Failed to load L1 sender config")
         .parse()
         .expect("Failed to parse L1 sender config");
-    
+
     l1_sender_config.pubdata_destination = PubdataDestination::Blobs;
 
     let l1_watcher_config = repo

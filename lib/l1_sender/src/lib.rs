@@ -17,8 +17,8 @@ use alloy::primitives::utils::format_ether;
 use alloy::primitives::{Address, BlockNumber, TxHash};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{DynProvider, Provider, WalletProvider};
-use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::Block;
+use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::transports::TransportResult;
 use anyhow::Context;
@@ -93,7 +93,14 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
         let pending_tx_hashes: HashMap<TxHash, Input> = futures::stream::iter(cmd_buffer.drain(..))
             .then(|mut cmd| async {
-                let tx_request = cmd.into_transaction_request(provider.clone(), operator_address, &config, to_address, &cmd).await?;
+                let tx_request = cmd
+                    .into_transaction_request(
+                        provider.clone(),
+                        operator_address,
+                        &config,
+                        to_address,
+                    )
+                    .await?;
                 let pending_tx_hash = *provider.send_transaction(tx_request).await?.tx_hash();
                 cmd.as_mut()
                     .iter_mut()

@@ -49,19 +49,16 @@ pub trait L1SenderCommand:
         operator_address: Address,
         config: &L1SenderConfig<Self>,
         to_address: Address,
-        cmd: &Self,
     ) -> anyhow::Result<TransactionRequest> {
-        Ok(
-            tx_request_with_gas_fields(
-                &provider,
-                operator_address,
-                config.max_fee_per_gas(),
-                config.max_priority_fee_per_gas(),
-            )
-            .await?
-            .with_to(to_address)
-            .with_call(&cmd.solidity_call())
+        Ok(tx_request_with_gas_fields(
+            &provider,
+            operator_address,
+            config.max_fee_per_gas(),
+            config.max_priority_fee_per_gas(),
         )
+        .await?
+        .with_to(to_address)
+        .with_call(&self.solidity_call()))
     }
 }
 

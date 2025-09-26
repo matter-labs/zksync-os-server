@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
-use zksync_os_l1_sender::commitment::PubdataDestination;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_l1_sender::commitment::PubdataDestination;
 use zksync_os_object_store::ObjectStoreConfig;
 
 /// Configuration for the sequencer node.
