@@ -45,10 +45,6 @@ impl L1SenderCommand for ExecuteCommand {
             self.to_calldata_suffix().into(),
         ))
     }
-
-    fn pubdata(&self) -> Vec<u8> {
-        vec![]
-    }
 }
 
 impl AsRef<[BatchEnvelope<FriProof>]> for ExecuteCommand {

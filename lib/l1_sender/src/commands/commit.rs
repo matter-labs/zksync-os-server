@@ -1,23 +1,36 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::config::BatchDaInputMode;
-use alloy::primitives::U256;
+use crate::commands::tx_request_with_gas_fields;
+use crate::commitment::PubdataDestination;
+use crate::config::{BatchDaInputMode, L1SenderConfig};
+use alloy::consensus::{Blob, BlobTransactionSidecar, Bytes48};
+use alloy::network::{TransactionBuilder, TransactionBuilder4844};
+use alloy::primitives::{Address, U256};
+use alloy::providers::{DynProvider, Provider};
+use alloy::rpc::types::TransactionRequest;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
+use zksync_kzg::{KzgInfo, ZK_SYNC_BYTES_PER_BLOB};
 use zksync_os_contract_interface::IExecutor;
 
 #[derive(Debug)]
 pub struct CommitCommand {
     input: BatchEnvelope<FriProof>,
     da_input_mode: BatchDaInputMode,
+    pubdata_destination: PubdataDestination,
 }
 
 impl CommitCommand {
-    pub fn new(input: BatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode) -> Self {
+    pub fn new(
+        input: BatchEnvelope<FriProof>,
+        da_input_mode: BatchDaInputMode,
+        pubdata_destination: PubdataDestination,
+    ) -> Self {
         Self {
             input,
             da_input_mode,
+            pubdata_destination,
         }
     }
 }
@@ -35,9 +48,100 @@ impl L1SenderCommand for CommitCommand {
         ))
     }
 
-    fn pubdata(&self) -> Vec<u8> {
-        self.input.batch.commit_batch_info.pubdata.clone()
+    async fn into_transaction_request(
+        &self,
+        provider: DynProvider,
+        operator_address: Address,
+        config: &L1SenderConfig<Self>,
+        to_address: Address,
+    ) -> anyhow::Result<TransactionRequest> {
+        match self.pubdata_destination {
+            PubdataDestination::Calldata => Ok(tx_request_with_gas_fields(
+                &provider,
+                operator_address,
+                config.max_fee_per_gas(),
+                config.max_priority_fee_per_gas(),
+            )
+            .await?
+            .with_to(to_address)
+            .with_call(&self.solidity_call())),
+            PubdataDestination::Blobs => Ok(blob_tx_request_with_gas_fields(
+                &provider,
+                operator_address,
+                config.max_fee_per_gas(),
+                config.max_priority_fee_per_gas(),
+                self.input.batch.commit_batch_info.pubdata.clone(),
+            )
+            .await?
+            .with_to(to_address)
+            .with_call(&self.solidity_call())),
+        }
     }
+}
+
+async fn blob_tx_request_with_gas_fields(
+    provider: &DynProvider,
+    operator_address: Address,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+    pubdata: Vec<u8>,
+) -> anyhow::Result<TransactionRequest> {
+    let eip1559_est = provider.estimate_eip1559_fees().await?;
+    tracing::debug!(
+        eip1559_est.max_priority_fee_per_gas,
+        "estimated median priority fee (20% percentile) for the last 10 blocks"
+    );
+    if eip1559_est.max_fee_per_gas > max_fee_per_gas {
+        tracing::warn!(
+            max_fee_per_gas = max_fee_per_gas,
+            estimated_max_fee_per_gas = eip1559_est.max_fee_per_gas,
+            "L1 sender's configured maxFeePerGas is lower than the one estimated from network"
+        );
+    }
+    if eip1559_est.max_priority_fee_per_gas > max_priority_fee_per_gas {
+        tracing::warn!(
+            max_priority_fee_per_gas = max_priority_fee_per_gas,
+            estimated_max_priority_fee_per_gas = eip1559_est.max_priority_fee_per_gas,
+            "L1 sender's configured maxPriorityFeePerGas is lower than the one estimated from network"
+        );
+    }
+
+    let blob_fee = provider.get_blob_base_fee().await.unwrap();
+
+    let (blobs, commitments, proofs) = pubdata
+        .chunks(ZK_SYNC_BYTES_PER_BLOB)
+        .map(|blob| {
+            let kzg_info = KzgInfo::new(blob);
+            let blob: Blob = Blob::from_slice(&kzg_info.blob);
+            let commitment = Bytes48::new(kzg_info.kzg_commitment);
+            let proof = Bytes48::new(kzg_info.blob_proof);
+            (blob, commitment, proof)
+        })
+        .fold(
+            (vec![], vec![], vec![]),
+            |(mut blobs, mut commitments, mut proofs), (blob, commitment, proof)| {
+                blobs.push(blob);
+                commitments.push(commitment);
+                proofs.push(proof);
+                (blobs, commitments, proofs)
+            },
+        );
+
+    let sidecar = BlobTransactionSidecar {
+        blobs,
+        commitments,
+        proofs,
+    };
+
+    let tx = TransactionRequest::default()
+        .with_from(operator_address)
+        .with_max_fee_per_gas(max_fee_per_gas)
+        .with_max_priority_fee_per_gas(max_priority_fee_per_gas)
+        // Default value for `max_aggregated_tx_gas` from zksync-era, should always be enough
+        .with_gas_limit(15000000)
+        .with_max_fee_per_blob_gas(blob_fee)
+        .with_blob_sidecar(sidecar);
+    Ok(tx)
 }
 
 impl AsRef<[BatchEnvelope<FriProof>]> for CommitCommand {

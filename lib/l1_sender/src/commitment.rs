@@ -12,12 +12,12 @@ use zksync_os_types::{L2_TO_L1_TREE_SIZE, ZkEnvelope, ZkTransaction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
-pub enum PubdataSource {
+pub enum PubdataDestination {
     Calldata = 0,
     Blobs = 1,
 }
 
-impl TryFrom<u8> for PubdataSource {
+impl TryFrom<u8> for PubdataDestination {
     type Error = ();
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -139,7 +139,7 @@ impl CommitBatchInfo {
         chain_id: u64,
         chain_address: Address,
         batch_number: u64,
-        pubdata_source: PubdataSource,
+        pubdata_source: PubdataDestination,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -205,54 +205,54 @@ impl CommitBatchInfo {
         // hasher.update([0u8; 32]); // its hash will be ignored on the settlement layer
         // Ok(hasher.finalize().into())
 
-        let (number_blobs, pubdata, linear_hashes) = match pubdata_source {
-            PubdataSource::Calldata => {
+        operator_da_input.extend(B256::ZERO.as_slice());
+        operator_da_input.extend(keccak256(&total_pubdata));
+        let num_blobs = if total_pubdata.len() % ZK_SYNC_BYTES_PER_BLOB == 0 {
+            (total_pubdata.len() / ZK_SYNC_BYTES_PER_BLOB) as u8
+        } else {
+            ((total_pubdata.len() / ZK_SYNC_BYTES_PER_BLOB) + 1) as u8
+        };
+        operator_da_input.push(num_blobs);
+
+        let pubdata = match pubdata_source {
+            PubdataDestination::Calldata => {
                 let kzg_info = KzgInfo::new(&total_pubdata);
                 let blob_commitment = kzg_info.to_blob_commitment();
 
                 let mut hasher = Keccak256::new();
                 hasher.update(&total_pubdata);
                 let linear_hash = hasher.finalize();
-                (
-                    1u8,
-                    total_pubdata
-                        .clone()
-                        .into_iter()
-                        .chain(blob_commitment)
-                        .collect(),
-                    linear_hash.0.to_vec(),
-                )
+                operator_da_input.extend(linear_hash.0);
+                operator_da_input.extend(blob_commitment);
+
+                total_pubdata
+                    .clone()
+                    .into_iter()
+                    .chain(blob_commitment)
+                    .collect()
             }
-            PubdataSource::Blobs => {
-                let (pubdata_commitments, linear_hashes) = total_pubdata
-                    .chunks(ZK_SYNC_BYTES_PER_BLOB)
-                    .fold((vec![], vec![]), |(commitments, linear_hashes), blob| {
+            PubdataDestination::Blobs => {
+                let pubdata_commitments = total_pubdata.chunks(ZK_SYNC_BYTES_PER_BLOB).fold(
+                    vec![],
+                    |commitments, blob| {
                         let kzg_info = KzgInfo::new(blob);
                         let mut hasher = Keccak256::new();
                         hasher.update(&kzg_info.blob);
                         let linear_hash = hasher.finalize().0;
-                        (
-                            commitments
-                                .into_iter()
-                                .chain(kzg_info.to_pubdata_commitment())
-                                .chain(Bytes32::zero().as_u8_array())
-                                .collect(),
-                            linear_hashes.into_iter().chain(linear_hash).collect(),
-                        )
-                    });
-                let number_blobs = if total_pubdata.len() % ZK_SYNC_BYTES_PER_BLOB == 0 {
-                    total_pubdata.len() / ZK_SYNC_BYTES_PER_BLOB
-                } else {
-                    (total_pubdata.len() / ZK_SYNC_BYTES_PER_BLOB) + 1
-                };
-                (number_blobs as u8, pubdata_commitments, linear_hashes)
+                        operator_da_input.extend(linear_hash);
+                        operator_da_input.extend(kzg_info.to_blob_commitment());
+
+                        commitments
+                            .into_iter()
+                            .chain(kzg_info.to_pubdata_commitment())
+                            .chain(Bytes32::zero().as_u8_array())
+                            .collect()
+                    },
+                );
+
+                pubdata_commitments
             }
         };
-
-        operator_da_input.extend(B256::ZERO.as_slice());
-        operator_da_input.extend(keccak256(&total_pubdata));
-        operator_da_input.push(number_blobs);
-        operator_da_input.extend(linear_hashes);
 
         //     bytes32 daCommitment; - we compute hash of the first part of the operator_da_input (see above)
         let operator_da_input_header_hash = keccak256(&operator_da_input);
