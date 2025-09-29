@@ -1,9 +1,9 @@
-pub mod v1 {
+pub mod v2 {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
     pub const SERVER_APP: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_0_23_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_0_25_SOURCE_PATH"),
         "/server_app.bin"
     ));
 
@@ -11,7 +11,7 @@ pub mod v1 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v1");
+            let dir_path = base_dir.join("v2");
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("server_app.bin");
@@ -22,7 +22,7 @@ pub mod v1 {
     }
 
     pub const SERVER_APP_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_0_23_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_0_25_SOURCE_PATH"),
         "/server_app_logging_enabled.bin"
     ));
 
@@ -30,7 +30,7 @@ pub mod v1 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v1");
+            let dir_path = base_dir.join("v2");
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("server_app_logging_enabled.bin");
@@ -41,7 +41,7 @@ pub mod v1 {
     }
 
     pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_0_23_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_0_25_SOURCE_PATH"),
         "/multiblock_batch.bin"
     ));
 
@@ -49,7 +49,7 @@ pub mod v1 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v1");
+            let dir_path = base_dir.join("v2");
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("multiblock_batch.bin");

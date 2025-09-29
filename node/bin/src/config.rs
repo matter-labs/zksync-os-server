@@ -44,6 +44,14 @@ pub struct GeneralConfig {
     #[config(default_t = 10)]
     pub min_blocks_to_replay: usize,
 
+    /// Force a block number to start replaying from.
+    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
+    /// For FullDiffs backend:
+    ///     On EN: can be any historical block number;
+    ///     On Main Node: any historical block number up to the last l1 committed one.
+    #[config(default_t = None)]
+    pub force_starting_block_number: Option<u64>,
+
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
@@ -87,7 +95,7 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = Some("0x70968ad336b957311e3c1c63e36d05035e356f68".parse().unwrap()))]
+    #[config(with = Serde![str], default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
@@ -142,6 +150,9 @@ pub struct SequencerConfig {
     /// Path to the directory where block dumps for unexpected failures will be saved.
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
+
+    #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
+    pub fee_collector_address: Address,
 }
 
 impl SequencerConfig {
@@ -193,19 +204,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x13a60a4e493eca17ffcbe16bf1fc139b77bccc73c1b5459010a2b706bbd62602".into())]
+    #[config(alias = "operator_private_key", default_t = "0x48925fa4281a16382fd07817fd3762fe1ec7a04dcaffddd2897b0cc56e490029".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xf669493eeb9dcc776188ad8227b833979b689e67b7b52d25cf2e5ab1f3d00317".into())]
+    #[config(default_t = "0xf53f5dc8d123758a11949cba078887231f146b242bb9d344317f3c1b426856bd".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x5d57343476407c385818c9f793c7960bc96b8ce9ab924f3e1384baf54a1589a2".into())]
+    #[config(default_t = "0x458bdffd410072451106fde15aae99edfee1c92f6614916190de4e9db3934e25".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
@@ -340,7 +351,7 @@ pub struct FakeFriProversConfig {
     pub enabled: bool,
 
     /// Number of fake provers to run in parallel.
-    #[config(default_t = 10)]
+    #[config(default_t = 5)]
     pub workers: usize,
 
     /// Amount of time it takes to compute a proof for one batch.

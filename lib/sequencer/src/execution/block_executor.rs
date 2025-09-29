@@ -2,6 +2,7 @@ use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::{BlockDump, hash_block_output};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::blocks::{InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
@@ -24,6 +25,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     state: R,
     latency_tracker: &ComponentStateHandle<SequencerState>,
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
+    tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
 
@@ -79,7 +81,16 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                 match maybe_tx {
                     /* ----- got a transaction with gas limit within the block gas limit left --- */
                     Some(tx) if cumulative_gas_used + tx.inner.gas_limit() <= ctx.gas_limit => {
-                        tracing::debug!("Executing tx: {:?}", tx.hash());
+
+                        tracing::debug!(
+                            block_number=command.block_context.block_number,
+                            tx_hash=?tx.hash(),
+                            tx_index_in_block=executed_txs.len(),
+                            cumulative_gas_used_before=cumulative_gas_used,
+                            gas_limit=tx.inner.gas_limit(),
+                            signer=?tx.inner.signer(),
+                            "Executing transaction..."
+                        );
                         all_processed_txs.push(tx.clone());
                         match runner.execute_next_tx(tx.clone().encode())
                             .await
@@ -92,6 +103,17 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             })? {
                             Ok(res) => {
                                 EXECUTION_METRICS.executed_transactions.inc();
+                                EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
+                                EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
+                                EXECUTION_METRICS.transaction_computation_native_used.observe(res.computational_native_used);
+                                EXECUTION_METRICS.transaction_pubdata_used.observe(res.pubdata_used);
+                                let status_str = if res.status  {"success"} else {"failure"};
+                                EXECUTION_METRICS.transaction_status[&status_str].inc();
+                                tracing::debug!(
+                                    block_number=command.block_context.block_number,
+                                    output=?res,
+                                    "Transaction executed"
+                                );
 
                                 executed_txs.push(tx);
                                 cumulative_gas_used += res.gas_used;
@@ -245,7 +267,11 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         "Block sealed in block executor"
     );
 
-    tracing::debug!(?output, "Block output");
+    tracing::debug!(
+        output = ?BlockOutputDebug(&output),
+        block_number = output.header.number,
+        "Block output"
+    );
 
     let block_hash_output = hash_block_output(&output);
 
