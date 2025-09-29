@@ -90,8 +90,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
                     native_price: U256::from(1),
-                    // todo: make dynamic once zksync-os sets max gas per pubdata >1 for L2 txs
-                    gas_per_pubdata: U256::from(1),
+                    gas_per_pubdata: Default::default(),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
