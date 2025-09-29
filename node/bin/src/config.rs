@@ -1,6 +1,5 @@
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
-use smart_config::fallback;
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig, Serde};
