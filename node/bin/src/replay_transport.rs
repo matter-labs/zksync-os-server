@@ -2,7 +2,7 @@ use alloy::primitives::BlockNumber;
 use backon::{ConstantBuilder, Retryable};
 use futures::{SinkExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::net::ToSocketAddrs;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -13,6 +13,7 @@ use zksync_os_sequencer::model::blocks::BlockCommand;
 use zksync_os_storage_api::{REPLAY_WIRE_FORMAT_VERSION, ReplayRecord};
 
 use crate::block_replay_storage::BlockReplayStorage;
+use crate::util::transport::skip_http_headers;
 
 pub async fn replay_server(
     block_replays: BlockReplayStorage,
@@ -64,35 +65,6 @@ pub async fn replay_server(
                 };
             }
         });
-    }
-}
-
-async fn skip_http_headers<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<(), std::io::Error> {
-    // Detects two consecutive line endings, which may be \r\n or \n.
-    let mut empty_line = false;
-    loop {
-        let buf = reader.fill_buf().await?;
-        if buf.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "EOF reached before end of headers",
-            ));
-        }
-
-        for (i, &byte) in buf.iter().enumerate() {
-            if byte == b'\n' {
-                if empty_line {
-                    reader.consume(i + 1);
-                    return Ok(());
-                }
-                empty_line = true;
-            } else if byte != b'\r' {
-                empty_line = false;
-            }
-        }
-
-        let len = buf.len();
-        reader.consume(len);
     }
 }
 

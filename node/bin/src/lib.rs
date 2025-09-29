@@ -4,7 +4,6 @@
 mod batch_sink;
 mod batch_verification_manager;
 mod batch_verification_transport;
-mod batch_verification_wire_format;
 pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;

@@ -19,6 +19,6 @@ pub struct BatchVerificationRequestWireFormatV1 {
 /// The format BatchVerificationResponse is currently sent in
 #[derive(Encode, Decode)]
 pub struct BatchVerificationResponseWireFormatV1 {
-    pub request: BatchVerificationRequestWireFormatV1,
+    pub request_id: u64,
     pub signature: Vec<u8>,
 }

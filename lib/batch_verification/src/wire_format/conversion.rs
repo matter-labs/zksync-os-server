@@ -1,5 +1,5 @@
 use super::v1::{BatchVerificationRequestWireFormatV1, BatchVerificationResponseWireFormatV1};
-use crate::batch_verification_transport::{BatchVerificationRequest, BatchVerificationResponse};
+use crate::{BatchVerificationRequest, BatchVerificationResponse};
 
 impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
     fn from(value: BatchVerificationRequestWireFormatV1) -> Self {
@@ -37,9 +37,12 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
 
 impl From<BatchVerificationResponseWireFormatV1> for BatchVerificationResponse {
     fn from(value: BatchVerificationResponseWireFormatV1) -> Self {
-        let BatchVerificationResponseWireFormatV1 { request, signature } = value;
+        let BatchVerificationResponseWireFormatV1 {
+            request_id,
+            signature,
+        } = value;
         Self {
-            request: request.into(),
+            request_id,
             signature,
         }
     }
@@ -47,9 +50,12 @@ impl From<BatchVerificationResponseWireFormatV1> for BatchVerificationResponse {
 
 impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV1 {
     fn from(value: BatchVerificationResponse) -> Self {
-        let BatchVerificationResponse { request, signature } = value;
+        let BatchVerificationResponse {
+            request_id,
+            signature,
+        } = value;
         Self {
-            request: request.into(),
+            request_id,
             signature,
         }
     }

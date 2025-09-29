@@ -1,37 +1,24 @@
-use alloy::primitives::BlockNumber;
 use backon::{ConstantBuilder, Retryable};
-use futures::{SinkExt, StreamExt, stream::BoxStream};
-use serde::{Deserialize, Serialize};
+use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::ToSocketAddrs;
 use tokio::sync::{Mutex, mpsc};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
-use tokio_util::codec::{self, FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite};
+use zksync_os_batch_verification::{
+    BATCH_VERIFICATION_WIRE_FORMAT_VERSION, BatchVerificationRequest,
+    BatchVerificationRequestCodec, BatchVerificationRequestDecoder, BatchVerificationResponse,
+    BatchVerificationResponseCodec, BatchVerificationResponseDecoder,
+};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 
-use crate::batch_verification_wire_format::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
-
-/// Request sent from main sequencer to external nodes for batch verification
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BatchVerificationRequest {
-    pub batch_number: u64,
-    pub first_block_number: u64,
-    pub last_block_number: u64,
-    pub request_id: u64,
-}
-
-/// Response sent from external nodes back to main sequencer
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BatchVerificationResponse {
-    pub request: BatchVerificationRequest,
-    pub signature: Vec<u8>, // TODO better type Placeholder for signature bytes
-}
+use crate::util::transport::skip_http_headers;
 
 /// Manages connected clients and collects their responses
 pub struct BatchVerificationServer {
@@ -79,7 +66,7 @@ impl BatchVerificationServer {
         clients: Arc<Mutex<HashMap<String, mpsc::Sender<BatchVerificationRequest>>>>,
         response_sender: mpsc::Sender<BatchVerificationResponse>,
     ) -> anyhow::Result<()> {
-        let (recv, send) = socket.split();
+        let (recv, mut send) = socket.split();
         let mut reader = BufReader::new(recv);
 
         // Skip HTTP headers similar to replay_transport
@@ -101,13 +88,13 @@ impl BatchVerificationServer {
 
         tracing::info!("Batch verification client connected: {}", client_addr);
 
-        let mut writer = FramedWrite::new(send, BatchVerificationCodec::new());
-        let mut reader = FramedRead::new(reader, BatchVerificationCodec::new());
+        let mut writer = FramedWrite::new(send, BatchVerificationRequestCodec::new());
+        let mut reader = FramedRead::new(reader, BatchVerificationResponseDecoder::new());
 
         // Handle bidirectional communication
         loop {
             tokio::select! {
-                // Send requests to client
+                // Send batches for signing to the client (verifier EN)
                 request = request_receiver.recv() => {
                     match request {
                         Some(req) => {
@@ -120,7 +107,7 @@ impl BatchVerificationServer {
                     }
                 }
 
-                // Receive responses from client
+                // Receive signing responses from client (verifier EN)
                 response = reader.next() => {
                     match response {
                         Some(Ok(resp)) => {
@@ -209,7 +196,7 @@ impl BatchVerificationServer {
 
             match tokio::time::timeout(remaining_time, response_receiver.recv()).await {
                 Ok(Some(response)) => {
-                    if response.request.request_id == request_id {
+                    if response.request_id == request_id {
                         responses.push(response);
                     }
                     // Note: responses for other requests are dropped here
@@ -260,9 +247,12 @@ impl BatchVerificationClient {
             .write_all(b"POST /batch_verification HTTP/1.0\r\n\r\n")
             .await?;
 
+        let replay_version = socket.read_u32().await?;
         let (recv, send) = socket.split();
-        let mut reader = FramedRead::new(recv, BatchVerificationRequestCodec::new());
-        let mut writer = FramedWrite::new(send, BatchVerificationResponseCodec::new());
+        let mut reader =
+            FramedRead::new(recv, BatchVerificationRequestDecoder::new(replay_version));
+        let mut writer =
+            FramedWrite::new(send, BatchVerificationResponseCodec::new(replay_version));
 
         tracing::info!("Connected to main sequencer for batch verification");
 
@@ -290,7 +280,10 @@ impl BatchVerificationClient {
         // For now, create a dummy signature
         let signature = self.sign_batch_verification(&request).await?;
 
-        Ok(BatchVerificationResponse { request, signature })
+        Ok(BatchVerificationResponse {
+            request_id: request.request_id,
+            signature,
+        })
     }
 
     async fn sign_batch_verification(
@@ -309,105 +302,5 @@ impl BatchVerificationClient {
         );
 
         Ok(signature_data.into_bytes())
-    }
-}
-
-/// Codecs for encoding/decoding batch verification messages
-
-struct BatchVerificationRequestDecoder {
-    inner: LengthDelimitedCodec,
-    wire_format_version: u32,
-}
-
-impl BatchVerificationRequestDecoder {
-    fn new(wire_format_version: u32) -> Self {
-        Self {
-            inner: LengthDelimitedCodec::new(),
-            wire_format_version,
-        }
-    }
-}
-
-impl codec::Decoder for BatchVerificationRequestDecoder {
-    type Item = BatchVerificationRequest;
-    type Error = std::io::Error;
-
-    fn decode(
-        &mut self,
-        src: &mut alloy::rlp::BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        self.inner.decode(src).map(|inner| {
-            inner.map(|bytes| BatchVerificationRequest::decode(&bytes, self.wire_format_version))
-        })
-    }
-}
-
-pub struct BatchVerificationRequestCodec(LengthDelimitedCodec);
-
-impl BatchVerificationRequestCodec {
-    pub fn new() -> Self {
-        Self(LengthDelimitedCodec::new())
-    }
-}
-
-impl codec::Encoder<BatchVerificationRequest> for BatchVerificationRequestCodec {
-    type Error = std::io::Error;
-
-    fn encode(
-        &mut self,
-        item: BatchVerificationRequest,
-        dst: &mut alloy::rlp::BytesMut,
-    ) -> Result<(), Self::Error> {
-        self.0
-            .encode(item.encode_with_current_version().into(), dst)
-    }
-}
-
-struct BatchVerificationResponseDecoder {
-    inner: LengthDelimitedCodec,
-    wire_format_version: u32,
-}
-
-impl BatchVerificationResponseDecoder {
-    fn new(wire_format_version: u32) -> Self {
-        Self {
-            inner: LengthDelimitedCodec::new(),
-            wire_format_version,
-        }
-    }
-}
-
-impl codec::Decoder for BatchVerificationResponseDecoder {
-    type Item = BatchVerificationResponse;
-    type Error = std::io::Error;
-
-    fn decode(
-        &mut self,
-        src: &mut alloy::rlp::BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        self.inner.decode(src).map(|inner| {
-            inner.map(|bytes| BatchVerificationResponse::decode(&bytes, self.wire_format_version))
-        })
-    }
-}
-
-pub struct BatchVerificationResponseCodec(LengthDelimitedCodec);
-
-impl BatchVerificationResponseCodec {
-    pub fn new() -> Self {
-        Self(LengthDelimitedCodec::new())
-    }
-}
-
-impl codec::Encoder<BatchVerificationResponse> for BatchVerificationResponseCodec {
-    type Error = std::io::Error;
-
-    fn encode(
-        &mut self,
-        item: BatchVerificationResponse,
-        dst: &mut alloy::rlp::BytesMut,
-    ) -> Result<(), Self::Error> {
-        self.0
-            .encode(item.encode_with_current_version().into(), dst)
     }
 }

@@ -1,4 +1,4 @@
-use crate::batch_verification_transport::{BatchVerificationRequest, BatchVerificationResponse};
+use crate::{BatchVerificationRequest, BatchVerificationResponse};
 
 mod conversion;
 
@@ -39,6 +39,16 @@ impl BatchVerificationResponse {
     pub fn encode_with_current_version(self) -> Vec<u8> {
         let wire_format = v1::BatchVerificationResponseWireFormatV1::from(self);
         bincode::encode_to_vec(wire_format, bincode::config::standard()).unwrap()
+    }
+
+    pub fn encode_with_version(self, version: u32) -> Vec<u8> {
+        match version {
+            1 => {
+                let wire_format = v1::BatchVerificationResponseWireFormatV1::from(self);
+                bincode::encode_to_vec(wire_format, bincode::config::standard()).unwrap()
+            }
+            _ => panic!("Unsupported batch verification wire format version: {version}"),
+        }
     }
 
     /// Decodes the response from the given bytes using the specified wire format version.

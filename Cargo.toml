@@ -158,6 +158,7 @@ zksync_os_genesis = { version = "=0.6.0-non-semver-compat", path = "lib/genesis"
 zksync_os_object_store = { version = "=0.6.0-non-semver-compat", path = "lib/object_store" }
 zksync_os_status_server = { version = "=0.6.0-non-semver-compat", path = "lib/status" }
 zksync_os_multivm = { version = "=0.6.0-non-semver-compat", path = "lib/multivm" }
+zksync_os_batch_verification = { version = "=0.6.0-non-semver-compat", path = "lib/batch_verification" }
 
 zksync_os_bin = { version = "=0.6.0-non-semver-compat", path = "node/bin" }
 

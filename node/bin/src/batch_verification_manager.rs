@@ -1,8 +1,8 @@
-use crate::batch_verification_transport::{BatchVerificationResponse, BatchVerificationServer};
+use crate::batch_verification_transport::BatchVerificationServer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use zksync_os_batch_verification::BatchVerificationResponse;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 
 /// Manages batch verification process - sends requests and collects signatures
@@ -46,7 +46,7 @@ impl BatchVerificationManager {
         self.server
             .send_verification_request(batch_envelope, request_id)
             .await?;
-
+        //TODO proper way of collecting and validation of responses
         // Collect responses with timeout
         let responses = {
             let mut server = Arc::clone(&self.server);
@@ -72,7 +72,6 @@ impl BatchVerificationManager {
             batch_number: batch_envelope.batch_number(),
             request_id,
             responses,
-            verification_successful: self.validate_responses(&responses),
         })
     }
 
@@ -94,7 +93,6 @@ pub struct BatchVerificationResult {
     pub batch_number: u64,
     pub request_id: u64,
     pub responses: Vec<BatchVerificationResponse>,
-    pub verification_successful: bool,
 }
 
 impl BatchVerificationResult {
