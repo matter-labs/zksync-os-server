@@ -9,7 +9,7 @@ use zksync_os_bin::config::{
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
-use zksync_os_observability::PrometheusExporterConfig;
+use zksync_os_observability::{PrometheusExporterConfig, Sentry};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -33,6 +33,16 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
+
+    let sentry = Sentry::new(
+        &config
+            .general_config
+            .sentry_url
+            .clone()
+            .expect("Sentry URL is not set"),
+    )
+    .expect("Failed to initialize Sentry");
+    let _sentry_guard = sentry.install();
 
     let main_task = async move {
         match config.general_config.state_backend {

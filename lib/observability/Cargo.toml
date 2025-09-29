@@ -16,3 +16,4 @@ tracing.workspace = true
 tokio.workspace = true
 vise.workspace = true
 vise-exporter.workspace = true
+sentry.workspace = true

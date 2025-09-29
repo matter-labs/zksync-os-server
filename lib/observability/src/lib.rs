@@ -12,3 +12,6 @@ pub use metrics::GENERAL_METRICS;
 
 mod prometheus;
 pub use prometheus::PrometheusExporterConfig;
+
+mod sentry;
+pub use sentry::Sentry;

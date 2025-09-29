@@ -62,6 +62,10 @@ pub struct GeneralConfig {
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
+    /// Sentry URL.
+    #[config(default_t = None)]
+    pub sentry_url: Option<String>,
+
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
