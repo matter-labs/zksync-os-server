@@ -376,7 +376,7 @@ pub struct FakeSnarkProversConfig {
 #[config(derive(Default))]
 pub struct LogConfig {
     /// Format of the logs emitted by the node.
-    #[config(default, fallback = &fallback::Env("MISC_LOG_FORMAT"))]
+    #[config(default)]
     #[config(with = Serde![str])]
     pub format: LogFormat,
 
