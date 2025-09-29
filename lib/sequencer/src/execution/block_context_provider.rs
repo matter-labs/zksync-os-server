@@ -1,7 +1,7 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::{BlockHash, TxHash, U256};
+use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,7 +11,7 @@ use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
-use zksync_os_multivm::LATEST_PROTOCOL_VERSION;
+use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 
@@ -36,6 +36,7 @@ pub struct BlockContextProvider<Mempool> {
     pubdata_limit: u64,
     node_version: semver::Version,
     genesis: Genesis,
+    fee_collector_address: Address,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -51,6 +52,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         pubdata_limit: u64,
         node_version: semver::Version,
         genesis: Genesis,
+        fee_collector_address: Address,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -63,6 +65,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             pubdata_limit,
             node_version,
             genesis,
+            fee_collector_address,
         }
     }
 
@@ -87,17 +90,18 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
                     native_price: U256::from(1),
-                    gas_per_pubdata: Default::default(),
+                    // todo: make dynamic once zksync-os sets max gas per pubdata >1 for L2 txs
+                    gas_per_pubdata: U256::from(1),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
-                    coinbase: Default::default(),
+                    coinbase: self.fee_collector_address,
                     block_hashes: self.block_hashes_for_next_block,
                     gas_limit: self.gas_limit,
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    protocol_version: LATEST_PROTOCOL_VERSION,
+                    execution_version: LATEST_EXECUTION_VERSION,
                 };
                 PreparedBlockCommand {
                     block_context,
@@ -124,6 +128,12 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                         ZkEnvelope::Upgrade(_) => {}
                     }
                 }
+                anyhow::ensure!(
+                    self.previous_block_timestamp == record.previous_block_timestamp,
+                    "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
+                    self.previous_block_timestamp,
+                    record.previous_block_timestamp
+                );
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted,

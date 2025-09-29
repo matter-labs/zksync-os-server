@@ -3,13 +3,13 @@ use crate::network::Zksync;
 use crate::prover_api::ProverApi;
 use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
 use backon::Retryable;
-use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -48,10 +48,14 @@ pub struct Tester {
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
 
+    #[allow(dead_code)]
+    tempdir: Arc<tempfile::TempDir>,
+    main_node_tempdir: Arc<tempfile::TempDir>,
+
     // Needed to be able to connect external nodes
     l1_address: String,
     replay_url: String,
-    object_store_path: PathBuf,
+    l2_rpc_address: String,
 }
 
 impl Tester {
@@ -69,9 +73,9 @@ impl Tester {
             self.l1_provider.clone(),
             self.l1_wallet.clone(),
             false,
-            Some(self.replay_url.clone()),
+            Some((self.replay_url.clone(), self.l2_rpc_address.clone())),
             None,
-            Some(self.object_store_path.clone()),
+            Some(self.main_node_tempdir.clone()),
         )
         .await
     }
@@ -81,9 +85,9 @@ impl Tester {
         l1_provider: EthDynProvider,
         l1_wallet: EthereumWallet,
         enable_prover: bool,
-        main_node_replay_url: Option<String>,
+        main_node_replay_and_rpc_urls: Option<(String, String)>,
         block_time: Option<Duration>,
-        object_store_path: Option<PathBuf>,
+        main_node_tempdir: Option<Arc<tempfile::TempDir>>,
     ) -> anyhow::Result<Self> {
         (|| async {
             // Wait for L1 node to get up and be able to respond.
@@ -113,27 +117,36 @@ impl Tester {
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
-        let rocksdb_path = tempfile::tempdir()?;
+        let tempdir = tempfile::tempdir()?;
+        let rocks_db_path = tempdir.path().join("rocksdb");
+        let app_bin_unpack_path = tempdir.path().join("apps");
+        let object_store_path = main_node_tempdir
+            .as_ref()
+            .map(|t| t.path())
+            .unwrap_or(tempdir.path())
+            .join("object_store");
         let (stop_sender, stop_receiver) = watch::channel(false);
-        // Create a handle to run the sequencer in the background
-        let object_store_path =
-            object_store_path.unwrap_or(tempfile::tempdir()?.path().to_path_buf());
 
+        // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
-            rocks_db_path: rocksdb_path.path().to_path_buf(),
+            rocks_db_path,
             l1_rpc_url: l1_address.clone(),
+            main_node_rpc_url: main_node_replay_and_rpc_urls.clone().map(|(_, rpc)| rpc),
             ..Default::default()
         };
         let mut sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
-            block_replay_download_address: main_node_replay_url,
+            block_replay_download_address: main_node_replay_and_rpc_urls
+                .clone()
+                .map(|(replay, _)| replay),
+            fee_collector_address: Address::random(),
             ..Default::default()
         };
         if let Some(block_time) = block_time {
             sequencer_config.block_time = block_time;
         }
         let rpc_config = RpcConfig {
-            address: l2_rpc_address,
+            address: l2_rpc_address.clone(),
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
@@ -163,7 +176,9 @@ impl Tester {
         let config = Config {
             general_config,
             genesis_config: GenesisConfig {
-                genesis_input_path: concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
+                genesis_input_path: Some(
+                    concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
+                ),
                 ..Default::default()
             },
             rpc_config,
@@ -174,10 +189,12 @@ impl Tester {
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
+                app_bin_unpack_path: app_bin_unpack_path.clone(),
                 ..Default::default()
             },
             prover_api_config,
             status_server_config,
+            log_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
@@ -185,14 +202,20 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            tokio::task::spawn(zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
-                base_url: prover_api_url.clone(),
-                enabled_logging: true,
-                app_bin_path: Some(concat!(env!("WORKSPACE_DIR"), "/multiblock_batch.bin").into()),
-                circuit_limit: 10000,
-                iterations: None,
-                path: None,
-            }));
+            let base_url = prover_api_url.clone();
+            let app_bin_path =
+                zksync_os_multivm::apps::v2::multiblock_batch_path(&app_bin_unpack_path);
+            tokio::task::spawn(async move {
+                zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
+                    base_url,
+                    enabled_logging: true,
+                    app_bin_path: Some(app_bin_path),
+                    circuit_limit: 10000,
+                    iterations: None,
+                    path: None,
+                })
+                .await
+            });
         }
 
         let l2_wallet = EthereumWallet::new(
@@ -247,6 +270,7 @@ impl Tester {
             .connect(&l2_rpc_ws_url)
             .await?;
 
+        let tempdir = Arc::new(tempdir);
         Ok(Tester {
             l1_provider: EthDynProvider::new(l1_provider),
             l2_provider: EthDynProvider::new(l2_provider),
@@ -257,8 +281,10 @@ impl Tester {
             stop_sender,
             main_task,
             l1_address,
+            l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             replay_url,
-            object_store_path,
+            tempdir: tempdir.clone(),
+            main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
         })
     }
 }

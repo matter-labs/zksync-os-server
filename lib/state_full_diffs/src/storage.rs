@@ -45,15 +45,16 @@ pub struct FullDiffsStorage {
 impl FullDiffsStorage {
     pub fn new(path: &Path) -> anyhow::Result<Self> {
         let rocks = RocksDB::<StorageCF>::new(path)?;
-        let latest = rocks
+        let latest_block = rocks
             .get_cf(StorageCF::Meta, StorageCF::latest_block_key())
             .ok()
             .flatten()
             .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
             .unwrap_or(0);
+        tracing::info!(latest_block, "initialized full diffs storage");
         Ok(Self {
             rocks,
-            latest_block: Arc::new(AtomicU64::new(latest)),
+            latest_block: Arc::new(AtomicU64::new(latest_block)),
         })
     }
 
@@ -62,12 +63,31 @@ impl FullDiffsStorage {
     }
 
     pub fn add_block(&self, block_number: u64, writes: Vec<StorageWrite>) -> anyhow::Result<()> {
-        assert!(
-            block_number <= self.latest_block() + 1,
-            "StorageMap: attempt to add block number {} - previous block is {}. Cannot have gaps in block data",
-            block_number,
-            self.latest_block() + 1
-        );
+        let latest_block = self.latest_block();
+        // We always persist genesis data because there is currently no way to distinguish between
+        // initialized empty storage and initialized storage with just genesis (both have latest block
+        // equal to 0).
+        // todo: distinguish between empty state and state with just genesis
+        if block_number != 0 {
+            if block_number <= latest_block {
+                for write in writes {
+                    let expected_value = self.read_at(block_number, write.key).unwrap_or_default();
+                    assert_eq!(
+                        expected_value, write.value,
+                        "historical write discrepancy for key={} at block_number={}",
+                        write.key, block_number
+                    );
+                }
+                return Ok(());
+            }
+            assert_eq!(
+                block_number,
+                latest_block + 1,
+                "StorageMap: attempt to add block number {} - previous block is {}. Cannot have gaps in block data",
+                block_number,
+                latest_block + 1
+            );
+        }
 
         let per_key: HashMap<B256, B256> = writes.into_iter().map(|w| (w.key, w.value)).collect();
 

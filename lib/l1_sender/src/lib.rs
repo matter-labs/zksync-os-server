@@ -3,6 +3,7 @@ pub mod batcher_model;
 pub mod commands;
 pub mod commitment;
 pub mod config;
+mod debug_formatting;
 pub mod l1_discovery;
 mod metrics;
 mod new_blocks;

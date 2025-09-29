@@ -28,8 +28,8 @@ pub struct RepositoryManager {
 }
 
 impl RepositoryManager {
-    pub fn new(blocks_to_retain: usize, db_path: PathBuf, genesis: &Genesis) -> Self {
-        let db = RepositoryDb::new(&db_path, genesis);
+    pub async fn new(blocks_to_retain: usize, db_path: PathBuf, genesis: &Genesis) -> Self {
+        let db = RepositoryDb::new(&db_path, genesis).await;
         let genesis_block = db
             .get_block_by_number(0)
             .unwrap()

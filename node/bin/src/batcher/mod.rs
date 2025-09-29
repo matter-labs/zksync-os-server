@@ -2,6 +2,7 @@ use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
 use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::primitives::Address;
+use anyhow::Context;
 use std::pin::Pin;
 use tokio::sync::mpsc::Sender;
 use tokio::time::Sleep;
@@ -83,6 +84,17 @@ impl Batcher {
             .handle_for("batcher", GenericComponentState::WaitingRecv);
 
         let mut first_block_in_batch = self.first_block_to_process;
+        // Skip blocks that were already committed (we start the sequencer with replaying older blocks)
+        // Normally, ProverInputGenerator would filter them out,
+        // but with `prover_input_generator_force_process_old_blocks` config set to true, they end up here.
+        while self
+            .block_receiver
+            .peek_recv(|(b, _, _)| b.header.number < first_block_in_batch)
+            .await
+            .context("channel closed while skipping already processed blocks")?
+        {
+            self.block_receiver.recv().await;
+        }
         loop {
             let batch_envelope = self
                 .create_batch(&prev_batch_info, &latency_tracker, first_block_in_batch)
@@ -93,12 +105,17 @@ impl Batcher {
             prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
             tracing::info!(
-                number = batch_envelope.batch_number(),
-                block_from = batch_envelope.batch.first_block_number,
-                block_to = batch_envelope.batch.last_block_number,
-                tx_count = batch_envelope.batch.tx_count,
+                batch_number = batch_envelope.batch_number(),
+                batch_metadata = ?batch_envelope.batch,
+                block_count = batch_envelope.batch.last_block_number - batch_envelope.batch.first_block_number + 1,
                 new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
                 "Batch created"
+            );
+
+            tracing::debug!(
+                batch_number = batch_envelope.batch_number(),
+                da_commitment = ?batch_envelope.batch.commit_batch_info.operator_da_input,
+                "Batch da_input",
             );
 
             first_block_in_batch = batch_envelope.batch.last_block_number + 1;
@@ -142,9 +159,9 @@ impl Batcher {
                 }
 
                 /* ---------- collect blocks ---------- */
-                should_seal = self.block_receiver.peek_recv(|(block_output, _, _)| {
+                should_seal = self.block_receiver.peek_recv(|(block_output, replay_record, _)| {
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(block_output).is_batch_limit_reached()
+                    accumulator.clone().add(block_output, replay_record).should_seal()
                 }) => {
                     latency_tracker.enter_state(GenericComponentState::Processing);
                     match should_seal {
@@ -186,7 +203,7 @@ impl Batcher {
                             };
 
                             // ---------- accumulate batch data ----------
-                            accumulator.add(&block_output);
+                            accumulator.add(&block_output, &replay_record);
 
                             blocks.push((
                                 block_output,

@@ -26,7 +26,8 @@ use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
+use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -99,6 +100,12 @@ impl FriJobManager {
     pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(u64, ProverInput)> {
         // 1) Prefer a timed-out reassignment
         if let Some((batch_number, prover_input)) = self.assigned_jobs.pick_timed_out_job() {
+            tracing::info!(
+                batch_number,
+                assigned_jobs_count = self.assigned_jobs.len(),
+                ?min_inbound_age,
+                "Assigned a timed out job"
+            );
             return Some((batch_number, prover_input));
         }
 
@@ -143,7 +150,7 @@ impl FriJobManager {
         } else {
             // in fact, we could wait for mutex to unlock -
             // but we return early and let prover poll again
-            tracing::debug!("inbound receiver is contended; returning None");
+            tracing::trace!("inbound receiver is contended; returning None");
             None
         }
     }
@@ -204,9 +211,15 @@ impl FriJobManager {
         tracing::info!(batch_number, "Real proof accepted");
 
         // Prepare the envelope and send it downstream.
+        let proof = RealFriProof::V2 {
+            proof: proof_bytes,
+            proving_execution_version: proving_run_execution_version(
+                batch_metadata.execution_version,
+            ),
+        };
         let envelope = removed_job
             .batch_envelope
-            .with_data(FriProof::Real(proof_bytes))
+            .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
 
         permit.send(envelope);

@@ -21,6 +21,7 @@ pub(crate) fn seal_batch(
 ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
+    let execution_version = blocks.first().unwrap().1.block_context.execution_version;
 
     let commit_batch_info = CommitBatchInfo::new(
         blocks
@@ -59,14 +60,11 @@ pub(crate) fn seal_batch(
                 .iter()
                 .map(|(block_output, _, _, _)| block_output.tx_results.len())
                 .sum(),
+            execution_version,
         },
         batch_prover_input,
     )
     .with_stage(BatchExecutionStage::BatchSealed);
-    tracing::debug!(
-        ?batch_envelope.batch,
-        "Batch details",
-    );
 
     Ok(batch_envelope)
 }

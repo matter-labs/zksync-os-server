@@ -5,12 +5,13 @@ use alloy::primitives::{Address, B64, B256, Bloom, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
+use anyhow::Context;
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::OnceCell;
 use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -20,13 +21,20 @@ use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_types::L1UpgradeEnvelope;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisInput {
     /// Initial contracts to deploy in genesis.
     /// Storage entries that set the contracts as deployed and preimages will be derived from this field.
     pub initial_contracts: Vec<(Address, alloy::primitives::Bytes)>,
     /// Additional (not related to contract deployments) storage entries to add in genesis state.
     pub additional_storage: Vec<(B256, B256)>,
+}
+
+impl GenesisInput {
+    pub fn load_from_file(path: &Path) -> anyhow::Result<Self> {
+        let file = std::fs::File::open(path).context("Failed to open genesis input file")?;
+        serde_json::from_reader(file).context("Failed to parse genesis input file")
+    }
 }
 
 /// Info about genesis upgrade fetched from L1:
@@ -42,17 +50,17 @@ pub struct GenesisUpgradeTxInfo {
 /// Lazy-initialized to avoid unnecessary computation at startup.
 #[derive(Clone)]
 pub struct Genesis {
-    input_path: PathBuf,
+    input_source: Arc<dyn GenesisInputSource>,
     l1_provider: DynProvider<Ethereum>,
     zk_chain_address: Address,
-    state: OnceLock<GenesisState>,
+    state: OnceCell<GenesisState>,
     genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
 }
 
 impl Debug for Genesis {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Genesis")
-            .field("input_path", &self.input_path)
+            .field("input_source", &self.input_source)
             .field("l1_provider", &self.l1_provider)
             .field("zk_chain_address", &self.zk_chain_address)
             .field("state", &self.state.get())
@@ -63,22 +71,24 @@ impl Debug for Genesis {
 
 impl Genesis {
     pub fn new(
-        input_path: PathBuf,
+        input_source: Arc<dyn GenesisInputSource>,
         l1_provider: DynProvider<Ethereum>,
         zk_chain_address: Address,
     ) -> Self {
         Self {
-            input_path,
+            input_source,
             l1_provider,
             zk_chain_address,
-            state: OnceLock::new(),
+            state: OnceCell::new(),
             genesis_upgrade_tx: OnceCell::new(),
         }
     }
 
-    pub fn state(&self) -> &GenesisState {
+    pub async fn state(&self) -> &GenesisState {
         self.state
-            .get_or_init(|| build_genesis(self.input_path.clone()))
+            .get_or_try_init(|| build_genesis(self.input_source.as_ref()))
+            .await
+            .expect("Failed to build genesis state")
     }
 
     pub async fn genesis_upgrade_tx(&self) -> GenesisUpgradeTxInfo {
@@ -103,11 +113,10 @@ pub struct GenesisState {
     pub header: Header,
 }
 
-fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
-    let genesis_input: GenesisInput = serde_json::from_reader(
-        std::fs::File::open(genesis_input_path).expect("Failed to open genesis input file"),
-    )
-    .expect("Failed to parse genesis input file");
+async fn build_genesis(
+    genesis_input_source: &dyn GenesisInputSource,
+) -> anyhow::Result<GenesisState> {
+    let genesis_input = genesis_input_source.genesis_input().await?;
 
     // BTreeMap is used to ensure that the storage logs are sorted by key, so that the order is deterministic
     // which is important for tree.
@@ -173,11 +182,11 @@ fn build_genesis(genesis_input_path: PathBuf) -> GenesisState {
         requests_hash: None,
     };
 
-    GenesisState {
+    Ok(GenesisState {
         storage_logs: storage_logs.into_iter().collect(),
         preimages,
         header,
-    }
+    })
 }
 
 async fn load_genesis_upgrade_tx(
@@ -240,4 +249,27 @@ async fn load_genesis_upgrade_tx(
         tx: upgrade_tx,
         force_deploy_preimages: preimages,
     })
+}
+
+#[async_trait::async_trait]
+pub trait GenesisInputSource: Debug + Send + Sync + 'static {
+    async fn genesis_input(&self) -> anyhow::Result<GenesisInput>;
+}
+
+#[derive(Debug)]
+pub struct FileGenesisInputSource {
+    path: PathBuf,
+}
+
+impl FileGenesisInputSource {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+#[async_trait::async_trait]
+impl GenesisInputSource for FileGenesisInputSource {
+    async fn genesis_input(&self) -> anyhow::Result<GenesisInput> {
+        GenesisInput::load_from_file(&self.path)
+    }
 }

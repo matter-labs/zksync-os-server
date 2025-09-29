@@ -6,15 +6,12 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
-use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
-use zk_os_forward_system::run::{
-    StorageCommitment, convert::FromInterface, generate_proof_input, test_impl::TxListSource,
-};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
     MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
+use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
@@ -22,9 +19,10 @@ use zksync_os_types::ZksyncOsEncode;
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
     // == config ==
-    bin_path: &'static str,
+    enable_logging: bool,
     maximum_in_flight_blocks: usize,
     first_block_to_process: u64,
+    app_bin_base_path: PathBuf,
 
     // == plumbing ==
     // inbound
@@ -44,6 +42,7 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         // == config ==
         enable_logging: bool,
         maximum_in_flight_blocks: usize,
+        app_bin_base_path: PathBuf,
         first_block_to_process: u64,
 
         // == plumbing ==
@@ -54,20 +53,14 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
         persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
         read_state: ReadState,
     ) -> Self {
-        // Use path relative to crate's Cargo.toml to ensure consistent pathing in different contexts
-        let bin_path = if enable_logging {
-            concat!(env!("WORKSPACE_DIR"), "/server_app_logging_enabled.bin")
-        } else {
-            concat!(env!("WORKSPACE_DIR"), "/server_app.bin")
-        };
-
         Self {
+            enable_logging,
+            maximum_in_flight_blocks,
+            app_bin_base_path,
+            first_block_to_process,
             block_receiver,
             blocks_for_batcher_sender,
-            first_block_to_process,
             persistent_tree,
-            bin_path,
-            maximum_in_flight_blocks,
             read_state,
         }
     }
@@ -117,14 +110,15 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
                     replay_record.transactions.len(),
                 );
                 let read_state = self.read_state.clone();
-
+                let enable_logging = self.enable_logging;
+                let app_bin_base_path = self.app_bin_base_path.clone();
                 tokio::task::spawn_blocking(move || {
                     let prover_input = compute_prover_input(
                         &replay_record,
                         read_state,
                         tree,
-                        self.bin_path,
-                        replay_record.previous_block_timestamp,
+                        app_bin_base_path,
+                        enable_logging,
                     );
                     (block_output, replay_record, prover_input)
                 })
@@ -151,42 +145,58 @@ fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
-    bin_path: &'static str,
-    last_block_timestamp: u64,
+    app_bin_base_path: PathBuf,
+    enable_logging: bool,
 ) -> Vec<u32> {
     let block_number = replay_record.block_context.block_number;
-
-    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
-    let initial_storage_commitment = StorageCommitment {
-        root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-        next_free_slot: leaf_count,
-    };
-
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
-
+    let (root_hash, leaf_count) = tree_view.root_info().unwrap();
     let transactions = replay_record
         .transactions
         .iter()
         .map(|tx| tx.clone().encode())
         .collect::<VecDeque<_>>();
-    let list_source = TxListSource { transactions };
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
+    let prover_input =
+        match proving_run_execution_version(replay_record.block_context.execution_version) {
+            1 => unreachable!("proving_run_execution_version does not return 1"), // we prove v1 blocks with v2, it's reflected in `proving_run_execution_version`
+            2 => {
+                use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
+                use zk_os_forward_system::run::{
+                    StorageCommitment, convert::FromInterface, generate_proof_input,
+                    test_impl::TxListSource,
+                };
 
-    let prover_input = generate_proof_input(
-        PathBuf::from(bin_path),
-        BlockMetadataFromOracle::from_interface(replay_record.block_context),
-        ProofData {
-            state_root_view: initial_storage_commitment,
-            last_block_timestamp,
-        },
-        tree_view,
-        state_view,
-        list_source,
-    )
-    .expect("proof gen failed");
+                let initial_storage_commitment = StorageCommitment {
+                    root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+                    next_free_slot: leaf_count,
+                };
 
+                let list_source = TxListSource { transactions };
+
+                let bin_path = if enable_logging {
+                    zksync_os_multivm::apps::v2::server_app_logging_enabled_path(&app_bin_base_path)
+                } else {
+                    zksync_os_multivm::apps::v2::server_app_path(&app_bin_base_path)
+                };
+
+                generate_proof_input(
+                    bin_path,
+                    BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                    ProofData {
+                        state_root_view: initial_storage_commitment,
+                        last_block_timestamp: replay_record.previous_block_timestamp,
+                    },
+                    tree_view,
+                    state_view,
+                    list_source,
+                )
+                .expect("proof gen failed")
+            }
+            v => panic!("Unsupported ZKsync OS execution version: {v}"),
+        };
     let latency = prover_input_generation_latency.observe();
 
     tracing::info!(

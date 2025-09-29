@@ -18,6 +18,7 @@ zksync_os_types.workspace = true
 zksync_os_object_store.workspace = true
 zksync_os_rpc_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
+zksync_os_multivm.workspace = true
 
 zksync_os_fri_prover = { workspace = true, optional = true }
 
@@ -35,7 +36,7 @@ reqwest.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-test-log.workspace = true
+test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 
 [features]
 prover-tests = ["dep:zksync_os_fri_prover"]

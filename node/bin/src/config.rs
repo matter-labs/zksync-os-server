@@ -8,6 +8,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_object_store::ObjectStoreConfig;
+use zksync_os_tracing::LogFormat;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -25,6 +26,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
+    pub log_config: LogConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -43,6 +45,14 @@ pub struct GeneralConfig {
     /// in such cases a warning is logged.
     #[config(default_t = 10)]
     pub min_blocks_to_replay: usize,
+
+    /// Force a block number to start replaying from.
+    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
+    /// For FullDiffs backend:
+    ///     On EN: can be any historical block number;
+    ///     On Main Node: any historical block number up to the last l1 committed one.
+    #[config(default_t = None)]
+    pub force_starting_block_number: Option<u64>,
 
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
@@ -68,6 +78,11 @@ pub struct GeneralConfig {
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+
+    /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
+    /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
+    #[config(default_t = None)]
+    pub main_node_rpc_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -82,16 +97,16 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0x70968ad336b957311e3c1c63e36d05035e356f68".parse().unwrap())]
-    pub bridgehub_address: Address,
+    #[config(with = Serde![str], default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
+    pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
+    #[config(default_t = Some(270))]
+    pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = "./genesis/genesis.json".into())]
-    pub genesis_input_path: PathBuf,
+    #[config(default_t = Some("./genesis/genesis.json".into()))]
+    pub genesis_input_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -137,7 +152,11 @@ pub struct SequencerConfig {
     /// Path to the directory where block dumps for unexpected failures will be saved.
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
+
+    #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
+    pub fee_collector_address: Address,
 }
+
 impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
@@ -187,19 +206,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x13a60a4e493eca17ffcbe16bf1fc139b77bccc73c1b5459010a2b706bbd62602".into())]
+    #[config(alias = "operator_private_key", default_t = "0x48925fa4281a16382fd07817fd3762fe1ec7a04dcaffddd2897b0cc56e490029".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xf669493eeb9dcc776188ad8227b833979b689e67b7b52d25cf2e5ab1f3d00317".into())]
+    #[config(default_t = "0xf53f5dc8d123758a11949cba078887231f146b242bb9d344317f3c1b426856bd".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x5d57343476407c385818c9f793c7960bc96b8ce9ab924f3e1384baf54a1589a2".into())]
+    #[config(default_t = "0x458bdffd410072451106fde15aae99edfee1c92f6614916190de4e9db3934e25".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
@@ -217,6 +236,13 @@ pub struct L1SenderConfig {
     /// How often to poll L1 for new blocks.
     #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
+
+    /// Whether L1 senders are enabled.
+    /// Only affects the Main Node.
+    /// Only useful for debug. When L1 senders are disabled,
+    /// the node will eventually halt as produced batches are not processed further.
+    #[config(default_t = true)]
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -265,6 +291,16 @@ pub struct ProverInputGeneratorConfig {
     /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
     #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
+
+    /// Normally, the Prover input generator skips the blocks that are already FRI proved and committed to L1.
+    /// When this option is enabled, it will reprocess all the blocks replayed by the node on startup.
+    /// The number of blocks to replay on startup is configurable via `min_blocks_to_replay`.
+    #[config(default_t = false)]
+    pub force_process_old_blocks: bool,
+
+    /// Path to the directory where RiscV binaries are unpacked (server_app.bin, app_data.bin, etc)
+    #[config(default_t = "./db/app_bins".into())]
+    pub app_bin_unpack_path: PathBuf,
 }
 
 /// Only used on the Main Node.
@@ -294,7 +330,7 @@ pub struct ProverApiConfig {
     pub job_timeout: Duration,
 
     /// Max difference between the oldest and newest batch number being proven
-    /// If the difference is larger than this, provers will not be assigned new jobs.
+    /// If the difference is larger than this, provers will not be assigned new jobs - only retries.
     /// We use max range instead of length limit to avoid having one old batch stuck -
     /// otherwise GaplessCommitter's buffer would grow indefinitely.
     #[config(default_t = 10)]
@@ -317,7 +353,7 @@ pub struct FakeFriProversConfig {
     pub enabled: bool,
 
     /// Number of fake provers to run in parallel.
-    #[config(default_t = 10)]
+    #[config(default_t = 5)]
     pub workers: usize,
 
     /// Amount of time it takes to compute a proof for one batch.
@@ -341,6 +377,20 @@ pub struct FakeSnarkProversConfig {
     /// Only pick up jobs that are this time old.
     #[config(default_t = Duration::from_secs(10))]
     pub max_batch_age: Duration,
+}
+
+/// Configuration for the logging stack.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct LogConfig {
+    /// Format of the logs emitted by the node.
+    #[config(default)]
+    #[config(with = Serde![str])]
+    pub format: LogFormat,
+
+    /// Whether to use color in logs.
+    #[config(default_t = true)]
+    pub use_color: bool,
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {

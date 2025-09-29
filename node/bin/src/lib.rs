@@ -5,8 +5,11 @@ mod batch_sink;
 pub mod batcher;
 pub mod block_replay_storage;
 pub mod config;
+mod en_remote_config;
+mod l1_provider;
 mod metadata;
 mod node_state_on_startup;
+mod noop_l1_sender;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
@@ -20,8 +23,11 @@ use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
+use crate::en_remote_config::load_remote_config;
+use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
+use crate::noop_l1_sender::run_noop_l1_sender;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::gapless_committer::GaplessCommitter;
@@ -35,8 +41,7 @@ use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
 use alloy::network::EthereumWallet;
-use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
-use alloy::signers::local::PrivateKeySigner;
+use alloy::providers::{Provider, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::StreamExt;
@@ -49,7 +54,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use zksync_os_genesis::Genesis;
+use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -59,7 +64,7 @@ use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
-use zksync_os_multivm::LATEST_PROTOCOL_VERSION;
+use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -102,6 +107,35 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!(version = %node_version, role, "Initializing Node");
 
+    let (bridgehub_address, chain_id, genesis_input_source) =
+        if config.sequencer_config.is_main_node() {
+            let genesis_input_source: Arc<dyn GenesisInputSource> =
+                Arc::new(FileGenesisInputSource::new(
+                    config
+                        .genesis_config
+                        .genesis_input_path
+                        .clone()
+                        .expect("Missing `genesis_input_path`"),
+                ));
+            (
+                config
+                    .genesis_config
+                    .bridgehub_address
+                    .expect("Missing `bridgehub_address`"),
+                config.genesis_config.chain_id.expect("Missing `chain_id`"),
+                genesis_input_source,
+            )
+        } else {
+            let main_node_rpc_url = config
+                .general_config
+                .main_node_rpc_url
+                .clone()
+                .expect("Missing `main_node_rpc_url` in external node config");
+            load_remote_config(&main_node_rpc_url, &config.genesis_config)
+                .await
+                .unwrap()
+        };
+
     let (blocks_for_batcher_subsystem_sender, blocks_for_batcher_subsystem_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord)>(5);
 
@@ -120,31 +154,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let block_replay_storage = BlockReplayStorage::new(
         config.general_config.rocks_db_path.clone(),
-        config.genesis_config.chain_id,
+        chain_id,
         node_version.clone(),
-        LATEST_PROTOCOL_VERSION,
+        LATEST_EXECUTION_VERSION,
     );
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
-    let l1_provider = ProviderBuilder::new()
-        .wallet(EthereumWallet::new(PrivateKeySigner::random()))
-        .connect(&config.general_config.l1_rpc_url)
-        .await
-        .expect("failed to connect to L1 api");
+    let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
 
     tracing::info!("Reading L1 state");
-    let mut l1_state = get_l1_state(
-        &l1_provider,
-        config.genesis_config.bridgehub_address,
-        config.genesis_config.chain_id,
-    )
-    .await
-    .expect("Failed to read L1 state");
+    let mut l1_state = get_l1_state(&l1_provider, bridgehub_address, chain_id)
+        .await
+        .expect("Failed to read L1 state");
     if config.sequencer_config.is_main_node() {
         // On a main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         l1_state = l1_state
-            .wait_to_finalize(&l1_provider, config.genesis_config.chain_id)
+            .wait_to_finalize(&l1_provider, chain_id)
             .await
             .expect("failed to wait for L1 state finalization");
     }
@@ -157,7 +183,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     ));
 
     let genesis = Genesis::new(
-        config.genesis_config.genesis_input_path.clone(),
+        genesis_input_source.clone(),
         l1_provider.clone().erased(),
         l1_state.diamond_proxy,
     );
@@ -171,24 +197,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.general_config.blocks_to_retain_in_memory,
         config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
-    );
+    )
+    .await;
 
     let state = State::new(&config.general_config, &genesis).await;
 
     tracing::info!("Initializing mempools");
     let l2_mempool = zksync_os_mempool::in_memory(
-        ZkClient::new(
-            repositories.clone(),
-            state.clone(),
-            config.genesis_config.chain_id,
-        ),
+        ZkClient::new(repositories.clone(), state.clone(), chain_id),
         config.mempool_config.max_tx_input_bytes,
     );
 
     let (tree_manager, persistent_tree) =
-        TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis);
+        TreeManager::new(tree_wrapper.clone(), tree_receiver, &genesis).await;
 
-    let (last_committed_block, last_proved_block, last_executed_block) =
+    let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
 
     let node_startup_state = NodeStateOnStartup {
@@ -200,27 +223,34 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .last_processed_block()
             .expect("cannot read tree last processed block after initialization"),
         repositories_persisted_block: repositories.get_latest_block(),
-        last_committed_block,
-        last_proved_block,
-        last_executed_block,
+        last_l1_committed_block,
+        last_l1_proved_block,
+        last_l1_executed_block,
     };
 
-    let desired_starting_block = [
-        node_startup_state
-            .block_replay_storage_last_block
-            .saturating_sub(config.general_config.min_blocks_to_replay as u64),
-        node_startup_state.last_committed_block + 1,
-        node_startup_state.repositories_persisted_block + 1,
-        node_startup_state.tree_last_block + 1,
-        state.block_range_available().end() + 1,
-    ]
-    .into_iter()
-    .min()
-    .unwrap();
+    let desired_starting_block = if let Some(forced_starting_block_number) =
+        config.general_config.force_starting_block_number
+    {
+        forced_starting_block_number
+    } else {
+        [
+            node_startup_state
+                .block_replay_storage_last_block
+                .saturating_sub(config.general_config.min_blocks_to_replay as u64),
+            node_startup_state.last_l1_committed_block + 1,
+            node_startup_state.repositories_persisted_block + 1,
+            node_startup_state.tree_last_block + 1,
+            state.block_range_available().end() + 1,
+        ]
+        .into_iter()
+        .min()
+        .unwrap()
+    };
 
     let starting_block = if desired_starting_block < state.block_range_available().start() + 1 {
         tracing::warn!(
             desired_starting_block,
+            config.general_config.force_starting_block_number,
             min_block_available_in_state = state.block_range_available().start() + 1,
             "Desired starting block is not available in state. Starting from zero."
         );
@@ -231,6 +261,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!(
         config.general_config.min_blocks_to_replay,
+        config.general_config.force_starting_block_number,
         ?node_startup_state,
         starting_block,
         "Node state on startup"
@@ -240,8 +271,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing L1 Watchers");
     let finality_storage = Finality::new(FinalityStatus {
-        last_committed_block,
-        last_executed_block,
+        last_committed_block: last_l1_committed_block,
+        last_executed_block: last_l1_executed_block,
     });
 
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -320,10 +351,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
-            config.genesis_config.chain_id,
+            chain_id,
             node_startup_state.l1_state.bridgehub,
             rpc_storage,
             l2_mempool.clone(),
+            genesis_input_source,
         )
         .map(report_exit("JSON-RPC server")),
     );
@@ -333,7 +365,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let previous_block_timestamp: u64 = first_replay_record
         .as_ref()
-        .map_or(0, |record| record.block_context.timestamp); // if no previous block, assume genesis block
+        .map_or(0, |record| record.previous_block_timestamp); // if no previous block, assume genesis block
 
     let block_hashes_for_next_block = first_replay_record
         .as_ref()
@@ -346,11 +378,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
-        config.genesis_config.chain_id,
+        chain_id,
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
         genesis,
+        config.sequencer_config.fee_collector_address,
     );
 
     // ========== Start Sequencer ===========
@@ -371,7 +404,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             let block_stream = if let Some(replay_download_address) =
                 &sequencer_config.block_replay_download_address
             {
-                // External Node
+                // External Node - start streaming from the Main Node, ignoring the local `block_replay_storage`.
                 match replay_receiver(starting_block, replay_download_address).await {
                     Ok(stream) => stream,
                     Err(e) => {
@@ -380,7 +413,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     }
                 }
             } else {
-                // Main Node
+                // Main Node - replay from `block_replay_storage`, then produce new blocks.
                 command_source(
                     &block_replay_storage,
                     starting_block,
@@ -436,6 +469,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             &mut tasks,
             state,
             finality_storage,
+            chain_id,
             _stop_receiver.clone(),
         )
         .await;
@@ -505,6 +539,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     tasks: &mut JoinSet<()>,
     state: State,
     finality: Finality,
+    chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
 ) {
     // Batcher-specific async channels
@@ -534,8 +569,8 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         tokio::sync::mpsc::channel::<ExecuteCommand>(5);
 
     // Channel between `PriorityTree` tasks
-    let (priority_txs_count_sender, priority_txs_count_receiver) =
-        tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
+    let (priority_txs_internal_sender, priority_txs_internal_receiver) =
+        tokio::sync::mpsc::channel::<(u64, u64, Option<usize>)>(1000);
 
     // Channel for `PriorityTree` cache task
     let (executed_batch_numbers_sender, executed_batch_numbers_receiver) =
@@ -610,10 +645,11 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     .await
     .expect("reschedule not executed batches");
 
-    let batcher_subsystem_first_block_to_process = node_state_on_startup.last_committed_block + 1;
+    let batcher_subsystem_first_block_to_process =
+        node_state_on_startup.last_l1_committed_block + 1;
     tracing::info!("Initializing Batcher");
     let batcher = Batcher::new(
-        config.genesis_config.chain_id,
+        chain_id,
         node_state_on_startup.l1_state.diamond_proxy,
         batcher_subsystem_first_block_to_process,
         node_state_on_startup.repositories_persisted_block,
@@ -629,13 +665,26 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
             .map(report_exit("Batcher")),
     );
 
+    let prover_input_generation_first_block_to_process = if config
+        .prover_input_generator_config
+        .force_process_old_blocks
+    {
+        // Prover input generator will (re)process all the blocks replayed by the node on startup - at least `min_blocks_to_replay`.
+        // Note that it doesn't always start from zero.
+        0
+    } else {
+        // Prover input generator will skip the blocks that are already FRI proved and committed to L1.
+        batcher_subsystem_first_block_to_process
+    };
+
     tracing::info!("Initializing ProverInputGenerator");
     let prover_input_generator = ProverInputGenerator::new(
         config.prover_input_generator_config.logging_enabled,
         config
             .prover_input_generator_config
             .maximum_in_flight_blocks,
-        batcher_subsystem_first_block_to_process,
+        config.prover_input_generator_config.app_bin_unpack_path,
+        prover_input_generation_first_block_to_process,
         blocks_for_batcher_subsystem_receiver,
         blocks_for_batcher_sender,
         persistent_tree,
@@ -692,24 +741,43 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         run_fake_snark_provers(&config.prover_api_config, tasks, snark_job_manager);
     }
 
-    let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
-        config.l1_sender_config,
-        l1_provider,
-        batch_for_commit_receiver,
-        batch_for_snark_sender,
-        batch_for_l1_proving_receiver,
-        batch_for_priority_tree_sender,
-        batch_for_execute_receiver,
-        fully_processed_batch_sender,
-        &node_state_on_startup.l1_state,
-    );
-    tasks.spawn(l1_committer.map(report_exit("L1 committer")));
-    tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
-    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    if config.l1_sender_config.enabled {
+        let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
+            config.l1_sender_config,
+            l1_provider,
+            batch_for_commit_receiver,
+            batch_for_snark_sender,
+            batch_for_l1_proving_receiver,
+            batch_for_priority_tree_sender,
+            batch_for_execute_receiver,
+            fully_processed_batch_sender,
+            &node_state_on_startup.l1_state,
+        );
+        tasks.spawn(l1_committer.map(report_exit("L1 committer")));
+        tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
+        tasks.spawn(l1_executor.map(report_exit("L1 executor")));
+    } else {
+        tracing::warn!("Starting without L1 senders! `l1_sender_enabled` config is false");
+        tasks.spawn(
+            run_noop_l1_sender(batch_for_commit_receiver, batch_for_snark_sender)
+                .map(report_exit("L1 committer")),
+        );
+        tasks.spawn(
+            run_noop_l1_sender(
+                batch_for_l1_proving_receiver,
+                batch_for_priority_tree_sender,
+            )
+            .map(report_exit("L1 committer")),
+        );
+        tasks.spawn(
+            run_noop_l1_sender(batch_for_execute_receiver, fully_processed_batch_sender)
+                .map(report_exit("L1 committer")),
+        );
+    }
 
     let priority_tree_manager = PriorityTreeManager::new(
         block_replay_storage.clone(),
-        node_state_on_startup.last_executed_block,
+        node_state_on_startup.last_l1_executed_block,
         Path::new(
             &config
                 .general_config
@@ -726,7 +794,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
                 batch_storage.clone(),
                 Some(batch_for_priority_tree_receiver),
                 None,
-                priority_txs_count_sender,
+                priority_txs_internal_sender,
                 Some(batch_for_execute_sender),
             )
             .map(report_exit(
@@ -747,7 +815,10 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     // Run task that persists PriorityTree for executed batches and drops old data.
     tasks.spawn(
         priority_tree_manager
-            .keep_caching(executed_batch_numbers_receiver, priority_txs_count_receiver)
+            .keep_caching(
+                executed_batch_numbers_receiver,
+                priority_txs_internal_receiver,
+            )
             .map(report_exit("priority_tree_manager#keep_caching")),
     );
 
@@ -777,8 +848,8 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     );
 
     // Channel between `PriorityTree` tasks
-    let (priority_txs_count_sender, priority_txs_count_receiver) =
-        tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
+    let (priority_txs_internal_sender, priority_txs_internal_receiver) =
+        tokio::sync::mpsc::channel::<(u64, u64, Option<usize>)>(1000);
 
     // Input channels for `PriorityTree` tasks
     let (executed_batch_numbers_sender_1, executed_batch_numbers_receiver_1) =
@@ -787,7 +858,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         tokio::sync::mpsc::channel::<u64>(1000);
 
     let last_ready_block = node_state_on_startup
-        .last_executed_block
+        .last_l1_executed_block
         .min(node_state_on_startup.block_replay_storage_last_block);
     let batch_of_last_ready_block = batch_storage
         .get_batch_by_block_number(last_ready_block)
@@ -842,7 +913,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
                 batch_storage.clone(),
                 None,
                 Some(executed_batch_numbers_receiver_1),
-                priority_txs_count_sender,
+                priority_txs_internal_sender,
                 None,
             )
             .map(report_exit(
@@ -866,7 +937,7 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
         priority_tree_manager
             .keep_caching(
                 executed_batch_numbers_receiver_2,
-                priority_txs_count_receiver,
+                priority_txs_internal_receiver,
             )
             .map(report_exit("priority_tree_manager#keep_caching")),
     );
@@ -882,10 +953,10 @@ fn block_hashes_for_first_block(repositories: &RepositoryManager) -> BlockHashes
     block_hashes
 }
 
-fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T, E>) {
+fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E>) {
     move |result| match result {
         Ok(_) => tracing::warn!("{name} unexpectedly exited"),
-        Err(e) => tracing::error!("{name} failed: {e:#}"),
+        Err(e) => tracing::error!("{name} failed: {e:#?}"),
     }
 }
 
