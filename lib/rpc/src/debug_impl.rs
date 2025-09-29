@@ -12,8 +12,6 @@ use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use std::ops::Range;
-use zk_ee::system::metadata::BlockMetadataFromOracle;
-use zk_os_forward_system::run::convert::FromInterface;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_storage_api::{RepositoryError, StateError};
 
@@ -79,12 +77,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             txs.push(tx);
         }
         let prev_state_view = self.storage.state_view_at(block.number - 1)?;
-        match sandbox::call_trace(
-            txs,
-            BlockMetadataFromOracle::from_interface(block_context),
-            prev_state_view,
-            call_config,
-        ) {
+        match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
             Ok(calls) => Ok(calls
                 .into_iter()
                 .zip(&block.body.transactions)
