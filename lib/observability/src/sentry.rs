@@ -1,7 +1,5 @@
 use std::borrow::Cow;
 
-// Temporary re-export of `sentry::capture_message` aiming to simplify the transition from `vlog` to using
-// crates directly.
 use sentry::{ClientInitGuard, types::Dsn};
 
 #[derive(Debug)]
