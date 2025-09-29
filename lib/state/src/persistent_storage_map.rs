@@ -47,7 +47,7 @@ impl StorageMapCF {
 }
 
 impl PersistentStorageMap {
-    pub fn new(rocks: RocksDB<StorageMapCF>, genesis: &Genesis) -> Self {
+    pub async fn new(rocks: RocksDB<StorageMapCF>, genesis: &Genesis) -> Self {
         let rocksdb_block_number = rocksdb_block_number(&rocks);
         let this = Self {
             rocks,
@@ -57,7 +57,13 @@ impl PersistentStorageMap {
         if rocksdb_block_number.is_none() {
             this.compact_sync(
                 0,
-                genesis.state().storage_logs.clone().into_iter().collect(),
+                genesis
+                    .state()
+                    .await
+                    .storage_logs
+                    .clone()
+                    .into_iter()
+                    .collect(),
             );
         }
         this

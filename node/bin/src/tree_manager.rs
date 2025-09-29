@@ -40,7 +40,7 @@ impl TreeManager {
         RocksDBWrapper::from(db)
     }
 
-    pub fn new(
+    pub async fn new(
         tree_wrapper: RocksDBWrapper,
         block_receiver: Receiver<BlockOutput>,
         genesis: &Genesis,
@@ -54,6 +54,7 @@ impl TreeManager {
         if version.is_none() {
             let tree_entries = genesis
                 .state()
+                .await
                 .storage_logs
                 .iter()
                 .map(|(key, value)| TreeEntry {

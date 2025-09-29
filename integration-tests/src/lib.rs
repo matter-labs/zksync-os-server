@@ -55,6 +55,7 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     l1_address: String,
     replay_url: String,
+    l2_rpc_address: String,
 }
 
 impl Tester {
@@ -72,7 +73,7 @@ impl Tester {
             self.l1_provider.clone(),
             self.l1_wallet.clone(),
             false,
-            Some(self.replay_url.clone()),
+            Some((self.replay_url.clone(), self.l2_rpc_address.clone())),
             None,
             Some(self.main_node_tempdir.clone()),
         )
@@ -84,7 +85,7 @@ impl Tester {
         l1_provider: EthDynProvider,
         l1_wallet: EthereumWallet,
         enable_prover: bool,
-        main_node_replay_url: Option<String>,
+        main_node_replay_and_rpc_urls: Option<(String, String)>,
         block_time: Option<Duration>,
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
     ) -> anyhow::Result<Self> {
@@ -130,11 +131,14 @@ impl Tester {
         let general_config = GeneralConfig {
             rocks_db_path,
             l1_rpc_url: l1_address.clone(),
+            main_node_rpc_url: main_node_replay_and_rpc_urls.clone().map(|(_, rpc)| rpc),
             ..Default::default()
         };
         let mut sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
-            block_replay_download_address: main_node_replay_url,
+            block_replay_download_address: main_node_replay_and_rpc_urls
+                .clone()
+                .map(|(replay, _)| replay),
             fee_collector_address: Address::random(),
             ..Default::default()
         };
@@ -142,7 +146,7 @@ impl Tester {
             sequencer_config.block_time = block_time;
         }
         let rpc_config = RpcConfig {
-            address: l2_rpc_address,
+            address: l2_rpc_address.clone(),
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
@@ -172,7 +176,9 @@ impl Tester {
         let config = Config {
             general_config,
             genesis_config: GenesisConfig {
-                genesis_input_path: concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
+                genesis_input_path: Some(
+                    concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
+                ),
                 ..Default::default()
             },
             rpc_config,
@@ -275,6 +281,7 @@ impl Tester {
             stop_sender,
             main_task,
             l1_address,
+            l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             replay_url,
             tempdir: tempdir.clone(),
             main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),

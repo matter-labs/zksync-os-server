@@ -1,7 +1,9 @@
 mod call_fees;
 
 mod config;
+
 pub use config::RpcConfig;
+use std::sync::Arc;
 
 mod eth_call_handler;
 mod eth_filter_impl;
@@ -34,6 +36,7 @@ use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::ws_client::RpcServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
+use zksync_os_genesis::GenesisInputSource;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -48,6 +51,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     bridgehub_address: Address,
     storage: RpcStorage,
     mempool: Mempool,
+    genesis_input_source: Arc<dyn GenesisInputSource>,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -66,7 +70,9 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         EthFilterNamespace::new(config.clone(), storage.clone(), mempool.clone()).into_rpc(),
     )?;
     rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
-    rpc.merge(ZksNamespace::new(bridgehub_address, storage.clone()).into_rpc())?;
+    rpc.merge(
+        ZksNamespace::new(bridgehub_address, storage.clone(), genesis_input_source).into_rpc(),
+    )?;
     rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
     rpc.merge(DebugNamespace::new(storage, eth_call_handler).into_rpc())?;
 

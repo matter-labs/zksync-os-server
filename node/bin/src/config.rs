@@ -78,6 +78,11 @@ pub struct GeneralConfig {
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+
+    /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
+    /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
+    #[config(default_t = None)]
+    pub main_node_rpc_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -92,16 +97,16 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap())]
-    pub bridgehub_address: Address,
+    #[config(with = Serde![str], default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
+    pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
+    #[config(default_t = Some(270))]
+    pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = "./genesis/genesis.json".into())]
-    pub genesis_input_path: PathBuf,
+    #[config(default_t = Some("./genesis/genesis.json".into()))]
+    pub genesis_input_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -151,6 +156,7 @@ pub struct SequencerConfig {
     #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
     pub fee_collector_address: Address,
 }
+
 impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()

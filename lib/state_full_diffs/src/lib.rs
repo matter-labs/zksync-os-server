@@ -30,6 +30,7 @@ impl FullDiffsState {
         if this.storage.latest_block() == 0 {
             let storage_logs = genesis
                 .state()
+                .await
                 .storage_logs
                 .clone()
                 .into_iter()
@@ -46,6 +47,7 @@ impl FullDiffsState {
             let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
             let preimages = genesis
                 .state()
+                .await
                 .preimages
                 .iter()
                 .chain(force_deploy_preimages.iter())

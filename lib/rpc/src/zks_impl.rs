@@ -4,6 +4,8 @@ use alloy::primitives::{Address, B256, BlockNumber, TxHash, keccak256};
 use alloy::rpc::types::Index;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
+use std::sync::Arc;
+use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{types::L2ToL1LogProof, zks::ZksApiServer};
 use zksync_os_storage_api::RepositoryError;
@@ -14,13 +16,19 @@ const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
 pub struct ZksNamespace<RpcStorage> {
     bridgehub_address: Address,
     storage: RpcStorage,
+    genesis_input_source: Arc<dyn GenesisInputSource>,
 }
 
 impl<RpcStorage> ZksNamespace<RpcStorage> {
-    pub fn new(bridgehub_address: Address, storage: RpcStorage) -> Self {
+    pub fn new(
+        bridgehub_address: Address,
+        storage: RpcStorage,
+        genesis_input_source: Arc<dyn GenesisInputSource>,
+    ) -> Self {
         Self {
             bridgehub_address,
             storage,
+            genesis_input_source,
         }
     }
 }
@@ -152,6 +160,14 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
             .await
             .to_rpc_result()
     }
+
+    async fn get_genesis(&self) -> RpcResult<GenesisInput> {
+        self.genesis_input_source
+            .genesis_input()
+            .await
+            .map_err(ZksError::GenesisSource)
+            .to_rpc_result()
+    }
 }
 
 /// `zks` namespace result type.
@@ -180,4 +196,6 @@ pub enum ZksError {
     Batch(#[from] anyhow::Error),
     #[error(transparent)]
     Repository(#[from] RepositoryError),
+    #[error(transparent)]
+    GenesisSource(anyhow::Error),
 }
