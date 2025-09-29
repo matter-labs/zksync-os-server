@@ -21,16 +21,7 @@ pub async fn main() {
     let config = build_configs();
 
     // =========== init tracing ===========
-    zksync_os_tracing::Tracer::new(
-        config.log_config.format,
-        config
-            .log_config
-            .default_directive
-            .parse()
-            .expect("malformed default directive"),
-        config.log_config.use_color,
-    )
-    .init();
+    zksync_os_tracing::Tracer::new(config.log_config.format, config.log_config.use_color).init();
     tracing::info!(?config, "Loaded config");
 
     let prometheus: PrometheusExporterConfig =

@@ -382,10 +382,6 @@ pub struct LogConfig {
     #[config(with = Serde![str])]
     pub format: LogFormat,
 
-    /// Default log directive in format that is used in `RUST_LOG`. Applied before directives from `RUST_LOG`.
-    #[config(default_t = "info".into())]
-    pub default_directive: String,
-
     /// Whether to use color in logs.
     #[config(default_t = true)]
     pub use_color: bool,

@@ -5,7 +5,6 @@ pub use formatter::LogFormat;
 
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::Directive;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -16,7 +15,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 #[derive(Debug, Clone)]
 pub struct Tracer {
     format: LogFormat,
-    default_directive: Directive,
     use_color: bool,
 }
 
@@ -28,25 +26,19 @@ impl Tracer {
     ///      - `LogFormat::Json` for JSON formatting.
     ///      - `LogFormat::LogFmt` for logfmt (key=value) formatting.
     ///      - `LogFormat::Terminal` for human-readable, terminal-friendly formatting.
-    ///  * `default_directive` - Directive for filtering log messages.
     ///  * `use_color` - Whether to use color for the log messages.
-    pub const fn new(format: LogFormat, default_directive: Directive, use_color: bool) -> Self {
-        Self {
-            format,
-            default_directive,
-            use_color,
-        }
+    pub const fn new(format: LogFormat, use_color: bool) -> Self {
+        Self { format, use_color }
     }
 }
 
 impl Default for Tracer {
     ///  Provides default values for `Tracer`.
     ///
-    ///  By default it uses terminal format, INFO level filter and enabled colored logs.
+    ///  By default it uses terminal format and enabled colored logs.
     fn default() -> Self {
         Self {
             format: LogFormat::Terminal,
-            default_directive: LevelFilter::INFO.into(),
             use_color: true,
         }
     }
@@ -55,7 +47,7 @@ impl Default for Tracer {
 impl Tracer {
     pub fn init(self) {
         let filter = EnvFilter::builder()
-            .with_default_directive(self.default_directive)
+            .with_default_directive(LevelFilter::INFO.into())
             .from_env_lossy();
         let layer = self.format.apply(filter, self.use_color);
 
