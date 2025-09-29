@@ -8,6 +8,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_object_store::ObjectStoreConfig;
+use zksync_os_tracing::LogFormat;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -25,6 +26,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
+    pub log_config: LogConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -369,6 +371,20 @@ pub struct FakeSnarkProversConfig {
     /// Only pick up jobs that are this time old.
     #[config(default_t = Duration::from_secs(10))]
     pub max_batch_age: Duration,
+}
+
+/// Configuration for the logging stack.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct LogConfig {
+    /// Format of the logs emitted by the node.
+    #[config(default)]
+    #[config(with = Serde![str])]
+    pub format: LogFormat,
+
+    /// Whether to use color in logs.
+    #[config(default_t = true)]
+    pub use_color: bool,
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {

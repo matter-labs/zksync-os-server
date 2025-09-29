@@ -9988,6 +9988,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-logfmt"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1f47d22deb79c3f59fcf2a1f00f60cbdc05462bf17d1cd356c1fefa3f444bd"
+dependencies = [
+ "time",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber 0.3.20",
+]
+
+[[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10006,12 +10028,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -11255,7 +11280,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "tracing-subscriber 0.3.20",
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.25)",
  "zksync_os_api",
@@ -11277,6 +11301,7 @@ dependencies = [
  "zksync_os_status_server",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_tracing",
  "zksync_os_types",
 ]
 
@@ -11751,6 +11776,16 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_rocksdb",
  "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_tracing"
+version = "0.7.3-non-semver-compat"
+dependencies = [
+ "serde",
+ "tracing",
+ "tracing-logfmt",
+ "tracing-subscriber 0.3.20",
 ]
 
 [[package]]
