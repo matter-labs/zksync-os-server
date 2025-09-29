@@ -1,0 +1,40 @@
+name: 'Run server'
+
+description: 'Starts server on localhost for CI testing purposes.'
+
+inputs:
+  build_type:
+    type: string
+    description: 'Build type: debug or release.'
+    required: false
+    default: 'release'
+
+runs:
+  using: composite
+  steps:
+
+    - name: Run anvil L1
+      shell: 'bash -ex {0}'
+      working-directory: ${{ inputs.working_directory }}
+      run: anvil --load-state ./zkos-l1-state.json --port 8545 &
+
+    - name: Run server
+      shell: 'bash -ex {0}'
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        SERVER_LOGFILE: zksync-os-server.log.txt
+      run: |
+        RELEASE="${{ inputs.build_type == 'release' && '--release' || '' }}"
+        cargo build --bin zksync_os_bin ${RELEASE}
+        cargo run --bin zksync_os_bin ${RELEASE} > "${SERVER_LOGFILE}" 2>&1 &
+
+    - name: Wait for server to start
+      shell: 'bash -ex {0}'
+      env:
+        SLEEP_INTERVAL_SEC: 3
+      run: |
+        while ! nc -z localhost 3050; do
+          echo "Waiting for server to start..."
+          sleep ${SLEEP_INTERVAL_SEC}
+        done
+        echo "Server is up and running."

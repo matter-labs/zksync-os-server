@@ -175,22 +175,8 @@ jobs:
         with:
           cache_shared_key: 'build-format-and-lint'
 
-      - name: Run anvil L1
-        run: anvil --load-state ./zkos-l1-state.json --port 8545 &
-
-      - name: Build server
-        run: cargo build --release --bin zksync_os_bin
-
       - name: Run server
-        run: cargo run --release --bin zksync_os_bin > ${SERVER_LOGFILE} 2>&1 &
-
-      - name: Wait for zksync OS to start
-        run: |
-          while ! nc -z localhost 3050; do
-            echo "Waiting for zksync OS to start..."
-            sleep 3
-          done
-          echo "Sequencer is up and running."
+        uses: ./.github/actions/run-server
 
       - name: Checkout tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

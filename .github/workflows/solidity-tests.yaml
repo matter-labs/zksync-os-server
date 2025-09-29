@@ -1,0 +1,72 @@
+name: Solidity tests
+
+# Run tests every day or by manual request
+on:
+  schedule:
+    - cron: '0 0 * * *' # every day at midnight UTC
+  workflow_dispatch:
+  # TODO: remove before mering PR
+  pull_request:
+
+# Set default permissions
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+# Cancel workflow if a new run for the same commit has been triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Use bash with -e and -x flags for all run steps
+# for more visibility
+defaults:
+  run:
+    shell: bash -ex {0}
+
+jobs:
+
+  solidity-tests:
+    runs-on: matterlabs-ci-runner-high-performance
+    env:
+      SERVER_LOGFILE: zksync-os-server.log.txt
+      TESTS_WORKING_DIR: solidity-tester
+      NODE_VERSION: 22
+    steps:
+
+      - name: Checkout server
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+        with:
+          cache_shared_key: 'build-format-and-lint'
+
+      - name: Run server
+        uses: ./.github/actions/run-server
+
+      - name: Checkout tests
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: antonbaliasnikov/solidity-tester
+          ref: main # use latest main branch to get test updates on early stages
+          path: solidity-tester
+
+      - name: Install NodeJS
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run tests
+        working-directory: solidity-tester
+        run: |
+          cargo nextest run --retries 2
+          find . -name junit.xml
+
+      - name: Upload server logs
+        if: (!cancelled())
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zksync-os-server-logs
+          path: ${{ env.SERVER_LOGFILE }}
