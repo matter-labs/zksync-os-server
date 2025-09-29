@@ -3,7 +3,7 @@ use crate::network::Zksync;
 use crate::prover_api::ProverApi;
 use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::LocalSigner;
 use backon::ConstantBuilder;
@@ -135,6 +135,7 @@ impl Tester {
         let mut sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
             block_replay_download_address: main_node_replay_url,
+            fee_collector_address: Address::random(),
             ..Default::default()
         };
         if let Some(block_time) = block_time {
@@ -197,7 +198,7 @@ impl Tester {
         if enable_prover {
             let base_url = prover_api_url.clone();
             let app_bin_path =
-                zksync_os_multivm::apps::v1::multiblock_batch_path(&app_bin_unpack_path);
+                zksync_os_multivm::apps::v2::multiblock_batch_path(&app_bin_unpack_path);
             tokio::task::spawn(async move {
                 zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
                     base_url,
