@@ -105,7 +105,7 @@ pub struct GenesisConfig {
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some("./genesis/genesis.json".into()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("./genesis/genesis.json".into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
