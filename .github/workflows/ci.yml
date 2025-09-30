@@ -178,12 +178,9 @@ jobs:
       - name: Prepare bellman-cuda directory
         shell: 'bash -ex {0}'
         run: |
-          release=($(curl --silent https://api.github.com/repos/matter-labs/era-bellman-cuda/releases | jq -r '.[0] | .name, .tarball_url, .assets[0].browser_download_url'))
-          curl --silent -L "${release[1]}" --output bellman-cuda-source.tar.gz
-          curl --silent -L "${release[2]}" --output bellman-cuda.tar.gz
-          mkdir -p bellman-cuda
-          tar xvfz bellman-cuda.tar.gz -C ./bellman-cuda
-          tar xvfz bellman-cuda-source.tar.gz -C ./bellman-cuda --strip-components=1 --wildcards \*/src/
+          git clone https://github.com/matter-labs/era-bellman-cuda.git --branch main bellman-cuda
+          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
+          cmake --build bellman-cuda/build/
 
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
@@ -214,7 +211,7 @@ jobs:
   #  Run prover integration tests on GPU machine  #
   #################################################
   prover-integration-tests:
-    runs-on: matterlabs-ci-gpu-l4-runner-prover-tests
+    runs-on: matterlabs-ci-gpu-runner
     needs: prover-integration-tests-build
     steps:
       - name: Checkout code
@@ -233,12 +230,9 @@ jobs:
       - name: Prepare bellman-cuda directory
         shell: 'bash -ex {0}'
         run: |
-          release=($(curl --silent https://api.github.com/repos/matter-labs/era-bellman-cuda/releases | jq -r '.[0] | .name, .tarball_url, .assets[0].browser_download_url'))
-          curl --silent -L "${release[1]}" --output bellman-cuda-source.tar.gz
-          curl --silent -L "${release[2]}" --output bellman-cuda.tar.gz
-          mkdir -p bellman-cuda
-          tar xvfz bellman-cuda.tar.gz -C ./bellman-cuda
-          tar xvfz bellman-cuda-source.tar.gz -C ./bellman-cuda --strip-components=1 --wildcards \*/src/
+          git clone https://github.com/matter-labs/era-bellman-cuda.git --branch main bellman-cuda
+          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
+          cmake --build bellman-cuda/build/
 
       - name: Download prebuilt tests
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
@@ -256,9 +250,9 @@ jobs:
         env:
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
           COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
-          RUST_MIN_STACK: 10737418240
+          RUST_MIN_STACK: 267108864
         run: |
-          ulimit -s 10485760
+          ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}
