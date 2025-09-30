@@ -44,7 +44,7 @@ runs:
         if command -v sudo >/dev/null 2>&1; then
           SUDO=sudo
         fi
-        ${SUDO} apt update && ${SUDO} apt install -y libclang-dev wget jq libssl-dev pkg-config curl
+        ${SUDO} apt update && ${SUDO} apt install -y libclang-dev wget jq libssl-dev pkg-config curl git
 
     - name: Add cuda to path
       shell: 'bash -ex {0}'
