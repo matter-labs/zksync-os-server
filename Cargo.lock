@@ -12214,6 +12214,7 @@ dependencies = [
 name = "zksync_os_tracing"
 version = "0.7.3-non-semver-compat"
 dependencies = [
+ "sentry",
  "serde",
  "tracing",
  "tracing-logfmt",

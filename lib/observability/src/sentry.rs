@@ -27,6 +27,8 @@ impl Sentry {
             release: sentry::release_name!(),
             environment: self.environment.map(Cow::from),
             attach_stacktrace: true,
+            // maybe should be revisited in the future
+            traces_sample_rate: 0.1,
             ..Default::default()
         };
 

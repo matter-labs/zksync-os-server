@@ -34,15 +34,14 @@ pub async fn main() {
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
-    let sentry = Sentry::new(
-        &config
-            .general_config
-            .sentry_url
-            .clone()
-            .expect("Sentry URL is not set"),
-    )
-    .expect("Failed to initialize Sentry");
-    let _sentry_guard = sentry.install();
+    let _sentry_guard = if let Some(sentry_url) = config.general_config.sentry_url.clone() {
+        let sentry = Sentry::new(&sentry_url)
+            .expect("Failed to initialize Sentry")
+            .with_environment(config.general_config.sentry_environment.clone());
+        Some(sentry.install())
+    } else {
+        None
+    };
 
     let main_task = async move {
         match config.general_config.state_backend {

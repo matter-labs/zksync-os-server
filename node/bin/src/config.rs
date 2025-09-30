@@ -66,6 +66,10 @@ pub struct GeneralConfig {
     #[config(default_t = None)]
     pub sentry_url: Option<String>,
 
+    /// Environment name to be used for Sentry.
+    #[config(default_t = None)]
+    pub sentry_environment: Option<String>,
+
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]

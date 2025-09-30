@@ -51,8 +51,30 @@ impl Tracer {
             .from_env_lossy();
         let layer = self.format.apply(filter, self.use_color);
 
-        // The error is returned if the global default subscriber is already set,
-        // so it's safe to ignore it
-        let _ = tracing_subscriber::registry().with(layer).try_init();
+        let subscriber_registry = tracing_subscriber::registry().with(layer);
+
+        #[cfg(feature = "sentry")]
+        {
+            let sentry_layer = sentry::integrations::tracing::layer()
+                .event_filter(|metadata| match *metadata.level() {
+                    tracing::Level::ERROR => sentry::integrations::tracing::EventFilter::Event,
+                    tracing::Level::WARN => sentry::integrations::tracing::EventFilter::Event,
+                    _ => sentry::integrations::tracing::EventFilter::Ignore,
+                })
+                .span_filter(|metadata| {
+                    matches!(
+                        *metadata.level(),
+                        tracing::Level::ERROR | tracing::Level::WARN
+                    )
+                });
+
+            let _ = subscriber_registry.with(sentry_layer).try_init();
+        }
+        #[cfg(not(feature = "sentry"))]
+        {
+            // The error is returned if the global default subscriber is already set,
+            // so it's safe to ignore it
+            let _ = subscriber_registry.try_init();
+        }
     }
 }
