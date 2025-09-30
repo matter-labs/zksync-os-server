@@ -96,7 +96,7 @@ pub enum StateBackendConfig {
 pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed
+    // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
     #[config(with = Optional(Serde![int]), default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
