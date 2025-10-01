@@ -9,7 +9,6 @@ use alloy::eips::Decodable2718;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::primitives::{B256, Signature, TxHash};
 use alloy_rlp::Decodable;
-use reth_primitives_traits::{InMemorySize, MaybeSerde, SignedTransaction};
 use std::fmt;
 
 /// L2 transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth we
@@ -298,7 +297,10 @@ where
     }
 }
 
-impl<T: InMemorySize> InMemorySize for L2EnvelopeInner<T> {
+#[cfg(feature = "reth")]
+impl<T: reth_primitives_traits::InMemorySize> reth_primitives_traits::InMemorySize
+    for L2EnvelopeInner<T>
+{
     fn size(&self) -> usize {
         match self {
             Self::Legacy(tx) => tx.size(),
@@ -310,10 +312,17 @@ impl<T: InMemorySize> InMemorySize for L2EnvelopeInner<T> {
     }
 }
 
-impl<T> SignedTransaction for L2EnvelopeInner<T>
+#[cfg(feature = "reth")]
+impl<T> reth_primitives_traits::SignedTransaction for L2EnvelopeInner<T>
 where
     T: RlpEcdsaEncodableTx + SignableTransaction<Signature> + Unpin,
-    Self: Clone + PartialEq + Eq + Decodable + Decodable2718 + MaybeSerde + InMemorySize,
+    Self: Clone
+        + PartialEq
+        + Eq
+        + Decodable
+        + Decodable2718
+        + reth_primitives_traits::MaybeSerde
+        + reth_primitives_traits::InMemorySize,
 {
     fn tx_hash(&self) -> &TxHash {
         match self {
