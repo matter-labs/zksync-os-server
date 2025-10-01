@@ -175,10 +175,16 @@ jobs:
         run: |
           nvcc --version
   
-      - name: Prepare bellman-cuda directory
+      - name: Checkout era-bellman-cuda
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matter-labs/era-bellman-cuda
+          ref: main
+          path: bellman-cuda
+
+      - name: Build bellman-cuda
         shell: 'bash -ex {0}'
         run: |
-          git clone https://github.com/matter-labs/era-bellman-cuda.git --branch main bellman-cuda
           cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
           cmake --build bellman-cuda/build/
 
@@ -227,13 +233,6 @@ jobs:
         run: |
           nvidia-smi
 
-      - name: Prepare bellman-cuda directory
-        shell: 'bash -ex {0}'
-        run: |
-          git clone https://github.com/matter-labs/era-bellman-cuda.git --branch main bellman-cuda
-          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
-          cmake --build bellman-cuda/build/
-
       - name: Download prebuilt tests
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
@@ -242,13 +241,12 @@ jobs:
       - name: Download CRS setup file
         run: |
           mkdir -p crs
-          curl -L https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key -o crs/setup_compact.key
+          wget https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key -O crs/setup_compact.key
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
         env:
-          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
           COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
           RUST_MIN_STACK: 267108864
         run: |
