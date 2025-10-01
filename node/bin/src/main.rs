@@ -35,11 +35,11 @@ pub async fn main() {
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
-    let _sentry_guard = if let Some(sentry_url) = config.general_config.sentry_url.clone() {
-        Some(init_sentry(&sentry_url))
-    } else {
-        None
-    };
+    let _sentry_guard = config
+        .general_config
+        .sentry_url
+        .clone()
+        .map(|sentry_url| init_sentry(&sentry_url));
 
     let main_task = async move {
         match config.general_config.state_backend {
