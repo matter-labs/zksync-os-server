@@ -210,7 +210,6 @@ impl Tester {
                     fri_path: None,
                     max_snark_latency: None,
                     max_fris_per_snark: Some(1),
-                    enabled_logging: false,
                 })
                 .await
             });
