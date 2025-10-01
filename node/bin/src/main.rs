@@ -8,8 +8,9 @@ use zksync_os_bin::config::{
     SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
+use zksync_os_bin::sentry::init_sentry;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
-use zksync_os_observability::{PrometheusExporterConfig, Sentry};
+use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -35,10 +36,7 @@ pub async fn main() {
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
     let _sentry_guard = if let Some(sentry_url) = config.general_config.sentry_url.clone() {
-        let sentry = Sentry::new(&sentry_url)
-            .expect("Failed to initialize Sentry")
-            .with_environment(config.general_config.sentry_environment.clone());
-        Some(sentry.install())
+        Some(init_sentry(&sentry_url))
     } else {
         None
     };

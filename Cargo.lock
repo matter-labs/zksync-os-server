@@ -11701,6 +11701,7 @@ dependencies = [
  "reth-trie-common",
  "ruint",
  "semver 1.0.26",
+ "sentry",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -11985,7 +11986,6 @@ version = "0.7.3-non-semver-compat"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
- "sentry",
  "tokio",
  "tracing",
  "vise",
