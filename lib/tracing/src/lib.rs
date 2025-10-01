@@ -49,32 +49,26 @@ impl Tracer {
         let filter = EnvFilter::builder()
             .with_default_directive(LevelFilter::INFO.into())
             .from_env_lossy();
-        let layer = self.format.apply(filter, self.use_color);
+        let fmt_layer = self.format.apply(filter, self.use_color);
 
-        let subscriber_registry = tracing_subscriber::registry().with(layer);
+        let sentry_layer = sentry::integrations::tracing::layer()
+            .event_filter(|metadata| match *metadata.level() {
+                tracing::Level::ERROR => sentry::integrations::tracing::EventFilter::Event,
+                tracing::Level::WARN => sentry::integrations::tracing::EventFilter::Event,
+                _ => sentry::integrations::tracing::EventFilter::Ignore,
+            })
+            .span_filter(|metadata| {
+                matches!(
+                    *metadata.level(),
+                    tracing::Level::ERROR | tracing::Level::WARN
+                )
+            });
 
-        #[cfg(feature = "sentry")]
-        {
-            let sentry_layer = sentry::integrations::tracing::layer()
-                .event_filter(|metadata| match *metadata.level() {
-                    tracing::Level::ERROR => sentry::integrations::tracing::EventFilter::Event,
-                    tracing::Level::WARN => sentry::integrations::tracing::EventFilter::Event,
-                    _ => sentry::integrations::tracing::EventFilter::Ignore,
-                })
-                .span_filter(|metadata| {
-                    matches!(
-                        *metadata.level(),
-                        tracing::Level::ERROR | tracing::Level::WARN
-                    )
-                });
-
-            let _ = subscriber_registry.with(sentry_layer).try_init();
-        }
-        #[cfg(not(feature = "sentry"))]
-        {
-            // The error is returned if the global default subscriber is already set,
-            // so it's safe to ignore it
-            let _ = subscriber_registry.try_init();
-        }
+        // The error is returned if the global default subscriber is already set,
+        // so it's safe to ignore it
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(sentry_layer)
+            .try_init();
     }
 }
