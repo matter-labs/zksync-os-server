@@ -8,23 +8,20 @@ use backon::{ConstantBuilder, Retryable};
 use std::time::Duration;
 use zksync_os_l1_sender::l1_discovery::get_l1_state;
 
-/// Default bridgehub address from zkos-l1-state.json
-const DEFAULT_BRIDGEHUB_ADDRESS: &str = "0x70968ad336b957311e3c1c63e36d05035e356f68";
-
-pub struct ProverApi {
+pub struct ProverTester {
     l1_provider: EthDynProvider,
     l2_provider: EthDynProvider,
     l2_zk_provider: DynProvider<Zksync>,
 }
 
-impl ProverApi {
+impl ProverTester {
     /// Create a new client targeting the given base URL
     pub fn new(
         l1_provider: EthDynProvider,
         l2_provider: EthDynProvider,
         l2_zk_provider: DynProvider<Zksync>,
     ) -> Self {
-        ProverApi {
+        Self {
             l1_provider,
             l2_provider,
             l2_zk_provider,
@@ -35,9 +32,7 @@ impl ProverApi {
     /// Returns `true` if batch has been proven and verified on L1, `false` otherwise.
     pub async fn check_batch_status(&self, batch_number: u64) -> anyhow::Result<bool> {
         // Try to get bridgehub address from L2, fallback to default
-        let bridgehub_address = ZksyncApi::get_bridgehub_contract(&self.l2_zk_provider)
-            .await
-            .unwrap_or_else(|_| DEFAULT_BRIDGEHUB_ADDRESS.parse().unwrap());
+        let bridgehub_address = self.l2_zk_provider.get_bridgehub_contract().await?;
         let chain_id = self.l2_provider.get_chain_id().await?;
 
         // Get L1 state which contains diamond proxy address

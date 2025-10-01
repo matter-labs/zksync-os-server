@@ -1,6 +1,6 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
-use crate::prover_api::ProverApi;
+use crate::prover_tester::ProverTester;
 use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::U256;
@@ -24,7 +24,7 @@ pub mod assert_traits;
 pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
-mod prover_api;
+mod prover_tester;
 pub mod provider;
 mod utils;
 
@@ -43,7 +43,7 @@ pub struct Tester {
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
-    pub prover_api: ProverApi,
+    pub prover_tester: ProverTester,
 
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
@@ -111,7 +111,6 @@ impl Tester {
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
-        let _prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
@@ -194,7 +193,7 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            let base_url = _prover_api_url.clone();
+            let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
                 zksync_os_multivm::apps::v2::multiblock_batch_path(&app_bin_unpack_path);
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
@@ -276,7 +275,7 @@ impl Tester {
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l1_wallet,
             l2_wallet,
-            prover_api: ProverApi::new(
+            prover_tester: ProverTester::new(
                 EthDynProvider::new(l1_provider.clone()),
                 EthDynProvider::new(l2_provider.clone()),
                 DynProvider::new(l2_zk_provider.clone()),
