@@ -13,7 +13,7 @@ inputs:
     type: string
     description: 'Whether to enable cache.'
     required: false
-    default: 'true'
+    default: 'false'
   save_cache:
     type: string
     description: 'Whether to save cache.'

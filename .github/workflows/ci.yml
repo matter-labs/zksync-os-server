@@ -28,7 +28,10 @@ permissions:
 
 jobs:
 
-  build-high-performance:
+  ############################
+  #       Build server       #
+  ############################
+  build:
     runs-on: matterlabs-ci-runner-high-performance
     steps:
       - name: Checkout code
@@ -36,40 +39,24 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          enable_cache: 'false'
 
-      - name: Build project
+      - name: Build server
         run: cargo build --release --bin zksync_os_bin
 
-  build-ultra-performance:
-    runs-on: matterlabs-ci-runner-ultra-performance
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Setup runner
-        uses: ./.github/actions/runner-setup
-        with:
-          enable_cache: 'false'
-
-      - name: Build project
-        run: cargo build --release --bin zksync_os_bin
 
   ############################
   #     Format and lint      #
   ############################
   format-and-lint:
     runs-on: matterlabs-ci-runner-high-performance
+    env:
+      ZKSYNC_USE_CUDA_STUBS: true
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'build-format-and-lint'
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -77,14 +64,40 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features --workspace -- -D warnings
 
-      - name: Build project
-        run: cargo build --all-targets --workspace --exclude zksync_os_integration_tests
-
 
   #################################################
   #      Run unit and core integration tests      #
   #################################################
   test:
+    runs-on: matterlabs-ci-runner-high-performance
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+
+      - name: Run tests
+        run: cargo nextest run --workspace ${NEXTEST_ITERATIONS}
+
+      - name: Upload test results
+        if: always() && !cancelled()
+        uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
+        with:
+          check_name: 'Test results'
+          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
+          action_fail_on_inconclusive: true
+
+
+  ######################################
+  # Measure code coverage on main push #
+  ######################################
+  code-coverage:
+    # Code coverage is measured only on push to main branch
+    # as it slows down PR testing significantly (2m -> 15m for tests execution)
+    # due to overhead with LLVM instrumentation.
+    # So, we keep the main numbers, but not force every PR to wait for it.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: matterlabs-ci-runner-high-performance
     env:
       RUSTC_BOOTSTRAP: 1
@@ -94,14 +107,9 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'unit-tests'
 
-      - name: Run unit tests
-        run: |
-          cargo llvm-cov --lcov --output-path lcov.info \
-            nextest --workspace ${NEXTEST_ITERATIONS}
+      - name: Measure coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace
 
       - name: Generate codecov report
         uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
@@ -111,20 +119,11 @@ jobs:
           files: lcov.info
           slug: ${{ github.repository }}
 
-      - name: Upload test results to Codecov
-        if: always() && !cancelled()
-        uses: codecov/test-results-action@47f89e9acb64b76debcd5ea40642d25a4adced9f # v1.1.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: 'target/nextest/default/${{ env.TEST_RESULTS_XML }}'
-          slug: ${{ github.repository }}
-
 
   ############################################
   # Enforce EN sync format file immutability #
   ############################################
-  check-EN-backwards-compatibility:
-    name: Check replay wire format version
+  check-wire-version:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -156,7 +155,7 @@ jobs:
   ####################################
   #  Build prover integration tests  #
   ####################################
-  prover-integration-tests-build:
+  build-prover-tests:
     runs-on: matterlabs-ci-runner-high-performance
     container:
       image: nvidia/cuda:12.9.1-devel-ubuntu22.04
@@ -168,8 +167,9 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
         with:
+          enable_cache: 'true'
+          cache_shared_key: 'prover-tests'
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'prover-integration-tests'
 
       - name: Check CUDA version
         run: |
@@ -211,22 +211,21 @@ jobs:
           name: ${{ env.PROVER_GPU_TESTS }}
           path: ${{ env.PROVER_GPU_TESTS }}.tar.zst
           if-no-files-found: error
+          retention-days: 1 # delete sooner to not waste storage
 
 
   #################################################
   #  Run prover integration tests on GPU machine  #
   #################################################
-  prover-integration-tests:
+  prover-tests:
     runs-on: matterlabs-ci-gpu-runner
-    needs: prover-integration-tests-build
+    needs: build-prover-tests
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          enable_cache: 'false'
 
       - name: Check Nvidia driver version
         run: |
@@ -264,11 +263,12 @@ jobs:
     if: always() && !cancelled()
     needs:
       [
-        format-and-lint,
+        build,
         test,
-        prover-integration-tests-build,
-        prover-integration-tests,
-        check-EN-backwards-compatibility,
+        format-and-lint,
+        build-prover-tests,
+        prover-tests,
+        check-wire-version,
       ]
     steps:
       - name: Status
