@@ -2,14 +2,13 @@ use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
 use zksync_os_bin::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig,
+    LogConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
+use zksync_os_bin::sentry::init_sentry;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
@@ -19,16 +18,11 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 pub async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
-
     // =========== load configs ===========
     let config = build_configs();
+
+    // =========== init tracing ===========
+    zksync_os_tracing::Tracer::new(config.log_config.format, config.log_config.use_color).init();
     tracing::info!(?config, "Loaded config");
 
     let prometheus: PrometheusExporterConfig =
@@ -40,6 +34,12 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
+
+    let _sentry_guard = config
+        .general_config
+        .sentry_url
+        .clone()
+        .map(|sentry_url| init_sentry(&sentry_url));
 
     let main_task = async move {
         match config.general_config.state_backend {
@@ -141,6 +141,9 @@ fn build_configs() -> Config {
     schema
         .insert(&StatusServerConfig::DESCRIPTION, "status_server")
         .expect("Failed to insert status server config");
+    schema
+        .insert(&LogConfig::DESCRIPTION, "log")
+        .expect("Failed to insert log config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -210,6 +213,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse status server config");
 
+    let log_config = repo
+        .single::<LogConfig>()
+        .expect("Failed to load log config")
+        .parse()
+        .expect("Failed to parse log config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -239,5 +248,6 @@ fn build_configs() -> Config {
         prover_input_generator_config,
         prover_api_config,
         status_server_config,
+        log_config,
     }
 }

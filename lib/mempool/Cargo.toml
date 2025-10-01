@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_types.workspace = true
+zksync_os_types = { workspace = true, features = ["reth"] }
 
 reth-chainspec = { workspace = true }
 reth-storage-api = { workspace = true }

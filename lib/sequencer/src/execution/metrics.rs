@@ -80,6 +80,21 @@ pub struct ExecutionMetrics {
     #[metrics(buckets = Buckets::exponential(1.0..=10_000.0, 2.0))]
     pub transactions_per_block: Histogram<u64>,
 
+    #[metrics(buckets = Buckets::exponential(10_000.0..=5_000_000.0, 4.0))]
+    pub transaction_gas_used: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(10_000.0..=50_000_000.0, 4.0))]
+    pub transaction_native_used: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(10_000.0..=50_000_000.0, 4.0))]
+    pub transaction_computation_native_used: Histogram<u64>,
+
+    #[metrics(buckets = Buckets::exponential(1.0..=1_000_000.0, 4.0))]
+    pub transaction_pubdata_used: Histogram<u64>,
+
+    #[metrics(labels = ["status"])]
+    pub transaction_status: LabeledFamily<&'static str, Counter>,
+
     #[metrics(buckets = Buckets::exponential(10_000.0..=1_000_000_000.0, 4.0))]
     pub computational_native_used_per_block: Histogram<u64>,
 

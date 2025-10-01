@@ -46,7 +46,7 @@ impl StateHandle {
     ) -> Self {
         let state_db = RocksDB::<StorageMapCF>::new(&rocks_db_path.join(STATE_STORAGE_DB_NAME))
             .expect("Failed to open State DB");
-        let persistent_storage_map = PersistentStorageMap::new(state_db, genesis);
+        let persistent_storage_map = PersistentStorageMap::new(state_db, genesis).await;
 
         let storage_map = StorageMap::new(persistent_storage_map, blocks_to_retain_in_memory);
 

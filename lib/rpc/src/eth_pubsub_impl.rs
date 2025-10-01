@@ -12,7 +12,7 @@ use jsonrpsee::{PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink};
 use serde::Serialize;
 use std::ops::Deref;
 use tokio_stream::wrappers::ReceiverStream;
-use zksync_os_mempool::{EthPooledTransaction, L2TransactionPool, NewTransactionEvent};
+use zksync_os_mempool::{L2PooledTransaction, L2TransactionPool, NewTransactionEvent};
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_types::BlockExt;
 
@@ -83,7 +83,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
     /// Returns a stream that yields all transactions emitted by the mempool.
     fn full_pending_transaction_stream(
         &self,
-    ) -> impl Stream<Item = NewTransactionEvent<EthPooledTransaction>> + use<RpcStorage, Mempool>
+    ) -> impl Stream<Item = NewTransactionEvent<L2PooledTransaction>> + use<RpcStorage, Mempool>
     {
         self.mempool.new_pending_pool_transactions_listener()
     }

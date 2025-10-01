@@ -3,6 +3,158 @@
 version = 4
 
 [[package]]
+name = "actix-codec"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f7b0a21988c1bf877cf4759ef5ddaac04c1c9fe808c9142ecb78ba97d97a28a"
+dependencies = [
+ "bitflags 2.9.1",
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "actix-http"
+version = "3.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44cceded2fb55f3c4b67068fa64962e2ca59614edc5b03167de9ff82ae803da0"
+dependencies = [
+ "actix-codec",
+ "actix-rt",
+ "actix-service",
+ "actix-utils",
+ "base64 0.22.1",
+ "bitflags 2.9.1",
+ "bytes",
+ "bytestring",
+ "derive_more 2.0.1",
+ "encoding_rs",
+ "foldhash",
+ "futures-core",
+ "http 0.2.12",
+ "httparse",
+ "httpdate",
+ "itoa",
+ "language-tags",
+ "local-channel",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "rand 0.9.2",
+ "sha1",
+ "smallvec",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "actix-router"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13d324164c51f63867b57e73ba5936ea151b8a41a1d23d1031eeb9f70d0236f8"
+dependencies = [
+ "bytestring",
+ "cfg-if",
+ "http 0.2.12",
+ "regex-lite",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "actix-rt"
+version = "2.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92589714878ca59a7626ea19734f0e07a6a875197eec751bb5d3f99e64998c63"
+dependencies = [
+ "futures-core",
+ "tokio",
+]
+
+[[package]]
+name = "actix-server"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a65064ea4a457eaf07f2fba30b4c695bf43b721790e9530d26cb6f9019ff7502"
+dependencies = [
+ "actix-rt",
+ "actix-service",
+ "actix-utils",
+ "futures-core",
+ "futures-util",
+ "mio",
+ "socket2",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "actix-service"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e46f36bf0e5af44bdc4bdb36fbbd421aa98c79a9bce724e1edeb3894e10dc7f"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "actix-utils"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88a1dcdff1466e3c2488e1cb5c36a71822750ad43839937f85d2f4d9f8b705d8"
+dependencies = [
+ "local-waker",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "actix-web"
+version = "4.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a597b77b5c6d6a1e1097fddde329a83665e25c5437c696a3a9a4aa514a614dea"
+dependencies = [
+ "actix-codec",
+ "actix-http",
+ "actix-router",
+ "actix-rt",
+ "actix-server",
+ "actix-service",
+ "actix-utils",
+ "bytes",
+ "bytestring",
+ "cfg-if",
+ "derive_more 2.0.1",
+ "encoding_rs",
+ "foldhash",
+ "futures-core",
+ "futures-util",
+ "impl-more",
+ "itoa",
+ "language-tags",
+ "log",
+ "mime",
+ "once_cell",
+ "pin-project-lite",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "smallvec",
+ "socket2",
+ "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "addchain"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2469,6 +2621,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytestring"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "113b4343b5f6617e7ad401ced8de3cc8b012e73a594347c307b90db3e9271289"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
 name = "bzip2-sys"
 version = "0.1.13+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3392,6 +3553,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
+name = "debugid"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
+dependencies = [
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "der"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3990,10 +4161,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "find-msvc-tools"
-version = "0.1.2"
+name = "final_reduced_risc_v_machine_verifier"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.4.4#5a9f7a101bf48ab9ef860416ab0bffe88cdd183d"
+dependencies = [
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.4.4)",
+ "unroll",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.4.4)",
+]
+
+[[package]]
+name = "findshlibs"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ced73b1dacfc750a6db6c0a0c3a3853c8b41997e2e2c563dc90804ae6867959"
+checksum = "40b9e59cd0f7e0806cca4be089683ecb6434e602038df21fe6bf6711b2f07f64"
+dependencies = [
+ "cc",
+ "lazy_static",
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "firestorm"
@@ -4738,6 +4925,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a56f203cd1c76362b69e3863fd987520ac36cf70a8c92627449b2f64a8cf7d65"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5088,6 +5286,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "impl-more"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8a5a9a0ff0086c7a148acb942baaabeadf9504d10400b5a05645853729b9cd2"
+
+[[package]]
 name = "impl-rlp"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5175,7 +5379,7 @@ dependencies = [
  "log",
  "num-format",
  "once_cell",
- "quick-xml",
+ "quick-xml 0.37.5",
  "rgb",
  "str_stack",
 ]
@@ -5555,6 +5759,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "language-tags"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5697,6 +5907,23 @@ name = "litemap"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
+
+[[package]]
+name = "local-channel"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6cbc85e69b8df4b8bb8b89ec634e7189099cea8927a276b7384ce5488e53ec8"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "local-waker",
+]
+
+[[package]]
+name = "local-waker"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d873d7c67ce09b42110d801813efbc9364414e356be9935700d368351657487"
 
 [[package]]
 name = "lock_api"
@@ -5892,6 +6119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78bed444cc8a2160f01cbcf811ef18cac863ad68ae8ca62092e8db51d51c761c"
 dependencies = [
  "libc",
+ "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
 ]
@@ -6340,6 +6568,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "os_info"
+version = "3.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0e1ac5fde8d43c34139135df8ea9ee9465394b2d8d20f032d38998f64afffc3"
+dependencies = [
+ "log",
+ "plist",
+ "serde",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6624,6 +6864,19 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "plist"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "740ebea15c5d1428f910cd1a5f52cebf8d25006245ed8ade92702f4943d91e07"
+dependencies = [
+ "base64 0.22.1",
+ "indexmap 2.10.0",
+ "quick-xml 0.38.3",
+ "serde",
+ "time",
+]
 
 [[package]]
 name = "plotters"
@@ -7069,6 +7322,15 @@ name = "quick-xml"
 version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.38.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42a232e7487fc2ef313d96dde7948e7a3c05101870d8985e4fd8d26aedd27b89"
 dependencies = [
  "memchr",
 ]
@@ -8443,7 +8705,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9aace74cb666635c918e9c12bc0d348266037aa8eb599b5cba565709a8dff00"
 dependencies = [
  "openssl-probe",
- "rustls-pemfile",
+ "rustls-pemfile 1.0.4",
  "schannel",
  "security-framework 2.11.1",
 ]
@@ -8467,6 +8729,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
 dependencies = [
  "base64 0.21.7",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -8807,6 +9078,127 @@ name = "send_wrapper"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
+
+[[package]]
+name = "sentry"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc02afbba55340d6394968cb621384dbb9a0ad72d1b45e3e403099702a8bcf61"
+dependencies = [
+ "httpdate",
+ "native-tls",
+ "reqwest",
+ "sentry-actix",
+ "sentry-backtrace",
+ "sentry-contexts",
+ "sentry-core",
+ "sentry-debug-images",
+ "sentry-panic",
+ "sentry-tracing",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
+name = "sentry-actix"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5c9138631299216c4b85be2e54b9ca3c40e54dabeac4fa71ee4a680d536e083"
+dependencies = [
+ "actix-http",
+ "actix-web",
+ "bytes",
+ "futures-util",
+ "sentry-core",
+]
+
+[[package]]
+name = "sentry-backtrace"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f288792b92dfb3e8887554d2d11418863d5fabcd1cfad6756a8f88a5b963b76"
+dependencies = [
+ "backtrace",
+ "regex",
+ "sentry-core",
+]
+
+[[package]]
+name = "sentry-contexts"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b28e6208b0f6e28a3d08a6e46b1127fefe75185decb969b8e1e0bf8cce6e06d"
+dependencies = [
+ "hostname",
+ "libc",
+ "os_info",
+ "rustc_version 0.4.1",
+ "sentry-core",
+ "uname",
+]
+
+[[package]]
+name = "sentry-core"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67600a47b5aa005cb701454d56a289135a80654eebf1c1d9f076c3817a249bb8"
+dependencies = [
+ "rand 0.9.2",
+ "sentry-types",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "sentry-debug-images"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb27e7e12008f0c80446089efe050f3333a333aafc9eb16fe9800b7a183cf20c"
+dependencies = [
+ "findshlibs",
+ "sentry-core",
+]
+
+[[package]]
+name = "sentry-panic"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce0bae293ecf6afaaa00dc63de3cc89b49ef774f06b9cf18dfd9c652009d3461"
+dependencies = [
+ "sentry-backtrace",
+ "sentry-core",
+]
+
+[[package]]
+name = "sentry-tracing"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c044617771f460a3c2ca7cf8f516c3341ba886ca38d53cb550997d8bf636a3c"
+dependencies = [
+ "bitflags 2.9.1",
+ "sentry-backtrace",
+ "sentry-core",
+ "tracing-core",
+ "tracing-subscriber 0.3.20",
+]
+
+[[package]]
+name = "sentry-types"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa369b6dc823ba5bddd69d16620f19229eb5df865b9483cf4dabb608891bb9c2"
+dependencies = [
+ "debugid",
+ "hex",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "time",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "seq-macro"
@@ -10079,6 +10471,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-logfmt"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1f47d22deb79c3f59fcf2a1f00f60cbdc05462bf17d1cd356c1fefa3f444bd"
+dependencies = [
+ "time",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber 0.3.20",
+]
+
+[[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10097,12 +10511,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -10222,6 +10639,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "uname"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b72f89f0ca32e4db1c04e2a72f5345d59796d4866a1ee0609084569f73683dc8"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10286,6 +10712,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
 
 [[package]]
+name = "ureq"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99ba1025f18a4a3fc3e9b48c868e9beb4f24f4b4b1a325bada26bd4119f46537"
+dependencies = [
+ "base64 0.22.1",
+ "der 0.7.10",
+ "log",
+ "native-tls",
+ "percent-encoding",
+ "rustls-pemfile 2.2.0",
+ "rustls-pki-types",
+ "ureq-proto",
+ "utf-8",
+ "webpki-root-certs 1.0.2",
+]
+
+[[package]]
+name = "ureq-proto"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60b4531c118335662134346048ddb0e54cc86bd7e81866757873055f0e38f5d2"
+dependencies = [
+ "base64 0.22.1",
+ "http 1.3.1",
+ "httparse",
+ "log",
+]
+
+[[package]]
 name = "url"
 version = "2.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10328,6 +10784,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
 dependencies = [
  "js-sys",
+ "serde",
  "wasm-bindgen",
 ]
 
@@ -11453,7 +11910,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_bin"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11471,6 +11928,7 @@ dependencies = [
  "futures",
  "http 1.3.1",
  "itertools 0.14.0",
+ "jsonrpsee",
  "pin-project 1.1.10",
  "reth-chainspec",
  "reth-execution-types",
@@ -11480,7 +11938,8 @@ dependencies = [
  "reth-storage-api",
  "reth-trie-common",
  "ruint",
- "semver 1.0.27",
+ "semver 1.0.26",
+ "sentry",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -11490,7 +11949,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "tracing-subscriber 0.3.20",
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.25)",
  "zksync_os_api",
@@ -11506,25 +11964,27 @@ dependencies = [
  "zksync_os_priority_tree",
  "zksync_os_rocksdb",
  "zksync_os_rpc",
+ "zksync_os_rpc_api",
  "zksync_os_sequencer",
  "zksync_os_state",
  "zksync_os_state_full_diffs",
  "zksync_os_status_server",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_tracing",
  "zksync_os_types",
 ]
 
 [[package]]
 name = "zksync_os_contract_interface"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
 ]
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "blake2 0.10.6",
@@ -11555,7 +12015,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_generate_deposit"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11567,18 +12027,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.25)",
  "blake2 0.10.6",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.25)",
- "ruint",
  "serde",
  "serde_json",
  "tokio",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.25)",
  "zksync_os_api",
  "zksync_os_contract_interface",
  "zksync_os_l1_watcher",
@@ -11587,7 +12045,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11626,7 +12084,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11657,7 +12115,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11672,7 +12130,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11689,7 +12147,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11718,7 +12176,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "criterion",
@@ -11729,7 +12187,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11742,7 +12200,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_object_store"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -11767,7 +12225,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -11779,7 +12237,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11820,7 +12278,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -11833,7 +12291,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11854,6 +12312,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.25)",
  "zksync_os_api",
+ "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_mempool",
  "zksync_os_mini_merkle_tree",
@@ -11865,12 +12324,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
  "jsonrpsee",
  "serde",
+ "zksync_os_genesis",
  "zksync_os_types",
 ]
 
@@ -11898,7 +12358,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11948,7 +12408,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11967,7 +12427,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11985,7 +12445,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -11996,7 +12456,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "dashmap",
@@ -12013,7 +12473,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -12037,12 +12497,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_tracing"
+version = "0.7.4-non-semver-compat"
+dependencies = [
+ "sentry",
+ "serde",
+ "tracing",
+ "tracing-logfmt",
+ "tracing-subscriber 0.3.20",
+]
+
+[[package]]
 name = "zksync_os_types"
-version = "0.7.0-non-semver-compat"
+version = "0.7.4-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
  "bincode 2.0.1",
+ "reth-primitives-traits",
  "serde",
  "thiserror 2.0.17",
  "zksync_os_contract_interface",

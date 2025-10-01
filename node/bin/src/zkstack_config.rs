@@ -49,7 +49,7 @@ impl ZkStackConfig {
             .and_then(Value::as_u64)
             .context("Failed to parse chain_id")?;
 
-        genesis_config.chain_id = chain_id;
+        genesis_config.chain_id = Some(chain_id);
 
         let wallets_yaml = self.get_yaml_file("configs/wallets.yaml")?;
 
@@ -74,7 +74,7 @@ impl ZkStackConfig {
             .context("Failed to parse bridgehub address")?;
 
         genesis_config.bridgehub_address =
-            alloy::primitives::Address::from_str(&bridgehub_address)?;
+            Some(alloy::primitives::Address::from_str(&bridgehub_address)?);
 
         // ports
 

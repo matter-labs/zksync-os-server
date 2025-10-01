@@ -2,12 +2,13 @@ use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
-use smart_config::{DescribeConfig, DeserializeConfig, Serde};
+use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::Optional};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_object_store::ObjectStoreConfig;
+use zksync_os_tracing::LogFormat;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -25,6 +26,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
+    pub log_config: LogConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -60,6 +62,10 @@ pub struct GeneralConfig {
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
+    /// Sentry URL.
+    #[config(default_t = None)]
+    pub sentry_url: Option<String>,
+
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
@@ -76,6 +82,11 @@ pub struct GeneralConfig {
 
     /// If set - initialize the configs based off the values from the yaml files from that directory.
     pub zkstack_cli_config_dir: Option<String>,
+
+    /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
+    /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
+    #[config(default_t = None)]
+    pub main_node_rpc_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -89,17 +100,17 @@ pub enum StateBackendConfig {
 pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = "0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap())]
-    pub bridgehub_address: Address,
+    // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
+    #[config(with = Optional(Serde![int]), default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
+    pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
-    #[config(default_t = 270)]
-    pub chain_id: u64,
+    #[config(default_t = Some(270))]
+    pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = "./genesis/genesis.json".into())]
-    pub genesis_input_path: PathBuf,
+    #[config(with = Optional(Serde![int]), default_t = Some("./genesis/genesis.json".into()))]
+    pub genesis_input_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -145,7 +156,11 @@ pub struct SequencerConfig {
     /// Path to the directory where block dumps for unexpected failures will be saved.
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
+
+    #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
+    pub fee_collector_address: Address,
 }
+
 impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
@@ -366,6 +381,20 @@ pub struct FakeSnarkProversConfig {
     /// Only pick up jobs that are this time old.
     #[config(default_t = Duration::from_secs(10))]
     pub max_batch_age: Duration,
+}
+
+/// Configuration for the logging stack.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct LogConfig {
+    /// Format of the logs emitted by the node.
+    #[config(default)]
+    #[config(with = Serde![str])]
+    pub format: LogFormat,
+
+    /// Whether to use color in logs.
+    #[config(default_t = true)]
+    pub use_color: bool,
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {

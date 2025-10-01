@@ -37,7 +37,7 @@ reqwest.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-test-log.workspace = true
+test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 
 [features]
 prover-tests = ["dep:zksync_os_prover_service"]

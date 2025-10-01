@@ -15,6 +15,7 @@ zksync_os_l1_watcher.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_rocksdb.workspace = true
 zksync_os_rpc.workspace = true
+zksync_os_rpc_api.workspace = true
 zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
@@ -25,6 +26,7 @@ zksync_os_object_store.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_tracing.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
@@ -51,7 +53,6 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
 thiserror.workspace = true
 itertools.workspace = true
 futures.workspace = true
@@ -74,3 +75,6 @@ axum.workspace = true
 http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
+jsonrpsee = { workspace = true, default-features = false, features = ["client"] }
+
+sentry.workspace = true
