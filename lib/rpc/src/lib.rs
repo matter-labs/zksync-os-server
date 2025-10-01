@@ -16,6 +16,7 @@ mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 mod monitoring_middleware;
+mod net_impl;
 mod sandbox;
 mod tx_handler;
 mod types;
@@ -27,6 +28,7 @@ use crate::eth_filter_impl::EthFilterNamespace;
 use crate::eth_impl::EthNamespace;
 use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::monitoring_middleware::Monitoring;
+use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
@@ -41,6 +43,7 @@ use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
+use zksync_os_rpc_api::net::NetApiServer;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
@@ -74,7 +77,8 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         ZksNamespace::new(bridgehub_address, storage.clone(), genesis_input_source).into_rpc(),
     )?;
     rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
-    rpc.merge(DebugNamespace::new(storage, eth_call_handler).into_rpc())?;
+    rpc.merge(DebugNamespace::new(storage.clone(), eth_call_handler).into_rpc())?;
+    rpc.merge(NetNamespace::new(chain_id).into_rpc())?;
 
     // Add a CORS middleware for handling HTTP requests.
     // This middleware does affect the response, including appropriate
