@@ -39,3 +39,7 @@ vise.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 hyper.workspace = true
+
+[features]
+default = []
+eip712-tx = ["zksync_os_types/eip712-tx"]

@@ -232,6 +232,11 @@ internal state or persistence — this is one of the design principles.
     3. Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from `batcher` -
        see below.
 
+### Prividium
+
+Prividium requires support for a custom transaction type based on EIP-712 that is disabled by default. To enable it,
+compile with `--features eip712-tx`.
+
 ## Glossary
 
 * `Block` vs `Batch`:

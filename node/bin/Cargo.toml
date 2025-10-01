@@ -76,3 +76,7 @@ http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["client"] }
+
+[features]
+default = []
+eip712-tx = ["zksync_os_types/eip712-tx", "zksync_os_rpc/eip712-tx"]

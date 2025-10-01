@@ -478,6 +478,8 @@ fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
         ZkEnvelope::L2(L2Envelope::Eip1559(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip4844(inner)) => inner.tx_mut().as_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip7702(inner)) => inner.tx_mut().gas_limit = gas_limit,
+        #[cfg(feature = "eip712-tx")]
+        ZkEnvelope::L2(L2Envelope::Eip712(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L1(envelope) => {
             let tx = envelope.inner.tx_mut();
             tx.gas_limit = gas_limit;
