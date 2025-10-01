@@ -6,6 +6,7 @@ use tokio::{
     task::{JoinHandle, spawn_blocking},
 };
 use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::tracing::NopTracer;
 use zksync_os_interface::traits::{NextTxResponse, TxResultCallback, TxSource};
 use zksync_os_interface::types::{BlockContext, BlockOutput, TxProcessingOutputOwned};
 use zksync_os_storage_api::ViewState;
@@ -39,6 +40,7 @@ impl VmWrapper {
                 state_view,
                 tx_source,
                 tx_callback,
+                &mut NopTracer,
             )
         });
 
