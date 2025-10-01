@@ -14,3 +14,5 @@ tracing.workspace = true
 tracing-logfmt = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 serde = { workspace = true, features = ["derive"] }
+sentry = { workspace = true, features = ["tracing"] }
+

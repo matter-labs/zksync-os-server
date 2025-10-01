@@ -14,6 +14,7 @@ pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
 pub mod reth_state;
+pub mod sentry;
 mod state_initializer;
 pub mod tree_manager;
 mod util;
