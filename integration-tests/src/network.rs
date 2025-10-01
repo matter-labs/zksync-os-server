@@ -165,7 +165,7 @@ impl TransactionBuilder<Zksync> for ZkTransactionRequest {
             ZkTxType::L1 | ZkTxType::Upgrade => {
                 unimplemented!()
             }
-            ZkTxType::L2(ty) => TransactionBuilder::complete_type(&self.0, ty),
+            ZkTxType::L2(ty) => TransactionBuilder::complete_type(&self.0, ty.into()),
         }
     }
 
@@ -178,13 +178,13 @@ impl TransactionBuilder<Zksync> for ZkTransactionRequest {
     }
 
     fn output_tx_type(&self) -> <Zksync as Network>::TxType {
-        ZkTxType::L2(TransactionBuilder::output_tx_type(&self.0))
+        ZkTxType::L2(TransactionBuilder::output_tx_type(&self.0).into())
     }
 
     fn output_tx_type_checked(&self) -> Option<<Zksync as Network>::TxType> {
-        Some(ZkTxType::L2(TransactionBuilder::output_tx_type_checked(
-            &self.0,
-        )?))
+        Some(ZkTxType::L2(
+            TransactionBuilder::output_tx_type_checked(&self.0)?.into(),
+        ))
     }
 
     fn prep_for_submission(&mut self) {
@@ -196,7 +196,10 @@ impl TransactionBuilder<Zksync> for ZkTransactionRequest {
             request: Self(e.request),
             error: match e.error {
                 TransactionBuilderError::InvalidTransactionRequest(tx_type, keys) => {
-                    TransactionBuilderError::InvalidTransactionRequest(ZkTxType::L2(tx_type), keys)
+                    TransactionBuilderError::InvalidTransactionRequest(
+                        ZkTxType::L2(tx_type.into()),
+                        keys,
+                    )
                 }
                 TransactionBuilderError::UnsupportedSignatureType => {
                     TransactionBuilderError::UnsupportedSignatureType
