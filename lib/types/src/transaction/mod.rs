@@ -1,10 +1,10 @@
 mod encode;
-mod l1;
-mod l2;
-
 pub use encode::*;
+mod l1;
 pub use l1::*;
+mod l2;
 pub use l2::*;
+
 use std::fmt;
 
 use alloy::consensus::crypto::RecoveryError;
@@ -182,7 +182,6 @@ impl fmt::Display for ZkTxType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::consensus::TxType;
     use alloy::consensus::private::alloy_primitives;
     use alloy::primitives::{TxKind, address};
 
