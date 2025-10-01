@@ -1,7 +1,7 @@
 use crate::receipt::ZkReceipt;
-use crate::transaction::{L1PriorityTxType, L1TxType};
+use crate::transaction::{L1PriorityTxType, L1TxType, TxType};
 use crate::{L2ToL1Log, UpgradeTxType, ZkTxType};
-use alloy::consensus::{Eip658Value, ReceiptWithBloom, TxReceipt, TxType};
+use alloy::consensus::{Eip658Value, ReceiptWithBloom, TxReceipt};
 use alloy::eips::Typed2718;
 use alloy::eips::eip2718::{
     Decodable2718, EIP1559_TX_TYPE_ID, EIP2930_TX_TYPE_ID, EIP4844_TX_TYPE_ID, EIP7702_TX_TYPE_ID,

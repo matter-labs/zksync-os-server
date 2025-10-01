@@ -1,12 +1,11 @@
 use crate::L2TransactionPool;
+use crate::transaction::L2PooledTransaction;
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
 use reth_primitives_traits::transaction::error::InvalidTransactionError;
 use reth_transaction_pool::error::InvalidPoolTransactionError;
-use reth_transaction_pool::{
-    BestTransactions, EthPooledTransaction, TransactionListenerKind, ValidPoolTransaction,
-};
+use reth_transaction_pool::{BestTransactions, TransactionListenerKind, ValidPoolTransaction};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -22,8 +21,8 @@ pub struct BestTransactionsStream<'a> {
     upgrade_tx: Option<L1UpgradeEnvelope>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
-        Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<EthPooledTransaction>>>>,
-    last_polled_l2_tx: Option<Arc<ValidPoolTransaction<EthPooledTransaction>>>,
+        Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
+    last_polled_l2_tx: Option<Arc<ValidPoolTransaction<L2PooledTransaction>>>,
 }
 
 /// Convenience method to stream best L2 transactions

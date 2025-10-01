@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
-use zksync_os_mempool::{EthPooledTransaction, L2TransactionPool, NewSubpoolTransactionStream};
+use zksync_os_mempool::{L2PooledTransaction, L2TransactionPool, NewSubpoolTransactionStream};
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2Envelope;
@@ -436,11 +436,11 @@ impl PendingTransactionsReceiver {
 /// A structure to manage and provide access to a stream of full transaction details.
 #[derive(Debug, Clone)]
 struct FullTransactionsReceiver {
-    txs_stream: Arc<Mutex<NewSubpoolTransactionStream<EthPooledTransaction>>>,
+    txs_stream: Arc<Mutex<NewSubpoolTransactionStream<L2PooledTransaction>>>,
 }
 
 impl FullTransactionsReceiver {
-    fn new(txs_stream: NewSubpoolTransactionStream<EthPooledTransaction>) -> Self {
+    fn new(txs_stream: NewSubpoolTransactionStream<L2PooledTransaction>) -> Self {
         Self {
             txs_stream: Arc::new(Mutex::new(txs_stream)),
         }

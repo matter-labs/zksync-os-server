@@ -11797,6 +11797,7 @@ dependencies = [
  "alloy",
  "alloy-rlp",
  "bincode 2.0.1",
+ "reth-primitives-traits",
  "serde",
  "thiserror 2.0.12",
  "zksync_os_contract_interface",
