@@ -110,7 +110,7 @@ runs:
       with:
         inherit-toolchain: true
         components: 'rustfmt,clippy'
-        bins: 'cargo-nextest'
+        bins: 'cargo-nextest,cargo-llvm-cov'
         cache: false
 
     - name: Rust cache

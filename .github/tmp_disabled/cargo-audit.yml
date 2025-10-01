@@ -14,9 +14,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Set default permissions
+# Set permissions
 permissions:
   contents: read
+  issues: write # required for cargo-audit
+  checks: write # required for cargo-audit
 
 jobs:
   cargo-audit:
