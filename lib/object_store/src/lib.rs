@@ -26,7 +26,6 @@
 mod config;
 mod factory;
 mod file;
-mod gcs;
 mod metrics;
 mod mirror;
 mod mock;
@@ -46,7 +45,6 @@ pub use self::{
     config::{ObjectStoreConfig, ObjectStoreMode},
     factory::ObjectStoreFactory,
     file::FileBackedObjectStore,
-    gcs::{GoogleCloudStore, GoogleCloudStoreAuthMode},
     mock::MockObjectStore,
     traits::{Bucket, ObjectStore, ObjectStoreError, StoredObject},
 };
