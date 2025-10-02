@@ -17,6 +17,7 @@ env:
   RUST_BACKTRACE: 1
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
+  CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
   NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
 
@@ -174,7 +175,7 @@ jobs:
       - name: Check CUDA version
         run: |
           nvcc --version
-  
+
       - name: Checkout era-bellman-cuda
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -192,7 +193,6 @@ jobs:
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
         env:
-          CUDAARCHS: 80
           # This is a special mandatory hack to transfer test binary from one machine to another.
           # We must use a dummy `./` path addition in the workspace path /home/runner/_work
           # to prevent GitHub Actions to replace it to the mapped `/__w` folder in the docker container.
