@@ -76,3 +76,5 @@ http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["client"] }
+
+sentry.workspace = true

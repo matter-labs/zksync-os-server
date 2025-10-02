@@ -94,3 +94,13 @@ async fn get_transaction_count() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test_log::test(tokio::test)]
+async fn get_net_version() -> anyhow::Result<()> {
+    // Test that the node returns correct chain ID in `net_version` RPC call
+    let tester = Tester::setup().await?;
+    let net_version = tester.l2_provider.get_net_version().await?;
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    assert_eq!(net_version, chain_id);
+    Ok(())
+}

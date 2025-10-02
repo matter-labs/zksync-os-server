@@ -123,7 +123,7 @@ impl Batcher {
             self.batch_data_sender
                 .send(batch_envelope)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to send batch data: {e}"))?;
         }
     }
 
@@ -183,9 +183,7 @@ impl Batcher {
 
                             // sanity check - ensure that we process blocks in order
                             anyhow::ensure!(block_number == expected_block_number,
-                                "Unexpected block number received. Expected {}, got {}",
-                                expected_block_number,
-                                block_number,
+                                "Unexpected block number received. Expected {expected_block_number}, got {block_number}"
                             );
                             expected_block_number += 1;
 
