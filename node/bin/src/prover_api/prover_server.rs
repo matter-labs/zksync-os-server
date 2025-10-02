@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,7 +114,7 @@ async fn submit_fri_proof(
 
 async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
     match state.proof_storage.get(block).await {
-        Ok(Some(BatchEnvelope {
+        Ok(Some(SignedBatchEnvelope {
             data: FriProof::Real(proof_bytes),
             ..
         })) => Json(FriProofPayload {

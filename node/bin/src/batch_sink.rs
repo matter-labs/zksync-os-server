@@ -1,5 +1,5 @@
 use tokio::sync::mpsc::Receiver;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 
 /// Final destination for all processed batches
 /// Only used for metrics, logging and analytics.
@@ -7,12 +7,12 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 pub struct BatchSink {
     // == plumbing ==
     // inbound
-    committed_batch_receiver: Receiver<BatchEnvelope<FriProof>>,
+    committed_batch_receiver: Receiver<SignedBatchEnvelope<FriProof>>,
 }
 
 impl BatchSink {
-    // todo: no need to pass FriProof here, just BatchEnvelope
-    pub fn new(committed_batch_receiver: Receiver<BatchEnvelope<FriProof>>) -> Self {
+    // todo: no need to pass FriProof here, just SignedBatchEnvelope
+    pub fn new(committed_batch_receiver: Receiver<SignedBatchEnvelope<FriProof>>) -> Self {
         Self {
             committed_batch_receiver,
         }

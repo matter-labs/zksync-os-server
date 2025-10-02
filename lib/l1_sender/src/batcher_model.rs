@@ -32,22 +32,58 @@ fn default_execution_version() -> u32 {
     1
 }
 
+#[derive(Debug)]
+pub enum MissingSignature {
+    ForSigning,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub enum BatchSignatureData {
+    Signed {
+        signatures: Vec<Vec<u8>>, //TODO proper type
+    },
+    // to allow deserializing older objects
+    #[default]
+    NotNeeded,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BatchEnvelope<E> {
+pub struct BatchEnvelope<E, S> {
     pub batch: BatchMetadata,
     pub data: E,
+    #[serde(default)] // to allow deserializing older objects
+    pub signature_data: S,
     #[serde(skip, default)]
     pub latency_tracker: LatencyDistributionTracker<BatchExecutionStage>,
 }
 
-impl<E> BatchEnvelope<E> {
+pub type BatchForSigning<E> = BatchEnvelope<E, MissingSignature>;
+pub type SignedBatchEnvelope<E> = BatchEnvelope<E, BatchSignatureData>;
+
+impl<E> BatchEnvelope<E, MissingSignature> {
     pub fn new(batch: BatchMetadata, data: E) -> Self {
         Self {
             batch,
             data,
+            signature_data: MissingSignature::ForSigning,
             latency_tracker: LatencyDistributionTracker::default(),
         }
     }
+
+    pub fn with_signatures(
+        self,
+        signature_data: BatchSignatureData,
+    ) -> BatchEnvelope<E, BatchSignatureData> {
+        BatchEnvelope {
+            batch: self.batch,
+            data: self.data,
+            signature_data,
+            latency_tracker: self.latency_tracker,
+        }
+    }
+}
+
+impl<E, S> BatchEnvelope<E, S> {
     pub fn batch_number(&self) -> u64 {
         self.batch.commit_batch_info.batch_number
     }
@@ -77,15 +113,16 @@ impl<E> BatchEnvelope<E> {
         });
     }
 
-    pub fn with_stage(mut self, stage: BatchExecutionStage) -> BatchEnvelope<E> {
+    pub fn with_stage(mut self, stage: BatchExecutionStage) -> BatchEnvelope<E, S> {
         self.set_stage(stage);
         self
     }
 
-    pub fn with_data<N>(self, data: N) -> BatchEnvelope<N> {
-        BatchEnvelope::<N> {
+    pub fn with_data<N>(self, data: N) -> BatchEnvelope<N, S> {
+        BatchEnvelope {
             batch: self.batch,
             data,
+            signature_data: self.signature_data,
             latency_tracker: self.latency_tracker,
         }
     }

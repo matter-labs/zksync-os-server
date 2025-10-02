@@ -5,9 +5,9 @@ use tokio::sync::watch;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use zksync_os_bin::config::{
-    BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-    MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig,
+    BatchVerificationConfig, BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig,
+    L1WatcherConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
@@ -209,6 +209,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse status server config");
 
+    let batch_verification_config = repo
+        .single::<BatchVerificationConfig>()
+        .expect("Failed to load batch verification config")
+        .parse()
+        .expect("Failed to parse batch verification config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -238,5 +244,6 @@ fn build_configs() -> Config {
         prover_input_generator_config,
         prover_api_config,
         status_server_config,
+        batch_verification_config,
     }
 }

@@ -8,7 +8,7 @@ use tokio::sync::{Mutex, mpsc};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
@@ -76,7 +76,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
     pub async fn prepare_execute_commands<BatchStorage: ReadBatch>(
         self,
         batch_storage: BatchStorage,
-        mut proved_batch_envelopes_receiver: Option<mpsc::Receiver<BatchEnvelope<FriProof>>>,
+        mut proved_batch_envelopes_receiver: Option<mpsc::Receiver<SignedBatchEnvelope<FriProof>>>,
         mut proved_batch_numbers_receiver: Option<mpsc::Receiver<u64>>,
         priority_ops_count_sender: mpsc::Sender<(u64, u64, usize)>,
         execute_batches_sender: Option<mpsc::Sender<ExecuteCommand>>,

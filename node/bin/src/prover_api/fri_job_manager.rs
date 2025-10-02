@@ -9,7 +9,7 @@
 //! * Fake provers call [`pick_next_job`] with a `min_age` param to avoid taking fresh items,
 //!   letting real provers race first.
 //! * When any proof is submitted (real or fake):
-//!     * It is enqueued to the ordered committer as `BatchEnvelope<FriProof>`.
+//!     * It is enqueued to the ordered committer as `SignedBatchEnvelope<FriProof>`.
 //!     * It is removed from `ProverJobMap` so the map cannot grow without bounds.
 //!
 //! `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
@@ -26,7 +26,7 @@ use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -56,9 +56,9 @@ pub struct FriJobManager {
     assigned_jobs: ProverJobMap,
     // == plumbing ==
     // inbound
-    inbound: Mutex<PeekableReceiver<BatchEnvelope<ProverInput>>>,
+    inbound: Mutex<PeekableReceiver<SignedBatchEnvelope<ProverInput>>>,
     // outbound
-    batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+    batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     // == config ==
     max_assigned_batch_range: usize,
     // == metrics ==
@@ -67,8 +67,8 @@ pub struct FriJobManager {
 
 impl FriJobManager {
     pub fn new(
-        batches_for_prove_receiver: mpsc::Receiver<BatchEnvelope<ProverInput>>,
-        batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+        batches_for_prove_receiver: mpsc::Receiver<SignedBatchEnvelope<ProverInput>>,
+        batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
 
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
@@ -253,7 +253,7 @@ impl FriJobManager {
     }
     fn try_reserve_permit_downstream(
         &self,
-    ) -> Result<Permit<BatchEnvelope<FriProof>>, SubmitError> {
+    ) -> Result<Permit<SignedBatchEnvelope<FriProof>>, SubmitError> {
         Ok(match self.batches_with_proof_sender.try_reserve() {
             Ok(permit) => {
                 self.set_status(GenericComponentState::ProcessingOrWaitingRecv);

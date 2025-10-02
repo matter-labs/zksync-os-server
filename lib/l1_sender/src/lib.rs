@@ -7,7 +7,7 @@ pub mod l1_discovery;
 mod metrics;
 mod new_blocks;
 
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::L1SenderCommand;
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1_STATE_METRICS, L1SenderState};
@@ -50,7 +50,7 @@ use zksync_os_observability::ComponentStateReporter;
 pub async fn run_l1_sender<Input: L1SenderCommand>(
     // == plumbing ==
     mut inbound: Receiver<Input>,
-    outbound: Sender<BatchEnvelope<FriProof>>,
+    outbound: Sender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,

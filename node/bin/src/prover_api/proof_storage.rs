@@ -9,7 +9,7 @@
 use alloy::primitives::BlockNumber;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_object_store::_reexports::BoxedError;
 use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
 use zksync_os_storage_api::ReadBatch;
@@ -17,7 +17,7 @@ use zksync_os_storage_api::ReadBatch;
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StoredBatch {
-    V1(BatchEnvelope<FriProof>),
+    V1(SignedBatchEnvelope<FriProof>),
 }
 
 impl StoredObject for StoredBatch {
@@ -44,7 +44,7 @@ impl StoredBatch {
         }
     }
 
-    pub fn batch_envelope(self) -> BatchEnvelope<FriProof> {
+    pub fn batch_envelope(self) -> SignedBatchEnvelope<FriProof> {
         match self {
             StoredBatch::V1(envelope) => envelope,
         }
@@ -69,7 +69,10 @@ impl ProofStorage {
     }
 
     /// Loads a BatchWithProof for `batch_number`, if present.
-    pub async fn get(&self, batch_number: u64) -> anyhow::Result<Option<BatchEnvelope<FriProof>>> {
+    pub async fn get(
+        &self,
+        batch_number: u64,
+    ) -> anyhow::Result<Option<SignedBatchEnvelope<FriProof>>> {
         match self.object_store.get::<StoredBatch>(batch_number).await {
             Ok(o) => Ok(Some(o.batch_envelope())),
             Err(ObjectStoreError::KeyNotFound(_)) => Ok(None),

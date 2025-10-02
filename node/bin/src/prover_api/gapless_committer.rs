@@ -2,7 +2,7 @@ use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::config::BatchDaInputMode;
 use zksync_os_observability::{
@@ -18,12 +18,12 @@ use zksync_os_observability::{
 #[derive(Debug)]
 pub struct GaplessCommitter {
     // == state ==
-    buffer: BTreeMap<u64, BatchEnvelope<FriProof>>,
+    buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>>,
     next_expected: u64,
 
     // == plumbing ==
     // inbound
-    batches_with_proof_receiver: mpsc::Receiver<BatchEnvelope<FriProof>>,
+    batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
     // outbound
     proof_storage: ProofStorage,
     commit_batch_sender: mpsc::Sender<CommitCommand>,
@@ -35,7 +35,7 @@ pub struct GaplessCommitter {
 impl GaplessCommitter {
     pub fn new(
         next_expected: u64,
-        batches_with_proof_receiver: mpsc::Receiver<BatchEnvelope<FriProof>>,
+        batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
         proof_storage: ProofStorage,
         commit_batch_sender: mpsc::Sender<CommitCommand>,
         da_input_mode: BatchDaInputMode,
@@ -72,7 +72,7 @@ impl GaplessCommitter {
     }
 
     async fn flush_ready(&mut self) -> anyhow::Result<()> {
-        let mut ready: Vec<BatchEnvelope<FriProof>> = Vec::default();
+        let mut ready: Vec<SignedBatchEnvelope<FriProof>> = Vec::default();
         while let Some(next_batch) = self.buffer.remove(&self.next_expected) {
             ready.push(next_batch);
             self.next_expected += 1;

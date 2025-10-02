@@ -21,6 +21,9 @@ mod util;
 pub mod zkstack_config;
 
 use crate::batch_sink::BatchSink;
+use crate::batch_verification_manager::{
+    BatchVerificationManager, run_batch_verification_tasks, run_pass_batches_without_signing,
+};
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
@@ -40,6 +43,7 @@ use crate::reth_state::ZkClient;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use crate::util::peekable_receiver::PeekableReceiver;
+use crate::util::tasks::report_exit;
 use alloy::network::EthereumWallet;
 use alloy::providers::{Provider, WalletProvider};
 use anyhow::{Context, Result};
@@ -56,7 +60,9 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockHashes, BlockOutput};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::batcher_model::{
+    BatchEnvelope, BatchForSigning, FriProof, ProverInput, SignedBatchEnvelope,
+};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -514,13 +520,17 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
     let (blocks_for_batcher_sender, blocks_for_batcher_receiver) =
         tokio::sync::mpsc::channel::<(BlockOutput, ReplayRecord, ProverInput)>(10);
 
-    // Channel between `Batcher` and `ProverAPI`
-    let (batch_for_proving_sender, batch_for_prover_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(5);
+    // Channel between `Batcher` and `BatchVerificationManager`
+    let (batch_for_signing_sender, batch_for_signing_receiver) =
+        tokio::sync::mpsc::channel::<BatchForSigning<ProverInput>>(5);
 
-    // Channel between between `ProverAPI` and `GaplessCommitter`
+    // Channel between `BatchVerificationManager` and `ProverAPI`
+    let (batch_for_proving_sender, batch_for_prover_receiver) =
+        tokio::sync::mpsc::channel::<SignedBatchEnvelope<ProverInput>>(5);
+
+    // Channel between `ProverAPI` and `GaplessCommitter`
     let (batch_with_proof_sender, batch_with_proof_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
+        tokio::sync::mpsc::channel::<SignedBatchEnvelope<FriProof>>(5);
 
     // Channel between `GaplessCommitter` and `L1Committer`
     let (batch_for_commit_sender, batch_for_commit_receiver) =
@@ -544,7 +554,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
 
     // Channel between `L1Executor` and `BatchSink`
     let (fully_processed_batch_sender, fully_processed_batch_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
+        tokio::sync::mpsc::channel::<SignedBatchEnvelope<FriProof>>(5);
 
     let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
         load_genesis_stored_batch_info(genesis_block, persistent_tree.clone()).await
@@ -591,13 +601,13 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
 
     // Channel between `L1Committer` and `SnarkJobManager`
     let (batch_for_snark_sender, batch_for_snark_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+        tokio::sync::mpsc::channel::<SignedBatchEnvelope<FriProof>>(
             committed_not_proven_batches.len().max(10),
         );
 
     // Channel between `L1ProofSubmitter` and `PriorityTree`
     let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
+        tokio::sync::mpsc::channel::<SignedBatchEnvelope<FriProof>>(
             proven_not_executed_batches.len().max(10),
         );
 
@@ -621,7 +631,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
         config.sequencer_config.block_pubdata_limit_bytes,
         config.batcher_config,
         PeekableReceiver::new(blocks_for_batcher_receiver),
-        batch_for_proving_sender,
+        batch_for_signing_sender,
         persistent_tree.clone(),
     );
     tasks.spawn(
@@ -629,6 +639,25 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
             .run_loop(last_committed_batch_info)
             .map(report_exit("Batcher")),
     );
+
+    // Batch signing should be very fast, in the future we may make it concurrent to proving
+    if config.batch_verification_config.enabled {
+        tracing::info!("Initializing BatchVerificationManager");
+        let (server_fut, response_processor_fut, verifier_fut) = run_batch_verification_tasks(
+            config.batch_verification_config,
+            batch_for_signing_receiver,
+            batch_for_proving_sender,
+        );
+
+        tasks.spawn(server_fut);
+        tasks.spawn(response_processor_fut);
+        tasks.spawn(verifier_fut);
+    } else {
+        tasks.spawn(run_pass_batches_without_signing(
+            batch_for_signing_receiver,
+            batch_for_proving_sender,
+        ));
+    }
 
     let prover_input_generation_first_block_to_process = if config
         .prover_input_generator_config
@@ -915,26 +944,19 @@ fn block_hashes_for_first_block(repositories: &RepositoryManager) -> BlockHashes
     block_hashes
 }
 
-fn report_exit<T, E: std::fmt::Display>(name: &'static str) -> impl Fn(Result<T, E>) {
-    move |result| match result {
-        Ok(_) => tracing::warn!("{name} unexpectedly exited"),
-        Err(e) => tracing::error!("{name} failed: {e:#}"),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_l1_senders(
     l1_sender_config: L1SenderConfig,
     provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
 
     batch_for_commit_receiver: Receiver<CommitCommand>,
-    batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
+    batch_for_snark_sender: Sender<SignedBatchEnvelope<FriProof>>,
 
     batch_for_l1_proving_receiver: Receiver<ProofCommand>,
-    batch_for_priority_tree_sender: Sender<BatchEnvelope<FriProof>>,
+    batch_for_priority_tree_sender: Sender<SignedBatchEnvelope<FriProof>>,
 
     batch_for_execute_receiver: Receiver<ExecuteCommand>,
-    fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
+    fully_processed_batch_sender: Sender<SignedBatchEnvelope<FriProof>>,
 
     l1_state: &L1State,
 ) -> (
@@ -981,7 +1003,7 @@ fn run_l1_senders(
 async fn get_committed_not_proven_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-) -> anyhow::Result<Vec<BatchEnvelope<FriProof>>> {
+) -> anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>> {
     let mut batch_to_prove = l1_state.last_proved_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_prove <= l1_state.last_committed_batch {
@@ -996,8 +1018,8 @@ async fn get_committed_not_proven_batches(
 }
 
 pub async fn reschedule_committed_not_proved_batches(
-    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
-    batch_for_snark_sender: &Sender<BatchEnvelope<FriProof>>,
+    batches_to_reschedule: Vec<SignedBatchEnvelope<FriProof>>,
+    batch_for_snark_sender: &Sender<SignedBatchEnvelope<FriProof>>,
 ) -> Result<()> {
     if !batches_to_reschedule.is_empty() {
         tracing::info!(
@@ -1022,7 +1044,7 @@ pub async fn reschedule_committed_not_proved_batches(
 async fn get_proven_not_executed_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-) -> Result<Vec<BatchEnvelope<FriProof>>> {
+) -> Result<Vec<SignedBatchEnvelope<FriProof>>> {
     let mut batch_to_execute = l1_state.last_executed_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_execute <= l1_state.last_proved_batch {
@@ -1037,8 +1059,8 @@ async fn get_proven_not_executed_batches(
 }
 
 pub async fn reschedule_proven_not_executed_batches(
-    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
-    batch_for_priority_tree_sender: &Sender<BatchEnvelope<FriProof>>,
+    batches_to_reschedule: Vec<SignedBatchEnvelope<FriProof>>,
+    batch_for_priority_tree_sender: &Sender<SignedBatchEnvelope<FriProof>>,
 ) -> anyhow::Result<()> {
     if !batches_to_reschedule.is_empty() {
         tracing::info!(

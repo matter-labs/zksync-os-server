@@ -25,6 +25,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
+    pub batch_verification_config: BatchVerificationConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -431,4 +432,24 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
             poll_interval: c.poll_interval,
         }
     }
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BatchVerificationConfig {
+    /// If we are using batch verification
+    #[config(default_t = false)]
+    pub enabled: bool,
+    /// Batch verification server address to listen on.
+    #[config(default_t = "0.0.0.0:3072".into())]
+    pub address: String,
+    /// Threshold (number of needed signatures)
+    #[config(default_t = 1)]
+    pub threshold: usize,
+    /// Accepted signer pubkeys
+    #[config(default)]
+    pub accepted_signers: Vec<String>,
+    /// Verification timeout
+    #[config(default_t = Duration::from_secs(60))]
+    pub verification_timeout: Duration,
 }

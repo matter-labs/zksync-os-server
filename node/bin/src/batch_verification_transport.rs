@@ -1,5 +1,6 @@
 use backon::{ConstantBuilder, Retryable};
-use futures::{SinkExt, StreamExt};
+use futures::future::join_all;
+use futures::{SinkExt, StreamExt, stream::BoxStream};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +17,7 @@ use zksync_os_batch_verification::{
     BatchVerificationRequestCodec, BatchVerificationRequestDecoder, BatchVerificationResponse,
     BatchVerificationResponseCodec, BatchVerificationResponseDecoder,
 };
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
+use zksync_os_l1_sender::batcher_model::BatchForSigning;
 
 use crate::util::transport::skip_http_headers;
 
@@ -39,7 +40,7 @@ impl BatchVerificationServer {
     }
 
     /// Start the TCP server that accepts connections from external nodes
-    pub async fn start_server(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
+    pub async fn run_server(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
         let listener = TcpListener::bind(address).await?;
         let clients = self.clients.clone();
         let response_sender = self.response_sender.clone();
@@ -136,9 +137,9 @@ impl BatchVerificationServer {
     }
 
     /// Send a batch verification request to all connected clients
-    pub async fn send_verification_request(
+    pub async fn send_verification_request<E: Sync>(
         &self,
-        batch_envelope: &BatchEnvelope<ProverInput>,
+        batch_envelope: &BatchForSigning<E>,
         request_id: u64,
     ) -> anyhow::Result<()> {
         let request = BatchVerificationRequest {
@@ -148,81 +149,58 @@ impl BatchVerificationServer {
             request_id,
         };
 
-        let clients = self.clients.lock().await;
-        let mut send_tasks = Vec::new();
+        // Clone senders while holding the lock, then drop the lock before awaiting.
+        let senders: Vec<(String, mpsc::Sender<BatchVerificationRequest>)> = {
+            let clients = self.clients.lock().await;
+            clients
+                .iter()
+                .map(|(id, tx)| (id.clone(), tx.clone()))
+                .collect()
+        };
 
-        for (client_id, sender) in clients.iter() {
-            let client_id = client_id.clone();
-            let request = request.clone();
-            let sender = sender.clone();
+        let senders_len = senders.len();
 
-            send_tasks.push(tokio::spawn(async move {
-                if let Err(e) = sender.send(request).await {
-                    tracing::error!(
-                        "Failed to send verification request to client {}: {}",
-                        client_id,
-                        e
-                    );
+        // Dispatch sends concurrently and await them together.
+        let send_futs = senders
+            .into_iter()
+            .map(|(client_id, sender)| {
+                let req = request.clone();
+                async move {
+                    if let Err(e) = sender.send(req).await {
+                        tracing::error!(
+                            "Failed to send verification request to client {}: {}",
+                            client_id,
+                            e
+                        );
+                        false
+                    } else {
+                        true
+                    }
                 }
-            }));
-        }
+            })
+            .collect::<Vec<_>>();
 
-        // Wait for all sends to complete
-        for task in send_tasks {
-            let _ = task.await;
-        }
+        let _results = join_all(send_futs).await;
 
         tracing::info!(
-            "Sent batch verification request {} to {} clients",
+            "Sent batch verification request {} for batch {} to {} clients",
             request_id,
-            clients.len()
+            batch_envelope.batch_number(),
+            senders_len
         );
 
         Ok(())
-    }
-
-    /// Collect responses for a specific request
-    pub async fn collect_responses(
-        &mut self,
-        response_receiver: &mut mpsc::Receiver<BatchVerificationResponse>,
-        request_id: u64,
-        timeout: Duration,
-    ) -> Vec<BatchVerificationResponse> {
-        let mut responses = Vec::new();
-        let deadline = tokio::time::Instant::now() + timeout;
-
-        while tokio::time::Instant::now() < deadline {
-            let remaining_time = deadline - tokio::time::Instant::now();
-
-            match tokio::time::timeout(remaining_time, response_receiver.recv()).await {
-                Ok(Some(response)) => {
-                    if response.request_id == request_id {
-                        responses.push(response);
-                    }
-                    // Note: responses for other requests are dropped here
-                    // In a production system, you'd want to buffer them
-                }
-                Ok(None) => break, // Channel closed
-                Err(_) => break,   // Timeout
-            }
-        }
-
-        responses
     }
 }
 
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient {
-    node_id: String,
     private_key: Vec<u8>, // Placeholder for signing key
 }
 
 impl BatchVerificationClient {
-    pub fn new(node_id: String, private_key: Vec<u8>) -> Self {
-        Self {
-            node_id,
-            private_key,
-        }
+    pub fn new(private_key: Vec<u8>) -> Self {
+        Self { private_key }
     }
 
     /// Connect to the main sequencer and handle verification requests
@@ -242,11 +220,12 @@ impl BatchVerificationClient {
             })
             .await?;
 
-        // Send HTTP headers similar to replay_transport
+        // This makes it valid HTTP
         socket
             .write_all(b"POST /batch_verification HTTP/1.0\r\n\r\n")
             .await?;
 
+        // After HTTP headers we drop directly to simple TCP
         let replay_version = socket.read_u32().await?;
         let (recv, send) = socket.split();
         let mut reader =
@@ -256,6 +235,7 @@ impl BatchVerificationClient {
 
         tracing::info!("Connected to main sequencer for batch verification");
 
+        // Handling in sequencer without concurrency is fine as we shouldn't get too many requests
         while let Some(message) = reader.next().await {
             let response = self.handle_verification_request(message?).await?;
             writer.send(response).await?;
@@ -291,10 +271,9 @@ impl BatchVerificationClient {
         request: &BatchVerificationRequest,
     ) -> anyhow::Result<Vec<u8>> {
         // TODO: Implement actual cryptographic signing
-        // For now, return a dummy signature based on node_id and request data
+        // For now, return a dummy signature based on request data
         let signature_data = format!(
-            "{}:{}:{}:{}:{}",
-            self.node_id,
+            "{}:{}:{}:{}",
             request.batch_number,
             request.first_block_number,
             request.last_block_number,
