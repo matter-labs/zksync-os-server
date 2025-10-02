@@ -3,16 +3,12 @@
 slow-timeout = { period = "1m", terminate-after = 20 }
 # Global timeout for the entire test run. Test runs will be terminated if they take longer than this timeout.
 global-timeout = "1h"
+# Do not stop the test run on the first failure, but continue to run all tests.
+fail-fast = false
 
 [profile.default.junit]
 # Save junit report to the project root.
 path = "test-results.xml"
-
-[profile.ci]
-# Do not cancel the test run on the first failure.
-fail-fast = false
-# Adds retries (at least one success is required to mark test as successful). Uncomment if integrtaion tests become flaky.
-#retries = { backoff = "fixed", count = 2, delay = "1s" }
 
 [[profile.default.overrides]]
 # Tests in `prover.rs` rely on prover (CPU or GPU). CPU prover can take >10m to prove one batch, so we give these tests
