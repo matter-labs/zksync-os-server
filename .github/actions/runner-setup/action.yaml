@@ -13,7 +13,7 @@ inputs:
     type: string
     description: 'Whether to enable cache.'
     required: false
-    default: 'true'
+    default: 'false'
   save_cache:
     type: string
     description: 'Whether to save cache.'
@@ -110,7 +110,7 @@ runs:
       with:
         inherit-toolchain: true
         components: 'rustfmt,clippy'
-        bins: 'cargo-nextest'
+        bins: 'cargo-nextest,cargo-llvm-cov'
         cache: false
 
     - name: Rust cache
