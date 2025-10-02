@@ -8,6 +8,7 @@ use zksync_os_bin::config::{
     SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
+use zksync_os_bin::sentry::init_sentry;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
@@ -33,6 +34,12 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
+
+    let _sentry_guard = config
+        .general_config
+        .sentry_url
+        .clone()
+        .map(|sentry_url| init_sentry(&sentry_url));
 
     let main_task = async move {
         match config.general_config.state_backend {

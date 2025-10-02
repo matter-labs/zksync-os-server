@@ -49,10 +49,26 @@ impl Tracer {
         let filter = EnvFilter::builder()
             .with_default_directive(LevelFilter::INFO.into())
             .from_env_lossy();
-        let layer = self.format.apply(filter, self.use_color);
+        let fmt_layer = self.format.apply(filter, self.use_color);
+
+        let sentry_layer = sentry::integrations::tracing::layer()
+            .event_filter(|metadata| match *metadata.level() {
+                tracing::Level::ERROR => sentry::integrations::tracing::EventFilter::Event,
+                tracing::Level::WARN => sentry::integrations::tracing::EventFilter::Event,
+                _ => sentry::integrations::tracing::EventFilter::Ignore,
+            })
+            .span_filter(|metadata| {
+                matches!(
+                    *metadata.level(),
+                    tracing::Level::ERROR | tracing::Level::WARN
+                )
+            });
 
         // The error is returned if the global default subscriber is already set,
         // so it's safe to ignore it
-        let _ = tracing_subscriber::registry().with(layer).try_init();
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(sentry_layer)
+            .try_init();
     }
 }
