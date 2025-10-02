@@ -6,9 +6,7 @@ use futures::FutureExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::net::ToSocketAddrs;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use zksync_os_batch_verification::BatchVerificationResponse;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
@@ -170,16 +168,22 @@ impl BatchVerifier {
         let mut responses = Vec::new();
         let deadline = tokio::time::Instant::now() + self.timeout;
 
-        while tokio::time::Instant::now() < deadline {
+        loop {
             let remaining_time = deadline - tokio::time::Instant::now();
+            if remaining_time <= Duration::from_secs(0) {
+                anyhow::bail!("Timeout");
+            }
 
             match tokio::time::timeout(remaining_time, response_receiver.recv()).await {
                 Ok(Some(response)) => {
-                    /// TODO add validation of signatures incl. uniqueness
+                    // TODO add validation of signatures incl. uniqueness
                     responses.push(response.signature);
+                    if responses.len() >= self.required_signatures {
+                        break;
+                    }
                 }
-                Ok(None) => break, // Channel closed
-                Err(_) => break,   // Timeout
+                Ok(None) => anyhow::bail!("Channel closed"),
+                Err(_) => anyhow::bail!("Timeout"),
             }
         }
 
@@ -196,27 +200,5 @@ impl BatchVerifier {
         Ok(batch_envelope.with_signatures(BatchSignatureData::Signed {
             signatures: responses,
         }))
-    }
-}
-/// Result of batch verification process
-#[derive(Debug)]
-pub struct BatchVerificationResult {
-    pub batch_number: u64,
-    pub request_id: u64,
-    pub responses: Vec<BatchVerificationResponse>,
-}
-
-impl BatchVerificationResult {
-    /// Get the signatures from all responses
-    pub fn get_signatures(&self) -> Vec<&[u8]> {
-        self.responses
-            .iter()
-            .map(|response| response.signature.as_slice())
-            .collect()
-    }
-
-    /// Get the number of verification responses
-    pub fn response_count(&self) -> usize {
-        self.responses.len()
     }
 }

@@ -22,7 +22,7 @@ pub mod zkstack_config;
 
 use crate::batch_sink::BatchSink;
 use crate::batch_verification_manager::{
-    BatchVerificationManager, run_batch_verification_tasks, run_pass_batches_without_signing,
+    run_batch_verification_tasks, run_pass_batches_without_signing,
 };
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
@@ -61,7 +61,7 @@ use tokio::task::JoinSet;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockHashes, BlockOutput};
 use zksync_os_l1_sender::batcher_model::{
-    BatchEnvelope, BatchForSigning, FriProof, ProverInput, SignedBatchEnvelope,
+    BatchForSigning, FriProof, ProverInput, SignedBatchEnvelope,
 };
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;

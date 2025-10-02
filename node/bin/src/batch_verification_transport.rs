@@ -1,6 +1,6 @@
 use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
-use futures::{SinkExt, StreamExt, stream::BoxStream};
+use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
