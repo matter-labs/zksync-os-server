@@ -1,6 +1,6 @@
 use crate::transaction::TxType;
 use alloy::consensus::transaction::{RlpEcdsaDecodableTx, RlpEcdsaEncodableTx};
-use alloy::consensus::{SignableTransaction, Transaction, Typed2718};
+use alloy::consensus::{SignableTransaction, Signed, Transaction, Typed2718};
 use alloy::eips::eip2718::IsTyped2718;
 use alloy::eips::eip2930::AccessList;
 use alloy::eips::eip7702::SignedAuthorization;
@@ -8,7 +8,8 @@ use alloy::primitives::bytes::BufMut;
 use alloy::primitives::{
     Address, B256, Bytes, ChainId, Keccak256, Signature, TxKind, U256, keccak256,
 };
-use alloy_rlp::{Decodable, Encodable};
+use alloy_rlp::{Decodable, Encodable, Header};
+use serde::{Deserialize, Serialize};
 use std::mem;
 
 /// Identifier for an EIP712 transaction.
@@ -257,6 +258,63 @@ impl RlpEcdsaDecodableTx for TxEip712 {
             factory_deps: Decodable::decode(buf)?,
         })
     }
+
+    fn rlp_decode_signed(buf: &mut &[u8]) -> alloy_rlp::Result<Signed<Self>> {
+        fn opt_decode<T: Decodable>(buf: &mut &[u8]) -> alloy::rlp::Result<Option<T>> {
+            Ok(Decodable::decode(buf).ok()) // TODO: better validation of error?
+        }
+
+        let header = Header::decode(buf)?;
+        if !header.list {
+            return Err(alloy::rlp::Error::UnexpectedString);
+        }
+
+        // record original length so we can check encoding
+        let original_len = buf.len();
+
+        let nonce: U256 = Decodable::decode(buf)?;
+        let max_priority_fee_per_gas = Decodable::decode(buf)?;
+        let max_fee_per_gas = Decodable::decode(buf)?;
+        let gas_limit = Decodable::decode(buf)?;
+        let to = Decodable::decode(buf)?;
+        let value = Decodable::decode(buf)?;
+        let input = Decodable::decode(buf)?;
+        let signature = Signature::decode_rlp_vrs(buf, bool::decode)?;
+        let chain_id = Decodable::decode(buf)?;
+        let from = Decodable::decode(buf)?;
+        let gas_per_pubdata = Decodable::decode(buf)?;
+        let factory_deps = Decodable::decode(buf)?;
+        // todo: assert these are empty
+        let _custom_signature: Option<Bytes> = opt_decode(buf)?;
+        let _paymaster: Option<PaymasterParams> = opt_decode(buf)?;
+
+        let tx = Self {
+            chain_id,
+            nonce: nonce.saturating_to(),
+            gas_limit,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            to,
+            from,
+            value,
+            input,
+            gas_per_pubdata,
+            factory_deps,
+            paymaster: Address::ZERO,
+            paymaster_input: Bytes::new(),
+        };
+
+        let signed = tx.into_signed(signature);
+
+        if buf.len() + header.payload_length != original_len {
+            return Err(alloy::rlp::Error::ListLengthMismatch {
+                expected: header.payload_length,
+                got: original_len - buf.len(),
+            });
+        }
+
+        Ok(signed)
+    }
 }
 
 impl Transaction for TxEip712 {
@@ -416,5 +474,65 @@ impl reth_primitives_traits::InMemorySize for TxEip712 {
     #[inline]
     fn size(&self) -> usize {
         Self::size(self)
+    }
+}
+
+// Seralize 'Bytes' to encode them into RLP friendly format.
+fn serialize_bytes_custom<S: serde::Serializer>(
+    bytes: &Bytes,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_bytes(&bytes.0)
+}
+
+/// Represents the paymaster parameters for ZKsync Era transactions.
+#[derive(Default, Serialize, Deserialize, Clone, PartialEq, Debug, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymasterParams {
+    /// Address of the paymaster.
+    pub paymaster: Address,
+    /// Paymaster input.
+    // A custom serialization is needed (otherwise RLP treats it as string).
+    #[serde(serialize_with = "serialize_bytes_custom")]
+    pub paymaster_input: Bytes,
+}
+
+impl Decodable for PaymasterParams {
+    fn decode(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
+        let mut bytes = Header::decode_bytes(buf, true)?;
+        let payload_view = &mut bytes;
+        Ok(Self {
+            paymaster: dbg!(Decodable::decode(payload_view))?,
+            paymaster_input: dbg!(Decodable::decode(payload_view))?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TxEip712;
+    use alloy::consensus::transaction::RlpEcdsaDecodableTx;
+    use alloy::hex::FromHex;
+    use alloy::primitives::{Bytes, U256, address, hex};
+
+    #[test]
+    fn decode_eip712_tx() {
+        // Does not have type byte.
+        let encoded = hex::decode("f8b701800b0c940754b07d1ea3071c3ec9bd86b2aa6f1a59a514980a8301020380a0635f9ee3a1523de15fc8b72a0eea12f5247c6b6e2369ed158274587af6496599a030f7c66d1ed24fca92527e6974b85b07ec30fdd5c2d41eae46966224add965f982010e9409a6aa96b9a17d7f7ba3e3b19811c082aba9f1e304e1a0020202020202020202020202020202020202020202020202020202020202020283010203d694000000000000000000000000000000000000000080").unwrap();
+        let signed_tx = TxEip712::rlp_decode_signed(&mut &encoded[..]).unwrap();
+        let tx = signed_tx.tx();
+        assert_eq!(tx.chain_id, 270);
+        assert_eq!(tx.nonce, 1);
+        assert_eq!(tx.gas_limit, 12);
+        assert_eq!(tx.max_fee_per_gas, 11);
+        assert_eq!(tx.max_priority_fee_per_gas, 0);
+        assert_eq!(tx.to, address!("0754b07d1ea3071c3ec9bd86b2aa6f1a59a51498"));
+        assert_eq!(
+            tx.from,
+            address!("09a6aa96b9a17d7f7ba3e3b19811c082aba9f1e3")
+        );
+        assert_eq!(tx.value, U256::from(10));
+        assert_eq!(tx.input, Bytes::from_hex("0x010203").unwrap());
+        assert_eq!(tx.gas_per_pubdata, 4);
     }
 }
