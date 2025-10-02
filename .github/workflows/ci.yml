@@ -171,6 +171,23 @@ jobs:
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache_shared_key: 'prover-integration-tests'
 
+      - name: Check CUDA version
+        run: |
+          nvcc --version
+  
+      - name: Checkout era-bellman-cuda
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matter-labs/era-bellman-cuda
+          ref: main
+          path: bellman-cuda
+
+      - name: Build bellman-cuda
+        shell: 'bash -ex {0}'
+        run: |
+          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
+          cmake --build bellman-cuda/build/
+
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
@@ -183,6 +200,7 @@ jobs:
           # are correct inside prebuilt binary.
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
           WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
+          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release --profile ci -p zksync_os_integration_tests \
             --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
@@ -211,15 +229,28 @@ jobs:
           save_cache: 'false'
           cache_shared_key: 'prover-integration-tests'
 
+      - name: Check Nvidia driver version
+        run: |
+          nvidia-smi
+
       - name: Download prebuilt tests
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
+      - name: Download CRS setup file
+        run: |
+          mkdir -p crs
+          wget https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key -O crs/setup_compact.key
+
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
+        env:
+          COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
+          RUST_MIN_STACK: 267108864
         run: |
+          ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}

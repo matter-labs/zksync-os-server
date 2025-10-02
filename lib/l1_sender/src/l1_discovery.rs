@@ -138,8 +138,7 @@ pub async fn get_l1_state(
     let all_chain_ids = bridgehub.get_all_zk_chain_chain_ids().await?;
     anyhow::ensure!(
         all_chain_ids.contains(&U256::from(chain_id)),
-        "chain ID {} is not registered on L1",
-        chain_id
+        "chain ID {chain_id} is not registered on L1"
     );
     let zk_chain = bridgehub.zk_chain().await?;
     let diamond_proxy = *zk_chain.address();

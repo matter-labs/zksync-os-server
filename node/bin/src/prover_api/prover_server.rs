@@ -1,7 +1,7 @@
 use crate::prover_api::fri_job_manager::{FriJobManager, SubmitError};
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::snark_job_manager::SnarkJobManager;
-use axum::extract::{DefaultBodyLimit, Path};
+use axum::extract::DefaultBodyLimit;
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::FriProof;
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,7 +60,6 @@ struct ProverQuery {
 struct AppState {
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
-    proof_storage: ProofStorage,
 }
 
 // ───────────── HTTP handlers ─────────────
@@ -108,24 +107,6 @@ async fn submit_fri_proof(
         Err(SubmitError::Other(e)) => {
             error!("internal error: {e}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e))
-        }
-    }
-}
-
-async fn get_fri_proof(Path(block): Path<u64>, State(state): State<AppState>) -> Response {
-    match state.proof_storage.get(block).await {
-        Ok(Some(BatchEnvelope {
-            data: FriProof::Real(real),
-            ..
-        })) => Json(FriProofPayload {
-            block_number: block,
-            proof: general_purpose::STANDARD.encode(real.proof()),
-        })
-        .into_response(),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            error!("error getting proof: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
@@ -200,23 +181,18 @@ async fn status(State(state): State<AppState>) -> Response {
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
-    proof_storage: ProofStorage,
+    _proof_storage: ProofStorage,
     bind_address: String,
 ) -> anyhow::Result<()> {
     let app_state = AppState {
         fri_job_manager,
         snark_job_manager,
-        proof_storage,
     };
 
     let app = Router::new()
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
-        // this method is only used in prover e2e test -
-        // it shouldn't be here otherwise. If we want to expose FRI proofs,
-        // we need to extract FRI cache to a separate service
-        .route("/prover-jobs/FRI/:block", get(get_fri_proof))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
         .with_state(app_state)
