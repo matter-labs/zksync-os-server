@@ -48,6 +48,10 @@ pub enum ZkReceiptEnvelope<T = Log, U = L2ToL1Log> {
     /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
     #[serde(rename = "0x4", alias = "0x04")]
     Eip7702(ReceiptWithBloom<ZkReceipt<T, U>>),
+    #[cfg(feature = "eip712-tx")]
+    /// Receipt envelope with type flag 113, containing a custom [EIP-712] receipt.
+    #[serde(rename = "0x71")]
+    Eip712(ReceiptWithBloom<ZkReceipt<T, U>>),
     /// Receipt envelope with type flag 255, containing an L1->L2 priority transaction receipt.
     #[serde(rename = "0x7f")]
     L1(ReceiptWithBloom<ZkReceipt<T, U>>),
@@ -68,6 +72,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             ZkTxType::L2(TxType::Eip1559) => Self::Eip1559(receipt.into()),
             ZkTxType::L2(TxType::Eip4844) => Self::Eip4844(receipt.into()),
             ZkTxType::L2(TxType::Eip7702) => Self::Eip7702(receipt.into()),
+            #[cfg(feature = "eip712-tx")]
+            ZkTxType::L2(TxType::Eip712) => Self::Eip712(receipt.into()),
             ZkTxType::L1 => Self::L1(receipt.into()),
             ZkTxType::Upgrade => Self::Upgrade(receipt.into()),
         }
@@ -97,6 +103,10 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             Self::Eip7702(r) => {
                 ZkReceiptEnvelope::Eip7702(r.map_receipt(|r| r.map_logs(logs_f, l2_to_l1_logs_f)))
             }
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(r) => {
+                ZkReceiptEnvelope::Eip712(r.map_receipt(|r| r.map_logs(logs_f, l2_to_l1_logs_f)))
+            }
             Self::L1(r) => {
                 ZkReceiptEnvelope::L1(r.map_receipt(|r| r.map_logs(logs_f, l2_to_l1_logs_f)))
             }
@@ -114,6 +124,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             Self::Eip1559(_) => ZkTxType::L2(TxType::Eip1559),
             Self::Eip4844(_) => ZkTxType::L2(TxType::Eip4844),
             Self::Eip7702(_) => ZkTxType::L2(TxType::Eip7702),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(_) => ZkTxType::L2(TxType::Eip712),
             Self::L1(_) => ZkTxType::L1,
             Self::Upgrade(_) => ZkTxType::Upgrade,
         }
@@ -170,6 +182,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip7702(t)
             | Self::L1(t)
             | Self::Upgrade(t) => Some(t),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(t) => Some(t),
         }
     }
 
@@ -186,6 +200,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip7702(t)
             | Self::L1(t)
             | Self::Upgrade(t) => Some(t),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(t) => Some(t),
         }
     }
 
@@ -199,6 +215,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip7702(t)
             | Self::L1(t)
             | Self::Upgrade(t) => t.receipt,
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(t) => t.receipt,
         }
     }
 
@@ -213,6 +231,8 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             | Self::Eip7702(t)
             | Self::L1(t)
             | Self::Upgrade(t) => Some(&t.receipt),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(t) => Some(&t.receipt),
         }
     }
 }
@@ -299,6 +319,8 @@ impl Typed2718 for ZkReceiptEnvelope {
             Self::Eip1559(_) => EIP1559_TX_TYPE_ID,
             Self::Eip4844(_) => EIP4844_TX_TYPE_ID,
             Self::Eip7702(_) => EIP7702_TX_TYPE_ID,
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(_) => crate::transaction::EIP712_TX_TYPE_ID,
             Self::L1(_) => L1PriorityTxType::TX_TYPE,
             Self::Upgrade(_) => UpgradeTxType::TX_TYPE,
         }
@@ -336,6 +358,8 @@ impl Decodable2718 for ZkReceiptEnvelope {
             ZkTxType::L2(TxType::Eip1559) => Ok(Self::Eip1559(receipt)),
             ZkTxType::L2(TxType::Eip4844) => Ok(Self::Eip4844(receipt)),
             ZkTxType::L2(TxType::Eip7702) => Ok(Self::Eip7702(receipt)),
+            #[cfg(feature = "eip712-tx")]
+            ZkTxType::L2(TxType::Eip712) => Ok(Self::Eip712(receipt)),
             ZkTxType::L2(TxType::Legacy) => Err(Eip2718Error::UnexpectedType(0)),
             ZkTxType::L1 => Ok(Self::L1(receipt)),
             ZkTxType::Upgrade => Ok(Self::Upgrade(receipt)),

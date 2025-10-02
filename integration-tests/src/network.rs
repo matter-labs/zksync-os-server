@@ -165,7 +165,7 @@ impl TransactionBuilder<Zksync> for ZkTransactionRequest {
             ZkTxType::L1 | ZkTxType::Upgrade => {
                 unimplemented!()
             }
-            ZkTxType::L2(ty) => TransactionBuilder::complete_type(&self.0, ty.into()),
+            ZkTxType::L2(ty) => TransactionBuilder::complete_type(&self.0, ty.try_into().unwrap()),
         }
     }
 

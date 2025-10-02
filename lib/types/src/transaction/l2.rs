@@ -47,6 +47,10 @@ pub enum L2EnvelopeInner<Eip4844> {
     /// A [`TxEip7702`] tagged with type 4.
     #[envelope(ty = 4)]
     Eip7702(Signed<TxEip7702>),
+    /// A [`TxEip712`] tagged with type 113.
+    #[cfg(feature = "eip712-tx")]
+    #[envelope(ty = 113)]
+    Eip712(Signed<crate::transaction::eip712::TxEip712>),
 }
 
 impl<T, Eip4844> From<Signed<T>> for L2EnvelopeInner<Eip4844>
@@ -91,6 +95,8 @@ impl<Eip4844> L2EnvelopeInner<Eip4844> {
             Self::Eip1559(_) => TxType::Eip1559,
             Self::Eip4844(_) => TxType::Eip4844,
             Self::Eip7702(_) => TxType::Eip7702,
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(_) => TxType::Eip712,
         }
     }
 }
@@ -193,6 +199,8 @@ impl<Eip4844: RlpEcdsaEncodableTx> L2EnvelopeInner<Eip4844> {
             Self::Eip1559(tx) => tx.signature_hash(),
             Self::Eip4844(tx) => tx.signature_hash(),
             Self::Eip7702(tx) => tx.signature_hash(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => tx.signature_hash(),
         }
     }
 
@@ -204,6 +212,8 @@ impl<Eip4844: RlpEcdsaEncodableTx> L2EnvelopeInner<Eip4844> {
             Self::Eip1559(tx) => tx.signature(),
             Self::Eip4844(tx) => tx.signature(),
             Self::Eip7702(tx) => tx.signature(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => tx.signature(),
         }
     }
 
@@ -215,6 +225,8 @@ impl<Eip4844: RlpEcdsaEncodableTx> L2EnvelopeInner<Eip4844> {
             Self::Eip1559(tx) => tx.hash(),
             Self::Eip4844(tx) => tx.hash(),
             Self::Eip7702(tx) => tx.hash(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => tx.hash(),
         }
     }
 
@@ -226,6 +238,8 @@ impl<Eip4844: RlpEcdsaEncodableTx> L2EnvelopeInner<Eip4844> {
             Self::Eip1559(tx) => tx.hash(),
             Self::Eip4844(tx) => tx.hash(),
             Self::Eip7702(tx) => tx.hash(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => tx.hash(),
         }
     }
 
@@ -237,6 +251,8 @@ impl<Eip4844: RlpEcdsaEncodableTx> L2EnvelopeInner<Eip4844> {
             Self::Eip1559(t) => t.eip2718_encoded_length(),
             Self::Eip4844(t) => t.eip2718_encoded_length(),
             Self::Eip7702(t) => t.eip2718_encoded_length(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(t) => t.eip2718_encoded_length(),
         }
     }
 }
@@ -252,6 +268,8 @@ where
             Self::Eip1559(tx) => crate::transaction::SignerRecoverable::recover_signer(tx),
             Self::Eip4844(tx) => crate::transaction::SignerRecoverable::recover_signer(tx),
             Self::Eip7702(tx) => crate::transaction::SignerRecoverable::recover_signer(tx),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => crate::transaction::SignerRecoverable::recover_signer(tx),
         }
     }
 
@@ -270,6 +288,8 @@ where
             Self::Eip7702(tx) => {
                 crate::transaction::SignerRecoverable::recover_signer_unchecked(tx)
             }
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => crate::transaction::SignerRecoverable::recover_signer_unchecked(tx),
         }
     }
 
@@ -293,6 +313,10 @@ where
             Self::Eip7702(tx) => {
                 crate::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
             }
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => {
+                crate::transaction::SignerRecoverable::recover_unchecked_with_buf(tx, buf)
+            }
         }
     }
 }
@@ -308,6 +332,8 @@ impl<T: reth_primitives_traits::InMemorySize> reth_primitives_traits::InMemorySi
             Self::Eip1559(tx) => tx.size(),
             Self::Eip4844(tx) => tx.size(),
             Self::Eip7702(tx) => tx.size(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => tx.size(),
         }
     }
 }
@@ -331,6 +357,8 @@ where
             Self::Eip1559(tx) => tx.hash(),
             Self::Eip7702(tx) => tx.hash(),
             Self::Eip4844(tx) => tx.hash(),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712(tx) => tx.hash(),
         }
     }
 }
@@ -388,6 +416,8 @@ impl fmt::Display for TxType {
             Self::Eip1559 => write!(f, "EIP-1559"),
             Self::Eip4844 => write!(f, "EIP-4844"),
             Self::Eip7702 => write!(f, "EIP-7702"),
+            #[cfg(feature = "eip712-tx")]
+            Self::Eip712 => write!(f, "EIP-712"),
         }
     }
 }
@@ -404,14 +434,18 @@ impl From<alloy::consensus::TxType> for TxType {
     }
 }
 
-impl From<TxType> for alloy::consensus::TxType {
-    fn from(value: TxType) -> Self {
+impl TryFrom<TxType> for alloy::consensus::TxType {
+    type Error = ();
+
+    fn try_from(value: TxType) -> Result<Self, Self::Error> {
         match value {
-            TxType::Legacy => alloy::consensus::TxType::Legacy,
-            TxType::Eip2930 => alloy::consensus::TxType::Eip2930,
-            TxType::Eip1559 => alloy::consensus::TxType::Eip1559,
-            TxType::Eip4844 => alloy::consensus::TxType::Eip4844,
-            TxType::Eip7702 => alloy::consensus::TxType::Eip7702,
+            TxType::Legacy => Ok(alloy::consensus::TxType::Legacy),
+            TxType::Eip2930 => Ok(alloy::consensus::TxType::Eip2930),
+            TxType::Eip1559 => Ok(alloy::consensus::TxType::Eip1559),
+            TxType::Eip4844 => Ok(alloy::consensus::TxType::Eip4844),
+            TxType::Eip7702 => Ok(alloy::consensus::TxType::Eip7702),
+            #[cfg(feature = "eip712-tx")]
+            TxType::Eip712 => Err(()),
         }
     }
 }

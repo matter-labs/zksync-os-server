@@ -20,19 +20,17 @@ pub use reth_transaction_pool::{
 use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
 use reth_storage_api::StateProviderFactory;
 use reth_transaction_pool::blobstore::NoopBlobStore;
+use reth_transaction_pool::test_utils::OkValidator;
 use reth_transaction_pool::validate::EthTransactionValidatorBuilder;
 use reth_transaction_pool::{CoinbaseTipOrdering, PoolConfig};
 
 pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory>(
     client: Client,
     max_input_bytes: usize,
-) -> RethPool<Client> {
+) -> RethPool {
     let blob_store = NoopBlobStore::default();
     RethPool::new(
-        EthTransactionValidatorBuilder::new(client)
-            .no_prague()
-            .with_max_tx_input_bytes(max_input_bytes)
-            .build(blob_store),
+        OkValidator::default(),
         CoinbaseTipOrdering::default(),
         blob_store,
         PoolConfig::default(),

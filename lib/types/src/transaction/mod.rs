@@ -1,7 +1,14 @@
 mod encode;
 pub use encode::*;
+
 mod l1;
 pub use l1::*;
+
+#[cfg(feature = "eip712-tx")]
+mod eip712;
+#[cfg(feature = "eip712-tx")]
+pub use eip712::{EIP712_TX_TYPE_ID, TxEip712};
+
 mod l2;
 pub use l2::*;
 
