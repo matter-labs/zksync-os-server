@@ -1,7 +1,11 @@
+use alloy::signers::Signer;
+use alloy::signers::local::PrivateKeySigner;
 use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
 use futures::{SinkExt, StreamExt};
+use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, BufReader};
@@ -195,16 +199,19 @@ impl BatchVerificationServer {
 
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient {
-    private_key: Vec<u8>, // Placeholder for signing key
+    signer: PrivateKeySigner, // TODO, we probably want to move to BLS?
 }
 
 impl BatchVerificationClient {
-    pub fn new(private_key: Vec<u8>) -> Self {
-        Self { private_key }
+    pub fn new(private_key: SecretString) -> Self {
+        Self {
+            signer: PrivateKeySigner::from_str(private_key.expose_secret())
+                .expect("Invalid batch verification private key"),
+        }
     }
 
     /// Connect to the main sequencer and handle verification requests
-    pub async fn connect_and_handle(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
+    pub async fn run(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
         let mut socket = (|| TcpStream::connect(&address))
             .retry(
                 ConstantBuilder::default()
@@ -280,6 +287,10 @@ impl BatchVerificationClient {
             request.request_id
         );
 
-        Ok(signature_data.into_bytes())
+        Ok(self
+            .signer
+            .sign_message(signature_data.as_bytes())
+            .await?
+            .into())
     }
 }

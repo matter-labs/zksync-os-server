@@ -452,4 +452,7 @@ pub struct BatchVerificationConfig {
     /// Verification timeout
     #[config(default_t = Duration::from_secs(60))]
     pub verification_timeout: Duration,
+    /// Signing key
+    #[config(default_t = "0x".into())]
+    pub signing_key: SecretString,
 }

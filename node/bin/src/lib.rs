@@ -24,6 +24,7 @@ use crate::batch_sink::BatchSink;
 use crate::batch_verification_manager::{
     run_batch_verification_tasks, run_pass_batches_without_signing,
 };
+use crate::batch_verification_transport::BatchVerificationClient;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
@@ -931,6 +932,15 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
                 priority_txs_count_receiver,
             )
             .map(report_exit("priority_tree_manager#keep_caching")),
+    );
+
+    tasks.spawn(
+        async move {
+            BatchVerificationClient::new(config.batch_verification_config.signing_key.clone())
+                .run(config.batch_verification_config.address)
+                .await
+        }
+        .map(report_exit("batch_verification_client")),
     );
 }
 
