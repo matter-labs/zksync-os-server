@@ -31,6 +31,12 @@ pub struct BatchVerificationServer {
     response_sender: mpsc::Sender<BatchVerificationResponse>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum BatchVerificationRequestError {
+    #[error("Not enough clients connected")]
+    NotEnoughClients,
+}
+
 impl BatchVerificationServer {
     pub fn new() -> (Self, mpsc::Receiver<BatchVerificationResponse>) {
         let (response_sender, response_receiver) = mpsc::channel(100);
@@ -145,7 +151,8 @@ impl BatchVerificationServer {
         &self,
         batch_envelope: &BatchForSigning<E>,
         request_id: u64,
-    ) -> anyhow::Result<()> {
+        required_clients: usize,
+    ) -> Result<(), BatchVerificationRequestError> {
         let request = BatchVerificationRequest {
             batch_number: batch_envelope.batch_number(),
             first_block_number: batch_envelope.batch.first_block_number,
@@ -163,6 +170,9 @@ impl BatchVerificationServer {
         };
 
         let senders_len = senders.len();
+        if senders_len < required_clients {
+            return Err(BatchVerificationRequestError::NotEnoughClients);
+        }
 
         // Dispatch sends concurrently and await them together.
         let send_futs = senders

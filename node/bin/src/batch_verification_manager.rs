@@ -1,4 +1,4 @@
-use crate::batch_verification_transport::BatchVerificationServer;
+use crate::batch_verification_transport::{BatchVerificationRequestError, BatchVerificationServer};
 use crate::config::BatchVerificationConfig;
 use crate::util::tasks::report_exit;
 use dashmap::DashMap;
@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use zksync_os_batch_verification::BatchVerificationResponse;
+use tokio::time::Instant;
+use zksync_os_batch_verification::{BatchVerificationResponse, Signatures};
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
 };
@@ -44,17 +45,18 @@ pub fn run_batch_verification_tasks<E: Send + Sync>(
     let response_channels = Arc::new(DashMap::new());
 
     let server_for_fut = server.clone();
+    let response_channels_for_fut = response_channels.clone();
     let server_address = config.address.clone();
     let server_fut = async move { server_for_fut.run_server(server_address).await }
         .map(report_exit("Batch verification server"));
 
     let response_processor_fut = async move {
-        run_batch_response_processor(response_receiver, response_channels.clone()).await
+        run_batch_response_processor(response_receiver, response_channels_for_fut).await
     }
     .map(report_exit("Batch response processor"));
 
     let verifier_fut = async move {
-        BatchVerifier::new(config.verification_timeout, config.threshold, server)
+        BatchVerifier::new(config, response_channels, server)
             .run(batch_for_signing_receiver, signed_batcher_sender)
             .await
     }
@@ -86,10 +88,7 @@ async fn run_batch_response_processor(
             }
         } else {
             // debug, because probably we finished processing this batch and this is an extra response
-            tracing::debug!(
-                "Received response for unknown request_id {}, dropping",
-                request_id
-            );
+            tracing::debug!("Response for unknown request_id {}, dropping", request_id);
         }
     }
 
@@ -98,24 +97,48 @@ async fn run_batch_response_processor(
 }
 
 pub struct BatchVerifier {
-    timeout: Duration,
-    required_signatures: usize,
+    config: BatchVerificationConfig,
     request_id_counter: AtomicU64,
     server: Arc<BatchVerificationServer>,
     response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum BatchVerificationError {
+    #[error("Timeout")]
+    Timeout,
+    #[error("Not enough signers")]
+    NotEnoughSigners,
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl From<BatchVerificationRequestError> for BatchVerificationError {
+    fn from(err: BatchVerificationRequestError) -> Self {
+        match err {
+            BatchVerificationRequestError::NotEnoughClients => {
+                BatchVerificationError::NotEnoughSigners
+            }
+        }
+    }
+}
+
+impl BatchVerificationError {
+    fn retryable(&self) -> bool {
+        !matches!(self, BatchVerificationError::Internal(_))
+    }
+}
+
 impl BatchVerifier {
     pub fn new(
-        timeout: Duration,
-        required_signatures: usize,
+        config: BatchVerificationConfig,
+        response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
         server: Arc<BatchVerificationServer>,
     ) -> Self {
         Self {
-            timeout,
-            required_signatures,
+            config,
             request_id_counter: AtomicU64::new(1),
-            response_channels: Arc::new(DashMap::new()),
+            response_channels,
             server,
         }
     }
@@ -131,9 +154,38 @@ impl BatchVerifier {
                 tracing::info!("BatchForSigning channel closed, exiting verifier",);
                 break Ok(());
             };
-            let result = self.verify_batch(batch_envelope).await?;
+            let mut retry_count = 0;
+            let deadline = Instant::now() + self.config.total_timeout;
+            let signatures = loop {
+                match self.verify_batch(&batch_envelope).await {
+                    Ok(result) => break Ok(result),
+                    Err(err) if err.retryable() => {
+                        if Instant::now() < deadline {
+                            retry_count += 1;
+                            tracing::warn!(
+                                "Batch verification failed, attempt {} retrying. Error: {}",
+                                retry_count,
+                                err
+                            );
+
+                            tokio::time::sleep(self.config.retry_delay).await;
+                        } else {
+                            tracing::warn!(
+                                "Batch verification failed after {} retries exceeding total timeout. Bailing. Last error: {}",
+                                retry_count,
+                                err
+                            );
+                            break Err(err);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("Batch verification failed. Non retryable error: {}", err);
+                        break Err(err);
+                    }
+                }
+            }?;
             singed_batcher_sender
-                .send(result)
+                .send(batch_envelope.with_signatures(BatchSignatureData::Signed { signatures }))
                 .await
                 .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
         }
@@ -142,8 +194,8 @@ impl BatchVerifier {
     /// Process a batch envelope and collect verification signatures
     async fn verify_batch<E: Send + Sync>(
         &self,
-        batch_envelope: BatchForSigning<E>,
-    ) -> anyhow::Result<SignedBatchEnvelope<E>> {
+        batch_envelope: &BatchForSigning<E>,
+    ) -> Result<Signatures, BatchVerificationError> {
         let request_id = self.request_id_counter.fetch_add(1, Ordering::SeqCst);
 
         tracing::info!(
@@ -154,36 +206,47 @@ impl BatchVerifier {
 
         // Create a channel for collecting responses for this request
         let (response_sender, mut response_receiver) =
-            mpsc::channel::<BatchVerificationResponse>(100);
+            mpsc::channel::<BatchVerificationResponse>(self.config.threshold);
 
         // Register the channel for this request_id
         self.response_channels.insert(request_id, response_sender);
 
         // Send verification request to all connected clients
         self.server
-            .send_verification_request(&batch_envelope, request_id)
+            .send_verification_request(&batch_envelope, request_id, self.config.threshold)
             .await?;
 
         // Collect responses with timeout
         let mut responses = Vec::new();
-        let deadline = tokio::time::Instant::now() + self.timeout;
+        let deadline = Instant::now() + self.config.request_timeout;
 
         loop {
-            let remaining_time = deadline - tokio::time::Instant::now();
+            let remaining_time = deadline - Instant::now();
             if remaining_time <= Duration::from_secs(0) {
-                anyhow::bail!("Timeout");
+                return Err(BatchVerificationError::Timeout);
             }
 
             match tokio::time::timeout(remaining_time, response_receiver.recv()).await {
                 Ok(Some(response)) => {
                     // TODO add validation of signatures incl. uniqueness
                     responses.push(response.signature);
-                    if responses.len() >= self.required_signatures {
+                    tracing::debug!(
+                        "Validated response for batch {} (request {}), {} of {}",
+                        batch_envelope.batch_number(),
+                        request_id,
+                        responses.len(),
+                        self.config.threshold
+                    );
+                    if responses.len() >= self.config.threshold {
                         break;
                     }
                 }
-                Ok(None) => anyhow::bail!("Channel closed"),
-                Err(_) => anyhow::bail!("Timeout"),
+                Ok(None) => {
+                    return Err(BatchVerificationError::Internal(
+                        "Channel closed".to_string(),
+                    ));
+                }
+                Err(_) => return Err(BatchVerificationError::Timeout),
             }
         }
 
@@ -191,14 +254,12 @@ impl BatchVerifier {
         self.response_channels.remove(&request_id);
 
         tracing::info!(
-            "Collected {} verification responses for batch {} (request {})",
+            "Collected enough ({}) verification responses for batch {} (request {})",
             responses.len(),
             batch_envelope.batch_number(),
             request_id
         );
 
-        Ok(batch_envelope.with_signatures(BatchSignatureData::Signed {
-            signatures: responses,
-        }))
+        Ok(responses)
     }
 }

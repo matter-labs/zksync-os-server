@@ -449,9 +449,15 @@ pub struct BatchVerificationConfig {
     /// Accepted signer pubkeys
     #[config(default)]
     pub accepted_signers: Vec<String>,
-    /// Verification timeout
-    #[config(default_t = Duration::from_secs(60))]
-    pub verification_timeout: Duration,
+    /// Iteration timeout
+    #[config(default_t = Duration::from_secs(5))]
+    pub request_timeout: Duration,
+    /// Retry delay between attempts
+    #[config(default_t = Duration::from_secs(1))]
+    pub retry_delay: Duration,
+    /// Total timeout
+    #[config(default_t = Duration::from_secs(300))]
+    pub total_timeout: Duration,
     /// Signing key
     #[config(default_t = "0x".into())]
     pub signing_key: SecretString,
