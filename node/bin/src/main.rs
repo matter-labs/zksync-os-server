@@ -140,6 +140,9 @@ fn build_configs() -> Config {
     schema
         .insert(&StatusServerConfig::DESCRIPTION, "status_server")
         .expect("Failed to insert status server config");
+    schema
+        .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
+        .expect("Failed to insert batch verification config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 

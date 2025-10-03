@@ -934,14 +934,16 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
             .map(report_exit("priority_tree_manager#keep_caching")),
     );
 
-    tasks.spawn(
-        async move {
-            BatchVerificationClient::new(config.batch_verification_config.signing_key.clone())
-                .run(config.batch_verification_config.address)
-                .await
-        }
-        .map(report_exit("batch_verification_client")),
-    );
+    if config.batch_verification_config.enabled {
+        tasks.spawn(
+            async move {
+                BatchVerificationClient::new(config.batch_verification_config.signing_key.clone())
+                    .run(config.batch_verification_config.address)
+                    .await
+            }
+            .map(report_exit("batch_verification_client")),
+        );
+    }
 }
 
 fn block_hashes_for_first_block(repositories: &RepositoryManager) -> BlockHashes {
