@@ -1,4 +1,4 @@
-use crate::util::peekable_receiver::PeekableReceiver;
+use zksync_os_pipeline::PeekableReceiver;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;

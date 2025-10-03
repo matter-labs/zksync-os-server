@@ -1,19 +1,19 @@
 use crate::config::SequencerConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
-use crate::execution::block_executor::execute_block;
-use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
 use crate::model::blocks::BlockCommand;
 use anyhow::Context;
-use futures::StreamExt;
-use futures::stream::BoxStream;
+use async_trait::async_trait;
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::ComponentStateReporter;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{
     ReadStateHistory, ReplayRecord, WriteReplay, WriteRepository, WriteState,
 };
+use crate::execution::block_executor::execute_block;
+use crate::execution::metrics::{SequencerState, EXECUTION_METRICS};
 
 pub mod block_context_provider;
 pub mod block_executor;
@@ -21,28 +21,78 @@ pub(crate) mod metrics;
 pub(crate) mod utils;
 pub mod vm_wrapper;
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_sequencer_actor<
-    State: ReadStateHistory + WriteState + Clone,
-    Mempool: L2TransactionPool,
->(
-    mut block_stream: BoxStream<'_, BlockCommand>,
+/// Parameters for the Sequencer pipeline component
+/// Contains all the dependencies needed to run the sequencer
+pub struct SequencerParams<Mempool, State, Wal, Repo>
+where
+    Mempool: L2TransactionPool + Send + 'static,
+    State: ReadStateHistory + WriteState + Clone + Send + 'static,
+    Wal: WriteReplay + Send + 'static,
+    Repo: WriteRepository + Send + 'static,
+{
+    pub block_context_provider: BlockContextProvider<Mempool>,
+    pub state: State,
+    pub wal: Wal,
+    pub repositories: Repo,
+    pub sequencer_config: SequencerConfig,
+}
 
-    prover_input_generator_sink: Sender<(BlockOutput, ReplayRecord)>,
-    tree_sink: Sender<BlockOutput>,
+pub struct Sequencer<Mempool, State, Wal, Repo>
+where
+    Mempool: L2TransactionPool + Send + 'static,
+    State: ReadStateHistory + WriteState + Clone + Send + 'static,
+    Wal: WriteReplay + Send + 'static,
+    Repo: WriteRepository + Send + 'static,
+{
+    _phantom: std::marker::PhantomData<(Mempool, State, Wal, Repo)>,
+}
 
-    mut command_block_context_provider: BlockContextProvider<Mempool>,
-    state: State,
-    wal: impl WriteReplay,
-    repositories: impl WriteRepository,
-    sequencer_config: SequencerConfig,
-) -> anyhow::Result<()> {
+impl<Mempool, State, Wal, Repo> Default for Sequencer<Mempool, State, Wal, Repo>
+where
+    Mempool: L2TransactionPool + Send + 'static,
+    State: ReadStateHistory + WriteState + Clone + Send + 'static,
+    Wal: WriteReplay + Send + 'static,
+    Repo: WriteRepository + Send + 'static,
+{
+    fn default() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<Mempool, State, Wal, Repo> PipelineComponent for Sequencer<Mempool, State, Wal, Repo>
+where
+    Mempool: L2TransactionPool + Send + 'static,
+    State: ReadStateHistory + WriteState + Clone + Send + 'static,
+    Wal: WriteReplay + Send + 'static,
+    Repo: WriteRepository + Send + 'static,
+{
+    type Input = BlockCommand;
+    type Output = (BlockOutput, ReplayRecord);
+    type Params = SequencerParams<Mempool, State, Wal, Repo>;
+
+    const NAME: &'static str = "sequencer";
+    const OUTPUT_BUFFER_SIZE: usize = 5;
+
+    async fn run(
+        params: Self::Params,
+        mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<BlockCommand>
+        output: Sender<Self::Output>, // Sender<BlockOutput>
+    ) -> anyhow::Result<()> {
+        let mut command_block_context_provider = params.block_context_provider;
+        let state = params.state;
+        let wal = params.wal;
+        let repositories = params.repositories;
+        let sequencer_config = params.sequencer_config;
+
     let latency_tracker =
         ComponentStateReporter::global().handle_for("sequencer", SequencerState::WaitingForCommand);
     loop {
         latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
-        let Some(cmd) = block_stream.next().await else {
+        let Some(cmd) = input.recv().await else {
             anyhow::bail!("inbound channel closed");
         };
         let block_number = cmd.block_number();
@@ -108,20 +158,15 @@ pub async fn run_sequencer_actor<
 
         wal.append(replay_record.clone());
 
-        tracing::debug!(block_number, "Added to wal. Sending to batcher...");
-        latency_tracker.enter_state(SequencerState::SendingToBatcher);
-
-        prover_input_generator_sink
-            .send((block_output.clone(), replay_record))
-            .await?;
-
-        tracing::debug!(block_number, "Sent to batcher. Sending to tree...");
-        latency_tracker.enter_state(SequencerState::SendingToTree);
-
-        tree_sink.send(block_output).await?;
-
+        tracing::debug!(block_number, "Block processed in sequencer! Sending downstream...");
         EXECUTION_METRICS.block_number[&"execute"].set(block_number);
 
+        latency_tracker.enter_state(SequencerState::WaitingSend);
+        if output.send((block_output.clone(), replay_record.clone())).await.is_err() {
+            anyhow::bail!("Outbound channel closed");
+        }
+
         tracing::debug!(block_number, "Block fully processed");
+    }
     }
 }

@@ -1,60 +1,15 @@
 use crate::{
-    Database, DefaultTreeParams, HashTree, MerkleTree, TreeParams, leaf_nibbles,
+    Database, DefaultTreeParams, HashTree, MerkleTree, RocksDBWrapper, TreeParams, leaf_nibbles,
     types::{KeyLookup, Leaf, Node, NodeKey},
 };
 use alloy::primitives::{B256, FixedBytes};
-use tokio::sync::watch;
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 
-pub struct MerkleTreeForReading<DB: Database, P: TreeParams = DefaultTreeParams> {
-    tree: MerkleTree<DB, P>,
-    /// Used to wait until the requested tree version is written
-    tree_write_watcher: watch::Receiver<u64>,
-}
-
-impl<DB: Database + Clone, P: TreeParams> MerkleTreeForReading<DB, P>
-where
-    P::Hasher: Clone,
-{
-    pub fn new(tree: MerkleTree<DB, P>, tree_write_watcher: watch::Receiver<u64>) -> Self {
-        Self {
-            tree,
-            tree_write_watcher,
-        }
-    }
-
-    /// Returns a [MerkleTreeVersion] at a desired block but only
-    /// after waiting until that block is written into the tree.
-    pub async fn get_at_block(mut self, block: u64) -> MerkleTreeVersion<DB, P> {
-        self.tree_write_watcher
-            .wait_for(|&tree_version| tree_version >= block)
-            .await
-            .unwrap();
-
-        MerkleTreeVersion {
-            tree: self.tree,
-            block,
-        }
-    }
-}
-
-impl<DB: Database, P: TreeParams> Clone for MerkleTreeForReading<DB, P>
-where
-    MerkleTree<DB, P>: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            tree: self.tree.clone(),
-            tree_write_watcher: self.tree_write_watcher.clone(),
-        }
-    }
-}
-
-pub struct MerkleTreeVersion<DB: Database, P: TreeParams = DefaultTreeParams> {
-    tree: MerkleTree<DB, P>,
-    block: u64,
+pub struct MerkleTreeVersion<DB: Database = RocksDBWrapper, P: TreeParams = DefaultTreeParams> {
+    pub tree: MerkleTree<DB, P>,
+    pub block: u64,
 }
 
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
@@ -221,4 +176,16 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
 pub fn fixed_bytes_to_bytes32(x: B256) -> Bytes32 {
     let x: [u8; 32] = x.into();
     x.into()
+}
+
+impl<DB: Database + Clone, P: TreeParams> Clone for MerkleTreeVersion<DB, P>
+where
+    P::Hasher: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tree: self.tree.clone(),
+            block: self.block.clone(),
+        }
+    }
 }
