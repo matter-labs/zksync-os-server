@@ -26,6 +26,7 @@ members = [
     "lib/status",
     "lib/multivm",
     "lib/tracing",
+    "lib/pipeline",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -162,6 +163,7 @@ zksync_os_object_store = { version = "=0.7.4-non-semver-compat", path = "lib/obj
 zksync_os_status_server = { version = "=0.7.4-non-semver-compat", path = "lib/status" }
 zksync_os_multivm = { version = "=0.7.4-non-semver-compat", path = "lib/multivm" }
 zksync_os_tracing = { version = "=0.7.4-non-semver-compat", path = "lib/tracing" }
+zksync_os_pipeline = { version = "=0.7.4-non-semver-compat", path = "lib/pipeline" }
 
 zksync_os_bin = { version = "=0.7.4-non-semver-compat", path = "node/bin" }
 

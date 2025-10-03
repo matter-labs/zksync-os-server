@@ -1,106 +1,82 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{
-    MerkleTreeForReading, MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
+    MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
 };
 use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
+use crate::tree_manager::BlockMerkleTreeData;
 
 /// This component generates prover input from batch replay data
+/// Zero-sized marker struct for PipelineComponent trait
 pub struct ProverInputGenerator<ReadState> {
-    // == config ==
-    enable_logging: bool,
-    maximum_in_flight_blocks: usize,
-    first_block_to_process: u64,
-    app_bin_base_path: PathBuf,
-
-    // == plumbing ==
-    // inbound
-    block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
-
-    // outbound
-    blocks_for_batcher_sender: Sender<(BlockOutput, ReplayRecord, ProverInput)>,
-
-    // dependencies
-    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
-    read_state: ReadState,
+    _phantom: std::marker::PhantomData<ReadState>,
 }
 
-impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        // == config ==
-        enable_logging: bool,
-        maximum_in_flight_blocks: usize,
-        app_bin_base_path: PathBuf,
-        first_block_to_process: u64,
+pub struct ProverInputGeneratorParams<ReadState> {
+    pub enable_logging: bool,
+    pub maximum_in_flight_blocks: usize,
+    pub first_block_to_process: u64,
+    pub app_bin_base_path: PathBuf,
+    pub read_state: ReadState,
+}
 
-        // == plumbing ==
-        block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
-        blocks_for_batcher_sender: Sender<(BlockOutput, ReplayRecord, ProverInput)>,
+#[async_trait]
+impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent for ProverInputGenerator<ReadState> {
+    type Input = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
+    type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Params = ProverInputGeneratorParams<ReadState>;
 
-        // == dependencies ==
-        persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
-        read_state: ReadState,
-    ) -> Self {
-        Self {
-            enable_logging,
-            maximum_in_flight_blocks,
-            app_bin_base_path,
-            first_block_to_process,
-            block_receiver,
-            blocks_for_batcher_sender,
-            persistent_tree,
-            read_state,
-        }
-    }
+    const NAME: &'static str = "prover_input_generator";
+    const OUTPUT_BUFFER_SIZE: usize = 5;
+
 
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
-    pub async fn run_loop(self) -> Result<()> {
+    async fn run(
+        params: Self::Params,
+        input: PeekableReceiver<Self::Input>,
+        output: mpsc::Sender<Self::Output>,
+    ) -> Result<()> {
         let latency_tracker = ComponentStateReporter::global().handle_for(
             "prover_input_generator",
             GenericComponentState::ProcessingOrWaitingRecv,
         );
-        ReceiverStream::new(self.block_receiver)
+
+        // Extract params
+        let first_block_to_process = params.first_block_to_process;
+        let read_state = params.read_state;
+        let enable_logging = params.enable_logging;
+        let app_bin_base_path = params.app_bin_base_path;
+        let maximum_in_flight_blocks = params.maximum_in_flight_blocks;
+
+        ReceiverStream::new(input.into_inner())
             // skip the blocks that were already committed
-            .skip_while(|(_, replay_record)| {
+            .filter(|(_, replay_record, _)| {
                 let block_number = replay_record.block_context.block_number;
-                async move {
-                    if block_number < self.first_block_to_process {
-                        tracing::debug!(
-                            "Skipping block {} as it's below the first block to process {}",
-                            block_number,
-                            self.first_block_to_process
-                        );
-                        true
-                    } else {
-                        false
-                    }
+                let should_process = block_number >= first_block_to_process;
+                if !should_process {
+                    tracing::debug!(
+                        "Skipping block {} as it's below the first block to process {}",
+                        block_number,
+                        first_block_to_process
+                    );
                 }
+                futures::future::ready(should_process)
             })
-            // wait for tree to have processed block for each replay record
-            .then(|(block_output, replay_record)| {
-                let tree = self.persistent_tree.clone();
-                async move {
-                    let tree = tree
-                        .clone()
-                        .get_at_block(replay_record.block_context.block_number - 1)
-                        .await;
-                    (block_output, replay_record, tree)
-                }
-            })
-            // generate prover input. Use up to `Self::maximum_in_flight_blocks` threads
+            // generate prover input. Use up to `maximum_in_flight_blocks` threads
             .map(|(block_output, replay_record, tree)| {
                 let block_number = replay_record.block_context.block_number;
 
@@ -109,30 +85,29 @@ impl<ReadState: ReadStateHistory + Clone> ProverInputGenerator<ReadState> {
                     block_number,
                     replay_record.transactions.len(),
                 );
-                let read_state = self.read_state.clone();
-                let enable_logging = self.enable_logging;
-                let app_bin_base_path = self.app_bin_base_path.clone();
+                let read_state_clone = read_state.clone();
+                let app_bin_base_path_clone = app_bin_base_path.clone();
                 tokio::task::spawn_blocking(move || {
                     let prover_input = compute_prover_input(
                         &replay_record,
-                        read_state,
-                        tree,
-                        app_bin_base_path,
+                        read_state_clone,
+                        tree.block_start.clone(),
+                        app_bin_base_path_clone,
                         enable_logging,
                     );
-                    (block_output, replay_record, prover_input)
+                    (block_output, replay_record, prover_input, tree)
                 })
             })
-            .buffered(self.maximum_in_flight_blocks)
+            .buffered(maximum_in_flight_blocks)
             .map_err(|e| anyhow::anyhow!(e))
-            .try_for_each(|(block_output, replay_record, prover_input)| async {
+            .try_for_each(|(block_output, replay_record, prover_input, tree)| async {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
                 tracing::debug!(
                     block_number = block_output.header.number,
                     "sending block with prover input to batcher",
                 );
-                self.blocks_for_batcher_sender
-                    .send((block_output, replay_record, prover_input))
+                output
+                    .send((block_output, replay_record, prover_input, tree))
                     .await?;
                 latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 Ok(())

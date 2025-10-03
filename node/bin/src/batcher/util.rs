@@ -1,16 +1,18 @@
 use alloy::primitives::{B256, U256, keccak256};
 use blake2::{Blake2s256, Digest};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
-use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_storage_api::RepositoryBlock;
 
 pub async fn load_genesis_stored_batch_info(
     genesis_block: RepositoryBlock,
-    tree: MerkleTreeForReading<RocksDBWrapper>,
+    tree: MerkleTree<RocksDBWrapper>,
 ) -> StoredBatchInfo {
-    let genesis_root_info = tree
-        .get_at_block(0)
-        .await
+    let tree_at_genesis = MerkleTreeVersion {
+        tree,
+        block: 0,
+    };
+    let genesis_root_info = tree_at_genesis
         .root_info()
         .expect("Failed to get genesis root info");
 

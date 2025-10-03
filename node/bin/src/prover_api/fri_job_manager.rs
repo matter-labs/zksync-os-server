@@ -17,7 +17,7 @@
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
 use crate::prover_api::prover_job_map::ProverJobMap;
-use crate::util::peekable_receiver::PeekableReceiver;
+use zksync_os_pipeline::PeekableReceiver;
 use itertools::MinMaxResult::MinMax;
 use serde::Serialize;
 use std::time::Duration;

@@ -1,33 +1,154 @@
 use alloy::primitives::BlockNumber;
-use anyhow::Context;
+use async_trait::async_trait;
 use std::ops::Div;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{
-    MerkleTree, MerkleTreeColumnFamily, MerkleTreeForReading, RocksDBWrapper, TreeEntry,
+    MerkleTree, MerkleTreeColumnFamily, MerkleTreeVersion, RocksDBWrapper, TreeEntry,
 };
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 
 // todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
-pub struct TreeManager {
-    pub tree: Arc<RwLock<MerkleTree<RocksDBWrapper>>>,
-    // todo: it only needs the BlockOutput - sending both for now
-    block_receiver: tokio::sync::mpsc::Receiver<BlockOutput>,
-    latest_block_sender: watch::Sender<u64>,
+
+pub struct BlockMerkleTreeData {
+    pub block_start: MerkleTreeVersion,
+    pub block_end: MerkleTreeVersion,
+}
+
+#[derive(Debug)]
+pub(crate) struct TreeManager;
+
+#[derive(Debug)]
+pub struct TreeManagerParams {
+    pub tree: MerkleTree<RocksDBWrapper>,
+}
+
+#[async_trait]
+impl PipelineComponent for TreeManager {
+    type Input = (BlockOutput, zksync_os_storage_api::ReplayRecord);
+    type Output = (
+        BlockOutput,
+        zksync_os_storage_api::ReplayRecord,
+        BlockMerkleTreeData,
+    );
+    type Params = TreeManagerParams;
+    const NAME: &'static str = "merkle_tree";
+    const OUTPUT_BUFFER_SIZE: usize = 10;
+
+    async fn run(
+        params: Self::Params,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::Sender<Self::Output>,
+    ) -> anyhow::Result<()> {
+        // todo: Arc/RwLock is only done to support `spawn_blocking`
+        //  there must be a better way.
+        let tree = Arc::new(RwLock::new(params.tree));
+
+        // only used to skip blocks that were already processed by the tree -
+        // will be removed once idempotency is handled on the framework level
+        let mut last_processed_block = tree
+            .write()
+            .unwrap()
+            .latest_version()?
+            .expect("tree wasn't initialized");
+
+        let latency_tracker =
+            ComponentStateReporter::global().handle_for("tree", GenericComponentState::WaitingRecv);
+        loop {
+            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
+
+            let Some((block_output, replay_record)) = input.recv().await else {
+                anyhow::bail!("inbound channel closed");
+            };
+            latency_tracker.enter_state(GenericComponentState::Processing);
+            let started_at = Instant::now();
+            let block_number = block_output.header.number;
+
+            //todo: delegate idempotency logic to Pipeline Framework level
+            if block_number <= last_processed_block {
+                tracing::debug!(
+                    "not applying block {} to the tree as it's already processed",
+                    block_number
+                )
+            } else {
+                tracing::debug!(
+                    "Processing {} storage writes in tree for block {}",
+                    block_output.storage_writes.len(),
+                    block_number
+                );
+
+                // Convert StorageWrite to TreeEntry
+                let tree_entries = block_output
+                    .storage_writes
+                    .iter()
+                    .map(|write| TreeEntry {
+                        key: write.key,
+                        value: write.value,
+                    })
+                    .collect::<Vec<_>>();
+
+                let clone = tree.clone();
+                let count = tree_entries.len();
+                let tree_batch_output = tokio::task::spawn_blocking(move || {
+                    clone.write().unwrap().extend(&tree_entries)
+                })
+                .await??;
+                last_processed_block = tree
+                    .write()
+                    .unwrap()
+                    .latest_version()?
+                    .expect("uninitialized tree after applying a block");
+                assert_eq!(last_processed_block, block_number);
+
+                tracing::debug!(
+                    block_number = block_number,
+                    next_free_slot = tree_batch_output.leaf_count,
+                    "Processed {} entries in tree, output: {:?}",
+                    count,
+                    tree_batch_output
+                );
+
+                TREE_METRICS
+                    .entry_time
+                    .observe(started_at.elapsed().div(count as u32));
+                TREE_METRICS.unique_leafs.set(tree_batch_output.leaf_count);
+                TREE_METRICS.block_time.observe(started_at.elapsed());
+
+                TREE_METRICS.processing_range.observe(count as u64);
+            }
+            TREE_METRICS.block_number.set(block_number);
+            let tree_block = BlockMerkleTreeData {
+                block_start: MerkleTreeVersion {
+                    tree: tree.read().unwrap().clone(),
+                    block: block_number - 1,
+                },
+                block_end: MerkleTreeVersion {
+                    tree: tree.read().unwrap().clone(),
+                    block: block_number ,
+                },
+            };
+            output
+                .send((block_output, replay_record, tree_block))
+                .await?;
+        }
+    }
 }
 
 impl TreeManager {
-    pub fn tree_wrapper(path: &Path) -> RocksDBWrapper {
+    pub async fn load_or_initialize_tree(
+        path: &Path,
+        genesis: &Genesis,
+    ) -> MerkleTree<RocksDBWrapper> {
         let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
-            path,
+            &path,
             RocksDBOptions {
                 block_cache_capacity: Some(128 << 20),
                 include_indices_and_filters_in_block_cache: false,
@@ -37,15 +158,8 @@ impl TreeManager {
             },
         )
         .unwrap();
-        RocksDBWrapper::from(db)
-    }
 
-    pub async fn new(
-        tree_wrapper: RocksDBWrapper,
-        block_receiver: Receiver<BlockOutput>,
-        genesis: &Genesis,
-    ) -> (TreeManager, MerkleTreeForReading<RocksDBWrapper>) {
-        let (latest_block_sender, latest_block_receiver) = watch::channel(0u64);
+        let tree_wrapper = RocksDBWrapper::from(db);
         let mut tree = MerkleTree::new(tree_wrapper).unwrap();
 
         let version = tree
@@ -66,107 +180,7 @@ impl TreeManager {
         }
 
         tracing::info!("Loaded tree with last processed block at {:?}", version);
-        let tree_manager = Self {
-            tree: Arc::new(RwLock::new(tree.clone())),
-            block_receiver,
-            latest_block_sender,
-        };
-        tree_manager
-            .latest_block_sender
-            .send(
-                tree_manager
-                    .last_processed_block()
-                    .expect("cannot get last processed block from tree"),
-            )
-            .expect("cannot send last processed block to watcher");
-
-        (
-            tree_manager,
-            MerkleTreeForReading::new(tree, latest_block_receiver),
-        )
-    }
-
-    pub fn last_processed_block(&self) -> anyhow::Result<u64> {
-        self.tree
-            .write()
-            .unwrap()
-            .latest_version()?
-            .context("tree wasn't initialized with genesis batch")
-    }
-
-    pub async fn run_loop(mut self) -> anyhow::Result<()> {
-        let latency_tracker =
-            ComponentStateReporter::global().handle_for("tree", GenericComponentState::WaitingRecv);
-        loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            match self.block_receiver.recv().await {
-                Some(block_output) => {
-                    latency_tracker.enter_state(GenericComponentState::Processing);
-                    let started_at = Instant::now();
-                    let block_number = block_output.header.number;
-
-                    if block_number <= self.last_processed_block()? {
-                        tracing::debug!(
-                            "skipping block {} as it's already processed",
-                            block_number
-                        );
-                        continue;
-                    }
-
-                    tracing::debug!(
-                        "Processing {} storage writes in tree for block {}",
-                        block_output.storage_writes.len(),
-                        block_number
-                    );
-
-                    // Convert StorageWrite to TreeEntry
-                    let tree_entries = block_output
-                        .storage_writes
-                        .into_iter()
-                        .map(|write| TreeEntry {
-                            key: write.key,
-                            value: write.value,
-                        })
-                        .collect::<Vec<_>>();
-
-                    let clone = self.tree.clone();
-                    let count = tree_entries.len();
-                    let output = tokio::task::spawn_blocking(move || {
-                        clone.write().unwrap().extend(&tree_entries)
-                    })
-                    .await??;
-                    let version_after = self.tree.write().unwrap().latest_version()?;
-
-                    assert_eq!(version_after, Some(block_number));
-
-                    // Send the latest processed block number to watchers
-                    let _ = self.latest_block_sender.send(block_number);
-
-                    tracing::debug!(
-                        block_number = block_number,
-                        next_free_slot = output.leaf_count,
-                        "Processed {} entries in tree, output: {:?}",
-                        count,
-                        output
-                    );
-
-                    TREE_METRICS
-                        .entry_time
-                        .observe(started_at.elapsed().div(count as u32));
-
-                    TREE_METRICS.block_time.observe(started_at.elapsed());
-
-                    TREE_METRICS.processing_range.observe(count as u64);
-                    TREE_METRICS.block_number.set(block_number);
-                }
-                None => {
-                    // Channel closed, exit the loop
-                    tracing::info!("BlockOutput channel closed, exiting tree manager",);
-                    break;
-                }
-            }
-        }
-        Ok(())
+        tree
     }
 }
 
@@ -182,6 +196,7 @@ pub struct TreeMetrics {
     pub block_time: Histogram<Duration>,
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
     pub range_time: Histogram<Duration>,
+    pub unique_leafs: Gauge<u64>,
     #[metrics(buckets = BLOCK_RANGE_SIZE)]
     pub processing_range: Histogram<u64>,
     pub block_number: Gauge<BlockNumber>,
