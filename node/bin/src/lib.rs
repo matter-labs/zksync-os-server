@@ -724,12 +724,26 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
             .map(report_exit("prover_gapless_committer")),
     );
 
+    // We are in the process of splitting Prover FRI Api and Prover SNARK Api.
+    // We temporarily run the same API both on FRI and SNARK prover api ports.
+    // Thus, all endpoints are served from all ports -
+    // this way we don't need to coordinate deployments when migrating the provers.
     tasks.spawn(
         prover_server::run(
             fri_job_manager.clone(),
             snark_job_manager.clone(),
             batch_storage.clone(),
-            config.prover_api_config.address.clone(),
+            config.prover_api_config.address_fri.clone(),
+        )
+        .map(report_exit("prover_server_job")),
+    );
+
+    tasks.spawn(
+        prover_server::run(
+            fri_job_manager.clone(),
+            snark_job_manager.clone(),
+            batch_storage.clone(),
+            config.prover_api_config.address_snark.clone(),
         )
         .map(report_exit("prover_server_job")),
     );

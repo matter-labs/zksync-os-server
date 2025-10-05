@@ -190,6 +190,8 @@ pub async fn run(
     };
 
     let app = Router::new()
+        .route("/prover-jobs/FRI/status", get(status))
+        // deprecated: use the FRI-specific endpoint above
         .route("/prover-jobs/status", get(status))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))

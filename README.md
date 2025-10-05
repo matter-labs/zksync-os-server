@@ -110,8 +110,9 @@ sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e ba
 
 * `3050` - L2 JSON RPC
 * `3053` - Block replay server (transport for EN)
-* `3124` - Prover API (e.g. `127.0.0.1/prover-jobs/status`) (only enabled if `prover_api_component_enabled` is set to
+* `3124` - Prover FRI API (e.g. `127.0.0.1/prover-jobs/FRI/status`) (only enabled if `prover_api_component_enabled` is set to
   `true`)
+* `3125` - Prover SNARK API (see `node/bin/src/prover_api/prover_server.rs`)
 * `3312` - Prometheus
 
 ### Prerequisites

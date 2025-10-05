@@ -311,9 +311,13 @@ pub struct ProverInputGeneratorConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverApiConfig {
-    /// Prover API address to listen on.
+    /// FRI Prover API address to listen on.
     #[config(default_t = "0.0.0.0:3124".into())]
-    pub address: String,
+    pub address_fri: String,
+
+    /// SNARK Prover API address to listen on.
+    #[config(default_t = "0.0.0.0:3125".into())]
+    pub address_snark: String,
 
     /// Enabled by default.
     /// Use `prover_fake_fri_provers_enabled=false` to disable fake fri provers.
