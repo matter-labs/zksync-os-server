@@ -441,6 +441,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             &mut tasks,
             block_context_provider,
             state,
+            tree_db,
             starting_block,
             repositories,
             finality_storage,
@@ -854,7 +855,7 @@ async fn run_en_pipeline<State: ReadStateHistory + WriteState + StateInitializer
         replay_download_address: config.sequencer_config.block_replay_download_address.clone().expect("EN must have replay_download_address"),
     });
 
-    let mut pipeline_after_sequencer = pipeline.add_component::<Sequencer<
+    let pipeline_after_sequencer = pipeline.add_component::<Sequencer<
         RethPool<ZkClient<State>>,
         State,
         BlockReplayStorage,
