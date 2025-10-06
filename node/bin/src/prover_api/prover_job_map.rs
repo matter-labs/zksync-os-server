@@ -90,8 +90,7 @@ impl ProverJobMap {
             .map(|entry| (entry.assigned_at, entry.batch_envelope.batch.clone()))
     }
 
-    /// If a job is present for given batch_number, returns
-    /// (batch_metadata, prover_input)
+    /// If a job is present for given batch_number, returns prover_input
     pub fn get_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
         self.jobs
             .get(&batch_number)

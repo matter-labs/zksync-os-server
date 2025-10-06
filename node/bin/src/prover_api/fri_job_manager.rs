@@ -96,7 +96,9 @@ impl FriJobManager {
                 Some(prover_input)
             }
             None => {
-                tracing::debug!("No batch data found for batch number {batch_number}");
+                tracing::debug!(
+                    "Trying to peek batch number {batch_number} that is not present in assigned_jobs"
+                );
                 None
             }
         }
