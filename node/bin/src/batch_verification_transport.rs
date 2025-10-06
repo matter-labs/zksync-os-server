@@ -398,9 +398,20 @@ impl PipelineComponent for BatchVerificationClient {
                 // Handling in sequence without concurrency is fine as we shouldn't get too many requests and they should handle fast
                 server_message = reader.next() => {
                     match server_message {
-                        Some(message) => {
-                            let response = self.handle_verification_request(message?).await?;
-                            writer.send(response).await?;
+                        Some(Ok(message)) => {
+                            //TODO a way to send errors
+                            let batch_number = message.batch_number;
+                            match self.handle_verification_request(message).await {
+                                Ok(response) => {
+                                    tracing::info!("Approved batch verification request for {}", batch_number);
+                                    writer.send(response).await?;
+                                },
+                                Err(reason) => {tracing::info!("Batch {} verification failed: {}", batch_number, reason);},
+                            }
+                        }
+                        Some(Err(parsing_err)) =>
+                        {
+                            tracing::error!("Error parsing verfication request message. Ignoring: {}", parsing_err);
                         }
                         None => {
                             tracing::error!("Server has disconnected verification client"); //TODO retries
