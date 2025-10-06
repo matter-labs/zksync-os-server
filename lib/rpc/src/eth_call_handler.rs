@@ -1,5 +1,6 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
+use crate::result::RevertError;
 use crate::rpc_storage::ReadRpcStorage;
 use crate::sandbox::{call_trace_simulate, execute};
 use alloy::consensus::transaction::Recovered;
@@ -11,6 +12,7 @@ use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use zk_os_api::helpers::{get_balance, get_nonce};
+use zksync_os_interface::types::ExecutionOutput;
 use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, ExecutionResult},
@@ -234,7 +236,15 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         .map_err(EthCallError::ForwardSubsystemError)?
         .map_err(EthCallError::InvalidTransaction)?;
 
-        Ok(Bytes::copy_from_slice(res.as_returned_bytes()))
+        match res.execution_result {
+            ExecutionResult::Success(
+                ExecutionOutput::Call(return_bytes) | ExecutionOutput::Create(return_bytes, _),
+            ) => Ok(Bytes::from(return_bytes)),
+            ExecutionResult::Revert(return_bytes) => {
+                let error = RevertError::new(Bytes::from(return_bytes));
+                Err(EthCallError::Revert(error))?
+            }
+        }
     }
 
     pub fn call_trace_impl(
@@ -358,7 +368,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 // binary search
             }
             ExecutionResult::Revert(output) => {
-                return Err(EthCallError::Revert(Bytes::from(output)));
+                let error = RevertError::new(Bytes::from(output));
+                return Err(EthCallError::Revert(error));
             }
         }
 
@@ -547,7 +558,7 @@ pub enum EthCallError {
 
     /// Thrown if executing a transaction failed during estimate/call
     #[error("execution reverted: {0}")]
-    Revert(Bytes),
+    Revert(RevertError),
 
     // Below is more or less temporary as the error hierarchy in ZKsync OS is going through a major
     // refactoring.
