@@ -20,8 +20,7 @@ pub enum SequencerState {
     AddingToRepos,
     UpdatingMempool,
     AddingToWal,
-    SendingToBatcher,
-    SendingToTree,
+    WaitingSend,
     BlockContextTxs,
     InitializingVm,
 }
@@ -29,7 +28,7 @@ impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
             Self::WaitingForCommand | Self::WaitingForTx => GenericComponentState::WaitingRecv,
-            Self::SendingToBatcher | Self::SendingToTree => GenericComponentState::WaitingSend,
+            Self::WaitingSend => GenericComponentState::WaitingSend,
             _ => GenericComponentState::Processing,
         }
     }
@@ -45,8 +44,7 @@ impl StateLabel for SequencerState {
             SequencerState::AddingToRepos => "adding_to_repos",
             SequencerState::UpdatingMempool => "updating_mempool",
             SequencerState::AddingToWal => "adding_to_wal",
-            SequencerState::SendingToBatcher => "sending_to_batcher",
-            SequencerState::SendingToTree => "sending_to_tree",
+            SequencerState::WaitingSend => "waiting_send",
             SequencerState::BlockContextTxs => "block_context_txs",
             SequencerState::InitializingVm => "initializing_vm",
         }

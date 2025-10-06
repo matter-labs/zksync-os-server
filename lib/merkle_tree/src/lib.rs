@@ -10,7 +10,7 @@ pub use self::{
     hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
     types::{TreeBatchOutput, TreeEntry},
-    with_version::{MerkleTreeForReading, MerkleTreeVersion, fixed_bytes_to_bytes32},
+    with_version::{MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
 use crate::{
     metrics::{BatchProofStage, LoadStage, METRICS, MerkleTreeInfo},
