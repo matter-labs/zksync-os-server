@@ -148,7 +148,7 @@ impl TreeManager {
         genesis: &Genesis,
     ) -> MerkleTree<RocksDBWrapper> {
         let db: RocksDB<MerkleTreeColumnFamily> = RocksDB::with_options(
-            &path,
+            path,
             RocksDBOptions {
                 block_cache_capacity: Some(128 << 20),
                 include_indices_and_filters_in_block_cache: false,

@@ -5,15 +5,12 @@ use std::mem::size_of;
 use tokio::sync::mpsc;
 
 /// A configured pipeline ready for execution
+#[derive(Default)]
 pub struct ConfiguredPipeline {
     tasks: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>>,
 }
 
 impl ConfiguredPipeline {
-    pub fn new() -> Self {
-        Self { tasks: Vec::new() }
-    }
-
     /// Add a source component to the pipeline
     pub fn add_source<S: Source + 'static>(
         &mut self,
@@ -82,7 +79,7 @@ impl ConfiguredPipeline {
 
         match result {
             Ok(task_result) => task_result,
-            Err(join_error) => anyhow::bail!("Task panicked: {}", join_error),
+            Err(join_error) => anyhow::bail!("Task panicked: {join_error}"),
         }
     }
 }

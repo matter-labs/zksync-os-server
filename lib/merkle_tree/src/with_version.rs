@@ -185,7 +185,7 @@ where
     fn clone(&self) -> Self {
         Self {
             tree: self.tree.clone(),
-            block: self.block.clone(),
+            block: self.block,
         }
     }
 }

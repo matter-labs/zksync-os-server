@@ -525,7 +525,7 @@ async fn run_main_node_pipeline<
     // To minimize the PR, the order in which the components are initialized is retained;
     // thus migrated components are sometimes interleaved with the ones that are not migrated yet.
 
-    let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::new();
+    let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::default();
 
     let pipeline_after_command_source =
         pipeline.add_source::<MainNodeCommandSource>(MainNodeCommandSourceParams {
@@ -867,7 +867,7 @@ async fn run_en_pipeline<
     // On EN, the Pipeline Framework is only used for
     // CommandSource -> Sequencer
 
-    let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::new();
+    let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::default();
 
     let pipeline_after_command_source =
         pipeline.add_source::<ExternalNodeCommandSource>(ExternalNodeCommandSourceParams {
