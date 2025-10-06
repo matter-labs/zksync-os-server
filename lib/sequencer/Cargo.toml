@@ -13,6 +13,7 @@ categories.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_mempool.workspace = true
 zksync_os_observability.workspace = true
+zksync_os_pipeline.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
@@ -27,6 +28,7 @@ reth-execution-types = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }
 anyhow.workspace = true
+async-trait.workspace = true
 futures.workspace = true
 ruint.workspace = true
 serde.workspace = true
