@@ -8,6 +8,7 @@ use zksync_os_bin::config::{
     SequencerConfig, StateBackendConfig, StatusServerConfig,
 };
 use zksync_os_bin::run;
+use zksync_os_bin::two_fa::main::run_two_fa_node;
 use zksync_os_bin::zkstack_config::ZkStackConfig;
 use zksync_os_observability::PrometheusExporterConfig;
 use zksync_os_state::StateHandle;
@@ -35,9 +36,44 @@ pub async fn main() {
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
 
     let main_task = async move {
-        match config.general_config.state_backend {
-            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
-            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+        // Always run the normal node, optionally with 2FA if env flag enabled
+        let enable_2fa = std::env::var("ENABLE_2FA").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        if enable_2fa {
+            tracing::info!("Starting node with 2FA validation enabled");
+            let main_node_address = config
+                .sequencer_config
+                .block_replay_download_address
+                .clone()
+                .unwrap_or_else(|| config.sequencer_config.block_replay_server_address.clone());
+            let two_fa_handle = tokio::spawn(async move {
+                if let Err(e) = run_two_fa_node(main_node_address).await {
+                    tracing::error!("2FA validation failed: {}", e);
+                }
+            });
+            
+            // Run the normal node
+            let node_result = match config.general_config.state_backend {
+                StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
+                StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+            };
+            
+            // Wait for both tasks
+            tokio::select! {
+                _ = two_fa_handle => {
+                    tracing::info!("2FA validation task completed");
+                }
+                _ = async { node_result } => {
+                    tracing::info!("Main node task completed");
+                }
+            }
+        } else {
+            tracing::info!("Starting node in normal mode");
+            
+            // Run the normal node without 2FA
+            match config.general_config.state_backend {
+                StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
+                StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+            }
         }
     };
 
@@ -137,6 +173,7 @@ fn build_configs() -> Config {
     schema
         .insert(&LogConfig::DESCRIPTION, "log")
         .expect("Failed to insert log config");
+    // 2FA config removed: enable via env vars (ENABLE_2FA, TWO_FA_*). No schema entry needed.
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -211,6 +248,8 @@ fn build_configs() -> Config {
         .expect("Failed to load log config")
         .parse()
         .expect("Failed to parse log config");
+
+    // two_fa config removed; controlled via env vars
 
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.

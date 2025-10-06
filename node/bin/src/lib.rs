@@ -15,6 +15,7 @@ mod replay_transport;
 pub mod reth_state;
 mod state_initializer;
 pub mod tree_manager;
+pub mod two_fa;
 mod util;
 pub mod zkstack_config;
 
