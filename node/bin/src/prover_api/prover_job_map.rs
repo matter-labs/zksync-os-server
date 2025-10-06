@@ -90,6 +90,14 @@ impl ProverJobMap {
             .map(|entry| (entry.assigned_at, entry.batch_envelope.batch.clone()))
     }
 
+    /// If a job is present for given batch_number, returns
+    /// (batch_metadata, prover_input)
+    pub fn get_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
+        self.jobs
+            .get(&batch_number)
+            .map(|entry| entry.batch_envelope.data.clone())
+    }
+
     /// Removes and returns the assigned job entry, if present.
     pub fn remove(&self, batch_number: u64) -> Option<AssignedJobEntry> {
         self.jobs.remove(&batch_number).map(|(_, v)| v)

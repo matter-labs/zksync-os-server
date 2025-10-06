@@ -88,6 +88,14 @@ impl FriJobManager {
         }
     }
 
+    /// Peek a batch data for a given batch number
+    pub fn peek_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
+        match self.assigned_jobs.get_batch_data(batch_number) {
+            Some(prover_input) => Some(prover_input),
+            None => None,
+        }
+    }
+
     /// Picks the **smallest** batch number that is either **pending** (from inbound)
     /// or whose assignment has **timed‑out** (from the assigned map).
     ///
