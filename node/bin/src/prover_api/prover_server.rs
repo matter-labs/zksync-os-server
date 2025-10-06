@@ -19,6 +19,12 @@ use zksync_os_l1_sender::batcher_model::FriProof;
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
+struct BatchDataPayload {
+    block_number: u64,
+    prover_input: String, // base64‑encoded little‑endian u32 array
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct FriProofPayload {
     block_number: u64,
     proof: String,
@@ -42,12 +48,6 @@ struct SnarkProofPayload {
 struct AvailableProofsPayload {
     block_number: u64,
     available_proofs: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BatchDataPayload {
-    block_number: u64,
-    prover_input: String,
 }
 
 #[derive(Debug, Deserialize)]
