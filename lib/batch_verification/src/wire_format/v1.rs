@@ -14,6 +14,7 @@ pub struct BatchVerificationRequestWireFormatV1 {
     pub first_block_number: u64,
     pub last_block_number: u64,
     pub request_id: u64,
+    pub commit_data: Vec<u8>,
 }
 
 /// The format BatchVerificationResponse is currently sent in

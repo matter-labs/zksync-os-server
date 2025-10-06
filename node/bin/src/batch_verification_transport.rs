@@ -1,5 +1,7 @@
+use alloy::primitives::Address;
 use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
+use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
 use futures::{SinkExt, StreamExt};
@@ -21,8 +23,15 @@ use zksync_os_batch_verification::{
     BatchVerificationRequestCodec, BatchVerificationRequestDecoder, BatchVerificationResponse,
     BatchVerificationResponseCodec, BatchVerificationResponseDecoder,
 };
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
+use zksync_os_l1_sender::commitment::BatchInfo;
+use zksync_os_merkle_tree::TreeBatchOutput;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_storage_api::ReplayRecord;
 use zksync_os_storage_api::skip_http_headers;
+
+use crate::tree_manager::BlockMerkleTreeData;
 
 /// Manages connected clients and collects their responses
 pub struct BatchVerificationServer {
@@ -156,6 +165,7 @@ impl BatchVerificationServer {
             batch_number: batch_envelope.batch_number(),
             first_block_number: batch_envelope.batch.first_block_number,
             last_block_number: batch_envelope.batch.last_block_number,
+            commit_data: batch_envelope.batch.batch_info.commit_info.clone(),
             request_id,
         };
 
@@ -208,20 +218,140 @@ impl BatchVerificationServer {
 
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient {
+    chain_id: u64,
+    chain_address: Address,
     signer: PrivateKeySigner, // TODO, we probably want to move to BLS?
+    block_storage: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
+    server_address: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BatchVerificationError {
+    #[error("Missing records for block {0}")]
+    MissingBlock(u64),
+    #[error("Tree error")]
+    TreeError,
 }
 
 impl BatchVerificationClient {
-    pub fn new(private_key: SecretString) -> Self {
+    pub fn new(
+        private_key: SecretString,
+        chain_id: u64,
+        chain_address: Address,
+        server_address: String,
+    ) -> Self {
         Self {
             signer: PrivateKeySigner::from_str(private_key.expose_secret())
                 .expect("Invalid batch verification private key"),
+            chain_id,
+            chain_address,
+            block_storage: HashMap::new(),
+            server_address,
         }
     }
 
-    /// Connect to the main sequencer and handle verification requests
-    pub async fn run(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
-        let mut socket = (|| TcpStream::connect(&address))
+    async fn handle_verification_request(
+        &self,
+        request: BatchVerificationRequest,
+    ) -> anyhow::Result<BatchVerificationResponse> {
+        tracing::info!(
+            "Handling batch verification request {} for batch {} (blocks {}-{})",
+            request.request_id,
+            request.batch_number,
+            request.first_block_number,
+            request.last_block_number,
+        );
+
+        let blocks: Vec<(&BlockOutput, &ReplayRecord, TreeBatchOutput)> =
+            (request.first_block_number..=request.last_block_number)
+                .map(|block_number| {
+                    let (block_output, replay_record, tree_data) = self
+                        .block_storage
+                        .get(&block_number)
+                        .ok_or(BatchVerificationError::MissingBlock(block_number))?;
+
+                    let (root_hash, leaf_count) = tree_data
+                        .block_start
+                        .clone()
+                        .root_info()
+                        .map_err(|_| BatchVerificationError::TreeError)?;
+
+                    let tree_output = TreeBatchOutput {
+                        root_hash,
+                        leaf_count,
+                    };
+                    Ok((block_output, replay_record, tree_output))
+                })
+                .collect::<Result<Vec<_>, BatchVerificationError>>()?;
+
+        // TODO VALIDATE
+        let commit_batch_info = BatchInfo::new(
+            blocks
+                .iter()
+                .map(|(block_output, replay_record, tree)| {
+                    (
+                        *block_output,
+                        &replay_record.block_context,
+                        replay_record.transactions.as_slice(),
+                        tree,
+                    )
+                })
+                .collect(),
+            self.chain_id,
+            self.chain_address,
+            request.batch_number,
+        )
+        .commit_info;
+
+        // For now, create a dummy signature. Think of something better in the future
+        let signature = self.sign_batch_verification(&request).await?;
+
+        Ok(BatchVerificationResponse {
+            request_id: request.request_id,
+            signature,
+        })
+    }
+
+    async fn sign_batch_verification(
+        &self,
+        request: &BatchVerificationRequest,
+    ) -> anyhow::Result<Vec<u8>> {
+        // TODO: Implement actual cryptographic signing
+        // For now, return a dummy signature based on request data
+        let signature_data = format!(
+            "{}:{}:{}:{}",
+            request.batch_number,
+            request.first_block_number,
+            request.last_block_number,
+            request.request_id
+        );
+
+        Ok(self
+            .signer
+            .sign_message(signature_data.as_bytes())
+            .await?
+            .into())
+    }
+}
+
+#[async_trait]
+impl PipelineComponent for BatchVerificationClient {
+    type Input = (
+        BlockOutput,
+        zksync_os_storage_api::ReplayRecord,
+        BlockMerkleTreeData,
+    );
+    type Output = ();
+
+    const NAME: &'static str = "batch_verification_client";
+    const OUTPUT_BUFFER_SIZE: usize = 5;
+
+    async fn run(
+        mut self,
+        mut input: PeekableReceiver<Self::Input>,
+        _output: mpsc::Sender<Self::Output>,
+    ) -> anyhow::Result<()> {
+        let mut socket = (|| TcpStream::connect(&self.server_address))
             .retry(
                 ConstantBuilder::default()
                     .with_delay(Duration::from_secs(1))
@@ -251,55 +381,36 @@ impl BatchVerificationClient {
 
         tracing::info!("Connected to main sequencer for batch verification");
 
-        // Handling in sequencer without concurrency is fine as we shouldn't get too many requests
-        while let Some(message) = reader.next().await {
-            let response = self.handle_verification_request(message?).await?;
-            writer.send(response).await?;
+        loop {
+            tokio::select! {
+                block = input.recv() => {
+                    match block {
+                        Some((block_output, replay_record, tree_data)) => {
+                            // TODO remove old blocks from storage
+                            self.block_storage.insert(
+                                replay_record.block_context.block_number,
+                                (block_output, replay_record, tree_data),
+                            );
+                        }
+                        None => break, // Channel closed, we are stopping now
+                    }
+                }
+                // Handling in sequence without concurrency is fine as we shouldn't get too many requests and they should handle fast
+                server_message = reader.next() => {
+                    match server_message {
+                        Some(message) => {
+                            let response = self.handle_verification_request(message?).await?;
+                            writer.send(response).await?;
+                        }
+                        None => {
+                            tracing::error!("Server has disconnected verification client"); //TODO retries
+                            break; // Connection closed
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
-    }
-
-    async fn handle_verification_request(
-        &self,
-        request: BatchVerificationRequest,
-    ) -> anyhow::Result<BatchVerificationResponse> {
-        tracing::info!(
-            "Handling batch verification request {} for batch {} (blocks {}-{})",
-            request.request_id,
-            request.batch_number,
-            request.first_block_number,
-            request.last_block_number
-        );
-
-        // TODO: Implement actual batch verification logic
-        // For now, create a dummy signature
-        let signature = self.sign_batch_verification(&request).await?;
-
-        Ok(BatchVerificationResponse {
-            request_id: request.request_id,
-            signature,
-        })
-    }
-
-    async fn sign_batch_verification(
-        &self,
-        request: &BatchVerificationRequest,
-    ) -> anyhow::Result<Vec<u8>> {
-        // TODO: Implement actual cryptographic signing
-        // For now, return a dummy signature based on request data
-        let signature_data = format!(
-            "{}:{}:{}:{}",
-            request.batch_number,
-            request.first_block_number,
-            request.last_block_number,
-            request.request_id
-        );
-
-        Ok(self
-            .signer
-            .sign_message(signature_data.as_bytes())
-            .await?
-            .into())
     }
 }

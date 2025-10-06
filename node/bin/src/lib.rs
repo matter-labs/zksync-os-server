@@ -739,7 +739,7 @@ async fn run_en_pipeline(
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
-    Pipeline::new()
+    let pipeline = Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
             replay_download_address: config
@@ -762,9 +762,20 @@ async fn run_en_pipeline(
                 .revm_consistency_checker_enabled
                 .then(|| RevmConsistencyChecker::new(state.clone())),
         )
-        .pipe(TreeManager { tree: tree.clone() })
-        .pipe(NoOpSink::new())
-        .spawn(tasks);
+        .pipe(TreeManager { tree: tree.clone() });
+
+    let pipeline = if config.batch_verification_config.enabled {
+        pipeline.pipe(BatchVerificationClient::new(
+            config.batch_verification_config.signing_key.clone(),
+            config.genesis_config.chain_id.unwrap(),
+            *node_state_on_startup.l1_state.diamond_proxy.address(),
+            config.batch_verification_config.address,
+        ))
+    } else {
+        pipeline.pipe(NoOpSink::new())
+    };
+
+    pipeline.spawn(tasks);
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     let priority_tree_en_step = PriorityTreeENStep::new(
@@ -789,17 +800,6 @@ async fn run_en_pipeline(
             .run()
             .map(report_exit("priority_tree_en")),
     );
-
-    if config.batch_verification_config.enabled {
-        tasks.spawn(
-            async move {
-                BatchVerificationClient::new(config.batch_verification_config.signing_key.clone())
-                    .run(config.batch_verification_config.address)
-                    .await
-            }
-            .map(report_exit("batch_verification_client")),
-        );
-    }
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {

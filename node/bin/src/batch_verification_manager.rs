@@ -236,7 +236,7 @@ impl BatchVerifier {
 
         // Send verification request to all connected clients
         self.server
-            .send_verification_request(&batch_envelope, request_id, self.config.threshold)
+            .send_verification_request(batch_envelope, request_id, self.config.threshold)
             .await?;
 
         // Collect responses with timeout
