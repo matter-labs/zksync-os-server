@@ -46,7 +46,7 @@ struct AvailableProofsPayload {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct BatchDataPayload {
-    batch_number: u64,
+    block_number: u64,
     prover_input: String,
 }
 
@@ -68,10 +68,10 @@ async fn pick_fri_job(State(state): State<AppState>) -> Response {
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
-        Some((batch_number, input)) => {
+        Some((block, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
-                batch_number: batch_number,
+                block_number: block,
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
             .into_response()
@@ -179,7 +179,7 @@ async fn peek_batch_data(Path(batch_number): Path<u64>, State(state): State<AppS
         Some(prover_input) => {
             let bytes: Vec<u8> = prover_input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
-                batch_number,
+                block_number: batch_number,
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
             .into_response()
@@ -205,7 +205,7 @@ pub async fn run(
 
     let app = Router::new()
         .route("/prover-jobs/status", get(status))
-        .route("/prover-jobs/FRI/:id/peek", get(peek_batch_data))
+        .route("/prover-jobs/FRI/{id}/peek", get(peek_batch_data))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
