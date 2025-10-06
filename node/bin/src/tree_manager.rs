@@ -2,7 +2,6 @@ use alloy::primitives::BlockNumber;
 use async_trait::async_trait;
 use std::ops::Div;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -45,17 +44,11 @@ impl PipelineComponent for TreeManager {
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        // todo: Arc/RwLock is only done to support `spawn_blocking`
-        //  there must be a better way.
-        let tree = Arc::new(RwLock::new(params.tree));
+        let tree = params.tree;
 
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level
-        let mut last_processed_block = tree
-            .write()
-            .unwrap()
-            .latest_version()?
-            .expect("tree wasn't initialized");
+        let mut last_processed_block = tree.latest_version()?.expect("tree wasn't initialized");
 
         let latency_tracker =
             ComponentStateReporter::global().handle_for("tree", GenericComponentState::WaitingRecv);
@@ -92,15 +85,11 @@ impl PipelineComponent for TreeManager {
                     })
                     .collect::<Vec<_>>();
 
-                let clone = tree.clone();
                 let count = tree_entries.len();
-                let tree_batch_output = tokio::task::spawn_blocking(move || {
-                    clone.write().unwrap().extend(&tree_entries)
-                })
-                .await??;
+                let mut tree_clone = tree.clone();
+                let tree_batch_output =
+                    tokio::task::spawn_blocking(move || tree_clone.extend(&tree_entries)).await??;
                 last_processed_block = tree
-                    .write()
-                    .unwrap()
                     .latest_version()?
                     .expect("uninitialized tree after applying a block");
                 assert_eq!(last_processed_block, block_number);
@@ -124,11 +113,11 @@ impl PipelineComponent for TreeManager {
             TREE_METRICS.block_number.set(block_number);
             let tree_block = BlockMerkleTreeData {
                 block_start: MerkleTreeVersion {
-                    tree: tree.read().unwrap().clone(),
+                    tree: tree.clone(),
                     block: block_number - 1,
                 },
                 block_end: MerkleTreeVersion {
-                    tree: tree.read().unwrap().clone(),
+                    tree: tree.clone(),
                     block: block_number,
                 },
             };
