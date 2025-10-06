@@ -60,12 +60,12 @@ serde_json = "1"
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
-zksync_os_interface = { git = "https://github.com/matter-labs/zksync-os-interface", branch = "di/tracing" }
+zksync_os_interface = { version = "=0.0.6" }
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-tracing", features = ["evm-compatibility", "no_print"] }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-tracing" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-tracing" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", branch = "di/interface-tracing" }
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", branch = "main", features = ["evm-compatibility", "no_print"] }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "main" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "main" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", branch = "main" }
 
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
