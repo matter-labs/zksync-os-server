@@ -10,6 +10,9 @@ use crate::eth_filter_impl::EthFilterError;
 use crate::eth_impl::EthError;
 use crate::tx_handler::EthSendRawTransactionError;
 use crate::zks_impl::ZksError;
+use alloy::primitives::Bytes;
+use alloy::rpc::types::error::EthRpcErrorCode;
+use alloy::sol_types::{ContractError, RevertReason};
 use jsonrpsee::core::RpcResult;
 use std::fmt;
 
@@ -19,35 +22,7 @@ pub trait ToRpcResult<Ok, Err>: Sized {
     /// [`jsonrpsee::types::error::ErrorObject`]
     fn to_rpc_result(self) -> RpcResult<Ok>
     where
-        Err: fmt::Display,
-    {
-        self.map_internal_err(|err| err.to_string())
-    }
-
-    /// Converts this type into an [`RpcResult`]
-    fn map_rpc_err<'a, F, M>(self, op: F) -> RpcResult<Ok>
-    where
-        F: FnOnce(Err) -> (i32, M, Option<&'a [u8]>),
-        M: Into<String>;
-
-    /// Converts this type into an [`RpcResult`] with the
-    /// [`jsonrpsee::types::error::INTERNAL_ERROR_CODE`] and the given message.
-    fn map_internal_err<F, M>(self, op: F) -> RpcResult<Ok>
-    where
-        F: FnOnce(Err) -> M,
-        M: Into<String>;
-
-    /// Converts this type into an [`RpcResult`] with the
-    /// [`jsonrpsee::types::error::INTERNAL_ERROR_CODE`] and given message and data.
-    fn map_internal_err_with_data<'a, F, M>(self, op: F) -> RpcResult<Ok>
-    where
-        F: FnOnce(Err) -> (M, &'a [u8]),
-        M: Into<String>;
-
-    /// Adds a message to the error variant and returns an internal Error.
-    ///
-    /// This is shorthand for `Self::map_internal_err(|err| format!("{msg}: {err}"))`.
-    fn with_message(self, msg: &str) -> RpcResult<Ok>;
+        Err: fmt::Display;
 }
 
 /// A macro that implements the `ToRpcResult` for a specific error type
@@ -55,65 +30,31 @@ pub trait ToRpcResult<Ok, Err>: Sized {
 macro_rules! impl_to_rpc_result {
     ($err:ty) => {
         impl<Ok> ToRpcResult<Ok, $err> for Result<Ok, $err> {
-            #[inline]
-            fn map_rpc_err<'a, F, M>(self, op: F) -> jsonrpsee::core::RpcResult<Ok>
-            where
-                F: FnOnce($err) -> (i32, M, Option<&'a [u8]>),
-                M: Into<String>,
-            {
-                match self {
-                    Ok(t) => Ok(t),
-                    Err(err) => {
-                        let (code, msg, data) = op(err);
-                        Err($crate::result::rpc_err(code, msg, data))
-                    }
-                }
-            }
-
-            #[inline]
-            fn map_internal_err<'a, F, M>(self, op: F) -> jsonrpsee::core::RpcResult<Ok>
-            where
-                F: FnOnce($err) -> M,
-                M: Into<String>,
-            {
-                self.map_err(|err| $crate::result::internal_rpc_err(op(err)))
-            }
-
-            #[inline]
-            fn map_internal_err_with_data<'a, F, M>(self, op: F) -> jsonrpsee::core::RpcResult<Ok>
-            where
-                F: FnOnce($err) -> (M, &'a [u8]),
-                M: Into<String>,
-            {
-                match self {
-                    Ok(t) => Ok(t),
-                    Err(err) => {
-                        let (msg, data) = op(err);
-                        Err($crate::result::internal_rpc_err_with_data(msg, data))
-                    }
-                }
-            }
-
-            #[inline]
-            fn with_message(self, msg: &str) -> jsonrpsee::core::RpcResult<Ok> {
-                match self {
-                    Ok(t) => Ok(t),
-                    Err(err) => {
-                        let msg = format!("{msg}: {err}");
-                        Err($crate::result::internal_rpc_err(msg))
-                    }
-                }
+            fn to_rpc_result(self) -> RpcResult<Ok> {
+                self.map_err(|err| $crate::result::internal_rpc_err(err.to_string()))
             }
         }
     };
 }
 
-impl_to_rpc_result!(EthCallError);
 impl_to_rpc_result!(EthSendRawTransactionError);
 impl_to_rpc_result!(EthFilterError);
 impl_to_rpc_result!(EthError);
 impl_to_rpc_result!(ZksError);
 impl_to_rpc_result!(DebugError);
+
+impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
+    fn to_rpc_result(self) -> RpcResult<Ok> {
+        self.map_err(|err| match err {
+            EthCallError::Revert(revert) => rpc_err(
+                EthRpcErrorCode::ExecutionError.code(),
+                revert.to_string(),
+                revert.output.as_ref().map(|out| out.as_ref()),
+            ),
+            err => internal_rpc_err(err.to_string()),
+        })
+    }
+}
 
 /// Constructs an unimplemented JSON-RPC error.
 pub fn unimplemented_rpc_err() -> jsonrpsee::types::error::ErrorObject<'static> {
@@ -166,4 +107,58 @@ pub fn rpc_err(
                 .expect("serializing String can't fail")
         }),
     )
+}
+
+/// Represents a reverted transaction and its output data.
+///
+/// Displays "execution reverted(: reason)?" if the reason is a string.
+#[derive(Debug, Clone, thiserror::Error)]
+pub struct RevertError {
+    /// The transaction output data
+    ///
+    /// Note: this is `None` if output was empty
+    output: Option<Bytes>,
+}
+
+impl RevertError {
+    /// Wraps the output bytes
+    ///
+    /// Note: this is intended to wrap a VM output
+    pub fn new(output: Bytes) -> Self {
+        if output.is_empty() {
+            Self { output: None }
+        } else {
+            Self {
+                output: Some(output),
+            }
+        }
+    }
+
+    /// Returns error code to return for this error.
+    pub const fn error_code(&self) -> i32 {
+        EthRpcErrorCode::ExecutionError.code()
+    }
+}
+
+impl fmt::Display for RevertError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("execution reverted")?;
+        if let Some(reason) = self
+            .output
+            .as_ref()
+            .and_then(|out| RevertReason::decode(out))
+        {
+            let error = reason.to_string();
+            let mut error = error.as_str();
+            if matches!(
+                reason,
+                RevertReason::ContractError(ContractError::Revert(_))
+            ) {
+                // we strip redundant `revert: ` prefix from the revert reason
+                error = error.trim_start_matches("revert: ");
+            }
+            write!(f, ": {error}")?;
+        }
+        Ok(())
+    }
 }
