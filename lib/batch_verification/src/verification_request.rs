@@ -1,13 +1,13 @@
-use serde::{Deserialize, Serialize};
 use tokio_util::codec::{self, LengthDelimitedCodec};
 
 /// Request sent from main sequencer to external nodes for batch verification
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct BatchVerificationRequest {
     pub batch_number: u64,
     pub first_block_number: u64,
     pub last_block_number: u64,
     pub request_id: u64,
+    pub commit_data: zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS,
 }
 
 pub struct BatchVerificationRequestDecoder {

@@ -1,8 +1,10 @@
+use alloy::primitives::Address;
 use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
 use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
 use futures::{SinkExt, StreamExt};
+use itertools::Itertools;
 use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -10,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::ToSocketAddrs;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, mpsc};
 use tokio::{
     io::AsyncWriteExt,
@@ -21,7 +24,12 @@ use zksync_os_batch_verification::{
     BatchVerificationRequestCodec, BatchVerificationRequestDecoder, BatchVerificationResponse,
     BatchVerificationResponseCodec, BatchVerificationResponseDecoder,
 };
+use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
+use zksync_os_l1_sender::commitment::CommitBatchInfo;
+use zksync_os_l1_sender::config::BatchDaInputMode;
+use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
+use zksync_os_storage_api::ReplayRecord;
 
 use crate::util::transport::skip_http_headers;
 
@@ -157,6 +165,11 @@ impl BatchVerificationServer {
             batch_number: batch_envelope.batch_number(),
             first_block_number: batch_envelope.batch.first_block_number,
             last_block_number: batch_envelope.batch.last_block_number,
+            commit_data: batch_envelope
+                .batch
+                .commit_batch_info
+                .clone()
+                .into_l1_commit_data(BatchDaInputMode::Rollup), //TODO, handle this better, maybe change type we are sending
             request_id,
         };
 
@@ -209,19 +222,44 @@ impl BatchVerificationServer {
 
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient {
+    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
+    chain_id: u64,
+    chain_address: Address,
     signer: PrivateKeySigner, // TODO, we probably want to move to BLS?
+    block_storage: HashMap<u64, (BlockOutput, ReplayRecord)>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum BatchVerificationError {
+    #[error("Missing records for block {0}")]
+    MissingBlock(u64),
+    #[error("Tree error")]
+    TreeError,
 }
 
 impl BatchVerificationClient {
-    pub fn new(private_key: SecretString) -> Self {
+    pub fn new(
+        private_key: SecretString,
+        persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
+        chain_id: u64,
+        chain_address: Address,
+    ) -> Self {
         Self {
             signer: PrivateKeySigner::from_str(private_key.expose_secret())
                 .expect("Invalid batch verification private key"),
+            persistent_tree,
+            chain_id,
+            chain_address,
+            block_storage: HashMap::new(),
         }
     }
 
     /// Connect to the main sequencer and handle verification requests
-    pub async fn run(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
+    pub async fn run(
+        mut self,
+        address: impl ToSocketAddrs,
+        mut block_receiver: Receiver<(BlockOutput, ReplayRecord)>,
+    ) -> anyhow::Result<()> {
         let mut socket = (|| TcpStream::connect(&address))
             .retry(
                 ConstantBuilder::default()
@@ -252,10 +290,34 @@ impl BatchVerificationClient {
 
         tracing::info!("Connected to main sequencer for batch verification");
 
-        // Handling in sequencer without concurrency is fine as we shouldn't get too many requests
-        while let Some(message) = reader.next().await {
-            let response = self.handle_verification_request(message?).await?;
-            writer.send(response).await?;
+        loop {
+            tokio::select! {
+                block = block_receiver.recv() => {
+                    match block {
+                        Some((block_output, replay_record)) => {
+                            // TODO remove old blocks from storage
+                            self.block_storage.insert(
+                                replay_record.block_context.block_number,
+                                (block_output, replay_record),
+                            );
+                        }
+                        None => break, // Channel closed, we are stopping now
+                    }
+                }
+                // Handling in sequence without concurrency is fine as we shouldn't get too many requests and they should handle fast
+                server_message = reader.next() => {
+                    match server_message {
+                        Some(message) => {
+                            let response = self.handle_verification_request(message?).await?;
+                            writer.send(response).await?;
+                        }
+                        None => {
+                            tracing::error!("Server has disconnected verification client"); //TODO retries
+                            break; // Connection closed
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -270,11 +332,59 @@ impl BatchVerificationClient {
             request.request_id,
             request.batch_number,
             request.first_block_number,
-            request.last_block_number
+            request.last_block_number,
         );
 
-        // TODO: Implement actual batch verification logic
-        // For now, create a dummy signature
+        let blocks: Vec<(&BlockOutput, &ReplayRecord, TreeBatchOutput)> = join_all(
+            (request.first_block_number..=request.last_block_number)
+                .map(|block_number| {
+                    let (block_output, replay_record) =
+                        self.block_storage.get(&block_number).ok_or(
+                            BatchVerificationError::MissingBlock(block_number)
+                        )?;
+
+                    Ok((block_number, block_output, replay_record))
+                })
+                .map_ok(async |(block_number, block_output, replay_record)| -> Result<_, BatchVerificationError> {
+                    let tree = self
+                        .persistent_tree
+                        .clone()
+                        .get_at_block(block_number)
+                        .await;
+
+                    let (root_hash, leaf_count) = tree.root_info().map_err(|_| BatchVerificationError::TreeError)?;
+
+                    let tree_output = TreeBatchOutput {
+                        root_hash,
+                        leaf_count,
+                    };
+                    Ok((block_output, replay_record, tree_output))
+                })
+                .collect::<Result<Vec<_>, BatchVerificationError>>()?,
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, BatchVerificationError>>()?;
+
+        // TODO VALIDATE
+        let commit_batch_info = CommitBatchInfo::new(
+            blocks
+                .iter()
+                .map(|(block_output, replay_record, tree)| {
+                    (
+                        *block_output,
+                        &replay_record.block_context,
+                        replay_record.transactions.as_slice(),
+                        tree,
+                    )
+                })
+                .collect(),
+            self.chain_id,
+            self.chain_address,
+            request.batch_number,
+        );
+
+        // For now, create a dummy signature. Think of something better in the future
         let signature = self.sign_batch_verification(&request).await?;
 
         Ok(BatchVerificationResponse {

@@ -451,6 +451,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // External Node
         run_en_batcher_tasks(
             config,
+            persistent_tree,
             batch_storage,
             node_startup_state,
             blocks_for_batcher_subsystem_receiver,
@@ -826,6 +827,7 @@ async fn run_batcher_subsystem<State: ReadStateHistory + Clone, Finality: ReadFi
 #[allow(clippy::too_many_arguments)]
 async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     config: Config,
+    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     mut blocks_for_batcher_subsystem_receiver: Receiver<(BlockOutput, ReplayRecord)>,
@@ -834,11 +836,6 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-    // Drain `blocks_for_batcher_subsystem_receiver`.
-    tokio::spawn(
-        async move { while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {} },
-    );
-
     // Channel between `PriorityTree` tasks
     let (priority_txs_count_sender, priority_txs_count_receiver) =
         tokio::sync::mpsc::channel::<(u64, u64, usize)>(1000);
@@ -937,12 +934,25 @@ async fn run_en_batcher_tasks<Finality: ReadFinality + Clone>(
     if config.batch_verification_config.enabled {
         tasks.spawn(
             async move {
-                BatchVerificationClient::new(config.batch_verification_config.signing_key.clone())
-                    .run(config.batch_verification_config.address)
-                    .await
+                BatchVerificationClient::new(
+                    config.batch_verification_config.signing_key.clone(),
+                    persistent_tree,
+                    config.genesis_config.chain_id,
+                    node_state_on_startup.l1_state.diamond_proxy,
+                )
+                .run(
+                    config.batch_verification_config.address,
+                    blocks_for_batcher_subsystem_receiver,
+                )
+                .await
             }
             .map(report_exit("batch_verification_client")),
         );
+    } else {
+        // Drain `blocks_for_batcher_subsystem_receiver`.
+        tokio::spawn(async move {
+            while blocks_for_batcher_subsystem_receiver.recv().await.is_some() {}
+        });
     }
 }
 

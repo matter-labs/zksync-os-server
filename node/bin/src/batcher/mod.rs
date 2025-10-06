@@ -16,7 +16,7 @@ use zksync_os_observability::{
 };
 use zksync_os_storage_api::ReplayRecord;
 
-mod batch_builder;
+pub mod batch_builder;
 mod seal_criteria;
 pub mod util;
 
