@@ -21,9 +21,9 @@ pub(crate) mod metrics;
 pub(crate) mod utils;
 pub mod vm_wrapper;
 
-/// Parameters for the Sequencer pipeline component
+/// Sequencer pipeline component
 /// Contains all the dependencies needed to run the sequencer
-pub struct SequencerParams<Mempool, State, Wal, Repo>
+pub struct Sequencer<Mempool, State, Wal, Repo>
 where
     Mempool: L2TransactionPool + Send + 'static,
     State: ReadStateHistory + WriteState + Clone + Send + 'static,
@@ -37,30 +37,6 @@ where
     pub sequencer_config: SequencerConfig,
 }
 
-pub struct Sequencer<Mempool, State, Wal, Repo>
-where
-    Mempool: L2TransactionPool + Send + 'static,
-    State: ReadStateHistory + WriteState + Clone + Send + 'static,
-    Wal: WriteReplay + Send + 'static,
-    Repo: WriteRepository + Send + 'static,
-{
-    _phantom: std::marker::PhantomData<(Mempool, State, Wal, Repo)>,
-}
-
-impl<Mempool, State, Wal, Repo> Default for Sequencer<Mempool, State, Wal, Repo>
-where
-    Mempool: L2TransactionPool + Send + 'static,
-    State: ReadStateHistory + WriteState + Clone + Send + 'static,
-    Wal: WriteReplay + Send + 'static,
-    Repo: WriteRepository + Send + 'static,
-{
-    fn default() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
 #[async_trait]
 impl<Mempool, State, Wal, Repo> PipelineComponent for Sequencer<Mempool, State, Wal, Repo>
 where
@@ -71,22 +47,15 @@ where
 {
     type Input = BlockCommand;
     type Output = (BlockOutput, ReplayRecord);
-    type Params = SequencerParams<Mempool, State, Wal, Repo>;
 
     const NAME: &'static str = "sequencer";
     const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
-        params: Self::Params,
+        mut self,
         mut input: PeekableReceiver<Self::Input>, // PeekableReceiver<BlockCommand>
         output: Sender<Self::Output>,             // Sender<BlockOutput>
     ) -> anyhow::Result<()> {
-        let mut command_block_context_provider = params.block_context_provider;
-        let state = params.state;
-        let wal = params.wal;
-        let repositories = params.repositories;
-        let sequencer_config = params.sequencer_config;
-
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("sequencer", SequencerState::WaitingForCommand);
         loop {
@@ -104,7 +73,7 @@ where
             );
             latency_tracker.enter_state(SequencerState::BlockContextTxs);
 
-            let prepared_command = command_block_context_provider.prepare_command(cmd).await?;
+            let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
 
             tracing::debug!(
                 block_number,
@@ -113,12 +82,13 @@ where
             );
 
             let (block_output, replay_record, purged_txs) =
-                execute_block(prepared_command, state.clone(), &latency_tracker)
+                execute_block(prepared_command, self.state.clone(), &latency_tracker)
                     .await
                     .map_err(|dump| {
                         let error = anyhow::anyhow!("{}", dump.error);
                         tracing::info!("Saving dump..");
-                        if let Err(err) = save_dump(sequencer_config.block_dump_path.clone(), dump)
+                        if let Err(err) =
+                            save_dump(self.sequencer_config.block_dump_path.clone(), dump)
                         {
                             tracing::error!("Failed to write dump: {err}");
                         }
@@ -129,7 +99,7 @@ where
             tracing::debug!(block_number, "Executed. Adding to state...",);
             latency_tracker.enter_state(SequencerState::AddingToState);
 
-            state.add_block_result(
+            self.state.add_block_result(
                 block_number,
                 block_output.storage_writes.clone(),
                 block_output
@@ -142,7 +112,7 @@ where
             latency_tracker.enter_state(SequencerState::AddingToRepos);
 
             // todo: do not call if api is not enabled.
-            repositories
+            self.repositories
                 .populate(block_output.clone(), replay_record.transactions.clone())
                 .await;
 
@@ -150,14 +120,15 @@ where
             latency_tracker.enter_state(SequencerState::UpdatingMempool);
 
             // TODO: would updating mempool in parallel with state make sense?
-            command_block_context_provider.on_canonical_state_change(&block_output, &replay_record);
+            self.block_context_provider
+                .on_canonical_state_change(&block_output, &replay_record);
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
-            command_block_context_provider.remove_txs(purged_txs_hashes);
+            self.block_context_provider.remove_txs(purged_txs_hashes);
 
             tracing::debug!(block_number, "Reported to mempools. Adding to wal...");
             latency_tracker.enter_state(SequencerState::AddingToWal);
 
-            wal.append(replay_record.clone());
+            self.wal.append(replay_record.clone());
 
             tracing::debug!(
                 block_number,

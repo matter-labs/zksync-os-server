@@ -3,8 +3,9 @@ use crate::config::BatcherConfig;
 use crate::tree_manager::BlockMerkleTreeData;
 use alloy::primitives::Address;
 use anyhow::Context;
+use async_trait::async_trait;
 use std::pin::Pin;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc;
 use tokio::time::Sleep;
 use tracing;
 use zksync_os_interface::types::BlockOutput;
@@ -15,73 +16,41 @@ use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
-use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
 mod seal_criteria;
 pub mod util;
 
-/// This component handles batching logic - receives blocks and prepares batch data.
+/// Batcher component - handles batching logic, receives blocks and prepares batch data
+#[derive(Debug)]
 pub struct Batcher {
-    // == initial state ==
-    // L2 chain id
-    chain_id: u64,
-    chain_address: Address,
-    // first block to process
-    first_block_to_process: u64,
+    pub chain_id: u64,
+    pub chain_address: Address,
+    pub first_block_to_process: u64,
     /// Last persisted block. We should not seal batches by timeout until this block is reached.
     /// This helps to avoid premature sealing due to timeout criterion, since for  every tick of the
     /// timer the `should_seal_by_timeout` call will return `true`
-    last_persisted_block: u64,
-
-    // == config ==
-    pubdata_limit_bytes: u64,
-    batcher_config: BatcherConfig,
-
-    // == plumbing ==
-    // inbound
-    block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)>,
-    // outbound
-    batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
+    pub last_persisted_block: u64,
+    pub pubdata_limit_bytes: u64,
+    pub batcher_config: BatcherConfig,
+    pub prev_batch_info: StoredBatchInfo,
 }
 
-impl Batcher {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        // == initial state ==
-        chain_id: u64,
-        chain_address: Address,
-        first_block_to_process: u64,
-        last_persisted_block: u64,
+#[async_trait]
+impl PipelineComponent for Batcher {
+    type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
+    type Output = BatchEnvelope<ProverInput>;
 
-        // == config ==
-        pubdata_limit_bytes: u64,
-        batcher_config: BatcherConfig,
+    const NAME: &'static str = "batcher";
+    const OUTPUT_BUFFER_SIZE: usize = 5;
 
-        // == plumbing ==
-        block_receiver: PeekableReceiver<(
-            BlockOutput,
-            ReplayRecord,
-            ProverInput,
-            BlockMerkleTreeData,
-        )>,
-        batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
-    ) -> Self {
-        Self {
-            chain_id,
-            chain_address,
-            first_block_to_process,
-            last_persisted_block,
-            pubdata_limit_bytes,
-            batcher_config,
-            block_receiver,
-            batch_data_sender,
-        }
-    }
-
-    /// Main processing loop for the batcher
-    pub async fn run_loop(mut self, mut prev_batch_info: StoredBatchInfo) -> anyhow::Result<()> {
+    async fn run(
+        mut self,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::Sender<Self::Output>,
+    ) -> anyhow::Result<()> {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("batcher", GenericComponentState::WaitingRecv);
 
@@ -89,22 +58,20 @@ impl Batcher {
         // Skip blocks that were already committed (we start the sequencer with replaying older blocks)
         // Normally, ProverInputGenerator would filter them out,
         // but with `prover_input_generator_force_process_old_blocks` config set to true, they end up here.
-        while self
-            .block_receiver
+        while input
             .peek_recv(|(b, _, _, _)| b.header.number < first_block_in_batch)
             .await
             .context("channel closed while skipping already processed blocks")?
         {
-            self.block_receiver.recv().await;
+            input.recv().await;
         }
         loop {
             let batch_envelope = self
-                .create_batch(&prev_batch_info, &latency_tracker, first_block_in_batch)
+                .create_batch(&mut input, &latency_tracker, first_block_in_batch)
                 .await?;
             BATCHER_METRICS
                 .transactions_per_batch
                 .observe(batch_envelope.batch.tx_count as u64);
-            prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
 
             tracing::info!(
                 batch_number = batch_envelope.batch_number(),
@@ -122,23 +89,30 @@ impl Batcher {
 
             first_block_in_batch = batch_envelope.batch.last_block_number + 1;
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            self.batch_data_sender
+            output
                 .send(batch_envelope)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to send batch data: {e}"))?;
         }
     }
+}
 
+impl Batcher {
     async fn create_batch(
         &mut self,
-        prev_batch_info: &StoredBatchInfo,
+        block_receiver: &mut PeekableReceiver<(
+            BlockOutput,
+            ReplayRecord,
+            ProverInput,
+            BlockMerkleTreeData,
+        )>,
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
         expected_first_block: u64,
     ) -> anyhow::Result<BatchEnvelope<ProverInput>> {
         // will be set to `Some` when we process the first block that the batch can be sealed after
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
 
-        let batch_number = prev_batch_info.batch_number + 1;
+        let batch_number = self.prev_batch_info.batch_number + 1;
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
         let mut accumulator = BatchInfoAccumulator::new(
             self.batcher_config.blocks_per_batch_limit,
@@ -161,7 +135,7 @@ impl Batcher {
                 }
 
                 /* ---------- collect blocks ---------- */
-                should_seal = self.block_receiver.peek_recv(|(block_output, replay_record, _, _)| {
+               should_seal = block_receiver.peek_recv(|(block_output, replay_record, _, _)| {
                     // determine if the block fits into the current batch
                     accumulator.clone().add(block_output, replay_record).should_seal()
                 }) => {
@@ -172,7 +146,7 @@ impl Batcher {
                             break;
                         }
                         Some(false) => {
-                            let Some((block_output, replay_record, prover_input, tree)) = self.block_receiver.pop_buffer() else {
+                            let Some((block_output, replay_record, prover_input, tree)) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
@@ -214,7 +188,7 @@ impl Batcher {
                                 } else {
                                     tracing::debug!(
                                         block_number,
-                                        self.last_persisted_block,
+                                        last_persisted_block = self.last_persisted_block,
                                         "received block with number lower than `last_persisted_block`. Not enabling the deadline seal criteria yet."
                                     )
                                 }
@@ -232,12 +206,14 @@ impl Batcher {
             .observe(blocks.len() as u64);
         accumulator.report_accumulated_resources_to_metrics();
         /* ---------- seal the batch ---------- */
-        batch_builder::seal_batch(
+        let batch_envelope = batch_builder::seal_batch(
             &blocks,
-            prev_batch_info.clone(),
+            self.prev_batch_info.clone(),
             batch_number,
             self.chain_id,
             self.chain_address,
-        )
+        )?;
+        self.prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
+        Ok(batch_envelope)
     }
 }

@@ -20,10 +20,7 @@ pub struct BlockMerkleTreeData {
 }
 
 #[derive(Debug)]
-pub(crate) struct TreeManager;
-
-#[derive(Debug)]
-pub struct TreeManagerParams {
+pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
 }
 
@@ -35,16 +32,15 @@ impl PipelineComponent for TreeManager {
         zksync_os_storage_api::ReplayRecord,
         BlockMerkleTreeData,
     );
-    type Params = TreeManagerParams;
     const NAME: &'static str = "merkle_tree";
     const OUTPUT_BUFFER_SIZE: usize = 10;
 
     async fn run(
-        params: Self::Params,
+        self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let tree = params.tree;
+        let tree = self.tree;
 
         // only used to skip blocks that were already processed by the tree -
         // will be removed once idempotency is handled on the framework level

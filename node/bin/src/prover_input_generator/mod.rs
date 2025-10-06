@@ -18,12 +18,7 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
 
 /// This component generates prover input from batch replay data
-/// Zero-sized marker struct for PipelineComponent trait
 pub struct ProverInputGenerator<ReadState> {
-    _phantom: std::marker::PhantomData<ReadState>,
-}
-
-pub struct ProverInputGeneratorParams<ReadState> {
     pub enable_logging: bool,
     pub maximum_in_flight_blocks: usize,
     pub first_block_to_process: u64,
@@ -37,7 +32,6 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 {
     type Input = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
     type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
-    type Params = ProverInputGeneratorParams<ReadState>;
 
     const NAME: &'static str = "prover_input_generator";
     const OUTPUT_BUFFER_SIZE: usize = 5;
@@ -45,7 +39,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.
     async fn run(
-        params: Self::Params,
+        self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> Result<()> {
@@ -54,12 +48,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             GenericComponentState::ProcessingOrWaitingRecv,
         );
 
-        // Extract params
-        let first_block_to_process = params.first_block_to_process;
-        let read_state = params.read_state;
-        let enable_logging = params.enable_logging;
-        let app_bin_base_path = params.app_bin_base_path;
-        let maximum_in_flight_blocks = params.maximum_in_flight_blocks;
+        let first_block_to_process = self.first_block_to_process;
+        let read_state = self.read_state;
+        let enable_logging = self.enable_logging;
+        let app_bin_base_path = self.app_bin_base_path;
+        let maximum_in_flight_blocks = self.maximum_in_flight_blocks;
 
         ReceiverStream::new(input.into_inner())
             // skip the blocks that were already committed

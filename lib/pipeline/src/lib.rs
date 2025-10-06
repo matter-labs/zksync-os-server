@@ -14,6 +14,6 @@ pub mod builder;
 pub mod peekable_receiver;
 pub mod traits;
 
-pub use builder::ConfiguredPipeline;
+pub use builder::{Pipeline, PipelineWithOutput};
 pub use peekable_receiver::PeekableReceiver;
 pub use traits::{PipelineComponent, Sink, Source};
