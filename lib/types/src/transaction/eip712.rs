@@ -72,6 +72,7 @@ pub struct TxEip712 {
     /// data: An unlimited size byte array specifying the
     /// input data of the message call, formally Td.
     pub input: Bytes,
+    pub signature: Option<Signature>,
     /// LEGACY. The 160-bit address of the message call's paymaster. Must be empty.
     #[serde(default)]
     pub paymaster: Address,
@@ -182,81 +183,68 @@ impl TxEip712 {
 
         hasher.finalize()
     }
-}
 
-impl RlpEcdsaEncodableTx for TxEip712 {
-    /// Outputs the length of the transaction's fields, without a RLP header.
-    fn rlp_encoded_fields_length(&self) -> usize {
-        self.chain_id.length()
-            + self.nonce.length()
+    fn fields_len(&self) -> usize {
+        self.nonce.length()
             + self.max_priority_fee_per_gas.length()
             + self.max_fee_per_gas.length()
             + self.gas_limit.length()
-            + self.gas_per_pubdata.length()
-            + self.from.length()
             + self.to.length()
             + self.value.length()
-            + self.input.0.length()
-            + self.paymaster.length()
-            + self.paymaster_input.0.length()
-            + self
-                .factory_deps
-                .iter()
-                .map(|dep| dep.0.length())
-                .sum::<usize>()
+            + self.input.length()
+            + self.chain_id.length()
+            + self.from.length()
+            + self.gas_per_pubdata.length()
+            + self.factory_deps.length()
+    }
+}
+
+impl RlpEcdsaEncodableTx for TxEip712 {
+    fn rlp_encoded_fields_length(&self) -> usize {
+        let payload_length = self.fields_len()
+            + self.signature.unwrap().rlp_rs_len()
+            + self.signature.unwrap().v().length();
+        Header {
+            list: true,
+            payload_length,
+        }
+        .length()
+            + payload_length
     }
 
-    /// Encodes only the transaction's fields into the desired buffer, without
-    /// a RLP header.
     fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
-        self.chain_id.encode(out);
+        let signature = self.signature.as_ref().unwrap();
+        self.rlp_encode_signed(signature, out);
+    }
+
+    fn rlp_encode_signed(&self, signature: &Signature, out: &mut dyn BufMut) {
+        let payload_length = self.fields_len() + signature.rlp_rs_len() + signature.v().length();
+        let header = Header {
+            list: true,
+            payload_length,
+        };
+        header.encode(out);
+
         self.nonce.encode(out);
         self.max_priority_fee_per_gas.encode(out);
         self.max_fee_per_gas.encode(out);
         self.gas_limit.encode(out);
-        self.gas_per_pubdata.encode(out);
-        self.from.encode(out);
         self.to.encode(out);
         self.value.encode(out);
         self.input.0.encode(out);
-        self.paymaster.encode(out);
-        self.paymaster_input.0.encode(out);
+        signature.write_rlp_vrs(out, signature.v());
+        self.chain_id.encode(out);
+        self.from.encode(out);
+        self.gas_per_pubdata.encode(out);
+        self.factory_deps.encode(out);
     }
 }
 
 impl RlpEcdsaDecodableTx for TxEip712 {
     const DEFAULT_TX_TYPE: u8 = { Self::tx_type() as u8 };
 
-    /// Decodes the inner [TxEip1559] fields from RLP bytes.
-    ///
-    /// NOTE: This assumes a RLP header has already been decoded, and _just_
-    /// decodes the following RLP fields in the following order:
-    ///
-    /// - `chain_id`
-    /// - `nonce`
-    /// - `max_priority_fee_per_gas`
-    /// - `max_fee_per_gas`
-    /// - `gas_limit`
-    /// - `to`
-    /// - `value`
-    /// - `data` (`input`)
-    /// - `access_list`
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
-        Ok(Self {
-            chain_id: Decodable::decode(buf)?,
-            nonce: Decodable::decode(buf)?,
-            max_priority_fee_per_gas: Decodable::decode(buf)?,
-            max_fee_per_gas: Decodable::decode(buf)?,
-            gas_limit: Decodable::decode(buf)?,
-            gas_per_pubdata: Decodable::decode(buf)?,
-            from: Decodable::decode(buf)?,
-            to: Decodable::decode(buf)?,
-            value: Decodable::decode(buf)?,
-            input: Decodable::decode(buf)?,
-            paymaster: Decodable::decode(buf)?,
-            paymaster_input: Decodable::decode(buf)?,
-            factory_deps: Decodable::decode(buf)?,
-        })
+        Self::rlp_decode_signed(buf).map(|signed| signed.into_parts().0)
     }
 
     fn rlp_decode_signed(buf: &mut &[u8]) -> alloy_rlp::Result<Signed<Self>> {
@@ -282,7 +270,7 @@ impl RlpEcdsaDecodableTx for TxEip712 {
         let signature = Signature::decode_rlp_vrs(buf, bool::decode)?;
         let chain_id = Decodable::decode(buf)?;
         let from = Decodable::decode(buf)?;
-        let gas_per_pubdata = Decodable::decode(buf)?;
+        let gas_per_pubdata: U256 = Decodable::decode(buf)?;
         let factory_deps = Decodable::decode(buf)?;
         // todo: assert these are empty
         let _custom_signature: Option<Bytes> = opt_decode(buf)?;
@@ -298,7 +286,8 @@ impl RlpEcdsaDecodableTx for TxEip712 {
             from,
             value,
             input,
-            gas_per_pubdata,
+            signature: Some(signature),
+            gas_per_pubdata: gas_per_pubdata.saturating_to(),
             factory_deps,
             paymaster: Address::ZERO,
             paymaster_input: Bytes::new(),

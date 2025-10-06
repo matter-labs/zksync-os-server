@@ -123,10 +123,24 @@ impl From<L2Envelope> for TransactionData {
 
         TransactionData {
             tx_type: U256::from(l2_tx.tx_type() as u8),
-            from: Address::ZERO,
+            from: match &l2_tx {
+                L2Envelope::Legacy(_)
+                | L2Envelope::Eip2930(_)
+                | L2Envelope::Eip1559(_)
+                | L2Envelope::Eip4844(_)
+                | L2Envelope::Eip7702(_) => Address::ZERO,
+                L2Envelope::Eip712(tx) => tx.tx().from,
+            },
             to: l2_tx.to().unwrap_or_default(),
             gas_limit: U256::from(l2_tx.gas_limit()),
-            pubdata_price_limit: U256::from(gas_per_pubdata_limit),
+            pubdata_price_limit: match &l2_tx {
+                L2Envelope::Legacy(_)
+                | L2Envelope::Eip2930(_)
+                | L2Envelope::Eip1559(_)
+                | L2Envelope::Eip4844(_)
+                | L2Envelope::Eip7702(_) => U256::from(gas_per_pubdata_limit),
+                L2Envelope::Eip712(tx) => U256::from(tx.tx().gas_per_pubdata),
+            },
             max_fee_per_gas: U256::from(l2_tx.max_fee_per_gas()),
             max_priority_fee_per_gas: U256::from(
                 l2_tx
@@ -190,7 +204,14 @@ impl From<L2Transaction> for TransactionData {
 
         TransactionData {
             tx_type: U256::from(l2_tx.tx_type() as u8),
-            from,
+            from: match &l2_tx {
+                L2Envelope::Legacy(_)
+                | L2Envelope::Eip2930(_)
+                | L2Envelope::Eip1559(_)
+                | L2Envelope::Eip4844(_)
+                | L2Envelope::Eip7702(_) => from,
+                L2Envelope::Eip712(tx) => tx.tx().from,
+            },
             to: l2_tx.to().unwrap_or_default(),
             gas_limit: U256::from(l2_tx.gas_limit()),
             pubdata_price_limit: U256::from(gas_per_pubdata_limit),
