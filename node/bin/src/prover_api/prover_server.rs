@@ -4,7 +4,7 @@ use crate::prover_api::snark_job_manager::SnarkJobManager;
 use axum::extract::DefaultBodyLimit;
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -19,7 +19,7 @@ use zksync_os_l1_sender::batcher_model::FriProof;
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
-struct NextFriProverJobPayload {
+struct BatchDataPayload {
     block_number: u64,
     prover_input: String, // base64‑encoded little‑endian u32 array
 }
@@ -70,7 +70,7 @@ async fn pick_fri_job(State(state): State<AppState>) -> Response {
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
         Some((block, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
-            Json(NextFriProverJobPayload {
+            Json(BatchDataPayload {
                 block_number: block,
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
@@ -174,6 +174,20 @@ async fn submit_snark_proof(
     }
 }
 
+async fn peek_batch_data(Path(batch_number): Path<u64>, State(state): State<AppState>) -> Response {
+    match state.fri_job_manager.peek_batch_data(batch_number) {
+        Some(prover_input) => {
+            let bytes: Vec<u8> = prover_input.iter().flat_map(|v| v.to_le_bytes()).collect();
+            Json(BatchDataPayload {
+                block_number: batch_number,
+                prover_input: general_purpose::STANDARD.encode(&bytes),
+            })
+            .into_response()
+        }
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
 async fn status(State(state): State<AppState>) -> Response {
     let status = state.fri_job_manager.status();
     Json(status).into_response()
@@ -191,6 +205,7 @@ pub async fn run(
 
     let app = Router::new()
         .route("/prover-jobs/status", get(status))
+        .route("/prover-jobs/FRI/{id}/peek", get(peek_batch_data))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
