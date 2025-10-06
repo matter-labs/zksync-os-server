@@ -15,9 +15,6 @@ use zksync_os_merkle_tree::{
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
-
-// todo: replace with the proper TreeManager implementation (currently it only works with Postgres)
-
 pub struct BlockMerkleTreeData {
     pub block_start: MerkleTreeVersion,
     pub block_end: MerkleTreeVersion,
