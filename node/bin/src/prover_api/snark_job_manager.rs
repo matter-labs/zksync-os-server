@@ -1,4 +1,3 @@
-use zksync_os_pipeline::PeekableReceiver;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -9,6 +8,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
+use zksync_os_pipeline::PeekableReceiver;
 
 /// Job manager for SNARK proving.
 ///

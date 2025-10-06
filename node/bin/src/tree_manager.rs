@@ -132,7 +132,7 @@ impl PipelineComponent for TreeManager {
                 },
                 block_end: MerkleTreeVersion {
                     tree: tree.read().unwrap().clone(),
-                    block: block_number ,
+                    block: block_number,
                 },
             };
             output

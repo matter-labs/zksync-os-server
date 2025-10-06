@@ -24,6 +24,10 @@ pub mod zkstack_config;
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
+use crate::command_source::{
+    ExternalNodeCommandSource, ExternalNodeCommandSourceParams, MainNodeCommandSource,
+    MainNodeCommandSourceParams,
+};
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
@@ -82,7 +86,6 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     ReplayRecord, RepositoryBlock, WriteState,
 };
-use crate::command_source::{ExternalNodeCommandSource, ExternalNodeCommandSourceParams, MainNodeCommandSource, MainNodeCommandSourceParams};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -188,7 +191,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let tree_db = TreeManager::load_or_initialize_tree(
         Path::new(&config.general_config.rocks_db_path.join(STATE_TREE_DB_NAME)),
         &genesis,
-    ).await;
+    )
+    .await;
 
     tracing::info!("Initializing RepositoryManager");
     let repositories = RepositoryManager::new(
@@ -369,19 +373,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`. Left here to reduce the PR size.
-    let block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>> = BlockContextProvider::new(
-        next_l1_priority_id,
-        l1_transactions_for_sequencer,
-        l2_mempool,
-        block_hashes_for_next_block,
-        previous_block_timestamp,
-        chain_id,
-        config.sequencer_config.block_gas_limit,
-        config.sequencer_config.block_pubdata_limit_bytes,
-        node_version,
-        genesis,
-        config.sequencer_config.fee_collector_address,
-    );
+    let block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>> =
+        BlockContextProvider::new(
+            next_l1_priority_id,
+            l1_transactions_for_sequencer,
+            l2_mempool,
+            block_hashes_for_next_block,
+            previous_block_timestamp,
+            chain_id,
+            config.sequencer_config.block_gas_limit,
+            config.sequencer_config.block_pubdata_limit_bytes,
+            node_version,
+            genesis,
+            config.sequencer_config.fee_collector_address,
+        );
 
     // ========== Start Sequencer ===========
     tasks.spawn(
@@ -447,7 +452,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage,
             _stop_receiver.clone(),
         )
-            .await;
+        .await;
     };
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
@@ -483,13 +488,16 @@ pub fn command_source(
                 block_number + 1,
             ))
         })
-            .boxed();
+        .boxed();
     let stream = replay_wal_stream.chain(produce_stream);
     stream.boxed()
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInitializer + Clone, Finality: ReadFinality>(
+async fn run_main_node_pipeline<
+    State: ReadStateHistory + WriteState + StateInitializer + Clone,
+    Finality: ReadFinality,
+>(
     config: Config,
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     genesis_block: RepositoryBlock,
@@ -506,7 +514,6 @@ async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInit
     chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-
     // NOTE: the execution pipeline is being migrated to the Pipeline Framework.
     // The current state is intermediary.
 
@@ -518,15 +525,15 @@ async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInit
     // To minimize the PR, the order in which the components are initialized is retained;
     // thus migrated components are sometimes interleaved with the ones that are not migrated yet.
 
-
     let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::new();
 
-    let pipeline_after_command_source = pipeline.add_source::<MainNodeCommandSource>(MainNodeCommandSourceParams {
-        block_replay_storage: block_replay_storage.clone(),
-        starting_block,
-        block_time: config.sequencer_config.block_time,
-        max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-    });
+    let pipeline_after_command_source =
+        pipeline.add_source::<MainNodeCommandSource>(MainNodeCommandSourceParams {
+            block_replay_storage: block_replay_storage.clone(),
+            starting_block,
+            block_time: config.sequencer_config.block_time,
+            max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+        });
 
     let pipeline_after_sequencer = pipeline.add_component::<Sequencer<
         RethPool<ZkClient<State>>,
@@ -541,12 +548,16 @@ async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInit
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
         },
-        pipeline_after_command_source
+        pipeline_after_command_source,
     );
 
-    let pipeline_after_tree_manager: PeekableReceiver<(BlockOutput, ReplayRecord, BlockMerkleTreeData)> = pipeline.add_component::<TreeManager>(
+    let pipeline_after_tree_manager: PeekableReceiver<(
+        BlockOutput,
+        ReplayRecord,
+        BlockMerkleTreeData,
+    )> = pipeline.add_component::<TreeManager>(
         TreeManagerParams { tree: tree.clone() },
-        pipeline_after_sequencer
+        pipeline_after_sequencer,
     );
 
     // Channel between `Batcher` and `ProverAPI`
@@ -650,7 +661,6 @@ async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInit
         node_state_on_startup.last_l1_committed_block + 1;
     tracing::info!("Initializing Batcher");
 
-
     let prover_input_generation_first_block_to_process = if config
         .prover_input_generator_config
         .force_process_old_blocks
@@ -663,15 +673,22 @@ async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInit
         batcher_subsystem_first_block_to_process
     };
 
-    let pipeline_after_prover_input_generator: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)> = pipeline.add_component::<ProverInputGenerator<State>>(
+    let pipeline_after_prover_input_generator: PeekableReceiver<(
+        BlockOutput,
+        ReplayRecord,
+        ProverInput,
+        BlockMerkleTreeData,
+    )> = pipeline.add_component::<ProverInputGenerator<State>>(
         ProverInputGeneratorParams {
             enable_logging: config.prover_input_generator_config.logging_enabled,
-            maximum_in_flight_blocks: config.prover_input_generator_config.maximum_in_flight_blocks,
+            maximum_in_flight_blocks: config
+                .prover_input_generator_config
+                .maximum_in_flight_blocks,
             first_block_to_process: prover_input_generation_first_block_to_process,
             app_bin_base_path: config.prover_input_generator_config.app_bin_unpack_path,
             read_state: state.clone(),
         },
-        pipeline_after_tree_manager
+        pipeline_after_tree_manager,
     );
 
     tasks.spawn(pipeline.execute().map(report_exit("Pipeline")));
@@ -827,7 +844,10 @@ async fn run_main_node_pipeline<State: ReadStateHistory + WriteState + StateInit
 /// Only for EN - we still populate channels destined for the batcher subsystem -
 /// need to drain them to not get stuck
 #[allow(clippy::too_many_arguments)]
-async fn run_en_pipeline<State: ReadStateHistory + WriteState + StateInitializer + Clone, Finality: ReadFinality + Clone>(
+async fn run_en_pipeline<
+    State: ReadStateHistory + WriteState + StateInitializer + Clone,
+    Finality: ReadFinality + Clone,
+>(
     config: Config,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
@@ -841,7 +861,6 @@ async fn run_en_pipeline<State: ReadStateHistory + WriteState + StateInitializer
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-
     // NOTE: the execution pipeline is being migrated to the Pipeline Framework.
     // The current state is intermediary.
 
@@ -850,10 +869,15 @@ async fn run_en_pipeline<State: ReadStateHistory + WriteState + StateInitializer
 
     let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::new();
 
-    let pipeline_after_command_source = pipeline.add_source::<ExternalNodeCommandSource>(ExternalNodeCommandSourceParams {
-        starting_block,
-        replay_download_address: config.sequencer_config.block_replay_download_address.clone().expect("EN must have replay_download_address"),
-    });
+    let pipeline_after_command_source =
+        pipeline.add_source::<ExternalNodeCommandSource>(ExternalNodeCommandSourceParams {
+            starting_block,
+            replay_download_address: config
+                .sequencer_config
+                .block_replay_download_address
+                .clone()
+                .expect("EN must have replay_download_address"),
+        });
 
     let pipeline_after_sequencer = pipeline.add_component::<Sequencer<
         RethPool<ZkClient<State>>,
@@ -868,20 +892,18 @@ async fn run_en_pipeline<State: ReadStateHistory + WriteState + StateInitializer
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
         },
-        pipeline_after_command_source
+        pipeline_after_command_source,
     );
 
     let mut pipeline_after_tree = pipeline.add_component::<TreeManager>(
         TreeManagerParams { tree: tree.clone() },
-        pipeline_after_sequencer
+        pipeline_after_sequencer,
     );
 
     tasks.spawn(pipeline.execute().map(report_exit("Pipeline")));
 
     // Drain `blocks_for_batcher_subsystem_receiver`.
-    tokio::spawn(
-        async move { while pipeline_after_tree.recv().await.is_some() {} },
-    );
+    tokio::spawn(async move { while pipeline_after_tree.recv().await.is_some() {} });
 
     // Channel between `PriorityTree` tasks
     let (priority_txs_internal_sender, priority_txs_internal_receiver) =

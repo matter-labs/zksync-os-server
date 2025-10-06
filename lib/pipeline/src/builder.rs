@@ -22,9 +22,7 @@ impl ConfiguredPipeline {
         let (sender, receiver) = mpsc::channel(S::OUTPUT_BUFFER_SIZE);
 
         self.tasks.push(Box::new(move || {
-            tokio::spawn(async move {
-                S::run(params, sender).await
-            })
+            tokio::spawn(async move { S::run(params, sender).await })
         }));
 
         PeekableReceiver::new(receiver)
@@ -36,7 +34,6 @@ impl ConfiguredPipeline {
         params: C::Params,
         input_receiver: PeekableReceiver<C::Input>,
     ) -> PeekableReceiver<C::Output> {
-
         // This trait only supports zero-sized structs.
         // Do not remove without a good reason.
         assert_eq!(
@@ -46,15 +43,12 @@ impl ConfiguredPipeline {
             C::NAME
         );
 
-
         let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
 
         let input = input_receiver;
 
         self.tasks.push(Box::new(move || {
-            tokio::spawn(async move {
-                C::run(params, input, output_sender).await
-            })
+            tokio::spawn(async move { C::run(params, input, output_sender).await })
         }));
 
         PeekableReceiver::new(output_receiver)
@@ -69,9 +63,7 @@ impl ConfiguredPipeline {
         let input = PeekableReceiver::new(input_receiver);
 
         self.tasks.push(Box::new(move || {
-            tokio::spawn(async move {
-                S::run(params, input).await
-            })
+            tokio::spawn(async move { S::run(params, input).await })
         }));
     }
 

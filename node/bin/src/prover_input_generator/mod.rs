@@ -1,3 +1,4 @@
+use crate::tree_manager::BlockMerkleTreeData;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
@@ -9,15 +10,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
-use zksync_os_merkle_tree::{
-    MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32,
-};
+use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
 use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ZksyncOsEncode;
-use crate::tree_manager::BlockMerkleTreeData;
 
 /// This component generates prover input from batch replay data
 /// Zero-sized marker struct for PipelineComponent trait
@@ -34,14 +32,15 @@ pub struct ProverInputGeneratorParams<ReadState> {
 }
 
 #[async_trait]
-impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent for ProverInputGenerator<ReadState> {
+impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
+    for ProverInputGenerator<ReadState>
+{
     type Input = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
     type Output = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
     type Params = ProverInputGeneratorParams<ReadState>;
 
     const NAME: &'static str = "prover_input_generator";
     const OUTPUT_BUFFER_SIZE: usize = 5;
-
 
     /// Works on multiple blocks in parallel. May use up to [Self::maximum_in_flight_blocks] threads but
     /// will only take up new work once the oldest block finishes processing.

@@ -1,6 +1,6 @@
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
-use zksync_os_pipeline::PeekableReceiver;
+use crate::tree_manager::BlockMerkleTreeData;
 use alloy::primitives::Address;
 use anyhow::Context;
 use std::pin::Pin;
@@ -15,8 +15,8 @@ use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
+use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_storage_api::ReplayRecord;
-use crate::tree_manager::BlockMerkleTreeData;
 
 mod batch_builder;
 mod seal_criteria;
@@ -60,7 +60,12 @@ impl Batcher {
         batcher_config: BatcherConfig,
 
         // == plumbing ==
-        block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)>,
+        block_receiver: PeekableReceiver<(
+            BlockOutput,
+            ReplayRecord,
+            ProverInput,
+            BlockMerkleTreeData,
+        )>,
         batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
     ) -> Self {
         Self {

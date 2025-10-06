@@ -8,10 +8,7 @@ pub async fn load_genesis_stored_batch_info(
     genesis_block: RepositoryBlock,
     tree: MerkleTree<RocksDBWrapper>,
 ) -> StoredBatchInfo {
-    let tree_at_genesis = MerkleTreeVersion {
-        tree,
-        block: 0,
-    };
+    let tree_at_genesis = MerkleTreeVersion { tree, block: 0 };
     let genesis_root_info = tree_at_genesis
         .root_info()
         .expect("Failed to get genesis root info");

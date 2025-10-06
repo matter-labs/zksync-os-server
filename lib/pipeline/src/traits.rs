@@ -21,10 +21,7 @@ pub trait Source {
     const OUTPUT_BUFFER_SIZE: usize;
 
     /// Run the source component, sending messages to the output
-    async fn run(
-        params: Self::Params,
-        output: mpsc::Sender<Self::Output>,
-    ) -> Result<()>;
+    async fn run(params: Self::Params, output: mpsc::Sender<Self::Output>) -> Result<()>;
 }
 
 /// A component that transforms messages in the pipeline.
@@ -72,8 +69,5 @@ pub trait Sink {
     const NAME: &'static str;
 
     /// Run the sink component, receiving messages from the input
-    async fn run(
-        params: Self::Params,
-        input: PeekableReceiver<Self::Input>,
-    ) -> Result<()>;
+    async fn run(params: Self::Params, input: PeekableReceiver<Self::Input>) -> Result<()>;
 }

@@ -198,8 +198,10 @@ impl<T> PeekableReceiver<T> {
     /// WARNING: panics if there are any buffered items!
     /// todo: only used in prover_input_generator sa it expects a Stream - remove when it's migrated to `PeekableReceiver`
     pub fn into_inner(self) -> mpsc::Receiver<T> {
-        assert!(self.buf.is_empty(), "PeekableReceiver::into_inner() called with buffered items");
+        assert!(
+            self.buf.is_empty(),
+            "PeekableReceiver::into_inner() called with buffered items"
+        );
         self.rx
     }
 }
-
