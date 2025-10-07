@@ -1,30 +1,17 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
-use zk_os_forward_system::run::convert::FromInterface;
+use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::error::InvalidTransaction;
+use zksync_os_interface::tracing::{
+    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
+    NopTracer,
+};
+use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{BlockContext, TxOutput};
-use zksync_os_multivm::simulate_tx;
+use zksync_os_multivm::{run_block, simulate_tx};
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
-
-// For tracing.
-use zk_ee::{
-    execution_environment_type::ExecutionEnvironmentType,
-    system::{
-        CallModifier, CallResult, EthereumLikeTypes, ExecutionEnvironmentLaunchParams, Resources,
-        SystemTypes,
-        evm::{EvmFrameInterface, errors::EvmError},
-        metadata::BlockMetadataFromOracle,
-        tracer::{Tracer, evm_tracer::EvmTracer},
-    },
-    types_config::SystemIOTypesConfig,
-};
-use zk_os_forward_system::run::{
-    errors::ForwardSubsystemError,
-    run_block,
-    test_impl::{NoopTxCallback, TxListSource},
-};
 
 /// EVM max stack size.
 pub const STACK_SIZE: usize = 1024;
@@ -40,7 +27,13 @@ pub fn execute(
 
     block_context.eip1559_basefee = U256::from(0);
 
-    simulate_tx(encoded_tx, block_context, state_view.clone(), state_view)
+    simulate_tx(
+        encoded_tx,
+        block_context,
+        state_view.clone(),
+        state_view,
+        &mut NopTracer,
+    )
 }
 
 pub fn call_trace_simulate(
@@ -48,7 +41,7 @@ pub fn call_trace_simulate(
     mut block_context: BlockContext,
     state_view: impl ViewState,
     call_config: CallConfig,
-) -> Result<CallFrame, Box<ForwardSubsystemError>> {
+) -> anyhow::Result<CallFrame> {
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
@@ -57,14 +50,13 @@ pub fn call_trace_simulate(
 
     block_context.eip1559_basefee = U256::from(0);
 
-    let _ = zk_os_forward_system::run::simulate_tx(
+    let _ = simulate_tx(
         encoded_tx,
-        BlockMetadataFromOracle::from_interface(block_context),
+        block_context,
         state_view.clone(),
         state_view,
         &mut tracer,
-    )
-    .map_err(Box::new)?;
+    )?;
 
     Ok(std::mem::take(
         tracer
@@ -76,10 +68,10 @@ pub fn call_trace_simulate(
 
 pub fn call_trace(
     txs: Vec<ZkTransaction>,
-    block_context: BlockMetadataFromOracle,
+    block_context: BlockContext,
     state_view: impl ViewState,
     call_config: CallConfig,
-) -> Result<Vec<CallFrame>, Box<ForwardSubsystemError>> {
+) -> anyhow::Result<Vec<CallFrame>> {
     let mut tracer = CallTracer::new_with_config(
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
@@ -132,41 +124,41 @@ impl CallTracer {
     }
 }
 
-impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
-    fn on_new_execution_frame(&mut self, initial_state: &ExecutionEnvironmentLaunchParams<S>) {
+impl AnyTracer for CallTracer {
+    fn as_evm(&mut self) -> Option<&mut impl EvmTracer> {
+        Some(self)
+    }
+}
+
+impl EvmTracer for CallTracer {
+    fn on_new_execution_frame(&mut self, request: impl EvmRequest) {
         self.current_call_depth += 1;
 
         if !self.only_top_call || self.current_call_depth == 1 {
             // Top-level deployment (initiated by EOA) won't trigger `on_create_request` hook
             // This is always a CREATE
-            if self.current_call_depth == 1
-                && initial_state.external_call.modifier == CallModifier::Constructor
-            {
+            if self.current_call_depth == 1 && request.modifier() == CallModifier::Constructor {
                 self.create_operation_requested = Some(CreateType::Create);
             }
 
             self.unfinished_calls.push(CallFrame {
-                from: Address::from(initial_state.external_call.caller.to_be_bytes()),
-                gas: U256::from(
-                    initial_state.external_call.available_resources.ergs().0 / ERGS_PER_GAS,
-                ),
+                from: request.caller(),
+                gas: U256::from(request.resources().ergs / ERGS_PER_GAS),
                 gas_used: U256::ZERO, // will be populated later
-                to: Some(Address::from(
-                    initial_state.external_call.callee.to_be_bytes(),
-                )),
-                input: Bytes::copy_from_slice(initial_state.external_call.input),
+                to: Some(request.callee()),
+                input: Bytes::copy_from_slice(request.input()),
                 output: None,        // will be populated later
                 error: None,         // can be populated later
                 revert_reason: None, // can be populated later
                 calls: vec![],       // will be populated later
                 logs: vec![],        // will be populated later
-                value: if initial_state.external_call.modifier == CallModifier::Static {
+                value: if request.modifier() == CallModifier::Static {
                     // STATICCALL frames don't have `value`
                     None
                 } else {
-                    Some(initial_state.external_call.nominal_token_value)
+                    Some(request.nominal_token_value())
                 },
-                typ: match initial_state.external_call.modifier {
+                typ: match request.modifier() {
                     CallModifier::NoModifier => "CALL",
                     CallModifier::Constructor => {
                         match self
@@ -199,38 +191,32 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
         }
     }
 
-    fn after_execution_frame_completed(&mut self, result: Option<(&S::Resources, &CallResult<S>)>) {
+    fn after_execution_frame_completed(&mut self, result: Option<(EvmResources, CallResult)>) {
         assert_ne!(self.current_call_depth, 0);
 
         if !self.only_top_call || self.current_call_depth == 1 {
             let mut finished_call = self.unfinished_calls.pop().expect("Should exist");
 
             match result {
-                Some(result) => {
+                Some((resources, result)) => {
                     finished_call.gas_used = finished_call
                         .gas
-                        .saturating_sub(U256::from(result.0.ergs().0 / ERGS_PER_GAS));
+                        .saturating_sub(U256::from(resources.ergs / ERGS_PER_GAS));
 
-                    match &result.1 {
-                        CallResult::PreparationStepFailed => {
-                            panic!("Should not happen") // ZKsync OS should not call tracer in this case
-                        }
-                        CallResult::Failed { return_values } => {
-                            finished_call.revert_reason =
-                                maybe_revert_reason(return_values.returndata);
-                            finished_call.output =
-                                Some(Bytes::copy_from_slice(return_values.returndata));
+                    match result {
+                        CallResult::Failed { returndata } => {
+                            finished_call.revert_reason = maybe_revert_reason(returndata);
+                            finished_call.output = Some(Bytes::copy_from_slice(returndata));
                             if finished_call.typ == "CREATE" || finished_call.typ == "CREATE2" {
                                 // Clear `to` field as no contract was created
                                 finished_call.to = None;
                             }
                         }
-                        CallResult::Successful { return_values } => {
+                        CallResult::Successful { returndata } => {
                             if finished_call.typ == "CREATE" || finished_call.typ == "CREATE2" {
                                 // output should be already populated in `on_bytecode_change` hook
                             } else {
-                                finished_call.output =
-                                    Some(Bytes::copy_from_slice(return_values.returndata));
+                                finished_call.output = Some(Bytes::copy_from_slice(returndata));
                             }
                         }
                     };
@@ -281,52 +267,19 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
             .push(self.finished_calls.pop().expect("Should exist"));
     }
 
-    #[inline(always)]
-    fn on_storage_read(
-        &mut self,
-        _ee_type: ExecutionEnvironmentType,
-        _is_transient: bool,
-        _address: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
-        _key: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::StorageKey,
-        _value: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::StorageValue,
-    ) {
-    }
-
-    #[inline(always)]
-    fn on_storage_write(
-        &mut self,
-        _ee_type: ExecutionEnvironmentType,
-        _is_transient: bool,
-        _address: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
-        _key: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::StorageKey,
-        _value: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::StorageValue,
-    ) {
-    }
-
-    fn on_event(
-        &mut self,
-        _ee_type: ExecutionEnvironmentType,
-        address: &<<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
-        topics: &[<<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::EventKey],
-        data: &[u8],
-    ) {
+    fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
         if self.collect_logs {
             let call = self.unfinished_calls.last_mut().expect("Should exist");
             call.logs.push(CallLogFrame {
-                address: if address == &ruint::aliases::B160::ZERO {
+                address: if address == Address::ZERO {
                     None
                 } else {
-                    Some(Address::from(address.to_be_bytes()))
+                    Some(address)
                 },
                 topics: if topics.is_empty() {
                     None
                 } else {
-                    Some(
-                        topics
-                            .iter()
-                            .map(|topic| B256::new(topic.as_u8_array()))
-                            .collect(),
-                    )
+                    Some(topics)
                 },
                 data: if data.is_empty() {
                     None
@@ -340,22 +293,36 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
         }
     }
 
+    fn on_storage_read(
+        &mut self,
+        _is_transient: bool,
+        _address: Address,
+        _key: B256,
+        _value: B256,
+    ) {
+    }
+
+    fn on_storage_write(
+        &mut self,
+        _is_transient: bool,
+        _address: Address,
+        _key: B256,
+        _value: B256,
+    ) {
+    }
+
     fn on_bytecode_change(
         &mut self,
-        _ee_type: ExecutionEnvironmentType,
-        address: <S::IOTypes as SystemIOTypesConfig>::Address,
-        new_bytecode: Option<&[u8]>,
-        _new_bytecode_hash: <S::IOTypes as SystemIOTypesConfig>::BytecodeHashValue,
+        address: Address,
+        new_raw_bytecode: Option<&[u8]>,
+        _new_internal_bytecode_hash: B256,
         new_observable_bytecode_length: u32,
     ) {
         let call = self.unfinished_calls.last_mut().expect("Should exist");
 
         if call.typ == "CREATE" || call.typ == "CREATE2" {
-            assert_eq!(
-                Address::from(address.to_be_bytes()),
-                call.to.expect("Should exist")
-            );
-            let deployed_raw_bytecode = new_bytecode.expect("Should be present");
+            assert_eq!(address, call.to.expect("Should exist"));
+            let deployed_raw_bytecode = new_raw_bytecode.expect("Should be present");
 
             assert!(deployed_raw_bytecode.len() >= new_observable_bytecode_length as usize);
 
@@ -369,17 +336,10 @@ impl<S: EthereumLikeTypes> Tracer<S> for CallTracer {
     }
 
     #[inline(always)]
-    fn evm_tracer(&mut self) -> &mut impl EvmTracer<S> {
-        self
-    }
-}
-
-impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
-    #[inline(always)]
     fn before_evm_interpreter_execution_step(
         &mut self,
         _opcode: u8,
-        _interpreter_state: &impl EvmFrameInterface<S>,
+        _frame_state: impl EvmFrameInterface,
     ) {
     }
 
@@ -387,12 +347,12 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     fn after_evm_interpreter_execution_step(
         &mut self,
         _opcode: u8,
-        _interpreter_state: &impl EvmFrameInterface<S>,
+        _frame_state: impl EvmFrameInterface,
     ) {
     }
 
     /// Opcode failed for some reason. Note: call frame ends immediately
-    fn on_opcode_error(&mut self, error: &EvmError, _frame_state: &impl EvmFrameInterface<S>) {
+    fn on_opcode_error(&mut self, error: &EvmError, _frame_state: impl EvmFrameInterface) {
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
@@ -415,9 +375,9 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
     /// We should treat selfdestruct as a special kind of a call
     fn on_selfdestruct(
         &mut self,
-        beneficiary: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::Address,
-        token_value: <<S as SystemTypes>::IOTypes as SystemIOTypesConfig>::NominalTokenValue,
-        frame_state: &impl EvmFrameInterface<S>,
+        beneficiary: Address,
+        token_value: U256,
+        frame_state: impl EvmFrameInterface,
     ) {
         // Following Geth implementation: https://github.com/ethereum/go-ethereum/blob/2dbb580f51b61d7ff78fceb44b06835827704110/core/vm/instructions.go#L894
         //
@@ -427,10 +387,10 @@ impl<S: EthereumLikeTypes> EvmTracer<S> for CallTracer {
         // * geth treats such calls as "SELFDESTRUCT" frames, but there is an issue that debates
         //   this behavior (https://github.com/ethereum/go-ethereum/issues/32376)
         let call_frame = CallFrame {
-            from: Address::from(frame_state.address().to_be_bytes()),
+            from: frame_state.address(),
             gas: Default::default(),
             gas_used: Default::default(),
-            to: Some(Address::from(beneficiary.to_be_bytes())),
+            to: Some(beneficiary),
             input: Default::default(),
             output: None,
             error: None,

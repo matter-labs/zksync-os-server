@@ -39,7 +39,7 @@ fn fmt_block_context(bc: &BlockContext, f: &mut fmt::Formatter<'_>) -> fmt::Resu
         .field("block_hashes", &block_hashes_ends)
         .field("timestamp", &bc.timestamp)
         .field("eip1559_basefee", &bc.eip1559_basefee)
-        .field("gas_per_pubdata", &bc.gas_per_pubdata)
+        .field("pubdata_price", &bc.pubdata_price)
         .field("native_price", &bc.native_price)
         .field("coinbase", &bc.coinbase)
         .field("gas_limit", &bc.gas_limit)
