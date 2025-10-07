@@ -140,6 +140,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 .await
                 .unwrap()
         };
+    let fee_collector_address: &'static str = config
+        .sequencer_config
+        .fee_collector_address
+        .to_string()
+        .leak();
+    GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
+    GENERAL_METRICS.chain_id.set(chain_id);
 
     // Channel between L1Watcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
