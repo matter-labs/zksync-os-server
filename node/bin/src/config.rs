@@ -7,6 +7,7 @@ use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_mempool::SubPoolLimit;
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_tracing::LogFormat;
 
@@ -19,6 +20,7 @@ pub struct Config {
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
     pub mempool_config: MempoolConfig,
+    pub tx_validator_config: TxValidatorConfig,
     pub sequencer_config: SequencerConfig,
     pub l1_sender_config: L1SenderConfig,
     pub l1_watcher_config: L1WatcherConfig,
@@ -264,9 +266,18 @@ pub struct L1WatcherConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct MempoolConfig {
+    #[config(default_t = usize::MAX)]
+    pub max_pending_txs: usize,
+    #[config(default_t = usize::MAX)]
+    pub max_pending_size: usize,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct TxValidatorConfig {
     /// Max input size of a transaction to be accepted by mempool
     #[config(default_t = 128 * 1024 * 1024)]
-    pub max_tx_input_bytes: usize,
+    pub max_input_bytes: usize,
 }
 
 /// Only used on the Main Node.
@@ -466,6 +477,23 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
         Self {
             max_blocks_to_process: c.max_blocks_to_process,
             poll_interval: c.poll_interval,
+        }
+    }
+}
+
+impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
+    fn from(c: MempoolConfig) -> Self {
+        Self {
+            pending_limit: SubPoolLimit::new(c.max_pending_txs, c.max_pending_size),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<TxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
+    fn from(c: TxValidatorConfig) -> Self {
+        Self {
+            max_input_bytes: c.max_input_bytes,
         }
     }
 }

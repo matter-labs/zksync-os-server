@@ -182,6 +182,7 @@ impl Tester {
             },
             rpc_config,
             mempool_config: Default::default(),
+            tx_validator_config: Default::default(),
             sequencer_config,
             l1_sender_config: Default::default(),
             l1_watcher_config: Default::default(),
