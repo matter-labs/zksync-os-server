@@ -204,7 +204,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Initializing mempools");
     let l2_mempool = zksync_os_mempool::in_memory(
         ZkClient::new(repositories.clone(), state.clone(), chain_id),
-        config.mempool_config.max_tx_input_bytes,
+        config.mempool_config.clone().into(),
+        config.tx_validator_config.clone().into(),
     );
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
