@@ -5,7 +5,7 @@ use tokio::sync::watch;
 use zksync_os_bin::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
     LogConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
-    SequencerConfig, StateBackendConfig, StatusServerConfig,
+    SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_bin::run;
 use zksync_os_bin::sentry::init_sentry;
@@ -171,6 +171,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse mempool config");
 
+    let tx_validator_config = repo
+        .single::<TxValidatorConfig>()
+        .expect("Failed to load tx validator config")
+        .parse()
+        .expect("Failed to parse tx validator config");
+
     let mut sequencer_config = repo
         .single::<SequencerConfig>()
         .expect("Failed to load sequencer config")
@@ -241,6 +247,7 @@ fn build_configs() -> Config {
         genesis_config,
         rpc_config,
         mempool_config,
+        tx_validator_config,
         sequencer_config,
         l1_sender_config,
         l1_watcher_config,
