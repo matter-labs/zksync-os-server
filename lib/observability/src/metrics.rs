@@ -18,6 +18,11 @@ pub struct GeneralMetrics {
     /// Time spent on various startup routines.
     #[metrics(labels = ["stage"])]
     pub startup_time: LabeledFamily<&'static str, Gauge<f64>>,
+
+    #[metrics(labels = ["fee_collector_address"])]
+    pub fee_collector_address: LabeledFamily<&'static str, Gauge, 1>,
+
+    pub chain_id: Gauge<u64>,
 }
 
 #[vise::register]
