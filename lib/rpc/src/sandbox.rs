@@ -1,9 +1,11 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
-use zksync_os_interface::error::{EvmError, InvalidTransaction};
+use zksync_os_evm_errors::EvmError;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
-    CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer, NopTracer,
+    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
+    NopTracer,
 };
 use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{BlockContext, TxOutput};
@@ -119,6 +121,12 @@ impl CallTracer {
             only_top_call,
             create_operation_requested: None,
         }
+    }
+}
+
+impl AnyTracer for CallTracer {
+    fn as_evm(&mut self) -> Option<&mut impl EvmTracer> {
+        Some(self)
     }
 }
 
@@ -283,6 +291,24 @@ impl EvmTracer for CallTracer {
                 index: None,
             })
         }
+    }
+
+    fn on_storage_read(
+        &mut self,
+        _is_transient: bool,
+        _address: Address,
+        _key: B256,
+        _value: B256,
+    ) {
+    }
+
+    fn on_storage_write(
+        &mut self,
+        _is_transient: bool,
+        _address: Address,
+        _key: B256,
+        _value: B256,
+    ) {
     }
 
     fn on_bytecode_change(

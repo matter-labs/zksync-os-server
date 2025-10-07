@@ -94,7 +94,7 @@ impl BlockReplayStorage {
                     block_hashes: Default::default(),
                     timestamp: 0,
                     eip1559_basefee: U256::from(0),
-                    gas_per_pubdata: U256::from(0),
+                    pubdata_price: U256::from(0),
                     native_price: U256::from(1),
                     coinbase: Default::default(),
                     gas_limit: 100_000_000,
