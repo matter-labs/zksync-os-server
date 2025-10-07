@@ -1,8 +1,6 @@
-use alloy::consensus::EthereumTxEnvelope;
-use alloy::consensus::transaction::Recovered;
+use crate::transaction::L2PooledTransaction;
 use reth_transaction_pool::{
-    AddedTransactionOutcome, EthPooledTransaction, PoolResult, PoolTransaction, TransactionOrigin,
-    TransactionPoolExt,
+    AddedTransactionOutcome, PoolResult, PoolTransaction, TransactionOrigin, TransactionPoolExt,
 };
 use std::fmt::Debug;
 use zksync_os_types::L2Transaction;
@@ -10,20 +8,16 @@ use zksync_os_types::L2Transaction;
 #[allow(async_fn_in_trait)]
 #[auto_impl::auto_impl(&, Box, Arc)]
 pub trait L2TransactionPool:
-    TransactionPoolExt<Transaction = EthPooledTransaction> + Send + Sync + Debug + 'static
+    TransactionPoolExt<Transaction = L2PooledTransaction> + Send + Sync + Debug + 'static
 {
     /// Convenience method to add a local L2 transaction
     fn add_l2_transaction(
         &self,
         transaction: L2Transaction,
     ) -> impl Future<Output = PoolResult<AddedTransactionOutcome>> + Send {
-        let (envelope, signer) = transaction.into_parts();
-        let envelope = EthereumTxEnvelope::try_from(envelope)
-            .expect("tried to insert an EIP-4844 transaction without sidecar into mempool");
-        let transaction = Recovered::new_unchecked(envelope, signer);
         self.add_transaction(
             TransactionOrigin::Local,
-            EthPooledTransaction::from_pooled(transaction),
+            L2PooledTransaction::from_pooled(transaction),
         )
     }
 }

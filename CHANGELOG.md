@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.7.5](https://github.com/matter-labs/zksync-os-server/compare/v0.7.4...v0.7.5) (2025-10-06)
+
+
+### Features
+
+* add net namespace and net_version RPC call support ([#436](https://github.com/matter-labs/zksync-os-server/issues/436)) ([e7b6ff5](https://github.com/matter-labs/zksync-os-server/commit/e7b6ff52d73506670ff5f2ffb03cdc8784fe2f96))
+* add Sentry support ([#430](https://github.com/matter-labs/zksync-os-server/issues/430)) ([afed980](https://github.com/matter-labs/zksync-os-server/commit/afed98050b513d36efee32ea85cee2424203e225))
+* drop GCP support and reduce dependencies ([#375](https://github.com/matter-labs/zksync-os-server/issues/375)) ([a4bd9e1](https://github.com/matter-labs/zksync-os-server/commit/a4bd9e1dd22b595a74584041152e653e155404ef))
+* pipeline framework (1/X) - tree, sequencer and prover_input_gen ([#447](https://github.com/matter-labs/zksync-os-server/issues/447)) ([ba2186e](https://github.com/matter-labs/zksync-os-server/commit/ba2186edb5131e4138917ee4972f2d61c1a5945c))
+* re-implement alloy tx types ([#438](https://github.com/matter-labs/zksync-os-server/issues/438)) ([9f993fc](https://github.com/matter-labs/zksync-os-server/commit/9f993fc2264a5c8c9c3820c9d00b29a6dad5616b))
+
+
+### Bug Fixes
+
+* report error on reverting `eth_call` ([#449](https://github.com/matter-labs/zksync-os-server/issues/449)) ([39ff0ae](https://github.com/matter-labs/zksync-os-server/commit/39ff0aef8ff5012437ea7638fd795e1fc978deed))
+
+## [0.7.4](https://github.com/matter-labs/zksync-os-server/compare/v0.7.3...v0.7.4) (2025-09-30)
+
+
+### Features
+
+* add logging configuration (json/terminal/logfmt) ([#407](https://github.com/matter-labs/zksync-os-server/issues/407)) ([06ef2f5](https://github.com/matter-labs/zksync-os-server/commit/06ef2f51f92264f6a80d94d841d1921a60d41809))
+* **en:** remote en config ([#387](https://github.com/matter-labs/zksync-os-server/issues/387)) ([550f3c4](https://github.com/matter-labs/zksync-os-server/commit/550f3c468977ae64aa28b44af62840cc2db37e39))
+* set gas per pubdata to `1` ([#406](https://github.com/matter-labs/zksync-os-server/issues/406)) ([528ea85](https://github.com/matter-labs/zksync-os-server/commit/528ea85cde0d4494d32cb4db99336511a6f173e7))
+
+
+### Bug Fixes
+
+* hack to allow forcing null bridgehub in config ([#435](https://github.com/matter-labs/zksync-os-server/issues/435)) ([60c007b](https://github.com/matter-labs/zksync-os-server/commit/60c007b8da71ce6fceb2a15b74157642fd15afae))
+
+
+### Reverts
+
+* feat: set gas per pubdata to `1` ([#431](https://github.com/matter-labs/zksync-os-server/issues/431)) ([1ca638b](https://github.com/matter-labs/zksync-os-server/commit/1ca638b4bed6cfd9630d524fa80f627743a1e306))
+
 ## [0.7.3](https://github.com/matter-labs/zksync-os-server/compare/v0.7.2...v0.7.3) (2025-09-26)
 
 

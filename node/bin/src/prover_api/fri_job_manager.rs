@@ -17,7 +17,6 @@
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
 use crate::prover_api::prover_job_map::ProverJobMap;
-use crate::util::peekable_receiver::PeekableReceiver;
 use itertools::MinMaxResult::MinMax;
 use serde::Serialize;
 use std::time::Duration;
@@ -31,6 +30,7 @@ use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
+use zksync_os_pipeline::PeekableReceiver;
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -85,6 +85,22 @@ impl FriJobManager {
             batches_with_proof_sender,
             max_assigned_batch_range,
             latency_tracker,
+        }
+    }
+
+    /// Peek a batch data for a given batch number
+    pub fn peek_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
+        match self.assigned_jobs.get_batch_data(batch_number) {
+            Some(prover_input) => {
+                tracing::info!("Batch data is peeked for batch number {batch_number}");
+                Some(prover_input)
+            }
+            None => {
+                tracing::debug!(
+                    "Trying to peek batch number {batch_number} that is not present in assigned_jobs"
+                );
+                None
+            }
         }
     }
 

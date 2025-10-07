@@ -5,8 +5,6 @@ on:
     branches:
      - main
   pull_request:
-# Disabled for now, as we don't want to run CI twice
-# merge_group:
 
 # Cancel new runs for PRs only
 concurrency:
@@ -19,6 +17,7 @@ env:
   RUST_BACKTRACE: 1
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
+  CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
   NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
 
@@ -31,9 +30,9 @@ permissions:
 jobs:
 
   ############################
-  #  Build, format and lint  #
+  #       Build server       #
   ############################
-  build-format-and-lint:
+  build:
     runs-on: matterlabs-ci-runner-high-performance
     steps:
       - name: Checkout code
@@ -41,27 +40,36 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'build-format-and-lint'
+
+      - name: Build server
+        run: cargo build --release --bin zksync_os_bin
+
+
+  ############################
+  #     Format and lint      #
+  ############################
+  format-and-lint:
+    runs-on: matterlabs-ci-runner-high-performance
+    env:
+      ZKSYNC_USE_CUDA_STUBS: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all --check
 
-      - name: Run clippy (core)
-        run: cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings
-
-      - name: Run clippy (integration tests)
-        run: cargo clippy --all-targets -p zksync_os_integration_tests -- -D warnings
-
-      - name: Build project
-        run: cargo build --all-targets --workspace --exclude zksync_os_integration_tests
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
 
 
-  ############################
-  #      Run unit tests      #
-  ############################
-  unit-tests:
+  #################################################
+  #      Run unit and core integration tests      #
+  #################################################
+  test:
     runs-on: matterlabs-ci-runner-high-performance
     steps:
       - name: Checkout code
@@ -69,19 +77,40 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'unit-tests'
 
-      - name: Run unit tests
-        env:
-          RUSTC_BOOTSTRAP: 1
-        run: |
-          # pin to a specific version to avoid breaking changes
-          cargo install --locked cargo-llvm-cov@0.6.18
-          # Run regression tests with code coverage
-          cargo llvm-cov --lcov --output-path lcov.info \
-            nextest --workspace --exclude zksync_os_integration_tests ${NEXTEST_ITERATIONS}
+      - name: Run tests
+        run: cargo nextest run --workspace ${NEXTEST_ITERATIONS}
+
+      - name: Upload test results
+        if: always() && !cancelled()
+        uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
+        with:
+          check_name: 'Test results'
+          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
+          action_fail_on_inconclusive: true
+
+
+  ######################################
+  # Measure code coverage on main push #
+  ######################################
+  code-coverage:
+    # Code coverage is measured only on push to main branch
+    # as it slows down PR testing significantly (2m -> 15m for tests execution)
+    # due to overhead with LLVM instrumentation.
+    # So, we keep the main numbers, but not force every PR to wait for it.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: matterlabs-ci-runner-high-performance
+    env:
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+
+      - name: Measure coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace
 
       - name: Generate codecov report
         uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
@@ -91,40 +120,11 @@ jobs:
           files: lcov.info
           slug: ${{ github.repository }}
 
-      - name: Upload test results to Codecov
-        if: always() && !cancelled()
-        uses: codecov/test-results-action@47f89e9acb64b76debcd5ea40642d25a4adced9f # v1.1.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: 'target/nextest/default/${{ env.TEST_RESULTS_XML }}'
-          slug: ${{ github.repository }}
-
-
-  ############################
-  #  Core integration tests  #
-  ############################
-  core-integration-tests:
-    runs-on: matterlabs-ci-runner-high-performance
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Setup runner
-        uses: ./.github/actions/runner-setup
-        with:
-          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'core-integration-tests'
-
-      - name: Run integration tests (no prover)
-        # Run all tests that don't require features enabled (e.g. `prover-tests`/`gpu-prover-tests`).
-        run: cargo nextest run --profile ci -p zksync_os_integration_tests ${NEXTEST_ITERATIONS}
-
 
   ############################################
   # Enforce EN sync format file immutability #
   ############################################
-  check-EN-backwards-compatibility:
-    name: Check replay wire format version
+  check-wire-version:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -156,7 +156,7 @@ jobs:
   ####################################
   #  Build prover integration tests  #
   ####################################
-  prover-integration-tests-build:
+  build-prover-tests:
     runs-on: matterlabs-ci-runner-high-performance
     container:
       image: nvidia/cuda:12.9.1-devel-ubuntu22.04
@@ -168,14 +168,31 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
         with:
+          enable_cache: 'true'
+          cache_shared_key: 'prover-tests'
           save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          cache_shared_key: 'prover-integration-tests'
+
+      - name: Check CUDA version
+        run: |
+          nvcc --version
+
+      - name: Checkout era-bellman-cuda
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matter-labs/era-bellman-cuda
+          ref: main
+          path: bellman-cuda
+
+      - name: Build bellman-cuda
+        shell: 'bash -ex {0}'
+        run: |
+          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
+          cmake --build bellman-cuda/build/
 
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
         env:
-          CUDAARCHS: 80
           # This is a special mandatory hack to transfer test binary from one machine to another.
           # We must use a dummy `./` path addition in the workspace path /home/runner/_work
           # to prevent GitHub Actions to replace it to the mapped `/__w` folder in the docker container.
@@ -183,8 +200,9 @@ jobs:
           # are correct inside prebuilt binary.
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
           WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
+          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
-          cargo nextest archive --release --profile ci -p zksync_os_integration_tests \
+          cargo nextest archive --release -p zksync_os_integration_tests \
             --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
 
       - name: Upload tests
@@ -193,33 +211,44 @@ jobs:
           name: ${{ env.PROVER_GPU_TESTS }}
           path: ${{ env.PROVER_GPU_TESTS }}.tar.zst
           if-no-files-found: error
+          retention-days: 1 # delete sooner to not waste storage
 
 
   #################################################
   #  Run prover integration tests on GPU machine  #
   #################################################
-  prover-integration-tests:
+  prover-tests:
     runs-on: matterlabs-ci-gpu-runner
-    needs: prover-integration-tests-build
+    needs: build-prover-tests
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          save_cache: 'false'
-          cache_shared_key: 'prover-integration-tests'
+
+      - name: Check Nvidia driver version
+        run: |
+          nvidia-smi
 
       - name: Download prebuilt tests
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
+      - name: Download CRS setup file
+        run: |
+          mkdir -p crs
+          wget https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key -O crs/setup_compact.key
+
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
+        env:
+          COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
+          RUST_MIN_STACK: 267108864
         run: |
+          ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}
@@ -234,12 +263,12 @@ jobs:
     if: always() && !cancelled()
     needs:
       [
-        build-format-and-lint,
-        unit-tests,
-        core-integration-tests,
-        prover-integration-tests-build,
-        prover-integration-tests,
-        check-EN-backwards-compatibility,
+        build,
+        test,
+        format-and-lint,
+        build-prover-tests,
+        prover-tests,
+        check-wire-version,
       ]
     steps:
       - name: Status

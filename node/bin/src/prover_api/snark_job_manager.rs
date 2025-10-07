@@ -1,4 +1,3 @@
-use crate::util::peekable_receiver::PeekableReceiver;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -9,6 +8,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
+use zksync_os_pipeline::PeekableReceiver;
 
 /// Job manager for SNARK proving.
 ///
@@ -129,10 +129,7 @@ impl SnarkJobManager {
         match pending_batch_number {
             Some(expected_batch_number) if batch_from != expected_batch_number => {
                 anyhow::bail!(
-                    "Batch range error. Expected first batch: {}, received: {}-{}",
-                    expected_batch_number,
-                    batch_from,
-                    batch_to
+                    "Batch range error. Expected first batch: {expected_batch_number}, received: {batch_from}-{batch_to}"
                 );
             }
             None => {
@@ -140,9 +137,7 @@ impl SnarkJobManager {
             }
             _ => {
                 tracing::debug!(
-                    "submitted proof is consistent with queue state. (proof for batches {}-{})",
-                    batch_from,
-                    batch_to
+                    "submitted proof is consistent with queue state. (proof for batches {batch_from}-{batch_to})"
                 );
             }
         }
@@ -159,10 +154,8 @@ impl SnarkJobManager {
 
         anyhow::ensure!(
             batches_proven.len() == (batch_to - batch_from + 1) as usize,
-            "Fatal error: inconsistent queue state ({} batches between numbers {} and {})",
-            batches_proven.len(),
-            batch_from,
-            batch_to,
+            "Fatal error: inconsistent queue state ({} batches between numbers {batch_from} and {batch_to})",
+            batches_proven.len()
         );
 
         // note: we still hold mutex while verifying the proof -
@@ -180,16 +173,12 @@ impl SnarkJobManager {
         // very unlikely - we just peeked the same batches
         anyhow::ensure!(
             batches_proven.len() == consumed_batches_proven.len(),
-            "Fatal error: inconsistency in PeekableReceiver",
+            "Fatal error: inconsistency in PeekableReceiver"
         );
 
         drop(receiver);
 
-        tracing::info!(
-            "real SNARK proof for batches {}-{} is accepted",
-            batch_from,
-            batch_to
-        );
+        tracing::info!("real SNARK proof for batches {batch_from}-{batch_to} is accepted",);
 
         let consumed_batches_proven: Vec<_> = consumed_batches_proven
             .into_iter()

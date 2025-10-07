@@ -23,6 +23,7 @@ zksync_os_priority_tree.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_object_store.workspace = true
+zksync_os_pipeline.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
@@ -76,3 +77,5 @@ http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["client"] }
+
+sentry.workspace = true

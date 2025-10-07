@@ -1,6 +1,6 @@
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
-use crate::util::peekable_receiver::PeekableReceiver;
+use crate::tree_manager::BlockMerkleTreeData;
 use alloy::primitives::Address;
 use anyhow::Context;
 use std::pin::Pin;
@@ -11,10 +11,11 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
 use zksync_os_l1_sender::commitment::StoredBatchInfo;
-use zksync_os_merkle_tree::{MerkleTreeForReading, RocksDBWrapper, TreeBatchOutput};
+use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
+use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_storage_api::ReplayRecord;
 
 mod batch_builder;
@@ -40,11 +41,9 @@ pub struct Batcher {
 
     // == plumbing ==
     // inbound
-    block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput)>,
+    block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData)>,
     // outbound
     batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
-    // dependencies
-    persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
 }
 
 impl Batcher {
@@ -61,9 +60,13 @@ impl Batcher {
         batcher_config: BatcherConfig,
 
         // == plumbing ==
-        block_receiver: PeekableReceiver<(BlockOutput, ReplayRecord, ProverInput)>,
+        block_receiver: PeekableReceiver<(
+            BlockOutput,
+            ReplayRecord,
+            ProverInput,
+            BlockMerkleTreeData,
+        )>,
         batch_data_sender: Sender<BatchEnvelope<ProverInput>>,
-        persistent_tree: MerkleTreeForReading<RocksDBWrapper>,
     ) -> Self {
         Self {
             chain_id,
@@ -74,7 +77,6 @@ impl Batcher {
             batcher_config,
             block_receiver,
             batch_data_sender,
-            persistent_tree,
         }
     }
 
@@ -89,7 +91,7 @@ impl Batcher {
         // but with `prover_input_generator_force_process_old_blocks` config set to true, they end up here.
         while self
             .block_receiver
-            .peek_recv(|(b, _, _)| b.header.number < first_block_in_batch)
+            .peek_recv(|(b, _, _, _)| b.header.number < first_block_in_batch)
             .await
             .context("channel closed while skipping already processed blocks")?
         {
@@ -123,7 +125,7 @@ impl Batcher {
             self.batch_data_sender
                 .send(batch_envelope)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to send batch data: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to send batch data: {e}"))?;
         }
     }
 
@@ -159,7 +161,7 @@ impl Batcher {
                 }
 
                 /* ---------- collect blocks ---------- */
-                should_seal = self.block_receiver.peek_recv(|(block_output, replay_record, _)| {
+                should_seal = self.block_receiver.peek_recv(|(block_output, replay_record, _, _)| {
                     // determine if the block fits into the current batch
                     accumulator.clone().add(block_output, replay_record).should_seal()
                 }) => {
@@ -170,7 +172,7 @@ impl Batcher {
                             break;
                         }
                         Some(false) => {
-                            let Some((block_output, replay_record, prover_input)) = self.block_receiver.pop_buffer() else {
+                            let Some((block_output, replay_record, prover_input, tree)) = self.block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
@@ -183,19 +185,11 @@ impl Batcher {
 
                             // sanity check - ensure that we process blocks in order
                             anyhow::ensure!(block_number == expected_block_number,
-                                "Unexpected block number received. Expected {}, got {}",
-                                expected_block_number,
-                                block_number,
+                                "Unexpected block number received. Expected {expected_block_number}, got {block_number}"
                             );
                             expected_block_number += 1;
 
-                            /* ---------- process block ---------- */
-                            let tree = self.persistent_tree
-                                .clone()
-                                .get_at_block(block_number)
-                                .await;
-
-                            let (root_hash, leaf_count) = tree.root_info()?;
+                            let (root_hash, leaf_count) = tree.block_end.root_info()?;
 
                             let tree_output = TreeBatchOutput {
                                 root_hash,

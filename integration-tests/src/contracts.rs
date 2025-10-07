@@ -39,6 +39,13 @@ alloy::sol!(
     "test-contracts/out/TracingSecondary.sol/TracingSecondary.json"
 );
 
+alloy::sol!(
+    /// Simple contract that reverts on demand.
+    #[sol(rpc)]
+    SimpleRevert,
+    "test-contracts/out/SimpleRevert.sol/SimpleRevert.json"
+);
+
 alloy::sol! {
     #[sol(rpc)]
     interface IBaseToken {

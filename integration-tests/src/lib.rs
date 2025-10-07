@@ -1,6 +1,6 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
-use crate::prover_api::ProverApi;
+use crate::prover_tester::ProverTester;
 use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::{Address, U256};
@@ -24,7 +24,7 @@ pub mod assert_traits;
 pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
-mod prover_api;
+mod prover_tester;
 pub mod provider;
 mod utils;
 
@@ -43,7 +43,7 @@ pub struct Tester {
     pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
-    pub prover_api: ProverApi,
+    pub prover_tester: ProverTester,
 
     stop_sender: watch::Sender<bool>,
     main_task: JoinHandle<()>,
@@ -112,7 +112,6 @@ impl Tester {
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
-        let prover_api_url = format!("http://localhost:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
@@ -155,7 +154,7 @@ impl Tester {
                 ..Default::default()
             },
             fake_snark_provers: FakeSnarkProversConfig {
-                enabled: true,
+                enabled: !enable_prover,
                 ..Default::default()
             },
             address: prover_api_address,
@@ -202,17 +201,23 @@ impl Tester {
 
         #[cfg(feature = "prover-tests")]
         if enable_prover {
-            let base_url = prover_api_url.clone();
+            let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
                 zksync_os_multivm::apps::v2::multiblock_batch_path(&app_bin_unpack_path);
+            let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
+            let output_dir = tempdir.path().join("outputs");
+            std::fs::create_dir_all(&output_dir).unwrap();
             tokio::task::spawn(async move {
-                zksync_os_fri_prover::run(zksync_os_fri_prover::Args {
+                zksync_os_prover_service::run(zksync_os_prover_service::Args {
                     base_url,
-                    enabled_logging: true,
                     app_bin_path: Some(app_bin_path),
                     circuit_limit: 10000,
-                    iterations: None,
-                    path: None,
+                    output_dir: output_dir.to_str().unwrap().to_string(),
+                    trusted_setup_file: trusted_setup_file.to_string(),
+                    iterations: Some(1),
+                    fri_path: None,
+                    max_snark_latency: None,
+                    max_fris_per_snark: Some(1),
                 })
                 .await
             });
@@ -272,12 +277,16 @@ impl Tester {
 
         let tempdir = Arc::new(tempdir);
         Ok(Tester {
-            l1_provider: EthDynProvider::new(l1_provider),
-            l2_provider: EthDynProvider::new(l2_provider),
-            l2_zk_provider: DynProvider::new(l2_zk_provider),
+            l1_provider: EthDynProvider::new(l1_provider.clone()),
+            l2_provider: EthDynProvider::new(l2_provider.clone()),
+            l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l1_wallet,
             l2_wallet,
-            prover_api: ProverApi::new(prover_api_url),
+            prover_tester: ProverTester::new(
+                EthDynProvider::new(l1_provider.clone()),
+                EthDynProvider::new(l2_provider.clone()),
+                DynProvider::new(l2_zk_provider.clone()),
+            ),
             stop_sender,
             main_task,
             l1_address,

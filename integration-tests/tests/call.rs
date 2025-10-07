@@ -4,7 +4,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::rpc::types::state::StateOverride;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::EthCallAssert;
-use zksync_os_integration_tests::contracts::EventEmitter;
+use zksync_os_integration_tests::contracts::{EventEmitter, SimpleRevert};
 
 #[test_log::test(tokio::test)]
 async fn call_genesis() -> anyhow::Result<()> {
@@ -120,5 +120,37 @@ async fn call_deploy() -> anyhow::Result<()> {
         .call()
         .await?;
     assert_eq!(result, EventEmitter::DEPLOYED_BYTECODE);
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn call_revert() -> anyhow::Result<()> {
+    // Test that the node returns error on reverting `eth_call`
+    let tester = Tester::setup().await?;
+
+    let simple_revert = SimpleRevert::deploy(tester.l2_provider.clone()).await?;
+    // Custom error is returned as accompanying data
+    let error = simple_revert
+        .simpleRevert()
+        .call_raw()
+        .await
+        .expect_err("call did not result in revert error")
+        .to_string();
+    assert_eq!(
+        error,
+        "server returned an error response: error code 3: execution reverted, data: \"0xc2bb947c\""
+    );
+    // String reverts are parsed out as a revert reason
+    let error = simple_revert
+        .stringRevert()
+        .call_raw()
+        .await
+        .expect_err("call did not result in revert error")
+        .to_string();
+    assert_eq!(
+        error,
+        "server returned an error response: error code 3: execution reverted: my message, data: \"0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000a6d79206d65737361676500000000000000000000000000000000000000000000\""
+    );
+
     Ok(())
 }

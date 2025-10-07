@@ -51,10 +51,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
                 // Assert that we don't fallback on longer chains (e.g. Sepolia)
                 if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
                     anyhow::bail!(
-                        "Binary search failed with {}. Cannot default starting block to zero for a long chain. Current L1 block number: {}. Limit: {}.",
-                        err,
-                        current_l1_block,
-                        MAX_L1_BLOCKS_LOOKBEHIND,
+                        "Binary search failed with {err}. Cannot default starting block to zero for a long chain. Current L1 block number: {current_l1_block}. Limit: {MAX_L1_BLOCKS_LOOKBEHIND}."
                     )
                 } else {
                     Ok(0)

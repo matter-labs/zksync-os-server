@@ -2,7 +2,7 @@ use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
-use smart_config::{DescribeConfig, DeserializeConfig, Serde};
+use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::Optional};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -62,6 +62,10 @@ pub struct GeneralConfig {
     #[config(default_t = 3312)]
     pub prometheus_port: u16,
 
+    /// Sentry URL.
+    #[config(default_t = None)]
+    pub sentry_url: Option<String>,
+
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
@@ -96,8 +100,8 @@ pub enum StateBackendConfig {
 pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed
-    #[config(with = Serde![str], default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
+    // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
+    #[config(with = Optional(Serde![int]), default_t = Some("0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
@@ -105,7 +109,7 @@ pub struct GenesisConfig {
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some("./genesis/genesis.json".into()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("./genesis/genesis.json".into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
