@@ -33,6 +33,7 @@ use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::noop_l1_sender::run_noop_l1_sender;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
+use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
@@ -536,10 +537,6 @@ async fn run_main_node_pipeline<
         })
         .pipe(TreeManager { tree: tree.clone() });
 
-    // Channel between between `ProverAPI` and `GaplessCommitter`
-    let (batch_with_proof_sender, batch_with_proof_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
-
     // Channel between `GaplessCommitter` and `L1Committer`
     let (batch_for_commit_sender, batch_for_commit_receiver) =
         tokio::sync::mpsc::channel::<CommitCommand>(5);
@@ -668,12 +665,12 @@ async fn run_main_node_pipeline<
             prev_batch_info: last_committed_batch_info,
         });
 
-    let fri_job_manager = Arc::new(FriJobManager::new(
-        pipeline_after_batcher.into_receiver().into_inner(),
-        batch_with_proof_sender,
+    let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         config.prover_api_config.job_timeout,
         config.prover_api_config.max_assigned_batch_range,
-    ));
+    );
+
+    let pipeline_after_fri = pipeline_after_batcher.pipe(fri_proving_step);
 
     let snark_job_manager = Arc::new(SnarkJobManager::new(
         PeekableReceiver::new(batch_for_snark_receiver),
@@ -683,7 +680,7 @@ async fn run_main_node_pipeline<
 
     let prover_gapless_committer = GaplessCommitter::new(
         node_state_on_startup.l1_state.last_committed_batch + 1,
-        batch_with_proof_receiver,
+        pipeline_after_fri.into_receiver().into_inner(),
         batch_storage.clone(),
         batch_for_commit_sender,
         node_state_on_startup.l1_state.da_input_mode,
