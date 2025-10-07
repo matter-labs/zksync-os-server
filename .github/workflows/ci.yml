@@ -88,6 +88,7 @@ jobs:
           check_name: 'Test results'
           files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
           action_fail_on_inconclusive: true
+          compare_to_earlier_commit: false # Do not compare with `main` due to different number of iterations
 
 
   ######################################
