@@ -193,6 +193,13 @@ async fn peek_fri_proofs(
     Path((from_batch_number, to_batch_number)): Path<(u64, u64)>,
     State(state): State<AppState>,
 ) -> Response {
+    if from_batch_number > to_batch_number {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid range: from_batch_number ({from_batch_number}) must be <= to_batch_number ({to_batch_number})")
+        ).into_response();
+    }
+
     let mut fri_proofs = vec![];
     for batch_number in from_batch_number..=to_batch_number {
         match state.proof_storage.get(batch_number).await {
@@ -202,21 +209,36 @@ async fn peek_fri_proofs(
                         fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))
                     }
                     FriProof::Fake => {
-                        // Should never happen; defensive guard
                         error!(
-                            "Trying to peek FRI proofs returned fake FRI at batch {} (range {}-{})",
+                            "Requested FRI proof for batch {} is fake (range {}-{})",
                             batch_number, from_batch_number, to_batch_number
                         );
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("FRI proof for batch {batch_number} is fake"),
+                        )
+                            .into_response();
                     }
                 };
             }
             Ok(None) => {
-                error!("Trying to peek FRI proofs returned no proof for batch {batch_number}");
-                return StatusCode::NO_CONTENT.into_response();
+                error!(
+                    "No FRI proof found for batch {batch_number} (range {}-{})",
+                    from_batch_number, to_batch_number
+                );
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!("No FRI proof found for batch {batch_number}"),
+                )
+                    .into_response();
             }
             Err(e) => {
-                error!("Trying to peek FRI proofs returned error: {e}");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                error!("Error retrieving FRI proof for batch {batch_number}: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Error retrieving proof: {e}"),
+                )
+                    .into_response();
             }
         }
     }
@@ -249,7 +271,7 @@ pub async fn run(
         .route("/prover-jobs/FRI/{id}/peek", get(peek_batch_data))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
-        .route("/prover-jobs/SNARK/{from}-{to}/peek", get(peek_fri_proofs))
+        .route("/prover-jobs/SNARK/{from}/{to}/peek", get(peek_fri_proofs))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
         .with_state(app_state)
