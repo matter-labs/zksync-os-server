@@ -60,6 +60,7 @@ struct ProverQuery {
 struct AppState {
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
+    proof_storage: ProofStorage,
 }
 
 // ───────────── HTTP handlers ─────────────
@@ -188,6 +189,67 @@ async fn peek_batch_data(Path(batch_number): Path<u64>, State(state): State<AppS
     }
 }
 
+async fn peek_fri_proofs(
+    Path((from_batch_number, to_batch_number)): Path<(u64, u64)>,
+    State(state): State<AppState>,
+) -> Response {
+    if from_batch_number > to_batch_number {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid range: from_batch_number ({from_batch_number}) must be <= to_batch_number ({to_batch_number})")
+        ).into_response();
+    }
+
+    let mut fri_proofs = vec![];
+    for batch_number in from_batch_number..=to_batch_number {
+        match state.proof_storage.get(batch_number).await {
+            Ok(Some(env)) => {
+                match env.data {
+                    FriProof::Real(real) => {
+                        fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))
+                    }
+                    FriProof::Fake => {
+                        error!(
+                            "Requested FRI proof for batch {} is fake (range {}-{})",
+                            batch_number, from_batch_number, to_batch_number
+                        );
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("FRI proof for batch {batch_number} is fake"),
+                        )
+                            .into_response();
+                    }
+                };
+            }
+            Ok(None) => {
+                error!(
+                    "No FRI proof found for batch {batch_number} (range {}-{})",
+                    from_batch_number, to_batch_number
+                );
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!("No FRI proof found for batch {batch_number}"),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("Error retrieving FRI proof for batch {batch_number}: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Error retrieving proof: {e}"),
+                )
+                    .into_response();
+            }
+        }
+    }
+    Json(NextSnarkProverJobPayload {
+        block_number_from: from_batch_number,
+        block_number_to: to_batch_number,
+        fri_proofs,
+    })
+    .into_response()
+}
+
 async fn status(State(state): State<AppState>) -> Response {
     let status = state.fri_job_manager.status();
     Json(status).into_response()
@@ -195,12 +257,13 @@ async fn status(State(state): State<AppState>) -> Response {
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
-    _proof_storage: ProofStorage,
+    proof_storage: ProofStorage,
     bind_address: String,
 ) -> anyhow::Result<()> {
     let app_state = AppState {
         fri_job_manager,
         snark_job_manager,
+        proof_storage,
     };
 
     let app = Router::new()
@@ -208,6 +271,7 @@ pub async fn run(
         .route("/prover-jobs/FRI/{id}/peek", get(peek_batch_data))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
+        .route("/prover-jobs/SNARK/{from}/{to}/peek", get(peek_fri_proofs))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))
         .with_state(app_state)
