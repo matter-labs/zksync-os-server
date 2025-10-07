@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::batcher_model::{FriProof, FriProof::Real};
+use zksync_os_l1_sender::batcher_model::FriProof;
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,6 +60,7 @@ struct ProverQuery {
 struct AppState {
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
+    proof_storage: ProofStorage,
 }
 
 // ───────────── HTTP handlers ─────────────
@@ -190,11 +191,11 @@ async fn peek_batch_data(Path(batch_number): Path<u64>, State(state): State<AppS
 
 async fn peek_fri_proofs(
     Path((from_batch_number, to_batch_number)): Path<(u64, u64)>,
-    State(proof_storage): State<ProofStorage>,
+    State(state): State<AppState>,
 ) -> Response {
     let mut fri_proofs = vec![];
     for batch_number in from_batch_number..=to_batch_number {
-        match proof_storage.get(batch_number).await {
+        match state.proof_storage.get(batch_number).await {
             Ok(Some(env)) => {
                 match env.data {
                     FriProof::Real(real) => {
@@ -234,12 +235,13 @@ async fn status(State(state): State<AppState>) -> Response {
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
-    _proof_storage: ProofStorage,
+    proof_storage: ProofStorage,
     bind_address: String,
 ) -> anyhow::Result<()> {
     let app_state = AppState {
         fri_job_manager,
         snark_job_manager,
+        proof_storage,
     };
 
     let app = Router::new()
