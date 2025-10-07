@@ -18,10 +18,10 @@ zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_genesis.workspace = true
 
+zksync_os_evm_errors.workspace = true
 zksync_os_interface.workspace = true
 zk_os_api.workspace = true
 zk_ee.workspace = true
-zk_os_forward_system.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }
 anyhow.workspace = true

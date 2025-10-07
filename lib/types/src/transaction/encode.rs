@@ -109,12 +109,6 @@ impl From<L2Envelope> for TransactionData {
             U256::ZERO
         };
 
-        // Ethereum transactions do not sign gas per pubdata limit, and so for them we need to use
-        // some default value. We use the maximum possible value that is allowed by the bootloader
-        // (i.e. we can not use u64::MAX, because the bootloader requires gas per pubdata for such
-        // transactions to be higher than `MAX_GAS_PER_PUBDATA_BYTE`).
-        let gas_per_pubdata_limit = 50_000;
-
         let is_deployment_transaction = if l2_tx.is_create() {
             U256::ONE
         } else {
@@ -126,7 +120,7 @@ impl From<L2Envelope> for TransactionData {
             from: Address::ZERO,
             to: l2_tx.to().unwrap_or_default(),
             gas_limit: U256::from(l2_tx.gas_limit()),
-            pubdata_price_limit: U256::from(gas_per_pubdata_limit),
+            pubdata_price_limit: U256::from(0),
             max_fee_per_gas: U256::from(l2_tx.max_fee_per_gas()),
             max_priority_fee_per_gas: U256::from(
                 l2_tx
@@ -162,12 +156,6 @@ impl From<L2Transaction> for TransactionData {
             U256::ZERO
         };
 
-        // Ethereum transactions do not sign gas per pubdata limit, and so for them we need to use
-        // some default value. We use the maximum possible value that is allowed by the bootloader
-        // (i.e. we can not use u64::MAX, because the bootloader requires gas per pubdata for such
-        // transactions to be higher than `MAX_GAS_PER_PUBDATA_BYTE`).
-        let gas_per_pubdata_limit = 50_000;
-
         let is_deployment_transaction = if l2_tx.is_create() {
             U256::ONE
         } else {
@@ -193,7 +181,7 @@ impl From<L2Transaction> for TransactionData {
             from,
             to: l2_tx.to().unwrap_or_default(),
             gas_limit: U256::from(l2_tx.gas_limit()),
-            pubdata_price_limit: U256::from(gas_per_pubdata_limit),
+            pubdata_price_limit: U256::from(0),
             max_fee_per_gas: U256::from(l2_tx.max_fee_per_gas()),
             max_priority_fee_per_gas: U256::from(
                 l2_tx
