@@ -4,7 +4,7 @@
 
 use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV2;
 use zksync_os_interface::error::InvalidTransaction;
-use zksync_os_interface::tracing::{AnyTracer, EvmTracer};
+use zksync_os_interface::tracing::AnyTracer;
 use zksync_os_interface::traits::{
     PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
 };
@@ -46,7 +46,7 @@ pub fn run_block<
     }
 }
 
-pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: EvmTracer>(
+pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyTracer>(
     transaction: Vec<u8>,
     block_context: BlockContext,
     storage: Storage,
