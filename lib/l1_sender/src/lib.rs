@@ -7,6 +7,7 @@ mod debug_formatting;
 pub mod l1_discovery;
 mod metrics;
 mod new_blocks;
+pub mod pipeline_component;
 
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
