@@ -1,6 +1,7 @@
 pub mod fake_fri_provers_pool;
 pub mod fri_job_manager;
 mod fri_proof_verifier;
+pub mod fri_proving_pipeline_step;
 pub mod gapless_committer;
 mod metrics;
 pub mod proof_storage;
