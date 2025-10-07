@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use zksync_os_pipeline::Source;
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_sequencer::model::blocks::BlockCommand;
 
 /// Main node command source
@@ -25,13 +25,18 @@ pub struct ExternalNodeCommandSource {
 }
 
 #[async_trait]
-impl Source for MainNodeCommandSource {
+impl PipelineComponent for MainNodeCommandSource {
+    type Input = ();
     type Output = BlockCommand;
 
     const NAME: &'static str = "command_source";
     const OUTPUT_BUFFER_SIZE: usize = 5;
 
-    async fn run(self, output: mpsc::Sender<Self::Output>) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        _input: PeekableReceiver<()>,
+        output: mpsc::Sender<BlockCommand>,
+    ) -> anyhow::Result<()> {
         // TODO: no need for a Stream in `command_source` - just send to channel right away instead
         let mut stream = command_source(
             &self.block_replay_storage,
@@ -53,13 +58,18 @@ impl Source for MainNodeCommandSource {
 }
 
 #[async_trait]
-impl Source for ExternalNodeCommandSource {
+impl PipelineComponent for ExternalNodeCommandSource {
+    type Input = ();
     type Output = BlockCommand;
 
     const NAME: &'static str = "external_node_command_source";
     const OUTPUT_BUFFER_SIZE: usize = 5;
 
-    async fn run(self, output: mpsc::Sender<Self::Output>) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        _input: PeekableReceiver<()>,
+        output: mpsc::Sender<BlockCommand>,
+    ) -> anyhow::Result<()> {
         // TODO: no need for a Stream in `replay_receiver` - just send to channel right away instead
         let mut stream = replay_receiver(self.starting_block, self.replay_download_address.clone())
             .await
