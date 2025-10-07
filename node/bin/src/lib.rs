@@ -537,10 +537,6 @@ async fn run_main_node_pipeline<
         })
         .pipe(TreeManager { tree: tree.clone() });
 
-    // Channel between `GaplessCommitter` and `L1Committer`
-    let (batch_for_commit_sender, batch_for_commit_receiver) =
-        tokio::sync::mpsc::channel::<CommitCommand>(5);
-
     // Channel between `SnarkJobManager` and `L1ProofSubmitter`
     let (batch_for_l1_proving_sender, batch_for_l1_proving_receiver) =
         tokio::sync::mpsc::channel::<ProofCommand>(5);
@@ -670,27 +666,20 @@ async fn run_main_node_pipeline<
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    let pipeline_after_fri = pipeline_after_batcher.pipe(fri_proving_step);
+    let pipeline_after_gapless =
+        pipeline_after_batcher
+            .pipe(fri_proving_step)
+            .pipe(GaplessCommitter {
+                next_expected: node_state_on_startup.l1_state.last_committed_batch + 1,
+                proof_storage: batch_storage.clone(),
+                da_input_mode: node_state_on_startup.l1_state.da_input_mode,
+            });
 
     let snark_job_manager = Arc::new(SnarkJobManager::new(
         PeekableReceiver::new(batch_for_snark_receiver),
         batch_for_l1_proving_sender,
         config.prover_api_config.max_fris_per_snark,
     ));
-
-    let prover_gapless_committer = GaplessCommitter::new(
-        node_state_on_startup.l1_state.last_committed_batch + 1,
-        pipeline_after_fri.into_receiver().into_inner(),
-        batch_storage.clone(),
-        batch_for_commit_sender,
-        node_state_on_startup.l1_state.da_input_mode,
-    );
-
-    tasks.spawn(
-        prover_gapless_committer
-            .run()
-            .map(report_exit("prover_gapless_committer")),
-    );
 
     tasks.spawn(
         prover_server::run(
@@ -709,6 +698,8 @@ async fn run_main_node_pipeline<
     if config.prover_api_config.fake_snark_provers.enabled {
         run_fake_snark_provers(&config.prover_api_config, tasks, snark_job_manager);
     }
+
+    let batch_for_commit_receiver = pipeline_after_gapless.into_receiver().into_inner();
 
     if config.l1_sender_config.enabled {
         let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
