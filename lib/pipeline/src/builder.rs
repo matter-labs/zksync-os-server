@@ -1,85 +1,88 @@
 use crate::peekable_receiver::PeekableReceiver;
-use crate::{PipelineComponent, Sink, Source};
+use crate::{PipelineComponent, Source};
 use anyhow::Result;
-use std::mem::size_of;
 use tokio::sync::mpsc;
 
-/// A configured pipeline ready for execution
-#[derive(Default)]
-pub struct ConfiguredPipeline {
+/// Fluent pipeline builder with automatic channel wiring
+///
+/// Example:
+/// ```ignore
+/// Pipeline::new()
+///     .pipe(CommandSource { ... })  // Source component
+///     .pipe(Sequencer { ... })      // Transformer component
+///     .pipe(TreeManager { ... })    // Transformer component
+///     .execute()
+///     .await
+/// ```
+pub struct Pipeline {
     tasks: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>>,
 }
 
-impl ConfiguredPipeline {
-    /// Add a source component to the pipeline
-    pub fn add_source<S: Source + 'static>(
-        &mut self,
-        params: S::Params,
-    ) -> PeekableReceiver<S::Output> {
+impl Pipeline {
+    /// Create a new empty pipeline
+    pub fn new() -> Self {
+        Self { tasks: Vec::new() }
+    }
+
+    /// Add a source component to start the pipeline
+    pub fn pipe<S>(mut self, source: S) -> PipelineWithOutput<S::Output>
+    where
+        S: Source,
+    {
         let (sender, receiver) = mpsc::channel(S::OUTPUT_BUFFER_SIZE);
 
         self.tasks.push(Box::new(move || {
-            tokio::spawn(async move { S::run(params, sender).await })
+            tokio::spawn(async move { source.run(sender).await })
         }));
 
-        PeekableReceiver::new(receiver)
+        PipelineWithOutput {
+            tasks: self.tasks,
+            receiver: PeekableReceiver::new(receiver),
+        }
     }
+}
 
-    /// Add a pipeline component that connects input receiver to output sender
-    pub fn add_component<C: PipelineComponent + 'static>(
-        &mut self,
-        params: C::Params,
-        input_receiver: PeekableReceiver<C::Input>,
-    ) -> PeekableReceiver<C::Output> {
-        // This trait only supports zero-sized structs.
-        // Do not remove without a good reason.
-        assert_eq!(
-            size_of::<C>(),
-            0,
-            "PipelineComponent {} must be zero-sized (no fields). Use Params instead.",
-            C::NAME
-        );
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+/// Pipeline with an active output stream that can be piped to more components
+pub struct PipelineWithOutput<Output: Send + 'static> {
+    tasks: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>>,
+    receiver: PeekableReceiver<Output>,
+}
+
+impl<Output: Send + 'static> PipelineWithOutput<Output> {
+    /// Add a transformer component to the pipeline
+    pub fn pipe<C>(mut self, component: C) -> PipelineWithOutput<C::Output>
+    where
+        C: PipelineComponent<Input = Output>,
+    {
         let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
-
-        let input = input_receiver;
-
-        self.tasks.push(Box::new(move || {
-            tokio::spawn(async move { C::run(params, input, output_sender).await })
-        }));
-
-        PeekableReceiver::new(output_receiver)
-    }
-
-    /// Add a sink component that consumes messages
-    pub fn add_sink<S: Sink + 'static>(
-        &mut self,
-        params: S::Params,
-        input_receiver: mpsc::Receiver<S::Input>,
-    ) {
-        let input = PeekableReceiver::new(input_receiver);
+        let input_receiver = self.receiver;
 
         self.tasks.push(Box::new(move || {
-            tokio::spawn(async move { S::run(params, input).await })
+            tokio::spawn(async move { component.run(input_receiver, output_sender).await })
         }));
+
+        PipelineWithOutput {
+            tasks: self.tasks,
+            receiver: PeekableReceiver::new(output_receiver),
+        }
     }
 
-    /// Execute all components in the pipeline
-    pub async fn execute(self) -> Result<()> {
-        let mut handles = Vec::new();
-
+    /// Consume the pipeline and return the output receiver
+    ///
+    /// This spawns all tasks and returns the receiver for the final output.
+    /// Useful when you need to manually consume the pipeline output with another component.
+    pub fn into_receiver(self) -> PeekableReceiver<Output> {
         // Spawn all tasks
         for task_fn in self.tasks {
-            let handle = task_fn();
-            handles.push(handle);
+            task_fn();
         }
 
-        // Wait for any task to complete (usually indicates an error)
-        let (result, _index, _remaining) = futures::future::select_all(handles).await;
-
-        match result {
-            Ok(task_result) => task_result,
-            Err(join_error) => anyhow::bail!("Task panicked: {join_error}"),
-        }
+        self.receiver
     }
 }

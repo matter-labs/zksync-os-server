@@ -5,50 +5,44 @@ use tokio::sync::mpsc;
 
 /// A component that generates messages and starts the pipeline.
 /// Examples: command_source, block replay streams
-/// ONLY IMPLEMENT THIS TRAIT FOR MARKER STRUCTS (no fields in struct).
+///
+/// Components construct themselves with all needed parameters, then get consumed by `run()`.
 #[async_trait]
-pub trait Source {
+pub trait Source: Send + 'static {
     /// The type of messages this source produces
     type Output: Send + 'static;
-
-    /// Parameters needed to initialize this source
-    type Params: Send + 'static;
 
     /// Human-readable name for logging and metrics
     const NAME: &'static str;
 
     /// Buffer size for the output channel
-    const OUTPUT_BUFFER_SIZE: usize;
+    const OUTPUT_BUFFER_SIZE: usize = 5;
 
-    /// Run the source component, sending messages to the output
-    async fn run(params: Self::Params, output: mpsc::Sender<Self::Output>) -> Result<()>;
+    /// Run the source component, sending messages to the output.
+    async fn run(self, output: mpsc::Sender<Self::Output>) -> Result<()>;
 }
 
 /// A component that transforms messages in the pipeline.
 /// Examples: ProverInputGenerator, Batcher, L1 senders
 ///
-/// ONLY IMPLEMENT THIS TRAIT FOR MARKER STRUCTS (no fields in struct).
-/// Any state is confined to the ` run () ` method.
+/// Components construct themselves with all needed parameters, then get consumed by `run()`.
 #[async_trait]
-pub trait PipelineComponent {
+pub trait PipelineComponent: Send + 'static {
     /// The type of messages this component receives
     type Input: Send + 'static;
 
     /// The type of messages this component produces
     type Output: Send + 'static;
 
-    /// Parameters needed to initialize this component
-    type Params: Send + 'static;
-
     /// Human-readable name for logging and metrics
     const NAME: &'static str;
 
     /// Buffer size for the output channel
     const OUTPUT_BUFFER_SIZE: usize;
 
-    /// Run the component, receiving from input and sending to output
+    /// Run the component, receiving from input and sending to output.
     async fn run(
-        params: Self::Params,
+        self,
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> Result<()>;
@@ -56,18 +50,16 @@ pub trait PipelineComponent {
 
 /// A component that consumes messages and ends the pipeline.
 /// Examples: BatchSink, logging components
-/// ONLY IMPLEMENT THIS TRAIT FOR MARKER STRUCTS (no fields in struct).
+///
+/// Components construct themselves with all needed parameters, then get consumed by `run()`.
 #[async_trait]
-pub trait Sink {
+pub trait Sink: Send + 'static {
     /// The type of messages this sink receives
     type Input: Send + 'static;
-
-    /// Parameters needed to initialize this sink
-    type Params: Send + 'static;
 
     /// Human-readable name for logging and metrics
     const NAME: &'static str;
 
-    /// Run the sink component, receiving messages from the input
-    async fn run(params: Self::Params, input: PeekableReceiver<Self::Input>) -> Result<()>;
+    /// Run the sink component, receiving messages from the input.
+    async fn run(self, input: PeekableReceiver<Self::Input>) -> Result<()>;
 }

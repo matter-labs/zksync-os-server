@@ -24,10 +24,7 @@ pub mod zkstack_config;
 use crate::batch_sink::BatchSink;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
-use crate::command_source::{
-    ExternalNodeCommandSource, ExternalNodeCommandSourceParams, MainNodeCommandSource,
-    MainNodeCommandSourceParams,
-};
+use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, L1SenderConfig, ProverApiConfig};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
@@ -40,11 +37,11 @@ use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
-use crate::prover_input_generator::{ProverInputGenerator, ProverInputGeneratorParams};
+use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::replay_server;
 use crate::reth_state::ZkClient;
 use crate::state_initializer::StateInitializer;
-use crate::tree_manager::{BlockMerkleTreeData, TreeManager, TreeManagerParams};
+use crate::tree_manager::TreeManager;
 use alloy::network::EthereumWallet;
 use alloy::providers::{Provider, WalletProvider};
 use anyhow::{Context, Result};
@@ -60,8 +57,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
-use zksync_os_interface::types::{BlockHashes, BlockOutput};
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_interface::types::BlockHashes;
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -76,15 +73,15 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
-use zksync_os_sequencer::execution::{Sequencer, SequencerParams};
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    ReplayRecord, RepositoryBlock, WriteState,
+    RepositoryBlock, WriteState,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -518,51 +515,25 @@ async fn run_main_node_pipeline<
     // The current state is intermediary.
 
     // Migrated components:
-    // CommandSource -> Sequencer -> TreeManager -> ProverInputGenerator
+    // CommandSource -> Sequencer -> TreeManager -> ProverInputGenerator -> Batcher
     // Other components (not migrated yet):
-    // Batcher -> FriProverManager -> L1Committer -> SnarkProverManager -> L1Prover -> PriorityTree -> L1Executor
+    // -> FriProverManager -> L1Committer -> SnarkProverManager -> L1Prover -> PriorityTree -> L1Executor
 
-    // To minimize the PR, the order in which the components are initialized is retained;
-    // thus migrated components are sometimes interleaved with the ones that are not migrated yet.
-
-    let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::default();
-
-    let pipeline_after_command_source =
-        pipeline.add_source::<MainNodeCommandSource>(MainNodeCommandSourceParams {
+    let pipeline = zksync_os_pipeline::Pipeline::new()
+        .pipe(MainNodeCommandSource {
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
             block_time: config.sequencer_config.block_time,
             max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-        });
-
-    let pipeline_after_sequencer = pipeline.add_component::<Sequencer<
-        RethPool<ZkClient<State>>,
-        State,
-        BlockReplayStorage,
-        RepositoryManager,
-    >>(
-        SequencerParams {
+        })
+        .pipe(Sequencer {
             block_context_provider,
             state: state.clone(),
             wal: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
-        },
-        pipeline_after_command_source,
-    );
-
-    let pipeline_after_tree_manager: PeekableReceiver<(
-        BlockOutput,
-        ReplayRecord,
-        BlockMerkleTreeData,
-    )> = pipeline.add_component::<TreeManager>(
-        TreeManagerParams { tree: tree.clone() },
-        pipeline_after_sequencer,
-    );
-
-    // Channel between `Batcher` and `ProverAPI`
-    let (batch_for_proving_sender, batch_for_prover_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<ProverInput>>(5);
+        })
+        .pipe(TreeManager { tree: tree.clone() });
 
     // Channel between between `ProverAPI` and `GaplessCommitter`
     let (batch_with_proof_sender, batch_with_proof_receiver) =
@@ -673,43 +644,31 @@ async fn run_main_node_pipeline<
         batcher_subsystem_first_block_to_process
     };
 
-    let pipeline_after_prover_input_generator: PeekableReceiver<(
-        BlockOutput,
-        ReplayRecord,
-        ProverInput,
-        BlockMerkleTreeData,
-    )> = pipeline.add_component::<ProverInputGenerator<State>>(
-        ProverInputGeneratorParams {
+    let pipeline_after_batcher = pipeline
+        .pipe(ProverInputGenerator {
             enable_logging: config.prover_input_generator_config.logging_enabled,
             maximum_in_flight_blocks: config
                 .prover_input_generator_config
                 .maximum_in_flight_blocks,
             first_block_to_process: prover_input_generation_first_block_to_process,
-            app_bin_base_path: config.prover_input_generator_config.app_bin_unpack_path,
+            app_bin_base_path: config
+                .prover_input_generator_config
+                .app_bin_unpack_path
+                .clone(),
             read_state: state.clone(),
-        },
-        pipeline_after_tree_manager,
-    );
+        })
+        .pipe(Batcher {
+            chain_id,
+            chain_address: node_state_on_startup.l1_state.diamond_proxy,
+            first_block_to_process: batcher_subsystem_first_block_to_process,
+            last_persisted_block: node_state_on_startup.repositories_persisted_block,
+            pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
+            batcher_config: config.batcher_config.clone(),
+            prev_batch_info: last_committed_batch_info,
+        });
 
-    tasks.spawn(pipeline.execute().map(report_exit("Pipeline")));
-
-    let batcher = Batcher::new(
-        chain_id,
-        node_state_on_startup.l1_state.diamond_proxy,
-        batcher_subsystem_first_block_to_process,
-        node_state_on_startup.repositories_persisted_block,
-        config.sequencer_config.block_pubdata_limit_bytes,
-        config.batcher_config,
-        pipeline_after_prover_input_generator,
-        batch_for_proving_sender,
-    );
-    tasks.spawn(
-        batcher
-            .run_loop(last_committed_batch_info)
-            .map(report_exit("Batcher")),
-    );
     let fri_job_manager = Arc::new(FriJobManager::new(
-        batch_for_prover_receiver,
+        pipeline_after_batcher.into_receiver().into_inner(),
         batch_with_proof_sender,
         config.prover_api_config.job_timeout,
         config.prover_api_config.max_assigned_batch_range,
@@ -861,48 +820,26 @@ async fn run_en_pipeline<
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-    // NOTE: the execution pipeline is being migrated to the Pipeline Framework.
-    // The current state is intermediary.
-
-    // On EN, the Pipeline Framework is only used for
-    // CommandSource -> Sequencer
-
-    let mut pipeline = zksync_os_pipeline::ConfiguredPipeline::default();
-
-    let pipeline_after_command_source =
-        pipeline.add_source::<ExternalNodeCommandSource>(ExternalNodeCommandSourceParams {
+    let mut pipeline_after_tree = zksync_os_pipeline::Pipeline::new()
+        .pipe(ExternalNodeCommandSource {
             starting_block,
             replay_download_address: config
                 .sequencer_config
                 .block_replay_download_address
                 .clone()
                 .expect("EN must have replay_download_address"),
-        });
-
-    let pipeline_after_sequencer = pipeline.add_component::<Sequencer<
-        RethPool<ZkClient<State>>,
-        State,
-        BlockReplayStorage,
-        RepositoryManager,
-    >>(
-        SequencerParams {
+        })
+        .pipe(Sequencer {
             block_context_provider,
             state: state.clone(),
             wal: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
-        },
-        pipeline_after_command_source,
-    );
+        })
+        .pipe(TreeManager { tree: tree.clone() })
+        .into_receiver();
 
-    let mut pipeline_after_tree = pipeline.add_component::<TreeManager>(
-        TreeManagerParams { tree: tree.clone() },
-        pipeline_after_sequencer,
-    );
-
-    tasks.spawn(pipeline.execute().map(report_exit("Pipeline")));
-
-    // Drain `blocks_for_batcher_subsystem_receiver`.
+    // Drain the pipeline output
     tokio::spawn(async move { while pipeline_after_tree.recv().await.is_some() {} });
 
     // Channel between `PriorityTree` tasks
