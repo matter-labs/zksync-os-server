@@ -11297,6 +11297,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-stream",
+ "async-trait",
  "backon",
  "basic_system",
  "blake2 0.10.6",
@@ -11318,6 +11319,7 @@ dependencies = [
  "zksync_os_mini_merkle_tree",
  "zksync_os_multivm",
  "zksync_os_observability",
+ "zksync_os_pipeline",
  "zksync_os_types",
 ]
 
