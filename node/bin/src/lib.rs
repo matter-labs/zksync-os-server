@@ -18,7 +18,6 @@ pub mod reth_state;
 pub mod sentry;
 mod state_initializer;
 pub mod tree_manager;
-mod util;
 pub mod zkstack_config;
 
 use crate::batch_sink::BatchSink;
@@ -792,9 +791,7 @@ async fn run_en_pipeline<
                 .join(PRIORITY_TREE_DB_NAME),
         ),
         batch_storage.clone(),
-        block_replay_storage,
         finality,
-        last_ready_batch,
     )
     .unwrap();
 

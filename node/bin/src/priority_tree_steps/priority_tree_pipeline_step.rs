@@ -17,13 +17,9 @@ use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay};
 /// Internally manages:
 /// - `prepare_execute_commands` task: processes proven batches and generates execute commands
 /// - `keep_caching` task: persists priority tree for executed batches
-/// - `send_executed_batch_numbers` task: monitors executed batches
 pub struct PriorityTreePipelineStep<BatchStorage, BlockStorage, Finality> {
-    priority_tree_manager: PriorityTreeManager<BlockStorage>,
+    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality>,
     batch_storage: BatchStorage,
-    finality: Finality,
-    last_executed_block: u64,
-    _phantom: std::marker::PhantomData<BlockStorage>,
 }
 
 impl<BatchStorage, BlockStorage, Finality>
@@ -40,15 +36,16 @@ where
         batch_storage: BatchStorage,
         finality: Finality,
     ) -> anyhow::Result<Self> {
-        let priority_tree_manager =
-            PriorityTreeManager::new(block_storage, last_executed_block, db_path)?;
+        let priority_tree_manager = PriorityTreeManager::new(
+            block_storage,
+            last_executed_block,
+            db_path,
+            finality.clone(),
+        )?;
 
         Ok(Self {
             priority_tree_manager,
             batch_storage,
-            finality,
-            last_executed_block,
-            _phantom: std::marker::PhantomData,
         })
     }
 }
@@ -76,16 +73,10 @@ where
         let (priority_txs_internal_sender, priority_txs_internal_receiver) =
             mpsc::channel::<(u64, u64, Option<usize>)>(1000);
 
-        let (executed_batch_numbers_sender, executed_batch_numbers_receiver) =
-            mpsc::channel::<u64>(1000);
-
         // Clone what we need before moving into async blocks
         let priority_tree_manager_for_prepare = self.priority_tree_manager.clone();
         let priority_tree_manager_for_caching = self.priority_tree_manager;
-        let batch_storage_for_prepare = self.batch_storage.clone();
-        let batch_storage_for_finalized = self.batch_storage;
-        let finality = self.finality;
-        let last_executed_block = self.last_executed_block;
+        let batch_storage_for_prepare = self.batch_storage;
 
         // Spawn the three tasks that make up the priority tree subsystem
         let prepare_task = tokio::spawn({
@@ -93,40 +84,17 @@ where
                 priority_tree_manager_for_prepare
                     .prepare_execute_commands(
                         batch_storage_for_prepare,
-                        Some(input.into_inner()),
-                        None,
+                        Some((input.into_inner(), output)),
                         priority_txs_internal_sender,
-                        Some(output),
                     )
                     .await
             }
         });
 
-        let finalized_blocks_task = tokio::spawn(async move {
-            // Convert block number to batch number for send_executed_and_replayed_batch_numbers
-            let last_executed_batch = batch_storage_for_finalized
-                .get_batch_by_block_number(last_executed_block)
-                .await
-                .expect("Failed to get batch by block number")
-                .expect("Missing batch for executed block");
-
-            super::super::util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
-                executed_batch_numbers_sender,
-                batch_storage_for_finalized,
-                finality,
-                None,
-                last_executed_batch + 1,
-            )
-            .await
-        });
-
         let keep_caching_task = tokio::spawn({
             async move {
                 priority_tree_manager_for_caching
-                    .keep_caching(
-                        executed_batch_numbers_receiver,
-                        priority_txs_internal_receiver,
-                    )
+                    .keep_caching(priority_txs_internal_receiver)
                     .await
             }
         });
@@ -135,9 +103,6 @@ where
         tokio::select! {
             _ = prepare_task => {
                 anyhow::bail!("Priority tree prepare_execute_commands ended unexpectedly")
-            }
-            _ = finalized_blocks_task => {
-                anyhow::bail!("Priority tree send_executed_batch_numbers ended unexpectedly")
             }
             _ = keep_caching_task => {
                 anyhow::bail!("Priority tree keep_caching ended unexpectedly")

@@ -3,7 +3,7 @@ use alloy::primitives::{B256, BlockNumber, TxHash};
 use anyhow::Context;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
@@ -12,23 +12,28 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_storage_api::{ReadBatch, ReadReplay};
+use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
 mod db;
 
 #[derive(Clone)]
-pub struct PriorityTreeManager<ReplayStorage> {
+pub struct PriorityTreeManager<ReplayStorage, Finality> {
     merkle_tree: Arc<Mutex<MiniMerkleTree<PriorityOpsLeaf>>>,
     replay_storage: ReplayStorage,
     db: PriorityTreeDB,
+    finality: Finality,
+    last_executed_block_on_init: u64,
 }
 
-impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
+impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
+    PriorityTreeManager<ReplayStorage, Finality>
+{
     pub fn new(
         replay_storage: ReplayStorage,
         last_executed_block: BlockNumber,
         db_path: &Path,
+        finality: Finality,
     ) -> anyhow::Result<Self> {
         let started_at = Instant::now();
         let db = PriorityTreeDB::new(db_path);
@@ -56,7 +61,7 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
         }
 
         tracing::info!(
-            last_executed_block = last_executed_block,
+            last_executed_block,
             root = ?merkle_tree.merkle_root(),
             time_taken = ?started_at.elapsed(),
             "re-built priority tree"
@@ -66,34 +71,33 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
             merkle_tree: Arc::new(Mutex::new(merkle_tree)),
             replay_storage,
             db,
+            finality,
+            last_executed_block_on_init: last_executed_block,
         })
     }
 
-    /// Keeps building the tree by adding new transactions to the priority tree. As an input it can accept either
-    /// `proved_batch_envelopes_receiver` or `proved_batch_numbers_receiver`. Only one of them must be provided.
-    /// If `proved_batch_envelopes_receiver` is provided, then `execute_batches_sender` can also be provided
-    /// to forward the proved batches along with the priority ops proofs.
+    /// Keeps building the tree by adding new transactions to the priority tree.
+    /// It supports two modes of operation:
+    /// - For the main node: you must provide both `proved_batch_envelopes_receiver` and `execute_batches_sender`
+    ///   and it will forward the proven batch envelopes along with the priority ops proofs.
+    /// - For the EN: you must provide neither `proved_batch_envelopes_receiver` nor `execute_batches_sender`
+    ///   and it will keep adding new transactions to the tree for finalized blocks.
     pub async fn prepare_execute_commands<BatchStorage: ReadBatch>(
         self,
         batch_storage: BatchStorage,
-        mut proved_batch_envelopes_receiver: Option<mpsc::Receiver<BatchEnvelope<FriProof>>>,
-        mut proved_batch_numbers_receiver: Option<mpsc::Receiver<u64>>,
+        main_node_channels: Option<(
+            mpsc::Receiver<BatchEnvelope<FriProof>>,
+            mpsc::Sender<ExecuteCommand>,
+        )>,
         priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
-        execute_batches_sender: Option<mpsc::Sender<ExecuteCommand>>,
     ) -> anyhow::Result<()> {
-        assert!(
-            proved_batch_envelopes_receiver.is_some() ^ proved_batch_numbers_receiver.is_some(),
-            "exactly one of `proved_batch_envelopes_receiver` or `proved_batch_numbers_receiver` must be provided"
-        );
-        assert!(
-            execute_batches_sender.is_none() || proved_batch_envelopes_receiver.is_some(),
-            "`execute_batches_sender` can only be provided if `proved_batch_envelopes_receiver` is also provided"
-        );
-
         let latency_tracker = ComponentStateReporter::global().handle_for(
             "priority_tree_manager#prepare_execute_commands",
             GenericComponentState::Processing,
         );
+        let (mut proved_batch_envelopes_receiver, execute_batches_sender) =
+            main_node_channels.unzip();
+        let mut last_processed_block = self.last_executed_block_on_init;
 
         async fn take_n<T>(receiver: &mut mpsc::Receiver<T>, n: usize) -> anyhow::Result<Vec<T>> {
             let mut out = Vec::default();
@@ -108,13 +112,10 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            // todo(#160): we enforce executing one batch at a time for now as we don't have
-            //             aggregation seal criteria yet
-            let (batch_envelopes, batch_ranges) = match (
-                &mut proved_batch_envelopes_receiver,
-                &mut proved_batch_numbers_receiver,
-            ) {
-                (Some(r), _) => {
+            let (batch_envelopes, batch_ranges) = match proved_batch_envelopes_receiver.as_mut() {
+                Some(r) => {
+                    // todo(#160): we enforce executing one batch at a time for now as we don't have
+                    //             aggregation seal criteria yet
                     let envelopes = take_n(r, 1).await?;
                     let ranges = envelopes
                         .iter()
@@ -125,11 +126,44 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                             )
                         })
                         .collect::<Vec<_>>();
+                    // Sanity check: we must receive the next batch in sequence.
+                    assert_eq!(
+                        ranges[0].1.0,
+                        last_processed_block + 1,
+                        "Unexpected envelope received"
+                    );
                     (Some(envelopes), ranges)
                 }
-                (None, Some(r)) => {
-                    let batch_numbers = take_n(r, 1).await?;
-                    let mut ranges = Vec::new();
+                None => {
+                    let new_executed_block_number = self
+                        .finality
+                        .subscribe()
+                        .wait_for(|f| last_processed_block < f.last_executed_block)
+                        .await
+                        .context("failed to wait for finalized block")?
+                        .last_executed_block;
+                    let from_batch = batch_storage
+                        .get_batch_by_block_number(last_processed_block + 1)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to get get_batch_by_block_number({})",
+                                last_processed_block + 1
+                            )
+                        })?
+                        .with_context(|| {
+                            format!(
+                                "get_batch_by_block_number({}) returned `None`",
+                                last_processed_block + 1
+                            )
+                        })?;
+                    let to_batch = batch_storage
+                        .get_batch_by_block_number(new_executed_block_number)
+                        .await
+                        .with_context(|| format!("failed to get get_batch_by_block_number({new_executed_block_number})"))?
+                        .with_context(|| format!("get_batch_by_block_number({new_executed_block_number}) returned `None`"))?;
+                    let batch_numbers: Vec<_> = (from_batch..=to_batch).collect();
+                    let mut ranges = Vec::with_capacity(batch_numbers.len());
                     for i in batch_numbers {
                         let range = batch_storage
                             .get_batch_range_by_number(i)
@@ -140,16 +174,16 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                     }
                     (None, ranges)
                 }
-                _ => unreachable!(),
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
             let mut priority_ops = Vec::new();
             let mut merkle_tree = self.merkle_tree.lock().await;
-            for (batch_number, (first_block_number, last_block_number)) in batch_ranges {
+            for (batch_number, (first_block_number, last_block_number)) in batch_ranges.clone() {
                 let mut first_priority_op_id_in_batch = None;
                 let mut priority_op_count = 0;
                 for block_number in first_block_number..=last_block_number {
-                    let replay = self.replay_storage.get_replay_record(block_number).unwrap();
+                    // Block is not guaranteed to be present in the replay storage for EN, so we use `wait_for_replay_record`.
+                    let replay = self.wait_for_replay_record(block_number).await;
                     for tx in replay.transactions {
                         match tx.into_envelope() {
                             ZkEnvelope::L1(l1_tx) => {
@@ -222,35 +256,32 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                 s.send(ExecuteCommand::new(batch_envelopes.unwrap(), priority_ops))
                     .await?;
             }
+            last_processed_block = batch_ranges.last().unwrap().1.1;
         }
     }
 
     /// Keeps caching the priority tree after each batch execution.
     pub async fn keep_caching(
         self,
-        mut executed_batch_numbers_receiver: mpsc::Receiver<u64>,
         mut priority_ops_internal_receiver: mpsc::Receiver<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {
         let latency_tracker = ComponentStateReporter::global().handle_for(
             "priority_tree_manager#keep_caching",
             GenericComponentState::Processing,
         );
+        let mut executed_batch_numbers = self.finality.subscribe();
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let new_executed_batch_number = executed_batch_numbers_receiver
-                .recv()
-                .await
-                .context("`executed_batch_numbers_receiver` closed")?;
             let (batch_number, last_block_number, last_priority_op_id) =
                 priority_ops_internal_receiver
                     .recv()
                     .await
                     .context("`priority_ops_internal_receiver` closed")?;
-            assert_eq!(
-                batch_number, new_executed_batch_number,
-                "Channels are out of sync"
-            );
+            executed_batch_numbers
+                .wait_for(|f| last_block_number <= f.last_executed_block)
+                .await
+                .context("failed to wait for executed batch number")?;
 
             latency_tracker.enter_state(GenericComponentState::Processing);
             let mut tree = self.merkle_tree.lock().await;
@@ -263,6 +294,16 @@ impl<ReplayStorage: ReadReplay> PriorityTreeManager<ReplayStorage> {
                     .cache_tree(&tree, last_block_number)
                     .context("failed to cache tree")?;
                 tracing::debug!(batch_number, "cached priority tree");
+            }
+        }
+    }
+
+    async fn wait_for_replay_record(&self, block_number: u64) -> ReplayRecord {
+        let mut timer = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            timer.tick().await;
+            if let Some(r) = self.replay_storage.get_replay_record(block_number) {
+                return r;
             }
         }
     }
