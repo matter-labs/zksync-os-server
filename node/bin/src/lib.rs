@@ -792,7 +792,7 @@ async fn run_en_pipeline<
                 .join(PRIORITY_TREE_DB_NAME),
         ),
         batch_storage.clone(),
-        Some(block_replay_storage),
+        block_replay_storage,
         finality,
         last_ready_batch,
     )

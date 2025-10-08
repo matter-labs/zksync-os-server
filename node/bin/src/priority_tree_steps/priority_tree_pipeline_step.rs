@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use std::path::Path;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -20,7 +19,7 @@ use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay};
 /// - `keep_caching` task: persists priority tree for executed batches
 /// - `send_executed_batch_numbers` task: monitors executed batches
 pub struct PriorityTreePipelineStep<BatchStorage, BlockStorage, Finality> {
-    priority_tree_manager: Arc<PriorityTreeManager<BlockStorage>>,
+    priority_tree_manager: PriorityTreeManager<BlockStorage>,
     batch_storage: BatchStorage,
     finality: Finality,
     last_executed_block: u64,
@@ -41,11 +40,8 @@ where
         batch_storage: BatchStorage,
         finality: Finality,
     ) -> anyhow::Result<Self> {
-        let priority_tree_manager = Arc::new(PriorityTreeManager::new(
-            block_storage,
-            last_executed_block,
-            db_path,
-        )?);
+        let priority_tree_manager =
+            PriorityTreeManager::new(block_storage, last_executed_block, db_path)?;
 
         Ok(Self {
             priority_tree_manager,
@@ -93,10 +89,8 @@ where
 
         // Spawn the three tasks that make up the priority tree subsystem
         let prepare_task = tokio::spawn({
-            let priority_tree_manager = Arc::try_unwrap(priority_tree_manager_for_prepare)
-                .unwrap_or_else(|arc| (*arc).clone());
             async move {
-                priority_tree_manager
+                priority_tree_manager_for_prepare
                     .prepare_execute_commands(
                         batch_storage_for_prepare,
                         Some(input.into_inner()),
@@ -127,10 +121,8 @@ where
         });
 
         let keep_caching_task = tokio::spawn({
-            let priority_tree_manager = Arc::try_unwrap(priority_tree_manager_for_caching)
-                .unwrap_or_else(|arc| (*arc).clone());
             async move {
-                priority_tree_manager
+                priority_tree_manager_for_caching
                     .keep_caching(
                         executed_batch_numbers_receiver,
                         priority_txs_internal_receiver,

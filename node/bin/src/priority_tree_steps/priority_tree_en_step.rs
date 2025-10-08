@@ -1,6 +1,5 @@
 use crate::block_replay_storage::BlockReplayStorage;
 use std::path::Path;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_storage_api::{ReadBatch, ReadFinality};
@@ -8,13 +7,14 @@ use zksync_os_storage_api::{ReadBatch, ReadFinality};
 /// Priority Tree manager for External Nodes.
 ///
 /// Unlike the main node version, this:
+/// - Doesn't act as pipeline step - launched as a standalone task instead
 /// - Takes block_replay_storage as input for replayed blocks
 /// - Doesn't output execute commands (EN doesn't execute on L1)
 /// - Receives batch numbers instead of batch envelopes
 pub struct PriorityTreeENStep<BatchStorage, Finality> {
-    priority_tree_manager: Arc<PriorityTreeManager<BlockReplayStorage>>,
+    priority_tree_manager: PriorityTreeManager<BlockReplayStorage>,
     batch_storage: BatchStorage,
-    block_replay_storage: Option<BlockReplayStorage>,
+    block_replay_storage: BlockReplayStorage,
     finality: Finality,
     last_ready_batch: u64,
 }
@@ -29,15 +29,11 @@ where
         init_block: u64,
         db_path: &Path,
         batch_storage: BatchStorage,
-        block_replay_storage: Option<BlockReplayStorage>,
+        block_replay_storage: BlockReplayStorage,
         finality: Finality,
         last_ready_batch: u64,
     ) -> anyhow::Result<Self> {
-        let priority_tree_manager = Arc::new(PriorityTreeManager::new(
-            block_storage,
-            init_block,
-            db_path,
-        )?);
+        let priority_tree_manager = PriorityTreeManager::new(block_storage, init_block, db_path)?;
 
         Ok(Self {
             priority_tree_manager,
@@ -75,7 +71,7 @@ where
                     executed_batch_numbers_sender_1,
                     batch_storage,
                     finality,
-                    block_replay_storage,
+                    Some(block_replay_storage),
                     last_ready_batch + 1,
                 )
                 .await
@@ -85,10 +81,8 @@ where
         // Task 2: Prepare execute commands (but don't send them)
         let prepare_task = tokio::spawn({
             let batch_storage = self.batch_storage.clone();
-            let priority_tree_manager = Arc::try_unwrap(priority_tree_manager_for_prepare)
-                .unwrap_or_else(|arc| (*arc).clone());
             async move {
-                priority_tree_manager
+                priority_tree_manager_for_prepare
                     .prepare_execute_commands(
                         batch_storage,
                         None,
@@ -111,7 +105,7 @@ where
                     executed_batch_numbers_sender_2,
                     batch_storage,
                     finality,
-                    block_replay_storage,
+                    Some(block_replay_storage),
                     last_ready_batch + 1,
                 )
                 .await
@@ -120,10 +114,8 @@ where
 
         // Task 4: Keep caching
         let keep_caching_task = tokio::spawn({
-            let priority_tree_manager = Arc::try_unwrap(priority_tree_manager_for_caching)
-                .unwrap_or_else(|arc| (*arc).clone());
             async move {
-                priority_tree_manager
+                priority_tree_manager_for_caching
                     .keep_caching(
                         executed_batch_numbers_receiver_2,
                         priority_txs_internal_receiver,
