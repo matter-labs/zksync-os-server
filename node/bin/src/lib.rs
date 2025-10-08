@@ -64,6 +64,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
+use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_mempool::RethPool;
@@ -524,9 +525,9 @@ async fn run_main_node_pipeline<
     // The current state is intermediary.
 
     // Migrated components:
-    // CommandSource -> Sequencer -> TreeManager -> ProverInputGenerator -> Batcher
+    // CommandSource -> Sequencer -> TreeManager -> ProverInputGenerator -> Batcher -> FriProverManager -> GaplessCommitter -> L1Committer
     // Other components (not migrated yet):
-    // -> FriProverManager -> L1Committer -> SnarkProverManager -> L1Prover -> PriorityTree -> L1Executor
+    // -> SnarkProverManager -> L1Prover -> PriorityTree -> L1Executor
 
     let pipeline = zksync_os_pipeline::Pipeline::new()
         .pipe(MainNodeCommandSource {
@@ -682,6 +683,7 @@ async fn run_main_node_pipeline<
                 da_input_mode: node_state_on_startup.l1_state.da_input_mode,
             });
 
+    // SnarkJobManager consumes batches from batch_for_snark_receiver (both new and rescheduled)
     let snark_job_manager = Arc::new(SnarkJobManager::new(
         PeekableReceiver::new(batch_for_snark_receiver),
         batch_for_l1_proving_sender,
@@ -706,25 +708,40 @@ async fn run_main_node_pipeline<
         run_fake_snark_provers(&config.prover_api_config, tasks, snark_job_manager);
     }
 
-    let batch_for_commit_receiver = pipeline_after_gapless.into_receiver().into_inner();
-
     if config.l1_sender_config.enabled {
-        let (l1_committer, l1_proof_submitter, l1_executor) = run_l1_senders(
+        let pipeline_after_l1_committer =
+            pipeline_after_gapless.pipe(L1Sender::<_, CommitCommand> {
+                provider: l1_provider.clone(),
+                config: config.l1_sender_config.clone().into(),
+                to_address: node_state_on_startup.l1_state.validator_timelock,
+            });
+
+        let mut l1_committer_output = pipeline_after_l1_committer.into_receiver();
+
+        // Forward committed batches to SnarkJobManager channel (which may already contain rescheduled batches)
+        tasks.spawn(async move {
+            while let Some(batch) = l1_committer_output.recv().await {
+                if batch_for_snark_sender.send(batch).await.is_err() {
+                    tracing::error!("SnarkJobManager channel unexpectedly closed");
+                    break;
+                }
+            }
+        });
+
+        let (l1_proof_submitter, l1_executor) = run_l1_proof_and_execute_senders(
             config.l1_sender_config,
             l1_provider,
-            batch_for_commit_receiver,
-            batch_for_snark_sender,
             batch_for_l1_proving_receiver,
             batch_for_priority_tree_sender,
             batch_for_execute_receiver,
             fully_processed_batch_sender,
             &node_state_on_startup.l1_state,
         );
-        tasks.spawn(l1_committer.map(report_exit("L1 committer")));
         tasks.spawn(l1_proof_submitter.map(report_exit("L1 proof submitter")));
         tasks.spawn(l1_executor.map(report_exit("L1 executor")));
     } else {
         tracing::warn!("Starting without L1 senders! `l1_sender_enabled` config is false");
+        let batch_for_commit_receiver = pipeline_after_gapless.into_receiver().into_inner();
         tasks.spawn(
             run_noop_l1_sender(batch_for_commit_receiver, batch_for_snark_sender)
                 .map(report_exit("L1 committer")),
@@ -951,13 +968,9 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_l1_senders(
+fn run_l1_proof_and_execute_senders(
     l1_sender_config: L1SenderConfig,
     provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
-
-    batch_for_commit_receiver: Receiver<CommitCommand>,
-    batch_for_snark_sender: Sender<BatchEnvelope<FriProof>>,
 
     batch_for_l1_proving_receiver: Receiver<ProofCommand>,
     batch_for_priority_tree_sender: Sender<BatchEnvelope<FriProof>>,
@@ -967,7 +980,6 @@ fn run_l1_senders(
 
     l1_state: &L1State,
 ) -> (
-    impl Future<Output = Result<()>> + 'static,
     impl Future<Output = Result<()>> + 'static,
     impl Future<Output = Result<()>> + 'static,
 ) {
@@ -981,13 +993,6 @@ fn run_l1_senders(
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");
     }
-    let l1_committer = run_l1_sender(
-        batch_for_commit_receiver,
-        batch_for_snark_sender,
-        l1_state.validator_timelock,
-        provider.clone(),
-        l1_sender_config.clone().into(),
-    );
 
     let l1_proof_submitter = run_l1_sender(
         batch_for_l1_proving_receiver,
@@ -1004,7 +1009,7 @@ fn run_l1_senders(
         provider,
         l1_sender_config.clone().into(),
     );
-    (l1_committer, l1_proof_submitter, l1_executor)
+    (l1_proof_submitter, l1_executor)
 }
 
 async fn get_committed_not_proven_batches(

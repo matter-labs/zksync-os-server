@@ -14,6 +14,7 @@ zksync_os_contract_interface.workspace = true
 zksync_os_mini_merkle_tree.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_merkle_tree.workspace = true
+zksync_os_pipeline.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
 
@@ -24,6 +25,7 @@ zk_os_basic_system.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["reqwest", "kzg", "provider-debug-api", "signer-local"] }
 anyhow.workspace = true
+async-trait.workspace = true
 backon.workspace = true
 blake2.workspace = true
 futures.workspace = true
