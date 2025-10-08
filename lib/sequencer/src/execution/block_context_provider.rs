@@ -84,8 +84,18 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 // Create stream:
                 // - For block #1 genesis upgrade tx goes first.
                 // - L1 transactions first, then L2 transactions.
-                let best_txs =
+                let mut best_txs =
                     best_transactions(&self.l2_mempool, &mut self.l1_transactions, upgrade_tx);
+
+                // Peek to ensure that at least one transaction is available so that timestamp is accurate.
+                let stream_closed = best_txs.wait_peek().await.is_none();
+                if stream_closed {
+                    return Err(anyhow::anyhow!(
+                        "BestTransactionsStream closed unexpectedly for block {}",
+                        produce_command.block_number
+                    ));
+                }
+
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(1000),
