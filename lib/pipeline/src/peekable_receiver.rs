@@ -29,6 +29,18 @@ impl<T> PeekableReceiver<T> {
         }
     }
 
+    /// Prepend items to the buffer
+    ///
+    /// The prepended items will be consumed first, before any buffered or incoming messages.
+    /// This is useful for rescheduling messages at the start of a pipeline.
+    pub fn prepend(mut self, items: Vec<T>) -> PeekableReceiver<T> {
+        // Insert items at the front of the buffer
+        for item in items.into_iter().rev() {
+            self.buf.push_front(item);
+        }
+        self
+    }
+
     /// Receive the next item, awaiting if necessary.
     /// If a buffered item exists, it is returned first.
     pub async fn recv(&mut self) -> Option<T> {

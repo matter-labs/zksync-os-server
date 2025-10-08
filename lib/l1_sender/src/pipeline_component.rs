@@ -27,7 +27,7 @@ where
     type Output = BatchEnvelope<FriProof>;
 
     const NAME: &'static str = C::NAME;
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const OUTPUT_BUFFER_SIZE: usize = 1;
 
     async fn run(
         self,
