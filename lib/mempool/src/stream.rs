@@ -2,7 +2,7 @@ use crate::L2TransactionPool;
 use crate::transaction::L2PooledTransaction;
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use reth_primitives_traits::transaction::error::InvalidTransactionError;
 use reth_transaction_pool::error::InvalidPoolTransactionError;
 use reth_transaction_pool::{BestTransactions, TransactionListenerKind, ValidPoolTransaction};
@@ -23,14 +23,15 @@ pub struct BestTransactionsStream<'a> {
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
     last_polled_l2_tx: Option<Arc<ValidPoolTransaction<L2PooledTransaction>>>,
+    peeked_tx: Option<ZkTransaction>,
 }
 
 /// Convenience method to stream best L2 transactions
-pub fn best_transactions(
+pub fn best_transactions<'a>(
     l2_mempool: &impl L2TransactionPool,
-    l1_transactions: &mut mpsc::Receiver<L1PriorityEnvelope>,
+    l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_tx: Option<L1UpgradeEnvelope>,
-) -> impl TxStream<Item = ZkTransaction> + Send {
+) -> BestTransactionsStream<'a> {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
@@ -39,6 +40,7 @@ pub fn best_transactions(
         pending_transactions_listener,
         best_l2_transactions: l2_mempool.best_transactions(),
         last_polled_l2_tx: None,
+        peeked_tx: None,
     }
 }
 
@@ -48,6 +50,10 @@ impl Stream for BestTransactionsStream<'_> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
+            if let Some(tx) = this.peeked_tx.take() {
+                return Poll::Ready(Some(tx));
+            }
+
             if let Some(upgrade_tx) = this.upgrade_tx.take() {
                 return Poll::Ready(Some(ZkTransaction::from(upgrade_tx)));
             }
@@ -85,6 +91,18 @@ impl TxStream for BestTransactionsStream<'_> {
             &tx,
             InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
         );
+    }
+}
+
+impl BestTransactionsStream<'_> {
+    /// Waits until there is a next transaction and returns a reference to it.
+    /// Does not consume the transaction, it will be returned on the next poll.
+    /// Returns `None` if the stream is closed.
+    pub async fn wait_peek(&mut self) -> Option<&ZkTransaction> {
+        if self.peeked_tx.is_none() {
+            self.peeked_tx = self.next().await;
+        }
+        self.peeked_tx.as_ref()
     }
 }
 
