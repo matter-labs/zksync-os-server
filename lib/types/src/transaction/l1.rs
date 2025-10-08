@@ -52,8 +52,10 @@ impl L1TxType for UpgradeTxType {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct L1Tx<T: L1TxType> {
+    #[serde(rename = "txHash")]
     pub hash: TxHash,
     /// The 160-bit address of the initiator on L1.
+    #[serde(rename = "initiator")]
     pub from: Address,
     /// The 160-bit address of the message call’s recipient. Cannot be missing as L1->L2 transaction cannot be `Create`.
     pub to: Address,
