@@ -10,6 +10,7 @@ mod en_remote_config;
 mod l1_provider;
 mod metadata;
 mod node_state_on_startup;
+mod priority_tree_steps;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
@@ -29,6 +30,8 @@ use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
+use crate::priority_tree_steps::priority_tree_en_step::PriorityTreeENStep;
+use crate::priority_tree_steps::priority_tree_pipeline_step::PriorityTreePipelineStep;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
@@ -71,7 +74,6 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
-use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
@@ -503,7 +505,7 @@ pub fn command_source(
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline<
     State: ReadStateHistory + WriteState + StateInitializer + Clone,
-    Finality: ReadFinality,
+    Finality: ReadFinality + Clone,
 >(
     config: Config,
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
@@ -546,18 +548,6 @@ async fn run_main_node_pipeline<
         })
         .pipe(TreeManager { tree: tree.clone() });
 
-    // Channel between `PriorityTree` and `L1Executor`
-    let (batch_for_execute_sender, batch_for_execute_receiver) =
-        tokio::sync::mpsc::channel::<ExecuteCommand>(5);
-
-    // Channel between `PriorityTree` tasks
-    let (priority_txs_internal_sender, priority_txs_internal_receiver) =
-        tokio::sync::mpsc::channel::<(u64, u64, Option<usize>)>(1000);
-
-    // Channel for `PriorityTree` cache task
-    let (executed_batch_numbers_sender, executed_batch_numbers_receiver) =
-        tokio::sync::mpsc::channel::<u64>(1000);
-
     // Channel between `L1Executor` and `BatchSink`
     let (fully_processed_batch_sender, fully_processed_batch_receiver) =
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
@@ -598,19 +588,6 @@ async fn run_main_node_pipeline<
         get_proven_not_executed_batches(&node_state_on_startup.l1_state, &batch_storage)
             .await
             .expect("Cannot get proven not executed batches");
-
-    // Channel between `L1ProofSubmitter` and `PriorityTree`
-    let (batch_for_priority_tree_sender, batch_for_priority_tree_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(
-            proven_not_executed_batches.len().max(10),
-        );
-
-    reschedule_proven_not_executed_batches(
-        proven_not_executed_batches,
-        &batch_for_priority_tree_sender,
-    )
-    .await
-    .expect("reschedule not executed batches");
 
     let batcher_subsystem_first_block_to_process =
         node_state_on_startup.last_l1_committed_block + 1;
@@ -700,31 +677,8 @@ async fn run_main_node_pipeline<
             to_address: node_state_on_startup.l1_state.validator_timelock,
         });
 
-    let mut l1_proof_sender_output = pipeline_after_l1_proof_sender.into_receiver();
-
-    // Forward L1 proven batches to PriorityTree channel (which may already contain rescheduled batches)
-    tasks.spawn(
-        async move {
-            while let Some(batch) = l1_proof_sender_output.recv().await {
-                if batch_for_priority_tree_sender.send(batch).await.is_err() {
-                    anyhow::bail!("PriorityTree channel unexpectedly closed");
-                }
-            }
-            Ok(())
-        }
-        .map(report_exit("proven batch forwarder")),
-    );
-
-    let l1_executor = run_l1_executor(
-        config.l1_sender_config,
-        l1_provider,
-        batch_for_execute_receiver,
-        fully_processed_batch_sender,
-        &node_state_on_startup.l1_state,
-    );
-    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
-
-    let priority_tree_manager = PriorityTreeManager::new(
+    // PriorityTree pipeline component: receives proven batches, outputs execute commands
+    let priority_tree_step = PriorityTreePipelineStep::new(
         block_replay_storage.clone(),
         node_state_on_startup.last_l1_executed_block,
         Path::new(
@@ -733,43 +687,25 @@ async fn run_main_node_pipeline<
                 .rocks_db_path
                 .join(PRIORITY_TREE_DB_NAME),
         ),
+        batch_storage.clone(),
+        finality,
     )
     .unwrap();
-    // Run task that adds new txs to PriorityTree and prepares `ExecuteCommand`s.
-    tasks.spawn(
-        priority_tree_manager
-            .clone()
-            .prepare_execute_commands(
-                batch_storage.clone(),
-                Some(batch_for_priority_tree_receiver),
-                None,
-                priority_txs_internal_sender,
-                Some(batch_for_execute_sender),
-            )
-            .map(report_exit(
-                "priority_tree_manager#prepare_execute_commands",
-            )),
+
+    let pipeline_after_priority_tree = pipeline_after_l1_proof_sender
+        .pipe_with_prepend(priority_tree_step, proven_not_executed_batches);
+
+    let execute_commands_output = pipeline_after_priority_tree.into_receiver();
+
+    // Forward execute commands to L1 executor
+    let l1_executor = run_l1_executor(
+        config.l1_sender_config,
+        l1_provider,
+        execute_commands_output.into_inner(),
+        fully_processed_batch_sender,
+        &node_state_on_startup.l1_state,
     );
-    // Auxiliary task that yields a channel of executed batch numbers.
-    tasks.spawn(
-        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
-            executed_batch_numbers_sender,
-            batch_storage.clone(),
-            finality,
-            None,
-            node_state_on_startup.l1_state.last_executed_batch + 1,
-        )
-        .map(report_exit("send_executed_batch_numbers")),
-    );
-    // Run task that persists PriorityTree for executed batches and drops old data.
-    tasks.spawn(
-        priority_tree_manager
-            .keep_caching(
-                executed_batch_numbers_receiver,
-                priority_txs_internal_receiver,
-            )
-            .map(report_exit("priority_tree_manager#keep_caching")),
-    );
+    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
 
     tasks.spawn(
         BatchSink::new(fully_processed_batch_receiver)
@@ -820,16 +756,6 @@ async fn run_en_pipeline<
     // Drain the pipeline output
     tokio::spawn(async move { while pipeline_after_tree.recv().await.is_some() {} });
 
-    // Channel between `PriorityTree` tasks
-    let (priority_txs_internal_sender, priority_txs_internal_receiver) =
-        tokio::sync::mpsc::channel::<(u64, u64, Option<usize>)>(1000);
-
-    // Input channels for `PriorityTree` tasks
-    let (executed_batch_numbers_sender_1, executed_batch_numbers_receiver_1) =
-        tokio::sync::mpsc::channel::<u64>(1000);
-    let (executed_batch_numbers_sender_2, executed_batch_numbers_receiver_2) =
-        tokio::sync::mpsc::channel::<u64>(1000);
-
     let last_ready_block = node_state_on_startup
         .last_l1_executed_block
         .min(node_state_on_startup.block_replay_storage_last_block);
@@ -855,7 +781,8 @@ async fn run_en_pipeline<
         .unwrap()
         .1;
 
-    let priority_tree_manager = PriorityTreeManager::new(
+    // Run Priority Tree tasks for EN - not part of the pipeline.
+    let priority_tree_en_step = PriorityTreeENStep::new(
         block_replay_storage.clone(),
         init_block,
         Path::new(
@@ -864,55 +791,17 @@ async fn run_en_pipeline<
                 .rocks_db_path
                 .join(PRIORITY_TREE_DB_NAME),
         ),
+        batch_storage.clone(),
+        Some(block_replay_storage),
+        finality,
+        last_ready_batch,
     )
     .unwrap();
-    // Prepare a stream of executed batch numbers for the first task.
-    tasks.spawn(
-        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
-            executed_batch_numbers_sender_1,
-            batch_storage.clone(),
-            finality.clone(),
-            Some(block_replay_storage.clone()),
-            last_ready_batch + 1,
-        )
-        .map(report_exit("send_executed_batch_numbers#1")),
-    );
-    // Run task that adds new txs to PriorityTree. Unlike in MN, we do not provide a sender for ExecuteCommand.
-    // Also, channel of executed batch numbers serves as an input.
-    tasks.spawn(
-        priority_tree_manager
-            .clone()
-            .prepare_execute_commands(
-                batch_storage.clone(),
-                None,
-                Some(executed_batch_numbers_receiver_1),
-                priority_txs_internal_sender,
-                None,
-            )
-            .map(report_exit(
-                "priority_tree_manager#prepare_execute_commands",
-            )),
-    );
 
-    // Prepare a stream of executed batch numbers for the second task.
     tasks.spawn(
-        util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
-            executed_batch_numbers_sender_2,
-            batch_storage.clone(),
-            finality,
-            Some(block_replay_storage),
-            last_ready_batch + 1,
-        )
-        .map(report_exit("send_executed_batch_numbers#2")),
-    );
-    // Run task that persists PriorityTree for executed batches and drops old data.
-    tasks.spawn(
-        priority_tree_manager
-            .keep_caching(
-                executed_batch_numbers_receiver_2,
-                priority_txs_internal_receiver,
-            )
-            .map(report_exit("priority_tree_manager#keep_caching")),
+        priority_tree_en_step
+            .run()
+            .map(report_exit("priority_tree_en")),
     );
 }
 
@@ -994,19 +883,6 @@ async fn get_proven_not_executed_batches(
         batch_to_execute += 1;
     }
     Ok(batches_to_reschedule)
-}
-
-pub async fn reschedule_proven_not_executed_batches(
-    batches_to_reschedule: Vec<BatchEnvelope<FriProof>>,
-    batch_for_priority_tree_sender: &Sender<BatchEnvelope<FriProof>>,
-) -> anyhow::Result<()> {
-    if !batches_to_reschedule.is_empty() {
-        for batch in batches_to_reschedule {
-            batch_for_priority_tree_sender.send(batch).await?
-        }
-    }
-
-    Ok(())
 }
 
 async fn commit_proof_execute_block_numbers(
