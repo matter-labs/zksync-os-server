@@ -118,6 +118,9 @@ fn build_configs() -> Config {
         .insert(&MempoolConfig::DESCRIPTION, "mempool")
         .expect("Failed to insert mempool config");
     schema
+        .insert(&TxValidatorConfig::DESCRIPTION, "tx_validator")
+        .expect("Failed to insert tx_validator config");
+    schema
         .insert(&SequencerConfig::DESCRIPTION, "sequencer")
         .expect("Failed to insert sequencer config");
     schema
