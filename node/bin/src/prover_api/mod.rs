@@ -8,3 +8,4 @@ pub mod proof_storage;
 mod prover_job_map;
 pub mod prover_server;
 pub mod snark_job_manager;
+pub mod snark_proving_pipeline_step;
