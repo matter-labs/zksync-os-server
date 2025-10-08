@@ -11829,6 +11829,7 @@ dependencies = [
  "alloy-rlp",
  "bincode 2.0.1",
  "serde",
+ "serde_json",
  "thiserror 2.0.12",
  "zksync_os_contract_interface",
 ]
