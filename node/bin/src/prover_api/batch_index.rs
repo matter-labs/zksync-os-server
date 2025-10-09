@@ -19,7 +19,7 @@ impl BatchIndexCF {
 
 impl NamedColumnFamily for BatchIndexCF {
     const DB_NAME: &'static str = BATCH_INDEX_DB_NAME;
-    const ALL: &'static [Self] = &[Self::BlockToBatch, Self::BatchRanges];
+    const ALL: &'static [Self] = &[Self::BlockToBatch, Self::BatchRanges, Self::Meta];
 
     fn name(&self) -> &'static str {
         match self {
