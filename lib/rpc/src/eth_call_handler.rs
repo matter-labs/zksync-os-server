@@ -4,7 +4,7 @@ use crate::result::RevertError;
 use crate::rpc_storage::ReadRpcStorage;
 use crate::sandbox::{call_trace_simulate, execute};
 use alloy::consensus::transaction::Recovered;
-use alloy::consensus::{SignableTransaction, Signed, TxEip1559, TxEip2930, TxLegacy, TxType};
+use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
@@ -107,9 +107,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let signature = Signature::new(Default::default(), Default::default(), false);
 
         if request.transaction_type == Some(L1PriorityTxType::TX_TYPE) {
-            let l1_tx = L1Tx {
+            let inner = L1Tx {
                 hash: B256::ZERO,
-                from,
+                initiator: from,
                 to: to.into_to().unwrap_or_default(),
                 gas_limit: request.gas.unwrap_or(self.config.eth_call_gas as u64),
                 gas_per_pubdata_byte_limit: REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -123,10 +123,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 factory_deps: vec![],
                 marker: std::marker::PhantomData::<L1PriorityTxType>,
             };
-            return Ok(L1Envelope {
-                inner: Signed::new_unchecked(l1_tx, signature, B256::ZERO),
-            }
-            .into());
+            return Ok(L1Envelope { inner }.into());
         } else if request.transaction_type == Some(UpgradeTxType::TX_TYPE) {
             return Err(EthCallError::UpgradeTxNotEstimatable);
         }
@@ -490,11 +487,11 @@ fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
         ZkEnvelope::L2(L2Envelope::Eip4844(inner)) => inner.tx_mut().as_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip7702(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L1(envelope) => {
-            let tx = envelope.inner.tx_mut();
+            let tx = &mut envelope.inner;
             tx.gas_limit = gas_limit;
             tx.to_mint = tx.value + U256::from(tx.max_fee_per_gas) * U256::from(gas_limit);
         }
-        ZkEnvelope::Upgrade(envelope) => envelope.inner.tx_mut().gas_limit = gas_limit,
+        ZkEnvelope::Upgrade(envelope) => envelope.inner.gas_limit = gas_limit,
     }
 }
 
