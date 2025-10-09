@@ -77,7 +77,10 @@ use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock, WriteState};
+use zksync_os_storage_api::{
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
+    WriteState,
+};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
