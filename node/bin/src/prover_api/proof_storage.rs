@@ -6,13 +6,14 @@
 //!  * batch -> its FRI proof
 //!  * batch -> its commitment (used for l1 senders)
 
+use crate::prover_api::batch_index::BatchIndex;
 use alloy::primitives::BlockNumber;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_object_store::_reexports::BoxedError;
 use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
-use zksync_os_storage_api::ReadBatch;
+use zksync_os_storage_api::{ReadBatch, UpdateBatchIndex};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -54,17 +55,35 @@ impl StoredBatch {
 #[derive(Clone, Debug)]
 pub struct ProofStorage {
     object_store: Arc<dyn ObjectStore>,
+    batch_index: BatchIndex,
 }
 
 impl ProofStorage {
-    pub fn new(object_store: Arc<dyn ObjectStore>) -> Self {
-        Self { object_store }
+    pub fn new(object_store: Arc<dyn ObjectStore>, batch_index: BatchIndex) -> Self {
+        Self {
+            object_store,
+            batch_index,
+        }
     }
 
     /// Persist a BatchWithProof. Overwrites any existing entry for the same batch.
     /// Doesn't allow gaps - if a proof for batch `n` is missing, then no proof for batch `n+1` is allowed.
     pub async fn save_proof(&self, value: &StoredBatch) -> anyhow::Result<()> {
         self.object_store.put(value.batch_number(), value).await?;
+
+        let (batch_number, first_block, last_block) = match value {
+            StoredBatch::V1(envelope) => (
+                envelope.batch_number(),
+                envelope.batch.first_block_number,
+                envelope.batch.last_block_number,
+            ),
+        };
+
+        // This function is only used in sequencer, so most likely this insert won't require
+        // any reads the bucket.
+        self.write_to_index(batch_number, first_block, last_block)
+            .await?;
+
         Ok(())
     }
 
@@ -75,6 +94,49 @@ impl ProofStorage {
             Err(ObjectStoreError::KeyNotFound(_)) => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub async fn write_to_index(
+        &self,
+        batch_number: u64,
+        first_block: u64,
+        last_block: u64,
+    ) -> anyhow::Result<()> {
+        if batch_number == self.batch_index.get_last_stored_batch() + 1 {
+            self.batch_index
+                .write_batch_mapping(batch_number, first_block, last_block)?;
+
+            return Ok(());
+        }
+
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            // there is a gap - we need to fill it by scanning the object store for missing batches
+            let last_indexed = self_clone.batch_index.get_last_stored_batch();
+            for n in (last_indexed + 1)..=batch_number {
+                // it might be already stored in case of concurrent calls, check it for optimization
+                // (only possible in EN)
+                if self_clone.batch_index.get_batch_range(n).is_some() {
+                    continue;
+                }
+
+                let Some(envelope) = self_clone.get(n).await? else {
+                    anyhow::bail!(
+                        "Batch {n} not found in object store while syncing index up to {batch_number}"
+                    );
+                };
+
+                self_clone.batch_index.write_batch_mapping(
+                    n,
+                    envelope.batch.first_block_number,
+                    envelope.batch.last_block_number,
+                )?;
+            }
+
+            Ok(())
+        });
+
+        Ok(())
     }
 }
 
@@ -88,26 +150,8 @@ impl ReadBatch for ProofStorage {
         if block_number == 0 {
             return Ok(Some(0));
         }
-        // todo(#259): we binsearch for the batch temporarily, to be replaced with something more efficient
-        // Worst-case scenario: we have 1 batch = 1 block.
-        let (mut lo, mut hi) = (1, block_number);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if let Some(batch) = self.get(mid).await? {
-                if batch.batch.first_block_number > block_number {
-                    hi = mid;
-                } else if batch.batch.last_block_number < block_number {
-                    lo = mid + 1;
-                } else {
-                    return Ok(Some(mid));
-                }
-            } else {
-                // Batch with this number doesn't exist
-                hi = mid;
-            }
-        }
-        // Check that `lo` actually exists
-        Ok(self.get(lo).await?.map(|_| lo))
+
+        Ok(self.batch_index.get_batch_by_block(block_number))
     }
 
     async fn get_batch_range_by_number(
@@ -118,11 +162,31 @@ impl ReadBatch for ProofStorage {
         if batch_number == 0 {
             return Ok(Some((0, 0)));
         }
+
+        if let Some((first, last)) = self.batch_index.get_batch_range(batch_number) {
+            return Ok(Some((first, last)));
+        }
+
+        // If the batch is not found in the index, try to load it from the object store.
+        // This is a fallback for the case when the index is not fully synced.
         Ok(self.get(batch_number).await?.map(|envelope| {
             (
                 envelope.batch.first_block_number,
                 envelope.batch.last_block_number,
             )
         }))
+    }
+}
+
+#[async_trait::async_trait]
+impl UpdateBatchIndex for ProofStorage {
+    async fn sync_index_to_batch(
+        &self,
+        batch_number: u64,
+        first_block: u64,
+        last_block: u64,
+    ) -> anyhow::Result<()> {
+        self.write_to_index(batch_number, first_block, last_block)
+            .await
     }
 }
