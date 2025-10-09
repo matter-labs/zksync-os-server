@@ -128,8 +128,8 @@ fn compute_prover_input(
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let prover_input =
         match proving_run_execution_version(replay_record.block_context.execution_version) {
-            1 => unreachable!("proving_run_execution_version does not return 1"), // we prove v1 blocks with v2, it's reflected in `proving_run_execution_version`
-            2 => {
+            1 | 2 => unreachable!("proving_run_execution_version does not return 1 or 2"), // we prove v1 and v2 blocks with v3, it's reflected in `proving_run_execution_version`
+            3 => {
                 use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
                 use zk_os_forward_system::run::{
                     StorageCommitment, convert::FromInterface, generate_proof_input,
