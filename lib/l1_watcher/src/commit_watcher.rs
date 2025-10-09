@@ -30,11 +30,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
     ) -> anyhow::Result<Self> {
         let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
         let current_l1_block = provider.get_block_number().await?;
-        let last_committed_block = finality.get_finality_status().last_committed_block;
-        let last_committed_batch = batch_storage
-            .get_batch_by_block_number(last_committed_block)
-            .await?
-            .expect("commited batch is missing from proof storage");
+        let last_committed_batch = finality.get_finality_status().last_committed_batch;
         tracing::info!(
             current_l1_block,
             last_committed_batch,

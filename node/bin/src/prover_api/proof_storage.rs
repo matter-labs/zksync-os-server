@@ -12,7 +12,7 @@ use std::sync::Arc;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_object_store::_reexports::BoxedError;
 use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
-use zksync_os_storage_api::ReadBatch;
+use zksync_os_storage_api::{ReadBatch, ReadFinality};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -83,14 +83,15 @@ impl ReadBatch for ProofStorage {
     async fn get_batch_by_block_number(
         &self,
         block_number: BlockNumber,
+        finality: &dyn ReadFinality,
     ) -> anyhow::Result<Option<u64>> {
         // Handle genesis block with a special case as we don't store it in the DB.
         if block_number == 0 {
             return Ok(Some(0));
         }
         // todo(#259): we binsearch for the batch temporarily, to be replaced with something more efficient
-        // Worst-case scenario: we have 1 batch = 1 block.
-        let (mut lo, mut hi) = (1, block_number);
+        let last_committed_batch = finality.get_finality_status().last_committed_batch;
+        let (mut lo, mut hi) = (1, last_committed_batch);
         while lo < hi {
             let mid = (lo + hi) / 2;
             if let Some(batch) = self.get(mid).await? {
@@ -102,7 +103,12 @@ impl ReadBatch for ProofStorage {
                     return Ok(Some(mid));
                 }
             } else {
-                // Batch with this number doesn't exist
+                // Batch with this number doesn't exist, which shouldn't happen
+                tracing::warn!(
+                    batch_number = mid,
+                    last_committed_batch,
+                    "missing from proof storage"
+                );
                 hi = mid;
             }
         }
