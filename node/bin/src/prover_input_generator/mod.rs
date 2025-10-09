@@ -144,9 +144,9 @@ fn compute_prover_input(
                 let list_source = TxListSource { transactions };
 
                 let bin_path = if enable_logging {
-                    zksync_os_multivm::apps::v2::server_app_logging_enabled_path(&app_bin_base_path)
+                    zksync_os_multivm::apps::v3::server_app_logging_enabled_path(&app_bin_base_path)
                 } else {
-                    zksync_os_multivm::apps::v2::server_app_path(&app_bin_base_path)
+                    zksync_os_multivm::apps::v3::server_app_path(&app_bin_base_path)
                 };
 
                 generate_proof_input(
