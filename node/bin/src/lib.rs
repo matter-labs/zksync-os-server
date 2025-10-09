@@ -397,6 +397,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_version,
             genesis,
             config.sequencer_config.fee_collector_address,
+            config.sequencer_config.base_fee_override,
+            config.sequencer_config.pubdata_price_override,
         );
 
     // ========== Start Sequencer ===========
