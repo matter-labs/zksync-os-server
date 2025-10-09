@@ -71,7 +71,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             genesis,
             fee_collector_address,
             base_fee_override,
-            pubdata_price_override
+            pubdata_price_override,
         }
     }
 
