@@ -45,7 +45,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         let Some(batch_number) = self
             .storage
             .batch()
-            .get_batch_by_block_number(tx_meta.block_number)
+            .get_batch_by_block_number(tx_meta.block_number, self.storage.finality())
             .await?
         else {
             return Err(ZksError::NotBatchedYet);
