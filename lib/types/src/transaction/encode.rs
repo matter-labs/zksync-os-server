@@ -72,10 +72,10 @@ impl TransactionData {
 
 impl<T: L1TxType> From<L1Envelope<T>> for TransactionData {
     fn from(l1_tx: L1Envelope<T>) -> Self {
-        let (l1_tx, _, _) = l1_tx.inner.into_parts();
+        let l1_tx = l1_tx.inner;
         TransactionData {
             tx_type: U256::from(T::TX_TYPE),
-            from: l1_tx.from,
+            from: l1_tx.initiator,
             to: l1_tx.to,
             gas_limit: U256::from(l1_tx.gas_limit),
             pubdata_price_limit: U256::from(l1_tx.gas_per_pubdata_byte_limit),
