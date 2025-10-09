@@ -3,12 +3,15 @@ use crate::peekable_receiver::PeekableReceiver;
 use anyhow::Result;
 use tokio::sync::mpsc;
 
+/// A named pipeline task: component name and its spawnable task function
+type PipelineTask = (
+    &'static str,
+    Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>,
+);
+
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
-    tasks: Vec<(
-        &'static str, // component name
-        Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>,
-    )>,
+    tasks: Vec<PipelineTask>,
     receiver: PeekableReceiver<Output>,
 }
 
