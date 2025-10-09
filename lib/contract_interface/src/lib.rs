@@ -192,6 +192,24 @@ alloy::sol! {
             bytes[] _factoryDeps
         );
     }
+
+    // `IGetters.sol`
+    #[sol(rpc)]
+    interface IGetters {
+        function getVerifier() external view returns (address);
+    }
+
+    // `DualVerifier.sol`
+    #[sol(rpc)]
+    contract DualVerifier {
+        mapping(uint32 => address) public plonkVerifiers;
+    }
+
+    // `IVerifier.sol`
+    #[sol(rpc)]
+    interface IVerifier {
+        function verificationKeyHash() external view returns (bytes32);
+    }
 }
 
 pub struct Bridgehub<P: Provider> {

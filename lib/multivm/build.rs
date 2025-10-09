@@ -1,4 +1,8 @@
 use cargo_metadata::{MetadataCommand, PackageId};
+use execution_utils::RecursionStrategy;
+use std::io::Write;
+use std::path::PathBuf;
+use std::thread;
 use url::Url;
 
 fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
@@ -10,8 +14,74 @@ fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
     Ok(tag.to_string())
 }
 
+fn generate_vk(tag: &str, setup_key_path: PathBuf, dir: PathBuf) {
+    let snark_vk_expected_path = dir.join("snark_vk_expected.json");
+    let snark_vk_hash_path = dir.join("snark_vk_hash.txt");
+    if snark_vk_expected_path.exists() && snark_vk_hash_path.exists() {
+        // VKs already exist, skip generation
+        return;
+    }
+
+    eprintln!(
+        "missing SNARK verification keys for {tag}; generating now - this can take a few minutes"
+    );
+    std::io::stderr().flush().unwrap();
+
+    let handle = thread::Builder::new()
+        .name("vk-generation".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(move || {
+            zkos_wrapper::generate_vk(
+                Some(
+                    dir.join("multiblock_batch.bin")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                dir.to_string_lossy().to_string(),
+                Some(setup_key_path.to_string_lossy().to_string()),
+                true,
+                RecursionStrategy::UseReducedLog23Machine,
+            )
+            .expect("failed to generate vk")
+        })
+        .expect("failed to spawn vk-generation thread");
+
+    match handle.join() {
+        Ok(vk_hash) => {
+            std::fs::write(snark_vk_hash_path, format!("{vk_hash:?}")).unwrap();
+        }
+        Err(e) => {
+            std::panic::resume_unwind(e);
+        }
+    }
+}
+
 fn main() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    // Rerun build script when `apps` or `Cargo.toml` get changed
+    println!("cargo::rerun-if-changed=apps");
+    println!("cargo::rerun-if-changed=Cargo.toml");
+
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    // `{manifest_dir}/../../setup.key`
+    let setup_key_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("setup.key");
+    let do_vk_generation = if setup_key_path.exists() {
+        true
+    } else {
+        println!(
+            "cargo::warning=`{}` not found; verification keys will not be generated",
+            setup_key_path.display()
+        );
+        println!(
+            "cargo::warning=to download run: `curl -L -o \"setup.key\" \"https://storage.googleapis.com/matterlabs-setup-keys-us/setup-keys/setup_2^24.key\"`"
+        );
+        false
+    };
+
     let metadata = MetadataCommand::new().exec().unwrap();
 
     // Find forward_system crate and expose its path to the directory containing `app*.bin` files.
@@ -27,7 +97,7 @@ fn main() {
             }
         };
 
-        let dir = format!("{manifest_dir}/apps/{tag}");
+        let dir = manifest_dir.join("apps").join(&tag);
         std::fs::create_dir_all(&dir).expect("failed to create directory");
         for variant in [
             "multiblock_batch",
@@ -37,8 +107,8 @@ fn main() {
             let url = format!(
                 "https://github.com/matter-labs/zksync-os/releases/download/{tag}/{variant}.bin"
             );
-            let path = format!("{dir}/{variant}.bin");
-            if std::fs::exists(&path).expect("failed to check file existence") {
+            let path = dir.join(format!("{variant}.bin"));
+            if path.exists() {
                 continue;
             }
             let resp = reqwest::blocking::get(url).expect("failed to download");
@@ -47,6 +117,13 @@ fn main() {
         }
 
         let snake_case_version = tag.trim_start_matches("v").replace('.', "_");
-        println!("cargo:rustc-env=ZKSYNC_OS_{snake_case_version}_SOURCE_PATH={dir}");
+        println!(
+            "cargo:rustc-env=ZKSYNC_OS_{snake_case_version}_SOURCE_PATH={}",
+            dir.to_string_lossy()
+        );
+
+        if do_vk_generation {
+            generate_vk(&tag, setup_key_path.clone(), dir);
+        }
     }
 }

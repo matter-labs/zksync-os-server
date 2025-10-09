@@ -58,6 +58,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zksync_os_contract_interface::DualVerifier::DualVerifierInstance;
+use zksync_os_contract_interface::IGetters;
+use zksync_os_contract_interface::IVerifier::IVerifierInstance;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
@@ -71,6 +74,7 @@ use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_mempool::RethPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_multivm::LATEST_EXECUTION_VERSION;
+use zksync_os_multivm::apps::v3::VERIFICATION_KEY_HASH;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
@@ -187,6 +191,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
+
+    let dual_verifier_address = IGetters::new(l1_state.diamond_proxy, l1_provider.clone())
+        .getVerifier()
+        .call()
+        .await
+        .expect("could not get dual verifier for the chain");
+    let dual_verifier = DualVerifierInstance::new(dual_verifier_address, l1_provider.clone());
+    let verifier_address = dual_verifier
+        .plonkVerifiers(LATEST_EXECUTION_VERSION)
+        .call()
+        .await
+        .expect("could not get verifier for latest execution version");
+    let verifier = IVerifierInstance::new(verifier_address, l1_provider.clone());
+    let l1_vk_hash = verifier
+        .verificationKeyHash()
+        .call()
+        .await
+        .expect("could not get verification key hash for L1 verifier");
+    if l1_vk_hash != VERIFICATION_KEY_HASH {
+        panic!(
+            "L1 verification key hash `{l1_vk_hash:?}` does not match calculated `{VERIFICATION_KEY_HASH}`"
+        );
+    }
 
     let genesis = Genesis::new(
         genesis_input_source.clone(),

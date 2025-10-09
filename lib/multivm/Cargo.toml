@@ -19,6 +19,9 @@ tempfile.workspace = true
 alloy = { workspace = true, default-features = false }
 
 [build-dependencies]
+zkos_wrapper.workspace = true
+execution_utils.workspace = true
+
 anyhow.workspace = true
 cargo_metadata = { workspace = true, default-features = false }
 reqwest = { workspace = true, features = ["blocking"] }
