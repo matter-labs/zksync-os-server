@@ -103,7 +103,7 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some("0x16cb69e3db14a6c58926c4eebd53bad4f0d0920e".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("0x8bd76a67b984e8f0b902a82220a90fc45d9738a9".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
@@ -159,7 +159,7 @@ pub struct SequencerConfig {
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
 
-    #[config(with = Serde![str], default_t = "0x8bd76a67b984e8f0b902a82220a90fc45d9738a9".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
     pub fee_collector_address: Address,
 }
 
