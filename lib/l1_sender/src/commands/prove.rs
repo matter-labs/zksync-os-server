@@ -142,6 +142,7 @@ impl ProofCommand {
             Some(1) => 0,
             // v2 and up are available under their respective execution version.
             Some(2) => 2,
+            Some(3) => 3,
             Some(vk) => panic!("unsupported verification key: {vk}"),
         };
 
