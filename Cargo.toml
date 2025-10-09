@@ -75,7 +75,7 @@ zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/z
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.4.5" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.4.5" }
 
-zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.4.6" }
+zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", rev = "c5ed6d3962c2d07352feaa39e045b3ce1ec404ba" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
