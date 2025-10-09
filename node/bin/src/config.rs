@@ -159,7 +159,7 @@ pub struct SequencerConfig {
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
 
-    #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
+    #[config(with = Serde![str], default_t = "0xafc553ec400180d5e01dcdbc13e6d05da7e5d25c".parse().unwrap())]
     pub fee_collector_address: Address,
 }
 
@@ -212,19 +212,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0xa0cc51a8cce1f0e58623c5629be53d5d3b79ca7c7e98de4a94752467c6d45435".into())]
+    #[config(alias = "operator_private_key", default_t = "0x097c361a79e0f5a4556f38f2df2c777bb5610129d8174239100571c4a625abf5".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x1dd791556f863c28907f2d74dfb7c320d66ad1f4e3a9b661085e0f6578cdef42".into())]
+    #[config(default_t = "0x80643afc8630077db42799f283c460832823c45940d169f640d600588ce224cd".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x11e6f916b4485b48c88c0d8118b7fb71d805202b6372344d6301b6f13190b30d".into())]
+    #[config(default_t = "0xe1dd52081be835cd388470351b5ff4d5006306830afb5150101cac9bae51e8aa".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
