@@ -45,12 +45,12 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
             .await
             .with_context(|| {
                 format!(
-                    "cannot initialize priority tree: batch {last_executed_batch} not found in storage"
+                    "cannot initialize priority tree: failed to get batch {last_executed_batch} from storage"
                 )
             })?
             .with_context(|| {
                 format!(
-                    "cannot initialize priority tree: batch {last_executed_batch} has no associated blocks"
+                    "cannot initialize priority tree: no batch {last_executed_batch} in storage"
                 )
             })?
             .1;
