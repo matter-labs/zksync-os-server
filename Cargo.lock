@@ -11725,6 +11725,7 @@ dependencies = [
  "bincode 2.0.1",
  "reth-primitives-traits",
  "serde",
+ "serde_json",
  "thiserror 2.0.12",
  "zksync_os_contract_interface",
 ]

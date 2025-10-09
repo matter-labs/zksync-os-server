@@ -54,7 +54,10 @@ impl L1TxType for UpgradeTxType {
 pub struct L1Tx<T: L1TxType> {
     pub hash: TxHash,
     /// The 160-bit address of the initiator on L1.
-    pub from: Address,
+    /// In RPC this holds the same value as `from` but, due to [`alloy::rpc::types::Transaction`]
+    /// enforcing that `from` is added on top of the transaction envelope, we cannot name this field
+    /// `from`. Both fields show up in RPC responses - this is expected.
+    pub initiator: Address,
     /// The 160-bit address of the message call’s recipient. Cannot be missing as L1->L2 transaction cannot be `Create`.
     pub to: Address,
     /// A scalar value equal to the maximum amount of L2 gas that should be used in executing this
@@ -91,6 +94,7 @@ pub struct L1Tx<T: L1TxType> {
     /// The set of L2 bytecode hashes whose preimages were shown on L1.
     pub factory_deps: Vec<B256>,
 
+    #[serde(skip)]
     pub marker: std::marker::PhantomData<T>,
 }
 
@@ -103,7 +107,7 @@ impl<T: L1TxType> Typed2718 for L1Tx<T> {
 impl<T: L1TxType> RlpEcdsaEncodableTx for L1Tx<T> {
     fn rlp_encoded_fields_length(&self) -> usize {
         self.hash.length()
-            + self.from.length()
+            + self.initiator.length()
             + self.to.length()
             + self.gas_limit.length()
             + self.gas_per_pubdata_byte_limit.length()
@@ -119,7 +123,7 @@ impl<T: L1TxType> RlpEcdsaEncodableTx for L1Tx<T> {
 
     fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
         self.hash.encode(out);
-        self.from.encode(out);
+        self.initiator.encode(out);
         self.to.encode(out);
         self.gas_limit.encode(out);
         self.gas_per_pubdata_byte_limit.encode(out);
@@ -144,7 +148,7 @@ impl<T: L1TxType> RlpEcdsaDecodableTx for L1Tx<T> {
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
         Ok(Self {
             hash: Decodable::decode(buf)?,
-            from: Decodable::decode(buf)?,
+            initiator: Decodable::decode(buf)?,
             to: Decodable::decode(buf)?,
             gas_limit: Decodable::decode(buf)?,
             gas_per_pubdata_byte_limit: Decodable::decode(buf)?,
@@ -252,16 +256,16 @@ impl<T: L1TxType> Transaction for L1Tx<T> {
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub struct L1Envelope<T: L1TxType> {
     #[serde(flatten)]
-    pub inner: Signed<L1Tx<T>>,
+    pub inner: L1Tx<T>,
 }
 
 impl<T: L1TxType> L1Envelope<T> {
     pub fn hash(&self) -> &B256 {
-        self.inner.hash()
+        &self.inner.hash
     }
 
     pub fn priority_id(&self) -> L1TxSerialId {
-        self.inner.tx().nonce
+        self.inner.nonce
     }
 }
 
@@ -343,8 +347,14 @@ impl<T: L1TxType> Typed2718 for L1Envelope<T> {
 
 impl<T: L1TxType> Decodable2718 for L1Envelope<T> {
     fn typed_decode(ty: u8, buf: &mut &[u8]) -> Eip2718Result<Self> {
+        let decoded = L1Tx::rlp_decode_signed(buf)?;
+
+        if decoded.ty() != ty {
+            return Err(Eip2718Error::UnexpectedType(ty));
+        }
+
         Ok(Self {
-            inner: Signed::<L1Tx<T>>::typed_decode(ty, buf)?,
+            inner: decoded.into_parts().0,
         })
     }
 
@@ -356,24 +366,28 @@ impl<T: L1TxType> Decodable2718 for L1Envelope<T> {
 
 impl<T: L1TxType> Encodable2718 for L1Envelope<T> {
     fn encode_2718_len(&self) -> usize {
-        self.inner.encode_2718_len()
+        self.inner
+            .eip2718_encoded_length(&Signature::new(U256::ZERO, U256::ZERO, false))
     }
 
     fn encode_2718(&self, out: &mut dyn BufMut) {
-        self.inner.encode_2718(out)
+        self.inner
+            .eip2718_encode(&Signature::new(U256::ZERO, U256::ZERO, false), out)
     }
 }
 
 impl<T: L1TxType> Decodable for L1Envelope<T> {
     fn decode(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
-        let inner = Signed::<L1Tx<T>>::decode_2718(buf)?;
-        Ok(L1Envelope { inner })
+        let decoded = Signed::<L1Tx<T>>::decode_2718(buf)?;
+        Ok(L1Envelope {
+            inner: decoded.into_parts().0,
+        })
     }
 }
 
 impl<T: L1TxType> Encodable for L1Envelope<T> {
     fn encode(&self, out: &mut dyn BufMut) {
-        self.inner.tx().encode(out)
+        self.inner.encode(out)
     }
 }
 
@@ -415,9 +429,9 @@ impl<T: L1TxType> TryFrom<L2CanonicalTransaction> for L1Envelope<T> {
         }
 
         let hash = keccak256(tx.abi_encode());
-        let tx = L1Tx {
+        let inner = L1Tx {
             hash,
-            from: Address::from_slice(&tx.from.to_be_bytes::<32>()[12..]),
+            initiator: Address::from_slice(&tx.from.to_be_bytes::<32>()[12..]),
             to: Address::from_slice(&tx.to.to_be_bytes::<32>()[12..]),
             gas_limit: tx.gasLimit.saturating_to(),
             gas_per_pubdata_byte_limit: tx.gasPerPubdataByteLimit.saturating_to(),
@@ -431,14 +445,7 @@ impl<T: L1TxType> TryFrom<L2CanonicalTransaction> for L1Envelope<T> {
             factory_deps: tx.factoryDeps.into_iter().map(B256::from).collect(),
             marker: std::marker::PhantomData,
         };
-        Ok(L1Envelope {
-            inner: Signed::new_unchecked(
-                tx,
-                // Mocked signature as L1->L2 priority transactions do not have signatures
-                Signature::new(U256::ZERO, U256::ZERO, false),
-                B256::from(hash),
-            ),
-        })
+        Ok(L1Envelope { inner })
     }
 }
 
@@ -469,4 +476,73 @@ pub enum L1EnvelopeError {
     NonEmptyPaymasterInput(Bytes),
     #[error("non-empty reserved dynamic bytes: {0:?}")]
     NonEmptyReservedDynamic(Bytes),
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{L1PriorityEnvelope, L1Tx, ZkEnvelope};
+    use alloy::consensus::transaction::Recovered;
+    use alloy::primitives::{address, b256, bytes};
+    use alloy::sol_types::private::u256;
+
+    #[test]
+    fn l1_rpc_json() {
+        // Test that L1 tx (de)serializes to a reasonable JSON representation
+        let l1_tx_json = serde_json::json!({
+          "type": "0x7f",
+          "hash": "0x4164624346d4c915977debf68dbd721f8ae86b964080925aecf6911dd47a6ece",
+          "initiator": "0x357fe6c9f85dc429596577cf2e7a191f60b6865b",
+          "to": "0x357fe6c9f85dc429596577cf2e7a191f60b6865b",
+          "gas": "0x493e0",
+          "gasPerPubdataByteLimit": "0x320",
+          "maxFeePerGas": "0xee6fcf4",
+          "maxPriorityFeePerGas": "0x0",
+          "nonce": "0x1",
+          "value": "0x32",
+          "toMint": "0x4b08a6610e32",
+          "refundRecipient": "0x357fe6c9f85dc429596577cf2e7a191f60b6865b",
+          "input": "0x",
+          "factoryDeps": [],
+          "blockHash": "0xb88bcbb8c3d67a79e4330b9410fb613f5d4d13747cdc80747b4c29ad32dbdfcc",
+          "blockNumber": "0x3",
+          "transactionIndex": "0x0",
+          "from": "0x357fe6c9f85dc429596577cf2e7a191f60b6865b",
+          "gasPrice": "0xee6fcf4"
+        });
+        let l1_tx: alloy::rpc::types::Transaction<ZkEnvelope> =
+            serde_json::from_value(l1_tx_json.clone()).unwrap();
+
+        let expected_signer = address!("0x357fe6c9f85dc429596577cf2e7a191f60b6865b");
+        let expected_envelope = ZkEnvelope::L1(L1PriorityEnvelope {
+            inner: L1Tx {
+                hash: b256!("0x4164624346d4c915977debf68dbd721f8ae86b964080925aecf6911dd47a6ece"),
+                initiator: expected_signer,
+                to: expected_signer,
+                gas_limit: 0x493e0,
+                gas_per_pubdata_byte_limit: 0x320,
+                max_fee_per_gas: 0xee6fcf4,
+                max_priority_fee_per_gas: 0x0,
+                nonce: 0x1,
+                value: u256(0x32),
+                to_mint: u256(0x4b08a6610e32),
+                refund_recipient: expected_signer,
+                input: bytes!("0x"),
+                factory_deps: vec![],
+                marker: Default::default(),
+            },
+        });
+        let expected_l1_tx = alloy::rpc::types::Transaction {
+            inner: Recovered::new_unchecked(expected_envelope, expected_signer),
+            block_hash: Some(b256!(
+                "0xb88bcbb8c3d67a79e4330b9410fb613f5d4d13747cdc80747b4c29ad32dbdfcc"
+            )),
+            block_number: Some(0x3),
+            transaction_index: Some(0x0),
+            effective_gas_price: Some(0xee6fcf4),
+        };
+        assert_eq!(l1_tx, expected_l1_tx);
+
+        let roundback_l1_tx_json = serde_json::to_value(&l1_tx).unwrap();
+        assert_eq!(roundback_l1_tx_json, l1_tx_json);
+    }
 }
