@@ -151,25 +151,25 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                     (Some(envelopes), ranges)
                 }
                 None => {
-                    let new_executed_batch_number = self
+                    let _ = self
                         .finality
                         .subscribe()
                         .wait_for(|f| last_processed_batch < f.last_executed_batch)
                         .await
-                        .context("failed to wait for finalized block")?
-                        .last_executed_batch;
-                    let batch_numbers: Vec<_> =
-                        ((last_processed_batch + 1)..=new_executed_batch_number).collect();
-                    let mut ranges = Vec::with_capacity(batch_numbers.len());
-                    for i in batch_numbers {
-                        let range = self
-                            .batch_storage
-                            .get_batch_range_by_number(i)
-                            .await
-                            .with_context(|| format!("failed to get batch {i} from storage"))?
-                            .with_context(|| format!("batch {i} not found in storage"))?;
-                        ranges.push((i, range));
-                    }
+                        .context("failed to wait for next finalized batch")?;
+
+                    let next_batch_number = last_processed_batch + 1;
+                    let range = self
+                        .batch_storage
+                        .get_batch_range_by_number(next_batch_number)
+                        .await
+                        .with_context(|| {
+                            format!("failed to get batch {next_batch_number} from storage")
+                        })?
+                        .with_context(|| {
+                            format!("batch {next_batch_number} not found in storage")
+                        })?;
+                    let ranges = vec![(next_batch_number, range)];
                     (None, ranges)
                 }
             };
