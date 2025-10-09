@@ -182,6 +182,9 @@ jobs:
         run: cargo build --release --bin zksync_os_bin
 
       - name: Run server
+        env:
+          # Do not use colored logs, otherwise logfile contains ANSI codes that are not human-readable
+          LOG_USE_COLOR: false
         run: cargo run --release --bin zksync_os_bin > ${SERVER_LOGFILE} 2>&1 &
 
       - name: Wait for zksync OS to start
