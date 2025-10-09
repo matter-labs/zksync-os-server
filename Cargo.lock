@@ -11554,7 +11554,7 @@ checksum = "4c8927d36dbdd25c8ffa58eb6f88d7bd6815f833272ba46da4d7382d0ce5ffd1"
 [[package]]
 name = "zksync_os_fri_prover"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?rev=c5ed6d3962c2d07352feaa39e045b3ce1ec404ba#c5ed6d3962c2d07352feaa39e045b3ce1ec404ba"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.4.7#c95c4afcb87ddc6b4e30c7ba649418a9888e254d"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -11828,7 +11828,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_prover_service"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?rev=c5ed6d3962c2d07352feaa39e045b3ce1ec404ba#c5ed6d3962c2d07352feaa39e045b3ce1ec404ba"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.4.7#c95c4afcb87ddc6b4e30c7ba649418a9888e254d"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -11950,7 +11950,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_snark_prover"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?rev=c5ed6d3962c2d07352feaa39e045b3ce1ec404ba#c5ed6d3962c2d07352feaa39e045b3ce1ec404ba"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.4.7#c95c4afcb87ddc6b4e30c7ba649418a9888e254d"
 dependencies = [
  "anyhow",
  "clap",
@@ -12098,7 +12098,7 @@ dependencies = [
 [[package]]
 name = "zksync_sequencer_proof_client"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?rev=c5ed6d3962c2d07352feaa39e045b3ce1ec404ba#c5ed6d3962c2d07352feaa39e045b3ce1ec404ba"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.4.7#c95c4afcb87ddc6b4e30c7ba649418a9888e254d"
 dependencies = [
  "anyhow",
  "async-trait",
