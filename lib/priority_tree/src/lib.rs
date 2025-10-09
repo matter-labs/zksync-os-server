@@ -267,7 +267,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
             "priority_tree_manager#keep_caching",
             GenericComponentState::Processing,
         );
-        let mut executed_batch_numbers = self.finality.subscribe();
+        let mut finality_receiver = self.finality.subscribe();
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -276,7 +276,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                     .recv()
                     .await
                     .context("`priority_ops_internal_receiver` closed")?;
-            executed_batch_numbers
+            finality_receiver
                 .wait_for(|f| last_block_number <= f.last_executed_block)
                 .await
                 .context("failed to wait for executed block number")?;
