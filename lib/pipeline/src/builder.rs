@@ -1,11 +1,14 @@
 use crate::PipelineComponent;
 use crate::peekable_receiver::PeekableReceiver;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::sync::mpsc;
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
-    tasks: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>>,
+    tasks: Vec<(
+        &'static str, // component name
+        Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>,
+    )>,
     receiver: PeekableReceiver<Output>,
 }
 
@@ -17,15 +20,27 @@ impl Default for Pipeline<()> {
 
 impl Pipeline<()> {
     pub fn new() -> Self {
-        let (sender, receiver) = mpsc::channel(1);
+        let (_sender, receiver) = mpsc::channel(1);
         Self {
-            tasks: vec![Box::new(move || {
-                tokio::spawn(
-                    async move { sender.send(()).await.context("failed to send source input") },
-                )
-            })],
+            tasks: vec![],
             receiver: PeekableReceiver::new(receiver),
         }
+    }
+
+    /// Spawn all pipeline component tasks into a JoinSet
+    pub fn spawn(self, tasks: &mut tokio::task::JoinSet<()>) {
+        // Spawn all component tasks into JoinSet (these run indefinitely)
+        for (name, task_fn) in self.tasks {
+            let handle = task_fn();
+            tasks.spawn(async move {
+                match handle.await {
+                    Ok(_) => tracing::warn!("{name} unexpectedly exited"),
+                    Err(e) => tracing::error!("{name} failed: {e:#?}"),
+                }
+            });
+        }
+        // Drop the receiver - for terminal pipelines we don't need it
+        drop(self.receiver);
     }
 }
 
@@ -38,9 +53,12 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
         let input_receiver = self.receiver;
 
-        self.tasks.push(Box::new(move || {
-            tokio::spawn(async move { component.run(input_receiver, output_sender).await })
-        }));
+        self.tasks.push((
+            C::NAME,
+            Box::new(move || {
+                tokio::spawn(async move { component.run(input_receiver, output_sender).await })
+            }),
+        ));
 
         Pipeline {
             tasks: self.tasks,
@@ -59,43 +77,16 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
         let input_receiver = self.receiver.prepend(prepend);
 
-        self.tasks.push(Box::new(move || {
-            tokio::spawn(async move { component.run(input_receiver, output_sender).await })
-        }));
+        self.tasks.push((
+            C::NAME,
+            Box::new(move || {
+                tokio::spawn(async move { component.run(input_receiver, output_sender).await })
+            }),
+        ));
 
         Pipeline {
             tasks: self.tasks,
             receiver: PeekableReceiver::new(output_receiver),
         }
-    }
-
-    /// Spawn all pipeline component tasks into a JoinSet
-    ///
-    /// Use this for terminal pipelines ending with a Sink component.
-    /// This spawns all component tasks into the provided JoinSet and drops the final receiver.
-    ///
-    /// The bootstrap task (from Pipeline::new) runs but is not tracked in the JoinSet since it
-    /// completes after sending one message. Component tasks run indefinitely and are tracked.
-    pub fn spawn(self, tasks: &mut tokio::task::JoinSet<()>) {
-        let mut task_iter = self.tasks.into_iter();
-
-        // Run the first task (bootstrap task from Pipeline::new) but don't track it
-        // This task sends one () and exits - that's expected behavior
-        if let Some(bootstrap_fn) = task_iter.next() {
-            bootstrap_fn(); // Spawn into runtime but don't track
-        }
-
-        // Spawn remaining component tasks into JoinSet (these run indefinitely)
-        for task_fn in task_iter {
-            let handle = task_fn();
-            tasks.spawn(async move {
-                if let Err(e) = handle.await {
-                    tracing::error!("Pipeline task panicked: {e:?}");
-                }
-            });
-        }
-
-        // Drop the receiver - for terminal pipelines we don't need it
-        drop(self.receiver);
     }
 }
