@@ -13,7 +13,7 @@ use std::sync::Arc;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_object_store::_reexports::BoxedError;
 use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
-use zksync_os_storage_api::{ReadBatch, UpdateBatchIndex};
+use zksync_os_storage_api::{ReadBatch, ReadFinality, UpdateBatchIndex};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -145,6 +145,7 @@ impl ReadBatch for ProofStorage {
     async fn get_batch_by_block_number(
         &self,
         block_number: BlockNumber,
+        _: &dyn ReadFinality,
     ) -> anyhow::Result<Option<u64>> {
         // Handle genesis block with a special case as we don't store it in the DB.
         if block_number == 0 {

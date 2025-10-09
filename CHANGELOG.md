@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.8.0](https://github.com/matter-labs/zksync-os-server/compare/v0.7.5...v0.8.0) (2025-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* Protocol upgrade v1.1 ([#487](https://github.com/matter-labs/zksync-os-server/issues/487))
+
+### Features
+
+* add config for fee params override ([#489](https://github.com/matter-labs/zksync-os-server/issues/489)) ([13587e5](https://github.com/matter-labs/zksync-os-server/commit/13587e529f24f5b1ea6158626403b751e3504b56))
+* add more general metrics ([#468](https://github.com/matter-labs/zksync-os-server/issues/468)) ([079a285](https://github.com/matter-labs/zksync-os-server/commit/079a28539dad438d5c483f9103661ef3f52d7e6e))
+* Adding more documentation ([#455](https://github.com/matter-labs/zksync-os-server/issues/455)) ([2ed7bc7](https://github.com/matter-labs/zksync-os-server/commit/2ed7bc766d55d3bd682b7c4dcbce04a6a35a6bd3))
+* ensure L1 tx is deserializable from RPC response ([#484](https://github.com/matter-labs/zksync-os-server/issues/484)) ([80abbcb](https://github.com/matter-labs/zksync-os-server/commit/80abbcb56c5f876d468bac34b5380ce08a6b4027))
+* get rid of `Source`/`Sink` ([#461](https://github.com/matter-labs/zksync-os-server/issues/461)) ([762c9b7](https://github.com/matter-labs/zksync-os-server/commit/762c9b788743813a4b55d138701f7c620e3cc901))
+* **l1-watcher:** track last committed/executed batch in finality ([#485](https://github.com/matter-labs/zksync-os-server/issues/485)) ([11c715c](https://github.com/matter-labs/zksync-os-server/commit/11c715c51522e2f2d90421aab2d483274bd81d40))
+* make mempool configurable ([#464](https://github.com/matter-labs/zksync-os-server/issues/464)) ([63f9f69](https://github.com/matter-labs/zksync-os-server/commit/63f9f69fcb6486f9e57dc983c7efcf14c0623a69))
+* Peek batch data from State ([#458](https://github.com/matter-labs/zksync-os-server/issues/458)) ([05ed98b](https://github.com/matter-labs/zksync-os-server/commit/05ed98b3977bebea91f489e7f33c95612a55d4c8))
+* Peek FRI Proofs from ProofStorage ([#470](https://github.com/matter-labs/zksync-os-server/issues/470)) ([0b5bbec](https://github.com/matter-labs/zksync-os-server/commit/0b5bbeca5285e26c68e5bb91d1050d33b1bfdf31))
+* pipeline framework (3/X) - migrate FriJobManager ([#465](https://github.com/matter-labs/zksync-os-server/issues/465)) ([2e012d9](https://github.com/matter-labs/zksync-os-server/commit/2e012d9ce4ffa9217dbb471293735a12c30f1e46))
+* pipeline framework (4/X): migrate gapless committer ([#467](https://github.com/matter-labs/zksync-os-server/issues/467)) ([07cccce](https://github.com/matter-labs/zksync-os-server/commit/07cccce96472794d0e4dfb322b73ae832d7980de))
+* pipeline framework (5/X) - migrate l1 committer ([#472](https://github.com/matter-labs/zksync-os-server/issues/472)) ([2ead9a0](https://github.com/matter-labs/zksync-os-server/commit/2ead9a0f857fb4af828332be9ce66a3544234efa))
+* pipeline framework (PR 2/X) - `pipe()` syntax; consume `self`; migrate batcher ([#448](https://github.com/matter-labs/zksync-os-server/issues/448)) ([7366acc](https://github.com/matter-labs/zksync-os-server/commit/7366accd4f587da5b789fa0a730f49ba0e9c294c))
+* pipeline framework PR 6/X - migrate l1 sender proves and SnarkJobsManager ([#477](https://github.com/matter-labs/zksync-os-server/issues/477)) ([84d87d6](https://github.com/matter-labs/zksync-os-server/commit/84d87d6b4f777467072b1b5398690fb8daa2e4d7))
+* pipeline framework PR 7/X - priority tree migrated ([#479](https://github.com/matter-labs/zksync-os-server/issues/479)) ([2bc7250](https://github.com/matter-labs/zksync-os-server/commit/2bc72500e65301600cd25c4768e65ad9d46e6871))
+* Protocol upgrade v1.1 ([#487](https://github.com/matter-labs/zksync-os-server/issues/487)) ([3f49fbc](https://github.com/matter-labs/zksync-os-server/commit/3f49fbc6640223fe02b90b38d5ef34f4731002a9))
+* refactor priority tree ([#483](https://github.com/matter-labs/zksync-os-server/issues/483)) ([d12b99f](https://github.com/matter-labs/zksync-os-server/commit/d12b99f1780d3fbc2b3518a88db570d065d60083))
+* set pubdata price to `1` ([#476](https://github.com/matter-labs/zksync-os-server/issues/476)) ([dcd060c](https://github.com/matter-labs/zksync-os-server/commit/dcd060ce6ffc1f5ab5b00a706d1d61dc2697fb09))
+* update zksync-os to v0.0.26 and interface to v0.0.7 ([#429](https://github.com/matter-labs/zksync-os-server/issues/429)) ([f22e478](https://github.com/matter-labs/zksync-os-server/commit/f22e478bd14f9342bbf88ec3c0516434e6cab265))
+* wait for tx in block context provider ([#478](https://github.com/matter-labs/zksync-os-server/issues/478)) ([d6e87b7](https://github.com/matter-labs/zksync-os-server/commit/d6e87b7522289f83c6b5f90ad41ae63b80e8abf3))
+
+
+### Bug Fixes
+
+* Add TxValidatorConfig to schema ([#475](https://github.com/matter-labs/zksync-os-server/issues/475)) ([797a0b5](https://github.com/matter-labs/zksync-os-server/commit/797a0b5744f6281b3fb2ac2f567c1a12f2638478))
+* **multivm:** use correct directories and default version ([#490](https://github.com/matter-labs/zksync-os-server/issues/490)) ([35e5440](https://github.com/matter-labs/zksync-os-server/commit/35e54407a7574aaedb7c0d61292d1436cc8404fe))
+
 ## [0.7.5](https://github.com/matter-labs/zksync-os-server/compare/v0.7.4...v0.7.5) (2025-10-06)
 
 

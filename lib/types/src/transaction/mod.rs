@@ -144,7 +144,7 @@ impl ZkTransaction {
 
 impl From<L1UpgradeEnvelope> for ZkTransaction {
     fn from(value: L1UpgradeEnvelope) -> Self {
-        let signer = value.inner.tx().from;
+        let signer = value.inner.initiator;
         Self {
             inner: Recovered::new_unchecked(ZkEnvelope::Upgrade(value), signer),
         }
@@ -153,7 +153,7 @@ impl From<L1UpgradeEnvelope> for ZkTransaction {
 
 impl From<L1PriorityEnvelope> for ZkTransaction {
     fn from(value: L1PriorityEnvelope) -> Self {
-        let signer = value.inner.tx().from;
+        let signer = value.inner.initiator;
         Self {
             inner: Recovered::new_unchecked(ZkEnvelope::L1(value), signer),
         }

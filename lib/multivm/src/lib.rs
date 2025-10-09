@@ -28,7 +28,7 @@ pub fn run_block<
     tracer: &mut Tracer,
 ) -> Result<BlockOutput, anyhow::Error> {
     match block_context.execution_version {
-        1 | 2 => {
+        1..=3 => {
             let object = RunBlockForwardV2 {};
             object
                 .run_block(
@@ -54,7 +54,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     tracer: &mut Tracer,
 ) -> Result<Result<TxOutput, InvalidTransaction>, anyhow::Error> {
     match block_context.execution_version {
-        1 | 2 => {
+        1..=3 => {
             let object = RunBlockForwardV2 {};
             object
                 .simulate_tx(
@@ -71,11 +71,11 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     }
 }
 
-pub const LATEST_EXECUTION_VERSION: u32 = 2;
+pub const LATEST_EXECUTION_VERSION: u32 = 3;
 
 pub fn proving_run_execution_version(forward_run_execution_version: u32) -> u32 {
     match forward_run_execution_version {
-        1 | 2 => 2,
+        1..=3 => 3,
         v => panic!("Unsupported ZKsync OS execution version: {v}"),
     }
 }

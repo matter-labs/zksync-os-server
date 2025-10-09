@@ -1,4 +1,4 @@
-pub mod v2 {
+pub mod v3 {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
@@ -11,7 +11,7 @@ pub mod v2 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v2");
+            let dir_path = base_dir.join("v3");
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("server_app.bin");
@@ -30,7 +30,7 @@ pub mod v2 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v2");
+            let dir_path = base_dir.join("v3");
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("server_app_logging_enabled.bin");
@@ -49,7 +49,7 @@ pub mod v2 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v2");
+            let dir_path = base_dir.join("v3");
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("multiblock_batch.bin");
