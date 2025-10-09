@@ -71,7 +71,7 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     }
 }
 
-pub const LATEST_EXECUTION_VERSION: u32 = 2;
+pub const LATEST_EXECUTION_VERSION: u32 = 3;
 
 pub fn proving_run_execution_version(forward_run_execution_version: u32) -> u32 {
     match forward_run_execution_version {
