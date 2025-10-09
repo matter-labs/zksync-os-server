@@ -223,7 +223,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let node_startup_state = NodeStateOnStartup {
         is_main_node: config.sequencer_config.is_main_node(),
-        l1_state,
+        l1_state: l1_state.clone(),
         state_block_range_available: state.block_range_available(),
         block_replay_storage_last_block: block_replay_storage.latest_block().unwrap_or(0),
         tree_last_block: tree_db
@@ -280,7 +280,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Initializing L1 Watchers");
     let finality_storage = Finality::new(FinalityStatus {
         last_committed_block: last_l1_committed_block,
+        last_committed_batch: l1_state.last_committed_batch,
         last_executed_block: last_l1_executed_block,
+        last_executed_batch: l1_state.last_executed_batch,
     });
 
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -679,7 +681,6 @@ async fn run_main_node_pipeline<
     // PriorityTree pipeline component: receives proven batches, outputs execute commands
     let priority_tree_step = PriorityTreePipelineStep::new(
         block_replay_storage.clone(),
-        node_state_on_startup.last_l1_executed_block,
         Path::new(
             &config
                 .general_config
@@ -689,6 +690,7 @@ async fn run_main_node_pipeline<
         batch_storage.clone(),
         finality,
     )
+    .await
     .unwrap();
 
     let pipeline_after_priority_tree = pipeline_after_l1_proof_sender
@@ -759,7 +761,7 @@ async fn run_en_pipeline<
         .last_l1_executed_block
         .min(node_state_on_startup.block_replay_storage_last_block);
     let batch_of_last_ready_block = batch_storage
-        .get_batch_by_block_number(last_ready_block)
+        .get_batch_by_block_number(last_ready_block, &finality)
         .await
         .unwrap()
         .unwrap();
@@ -773,17 +775,10 @@ async fn run_en_pipeline<
     } else {
         batch_of_last_ready_block.saturating_sub(1)
     };
-    let init_block = batch_storage
-        .get_batch_range_by_number(last_ready_batch)
-        .await
-        .unwrap()
-        .unwrap()
-        .1;
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     let priority_tree_en_step = PriorityTreeENStep::new(
         block_replay_storage.clone(),
-        init_block,
         Path::new(
             &config
                 .general_config
@@ -792,7 +787,9 @@ async fn run_en_pipeline<
         ),
         batch_storage.clone(),
         finality,
+        last_ready_batch,
     )
+    .await
     .unwrap();
 
     tasks.spawn(

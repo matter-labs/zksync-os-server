@@ -1,5 +1,5 @@
 use crate::db::PriorityTreeDB;
-use alloy::primitives::{B256, BlockNumber, TxHash};
+use alloy::primitives::{B256, TxHash};
 use anyhow::Context;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,26 +18,42 @@ use zksync_os_types::ZkEnvelope;
 mod db;
 
 #[derive(Clone)]
-pub struct PriorityTreeManager<ReplayStorage, Finality> {
+pub struct PriorityTreeManager<ReplayStorage, Finality, BatchStorage> {
     merkle_tree: Arc<Mutex<MiniMerkleTree<PriorityOpsLeaf>>>,
     replay_storage: ReplayStorage,
     db: PriorityTreeDB,
     finality: Finality,
-    last_executed_block_on_init: u64,
+    batch_storage: BatchStorage,
+    last_executed_batch_on_init: u64,
 }
 
-impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
-    PriorityTreeManager<ReplayStorage, Finality>
+impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
+    PriorityTreeManager<ReplayStorage, Finality, BatchStorage>
 {
-    pub fn new(
+    pub async fn new(
         replay_storage: ReplayStorage,
-        last_executed_block: BlockNumber,
         db_path: &Path,
         finality: Finality,
+        batch_storage: BatchStorage,
+        last_executed_batch: u64,
     ) -> anyhow::Result<Self> {
         let started_at = Instant::now();
         let db = PriorityTreeDB::new(db_path);
         let (initial_block_number, mut merkle_tree) = db.init_tree()?;
+        let last_executed_block = batch_storage
+            .get_batch_range_by_number(last_executed_batch)
+            .await
+            .with_context(|| {
+                format!(
+                    "cannot initialize priority tree: batch {last_executed_batch} not found in storage"
+                )
+            })?
+            .with_context(|| {
+                format!(
+                    "cannot initialize priority tree: batch {last_executed_batch} has no associated blocks"
+                )
+            })?
+            .1;
 
         tracing::debug!(
             persisted_up_to = initial_block_number,
@@ -72,7 +88,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
             replay_storage,
             db,
             finality,
-            last_executed_block_on_init: last_executed_block,
+            batch_storage,
+            last_executed_batch_on_init: last_executed_batch,
         })
     }
 
@@ -82,9 +99,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
     ///   and it will forward the proven batch envelopes along with the priority ops proofs.
     /// - For the EN: you must provide neither `proved_batch_envelopes_receiver` nor `execute_batches_sender`
     ///   and it will keep adding new transactions to the tree for finalized blocks.
-    pub async fn prepare_execute_commands<BatchStorage: ReadBatch>(
+    pub async fn prepare_execute_commands(
         self,
-        batch_storage: BatchStorage,
         main_node_channels: Option<(
             mpsc::Receiver<BatchEnvelope<FriProof>>,
             mpsc::Sender<ExecuteCommand>,
@@ -97,7 +113,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
         );
         let (mut proved_batch_envelopes_receiver, execute_batches_sender) =
             main_node_channels.unzip();
-        let mut last_processed_block = self.last_executed_block_on_init;
+        let mut last_processed_batch = self.last_executed_batch_on_init;
 
         async fn take_n<T>(receiver: &mut mpsc::Receiver<T>, n: usize) -> anyhow::Result<Vec<T>> {
             let mut out = Vec::default();
@@ -128,44 +144,26 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
                         .collect::<Vec<_>>();
                     // Sanity check: we must receive the next batch in sequence.
                     assert_eq!(
-                        ranges[0].1.0,
-                        last_processed_block + 1,
+                        ranges[0].0,
+                        last_processed_batch + 1,
                         "Unexpected envelope received"
                     );
                     (Some(envelopes), ranges)
                 }
                 None => {
-                    let new_executed_block_number = self
+                    let new_executed_batch_number = self
                         .finality
                         .subscribe()
-                        .wait_for(|f| last_processed_block < f.last_executed_block)
+                        .wait_for(|f| last_processed_batch < f.last_executed_batch)
                         .await
                         .context("failed to wait for finalized block")?
-                        .last_executed_block;
-                    let from_batch = batch_storage
-                        .get_batch_by_block_number(last_processed_block + 1)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to get get_batch_by_block_number({})",
-                                last_processed_block + 1
-                            )
-                        })?
-                        .with_context(|| {
-                            format!(
-                                "get_batch_by_block_number({}) returned `None`",
-                                last_processed_block + 1
-                            )
-                        })?;
-                    let to_batch = batch_storage
-                        .get_batch_by_block_number(new_executed_block_number)
-                        .await
-                        .with_context(|| format!("failed to get get_batch_by_block_number({new_executed_block_number})"))?
-                        .with_context(|| format!("get_batch_by_block_number({new_executed_block_number}) returned `None`"))?;
-                    let batch_numbers: Vec<_> = (from_batch..=to_batch).collect();
+                        .last_executed_batch;
+                    let batch_numbers: Vec<_> =
+                        ((last_processed_batch + 1)..=new_executed_batch_number).collect();
                     let mut ranges = Vec::with_capacity(batch_numbers.len());
                     for i in batch_numbers {
-                        let range = batch_storage
+                        let range = self
+                            .batch_storage
                             .get_batch_range_by_number(i)
                             .await
                             .with_context(|| format!("failed to get batch {i} from storage"))?
@@ -256,7 +254,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality + Clone>
                 s.send(ExecuteCommand::new(batch_envelopes.unwrap(), priority_ops))
                     .await?;
             }
-            last_processed_block = batch_ranges.last().unwrap().1.1;
+            last_processed_batch = batch_ranges.last().unwrap().0;
         }
     }
 

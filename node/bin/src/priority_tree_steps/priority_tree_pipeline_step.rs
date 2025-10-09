@@ -17,46 +17,46 @@ use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay};
 /// Internally manages:
 /// - `prepare_execute_commands` task: processes proven batches and generates execute commands
 /// - `keep_caching` task: persists priority tree for executed batches
-pub struct PriorityTreePipelineStep<BatchStorage, BlockStorage, Finality> {
-    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality>,
-    batch_storage: BatchStorage,
+pub struct PriorityTreePipelineStep<BlockStorage, Finality, BatchStorage> {
+    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality, BatchStorage>,
 }
 
-impl<BatchStorage, BlockStorage, Finality>
-    PriorityTreePipelineStep<BatchStorage, BlockStorage, Finality>
+impl<BlockStorage, Finality, BatchStorage>
+    PriorityTreePipelineStep<BlockStorage, Finality, BatchStorage>
 where
-    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
     BlockStorage: ReadReplay + Clone + Send + Sync + 'static,
     Finality: ReadFinality + Clone + Send + 'static,
+    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
 {
-    pub fn new(
+    pub async fn new(
         block_storage: BlockStorage,
-        last_executed_block: u64,
         db_path: &Path,
         batch_storage: BatchStorage,
         finality: Finality,
     ) -> anyhow::Result<Self> {
+        let finality_status = finality.get_finality_status();
         let priority_tree_manager = PriorityTreeManager::new(
             block_storage,
-            last_executed_block,
             db_path,
             finality.clone(),
-        )?;
+            batch_storage,
+            finality_status.last_executed_batch,
+        )
+        .await?;
 
         Ok(Self {
             priority_tree_manager,
-            batch_storage,
         })
     }
 }
 
 #[async_trait]
-impl<BatchStorage, BlockStorage, Finality> PipelineComponent
-    for PriorityTreePipelineStep<BatchStorage, BlockStorage, Finality>
+impl<BlockStorage, Finality, BatchStorage> PipelineComponent
+    for PriorityTreePipelineStep<BlockStorage, Finality, BatchStorage>
 where
-    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
     BlockStorage: ReadReplay + Clone + Send + Sync + 'static,
     Finality: ReadFinality + Clone + Send + 'static,
+    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
 {
     type Input = BatchEnvelope<FriProof>;
     type Output = ExecuteCommand;
@@ -76,14 +76,12 @@ where
         // Clone what we need before moving into async blocks
         let priority_tree_manager_for_prepare = self.priority_tree_manager.clone();
         let priority_tree_manager_for_caching = self.priority_tree_manager;
-        let batch_storage_for_prepare = self.batch_storage;
 
         // Spawn the three tasks that make up the priority tree subsystem
         let prepare_task = tokio::spawn({
             async move {
                 priority_tree_manager_for_prepare
                     .prepare_execute_commands(
-                        batch_storage_for_prepare,
                         Some((input.into_inner(), output)),
                         priority_txs_internal_sender,
                     )

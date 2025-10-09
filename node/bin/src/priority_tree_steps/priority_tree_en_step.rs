@@ -9,30 +9,34 @@ use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay};
 /// - Doesn't act as pipeline step - launched as a standalone task instead
 /// - Doesn't output execute commands (EN doesn't execute on L1)
 /// - Watches finalized batch numbers instead of batch envelopes
-pub struct PriorityTreeENStep<BatchStorage, BlockStorage, Finality> {
-    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality>,
-    batch_storage: BatchStorage,
+pub struct PriorityTreeENStep<BlockStorage, Finality, BatchStorage> {
+    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality, BatchStorage>,
 }
 
-impl<BatchStorage, BlockStorage, Finality> PriorityTreeENStep<BatchStorage, BlockStorage, Finality>
+impl<BlockStorage, Finality, BatchStorage> PriorityTreeENStep<BlockStorage, Finality, BatchStorage>
 where
-    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
     BlockStorage: ReadReplay + Clone + Send + Sync + 'static,
     Finality: ReadFinality + Clone + Send + 'static,
+    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
 {
-    pub fn new(
+    pub async fn new(
         block_storage: BlockStorage,
-        init_block: u64,
         db_path: &Path,
         batch_storage: BatchStorage,
         finality: Finality,
+        last_ready_batch: u64,
     ) -> anyhow::Result<Self> {
-        let priority_tree_manager =
-            PriorityTreeManager::new(block_storage, init_block, db_path, finality.clone())?;
+        let priority_tree_manager = PriorityTreeManager::new(
+            block_storage,
+            db_path,
+            finality.clone(),
+            batch_storage,
+            last_ready_batch,
+        )
+        .await?;
 
         Ok(Self {
             priority_tree_manager,
-            batch_storage,
         })
     }
 
@@ -48,10 +52,9 @@ where
 
         // Task 1: Prepare execute commands (but don't send them)
         let prepare_task = tokio::spawn({
-            let batch_storage = self.batch_storage.clone();
             async move {
                 priority_tree_manager_for_prepare
-                    .prepare_execute_commands(batch_storage, None, priority_txs_internal_sender)
+                    .prepare_execute_commands(None, priority_txs_internal_sender)
                     .await
             }
         });
