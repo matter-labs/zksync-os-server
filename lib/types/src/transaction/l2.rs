@@ -5,10 +5,8 @@ use alloy::consensus::{
     EthereumTypedTransaction, SignableTransaction, Signed, TransactionEnvelope, TxEip1559,
     TxEip2930, TxEip4844Variant, TxEip7702, TxLegacy,
 };
-use alloy::eips::Decodable2718;
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
-use alloy::primitives::{B256, Signature, TxHash};
-use alloy_rlp::Decodable;
+use alloy::primitives::{B256, Signature};
 use std::fmt;
 
 /// L2 transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth we
@@ -319,12 +317,12 @@ where
     Self: Clone
         + PartialEq
         + Eq
-        + Decodable
-        + Decodable2718
+        + alloy::rlp::Decodable
+        + alloy::eips::Decodable2718
         + reth_primitives_traits::MaybeSerde
         + reth_primitives_traits::InMemorySize,
 {
-    fn tx_hash(&self) -> &TxHash {
+    fn tx_hash(&self) -> &alloy::primitives::TxHash {
         match self {
             Self::Legacy(tx) => tx.hash(),
             Self::Eip2930(tx) => tx.hash(),
