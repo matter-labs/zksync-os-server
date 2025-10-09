@@ -279,7 +279,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
             executed_batch_numbers
                 .wait_for(|f| last_block_number <= f.last_executed_block)
                 .await
-                .context("failed to wait for executed batch number")?;
+                .context("failed to wait for executed block number")?;
 
             latency_tracker.enter_state(GenericComponentState::Processing);
             let mut tree = self.merkle_tree.lock().await;
