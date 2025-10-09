@@ -24,10 +24,7 @@ pub async fn send_executed_and_replayed_batch_numbers<
         timer.tick().await;
 
         let finality_status = finality_storage.get_finality_status();
-        let batch_number = batch_storage
-            .get_batch_by_block_number(finality_status.last_executed_block)
-            .await?
-            .context("Missing batch number for the the executed block")?;
+        let batch_number = finality_status.last_executed_batch;
         let prev_cursor = cursor;
         for batch in prev_cursor..=batch_number {
             let last_block_number = batch_storage

@@ -22,7 +22,7 @@ pub struct PriorityTreePipelineStep<BatchStorage, BlockStorage, Finality> {
     priority_tree_manager: PriorityTreeManager<BlockStorage>,
     batch_storage: BatchStorage,
     finality: Finality,
-    last_executed_block: u64,
+    last_executed_batch: u64,
     _phantom: std::marker::PhantomData<BlockStorage>,
 }
 
@@ -35,19 +35,19 @@ where
 {
     pub fn new(
         block_storage: BlockStorage,
-        last_executed_block: u64,
         db_path: &Path,
         batch_storage: BatchStorage,
         finality: Finality,
     ) -> anyhow::Result<Self> {
+        let finality_status = finality.get_finality_status();
         let priority_tree_manager =
-            PriorityTreeManager::new(block_storage, last_executed_block, db_path)?;
+            PriorityTreeManager::new(block_storage, finality_status.last_executed_block, db_path)?;
 
         Ok(Self {
             priority_tree_manager,
             batch_storage,
             finality,
-            last_executed_block,
+            last_executed_batch: finality_status.last_executed_batch,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -85,7 +85,7 @@ where
         let batch_storage_for_prepare = self.batch_storage.clone();
         let batch_storage_for_finalized = self.batch_storage;
         let finality = self.finality;
-        let last_executed_block = self.last_executed_block;
+        let last_executed_batch = self.last_executed_batch;
 
         // Spawn the three tasks that make up the priority tree subsystem
         let prepare_task = tokio::spawn({
@@ -103,13 +103,6 @@ where
         });
 
         let finalized_blocks_task = tokio::spawn(async move {
-            // Convert block number to batch number for send_executed_and_replayed_batch_numbers
-            let last_executed_batch = batch_storage_for_finalized
-                .get_batch_by_block_number(last_executed_block)
-                .await
-                .expect("Failed to get batch by block number")
-                .expect("Missing batch for executed block");
-
             super::super::util::finalized_block_channel::send_executed_and_replayed_batch_numbers(
                 executed_batch_numbers_sender,
                 batch_storage_for_finalized,
