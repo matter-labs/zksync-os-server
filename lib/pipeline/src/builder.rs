@@ -69,16 +69,33 @@ impl<Output: Send + 'static> Pipeline<Output> {
         }
     }
 
-    /// Consume the pipeline and return the output receiver
+    /// Spawn all pipeline component tasks into a JoinSet
     ///
-    /// This spawns all tasks and returns the receiver for the final output.
-    /// Useful when you need to manually consume the pipeline output with another component.
-    pub fn into_receiver(self) -> PeekableReceiver<Output> {
-        // Spawn all tasks
-        for task_fn in self.tasks {
-            task_fn();
+    /// Use this for terminal pipelines ending with a Sink component.
+    /// This spawns all component tasks into the provided JoinSet and drops the final receiver.
+    ///
+    /// The bootstrap task (from Pipeline::new) runs but is not tracked in the JoinSet since it
+    /// completes after sending one message. Component tasks run indefinitely and are tracked.
+    pub fn spawn(self, tasks: &mut tokio::task::JoinSet<()>) {
+        let mut task_iter = self.tasks.into_iter();
+
+        // Run the first task (bootstrap task from Pipeline::new) but don't track it
+        // This task sends one () and exits - that's expected behavior
+        if let Some(bootstrap_fn) = task_iter.next() {
+            bootstrap_fn(); // Spawn into runtime but don't track
         }
 
-        self.receiver
+        // Spawn remaining component tasks into JoinSet (these run indefinitely)
+        for task_fn in task_iter {
+            let handle = task_fn();
+            tasks.spawn(async move {
+                if let Err(e) = handle.await {
+                    tracing::error!("Pipeline task panicked: {e:?}");
+                }
+            });
+        }
+
+        // Drop the receiver - for terminal pipelines we don't need it
+        drop(self.receiver);
     }
 }

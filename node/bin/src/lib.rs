@@ -20,11 +20,11 @@ mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
 
-use crate::batch_sink::BatchSink;
+use crate::batch_sink::{BatchSink, NoOpSink};
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::block_replay_storage::BlockReplayStorage;
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
-use crate::config::{Config, L1SenderConfig, ProverApiConfig};
+use crate::config::{Config, ProverApiConfig};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
@@ -51,28 +51,25 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use ruint::aliases::U256;
-use smart_config::value::ExposeSecret;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::l1_discovery::{L1State, get_l1_state};
 use zksync_os_l1_sender::pipeline_component::L1Sender;
-use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_mempool::RethPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
+use zksync_os_pipeline::Pipeline;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
@@ -80,10 +77,7 @@ use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
-use zksync_os_storage_api::{
-    FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    RepositoryBlock, WriteState,
-};
+use zksync_os_storage_api::{FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock, WriteState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -382,7 +376,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
     // todo: `BlockContextProvider` initialization and its dependencies
-    // should be moved to `sequencer`. Left here to reduce the PR size.
+    // should be moved to `sequencer`
     let block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>> =
         BlockContextProvider::new(
             next_l1_priority_id,
@@ -524,35 +518,6 @@ async fn run_main_node_pipeline<
     chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-    // NOTE: the execution pipeline is being migrated to the Pipeline Framework.
-    // The current state is intermediary.
-
-    // Migrated components:
-    // CommandSource -> Sequencer -> TreeManager -> ProverInputGenerator -> Batcher
-    // -> FriProverManager -> GaplessCommitter -> L1Committer -> SnarkProverManager -> L1ProofSender
-    // Other components (not migrated yet):
-    // -> PriorityTree -> L1Executor
-
-    let pipeline = zksync_os_pipeline::Pipeline::new()
-        .pipe(MainNodeCommandSource {
-            block_replay_storage: block_replay_storage.clone(),
-            starting_block,
-            block_time: config.sequencer_config.block_time,
-            max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-        })
-        .pipe(Sequencer {
-            block_context_provider,
-            state: state.clone(),
-            wal: block_replay_storage.clone(),
-            repositories: repositories.clone(),
-            sequencer_config: config.sequencer_config.clone().into(),
-        })
-        .pipe(TreeManager { tree: tree.clone() });
-
-    // Channel between `L1Executor` and `BatchSink`
-    let (fully_processed_batch_sender, fully_processed_batch_receiver) =
-        tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
-
     let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
         load_genesis_stored_batch_info(genesis_block, tree.clone()).await
     } else {
@@ -566,20 +531,9 @@ async fn run_main_node_pipeline<
             .into()
     };
 
-    let committed_batch = batch_storage
-        .get(node_state_on_startup.l1_state.last_committed_batch)
-        .await
-        .expect("failed to load proof for last_committed_batch");
-    assert!(
-        node_state_on_startup.l1_state.last_committed_batch == 0 || committed_batch.is_some(),
-        "Inconsistent batch numbers: committed batch not found in proof storage."
-    );
-
     // There may be batches that are Committed but not Proven on L1 yet, or Proven but not Executed yet.
     // We will reschedule them by loading `BatchEnvelope`s from ProofStorage
     // and sending them to the corresponding channels.
-    // Target components don't differentiate whether a batch was rescheduled or loaded during normal operations
-
     let committed_not_proven_batches =
         get_committed_not_proven_batches(&node_state_on_startup.l1_state, &batch_storage)
             .await
@@ -592,58 +546,24 @@ async fn run_main_node_pipeline<
 
     let batcher_subsystem_first_block_to_process =
         node_state_on_startup.last_l1_committed_block + 1;
-    tracing::info!("Initializing Batcher");
 
     let prover_input_generation_first_block_to_process = if config
         .prover_input_generator_config
         .force_process_old_blocks
     {
         // Prover input generator will (re)process all the blocks replayed by the node on startup - at least `min_blocks_to_replay`.
-        // Note that it doesn't always start from zero.
+        // It will process all the blocks sent to it from upstream - not necessarily start from `0`.
         0
     } else {
         // Prover input generator will skip the blocks that are already FRI proved and committed to L1.
         batcher_subsystem_first_block_to_process
     };
 
-    let pipeline_after_batcher = pipeline
-        .pipe(ProverInputGenerator {
-            enable_logging: config.prover_input_generator_config.logging_enabled,
-            maximum_in_flight_blocks: config
-                .prover_input_generator_config
-                .maximum_in_flight_blocks,
-            first_block_to_process: prover_input_generation_first_block_to_process,
-            app_bin_base_path: config
-                .prover_input_generator_config
-                .app_bin_unpack_path
-                .clone(),
-            read_state: state.clone(),
-        })
-        .pipe(Batcher {
-            chain_id,
-            chain_address: node_state_on_startup.l1_state.diamond_proxy,
-            first_block_to_process: batcher_subsystem_first_block_to_process,
-            last_persisted_block: node_state_on_startup.repositories_persisted_block,
-            pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
-            batcher_config: config.batcher_config.clone(),
-            prev_batch_info: last_committed_batch_info,
-        });
-
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         config.prover_api_config.job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    let pipeline_after_gapless =
-        pipeline_after_batcher
-            .pipe(fri_proving_step)
-            .pipe(GaplessCommitter {
-                next_expected: node_state_on_startup.l1_state.last_committed_batch + 1,
-                proof_storage: batch_storage.clone(),
-                da_input_mode: node_state_on_startup.l1_state.da_input_mode,
-            });
-
-    // SnarkProvingPipelineStep: prepend rescheduled batches, then process new batches from L1Committer
     let (snark_proving_step, snark_job_manager) =
         SnarkProvingPipelineStep::new(config.prover_api_config.max_fris_per_snark);
 
@@ -665,7 +585,53 @@ async fn run_main_node_pipeline<
         run_fake_snark_provers(&config.prover_api_config, tasks, snark_job_manager);
     }
 
-    let pipeline_after_l1_proof_sender = pipeline_after_gapless
+    let priority_tree_db_path = config
+        .general_config
+        .rocks_db_path
+        .join(PRIORITY_TREE_DB_NAME);
+
+    Pipeline::new()
+        .pipe(MainNodeCommandSource {
+            block_replay_storage: block_replay_storage.clone(),
+            starting_block,
+            block_time: config.sequencer_config.block_time,
+            max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+        })
+        .pipe(Sequencer {
+            block_context_provider,
+            state: state.clone(),
+            wal: block_replay_storage.clone(),
+            repositories: repositories.clone(),
+            sequencer_config: config.sequencer_config.clone().into(),
+        })
+        .pipe(TreeManager { tree: tree.clone() })
+        .pipe(ProverInputGenerator {
+            enable_logging: config.prover_input_generator_config.logging_enabled,
+            maximum_in_flight_blocks: config
+                .prover_input_generator_config
+                .maximum_in_flight_blocks,
+            first_block_to_process: prover_input_generation_first_block_to_process,
+            app_bin_base_path: config
+                .prover_input_generator_config
+                .app_bin_unpack_path
+                .clone(),
+            read_state: state.clone(),
+        })
+        .pipe(Batcher {
+            chain_id,
+            chain_address: node_state_on_startup.l1_state.diamond_proxy,
+            first_block_to_process: batcher_subsystem_first_block_to_process,
+            last_persisted_block: node_state_on_startup.repositories_persisted_block,
+            pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
+            batcher_config: config.batcher_config.clone(),
+            prev_batch_info: last_committed_batch_info,
+        })
+        .pipe(fri_proving_step)
+        .pipe(GaplessCommitter {
+            next_expected: node_state_on_startup.l1_state.last_committed_batch + 1,
+            proof_storage: batch_storage.clone(),
+            da_input_mode: node_state_on_startup.l1_state.da_input_mode,
+        })
         .pipe(L1Sender::<_, CommitCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
@@ -676,43 +642,25 @@ async fn run_main_node_pipeline<
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
-        });
-
-    // PriorityTree pipeline component: receives proven batches, outputs execute commands
-    let priority_tree_step = PriorityTreePipelineStep::new(
-        block_replay_storage.clone(),
-        Path::new(
-            &config
-                .general_config
-                .rocks_db_path
-                .join(PRIORITY_TREE_DB_NAME),
-        ),
-        batch_storage.clone(),
-        finality,
-    )
-    .await
-    .unwrap();
-
-    let pipeline_after_priority_tree = pipeline_after_l1_proof_sender
-        .pipe_with_prepend(priority_tree_step, proven_not_executed_batches);
-
-    let execute_commands_output = pipeline_after_priority_tree.into_receiver();
-
-    // Forward execute commands to L1 executor
-    let l1_executor = run_l1_executor(
-        config.l1_sender_config,
-        l1_provider,
-        execute_commands_output.into_inner(),
-        fully_processed_batch_sender,
-        &node_state_on_startup.l1_state,
-    );
-    tasks.spawn(l1_executor.map(report_exit("L1 executor")));
-
-    tasks.spawn(
-        BatchSink::new(fully_processed_batch_receiver)
-            .run()
-            .map(report_exit("batch_sink")),
-    );
+        })
+        .pipe_with_prepend(
+            PriorityTreePipelineStep::new(
+                block_replay_storage.clone(),
+                &priority_tree_db_path,
+                batch_storage.clone(),
+                finality,
+            )
+            .await
+            .unwrap(),
+            proven_not_executed_batches,
+        )
+        .pipe(L1Sender {
+            provider: l1_provider,
+            config: config.l1_sender_config.clone().into(),
+            to_address: node_state_on_startup.l1_state.validator_timelock,
+        })
+        .pipe(BatchSink)
+        .spawn(tasks);
 }
 
 /// Only for EN - we still populate channels destined for the batcher subsystem -
@@ -735,7 +683,7 @@ async fn run_en_pipeline<
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
 ) {
-    let mut pipeline_after_tree = zksync_os_pipeline::Pipeline::new()
+    Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
             replay_download_address: config
@@ -752,42 +700,23 @@ async fn run_en_pipeline<
             sequencer_config: config.sequencer_config.clone().into(),
         })
         .pipe(TreeManager { tree: tree.clone() })
-        .into_receiver();
-
-    // Drain the pipeline output
-    tokio::spawn(async move { while pipeline_after_tree.recv().await.is_some() {} });
-
-    let last_ready_block = node_state_on_startup
-        .last_l1_executed_block
-        .min(node_state_on_startup.block_replay_storage_last_block);
-    let batch_of_last_ready_block = batch_storage
-        .get_batch_by_block_number(last_ready_block, &finality)
-        .await
-        .unwrap()
-        .unwrap();
-    let batch_range = batch_storage
-        .get_batch_range_by_number(batch_of_last_ready_block)
-        .await
-        .unwrap()
-        .unwrap();
-    let last_ready_batch = if last_ready_block == batch_range.1 {
-        batch_of_last_ready_block
-    } else {
-        batch_of_last_ready_block.saturating_sub(1)
-    };
+        .pipe(NoOpSink::new())
+        .spawn(tasks);
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     let priority_tree_en_step = PriorityTreeENStep::new(
-        block_replay_storage.clone(),
+        block_replay_storage,
         Path::new(
             &config
                 .general_config
                 .rocks_db_path
                 .join(PRIORITY_TREE_DB_NAME),
         ),
-        batch_storage.clone(),
+        batch_storage,
         finality,
-        last_ready_batch,
+        node_state_on_startup
+            .last_l1_executed_block
+            .min(node_state_on_startup.block_replay_storage_last_block),
     )
     .await
     .unwrap();
@@ -814,35 +743,6 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
         Ok(_) => tracing::warn!("{name} unexpectedly exited"),
         Err(e) => tracing::error!("{name} failed: {e:#?}"),
     }
-}
-
-fn run_l1_executor(
-    l1_sender_config: L1SenderConfig,
-    provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
-
-    batch_for_execute_receiver: Receiver<ExecuteCommand>,
-    fully_processed_batch_sender: Sender<BatchEnvelope<FriProof>>,
-
-    l1_state: &L1State,
-) -> impl Future<Output = Result<()>> + 'static {
-    if l1_sender_config.operator_commit_pk.expose_secret()
-        == l1_sender_config.operator_prove_pk.expose_secret()
-        || l1_sender_config.operator_prove_pk.expose_secret()
-            == l1_sender_config.operator_execute_pk.expose_secret()
-        || l1_sender_config.operator_execute_pk.expose_secret()
-            == l1_sender_config.operator_commit_pk.expose_secret()
-    {
-        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
-        panic!("Operator addresses for commit, prove and execute must be different");
-    }
-
-    run_l1_sender(
-        batch_for_execute_receiver,
-        fully_processed_batch_sender,
-        l1_state.validator_timelock,
-        provider,
-        l1_sender_config.clone().into(),
-    )
 }
 
 async fn get_committed_not_proven_batches(
