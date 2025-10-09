@@ -37,6 +37,8 @@ pub struct BlockContextProvider<Mempool> {
     node_version: semver::Version,
     genesis: Genesis,
     fee_collector_address: Address,
+    base_fee_override: Option<u64>,
+    pubdata_price_override: Option<u64>,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -53,6 +55,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         node_version: semver::Version,
         genesis: Genesis,
         fee_collector_address: Address,
+        base_fee_override: Option<u64>,
+        pubdata_price_override: Option<u64>,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -66,6 +70,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             node_version,
             genesis,
             fee_collector_address,
+            base_fee_override,
+            pubdata_price_override,
         }
     }
 
@@ -98,10 +104,10 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
                 let block_context = BlockContext {
-                    eip1559_basefee: U256::from(1000),
+                    eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(1000)),
                     native_price: U256::from(1),
                     // todo: make dynamic once zksync-os sets max gas per pubdata >1 for L2 txs
-                    pubdata_price: U256::from(1),
+                    pubdata_price: U256::from(self.pubdata_price_override.unwrap_or(1)),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
