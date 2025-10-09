@@ -1,4 +1,5 @@
 use tokio::sync::watch;
+use tokio::sync::watch::Receiver;
 use zksync_os_storage_api::{FinalityStatus, ReadFinality, WriteFinality};
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,10 @@ impl Finality {
 impl ReadFinality for Finality {
     fn get_finality_status(&self) -> FinalityStatus {
         self.sender.borrow().clone()
+    }
+
+    fn subscribe(&self) -> Receiver<FinalityStatus> {
+        self.sender.subscribe()
     }
 }
 

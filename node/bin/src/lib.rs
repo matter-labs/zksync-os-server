@@ -18,7 +18,6 @@ pub mod reth_state;
 pub mod sentry;
 mod state_initializer;
 pub mod tree_manager;
-mod util;
 pub mod zkstack_config;
 
 use crate::batch_sink::BatchSink;
@@ -691,6 +690,7 @@ async fn run_main_node_pipeline<
         batch_storage.clone(),
         finality,
     )
+    .await
     .unwrap();
 
     let pipeline_after_priority_tree = pipeline_after_l1_proof_sender
@@ -775,17 +775,10 @@ async fn run_en_pipeline<
     } else {
         batch_of_last_ready_block.saturating_sub(1)
     };
-    let init_block = batch_storage
-        .get_batch_range_by_number(last_ready_batch)
-        .await
-        .unwrap()
-        .unwrap()
-        .1;
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
     let priority_tree_en_step = PriorityTreeENStep::new(
         block_replay_storage.clone(),
-        init_block,
         Path::new(
             &config
                 .general_config
@@ -793,10 +786,10 @@ async fn run_en_pipeline<
                 .join(PRIORITY_TREE_DB_NAME),
         ),
         batch_storage.clone(),
-        block_replay_storage,
         finality,
         last_ready_batch,
     )
+    .await
     .unwrap();
 
     tasks.spawn(
