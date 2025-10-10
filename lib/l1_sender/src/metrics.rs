@@ -30,25 +30,13 @@ impl StateLabel for L1SenderState {
 }
 
 #[derive(Debug, Metrics)]
-#[metrics(prefix = "l1_state")]
-pub struct L1StateMetrics {
-    /// Used to report L1 contract addresses to Prometheus.
-    /// Gauge is always set to one.
-    #[metrics(labels = ["bridgehub", "diamond_proxy", "validator_timelock"])]
-    pub l1_contract_addresses: LabeledFamily<(&'static str, &'static str, &'static str), Gauge, 3>,
+#[metrics(prefix = "l1_sender")]
+pub struct L1SenderMetrics {
     /// Used to report L1 operator addresses to Prometheus (commit/prove/execute),
     /// Gauge is always set to one.
     #[metrics(labels = ["operation", "operator_address"])]
     pub l1_operator_address: LabeledFamily<(&'static str, &'static str), Gauge, 2>,
-    /// Used to report the DA mode (rollup/validium).
-    /// Gauge is always set to one.
-    #[metrics(labels = ["da_input_mode"])]
-    pub da_input_mode: LabeledFamily<&'static str, Gauge, 1>,
-}
 
-#[derive(Debug, Metrics)]
-#[metrics(prefix = "l1_sender")]
-pub struct L1SenderMetrics {
     /// Operator wallet balance
     #[metrics(labels = ["command"])]
     pub balance: LabeledFamily<&'static str, Gauge<f64>>,
@@ -80,5 +68,3 @@ pub struct L1SenderMetrics {
 
 #[vise::register]
 pub static L1_SENDER_METRICS: vise::Global<L1SenderMetrics> = vise::Global::new();
-#[vise::register]
-pub static L1_STATE_METRICS: vise::Global<L1StateMetrics> = vise::Global::new();

@@ -2,10 +2,10 @@ use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
-use zksync_os_l1_sender::config::BatchDaInputMode;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
