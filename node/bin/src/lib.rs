@@ -722,7 +722,7 @@ async fn run_main_node_pipeline<
         batcher_first_block,
         node_state_on_startup.repositories_persisted_block,
         config.sequencer_config.block_pubdata_limit_bytes,
-        config.batcher_config,
+        config.batcher_config.clone(),
         pipeline_after_prover_input_generator,
         batch_for_proving_sender,
     );
@@ -745,7 +745,7 @@ async fn run_main_node_pipeline<
     ));
 
     let prover_gapless_committer = GaplessCommitter::new(
-        node_state_on_startup.l1_state.last_committed_batch + 1,
+        config.batcher_config.forced_batch.map(|forced_batch| forced_batch.batch_number).unwrap_or(node_state_on_startup.l1_state.last_committed_batch + 1),
         batch_with_proof_receiver,
         batch_storage.clone(),
         batch_for_commit_sender,
