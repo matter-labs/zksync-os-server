@@ -54,8 +54,7 @@ pub struct GenesisUpgradeTxInfo {
 #[derive(Clone)]
 pub struct Genesis {
     input_source: Arc<dyn GenesisInputSource>,
-    l1_provider: DynProvider<Ethereum>,
-    zk_chain_address: Address,
+    zk_chain: Arc<ZkChain<DynProvider>>,
     state: OnceCell<GenesisState>,
     genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
 }
@@ -64,8 +63,7 @@ impl Debug for Genesis {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Genesis")
             .field("input_source", &self.input_source)
-            .field("l1_provider", &self.l1_provider)
-            .field("zk_chain_address", &self.zk_chain_address)
+            .field("zk_chain", &self.zk_chain.address())
             .field("state", &self.state.get())
             .field("genesis_upgrade_tx", &self.genesis_upgrade_tx.get())
             .finish()
@@ -75,13 +73,11 @@ impl Debug for Genesis {
 impl Genesis {
     pub fn new(
         input_source: Arc<dyn GenesisInputSource>,
-        l1_provider: DynProvider<Ethereum>,
-        zk_chain_address: Address,
+        zk_chain: Arc<ZkChain<DynProvider>>,
     ) -> Self {
         Self {
             input_source,
-            l1_provider,
-            zk_chain_address,
+            zk_chain,
             state: OnceCell::new(),
             genesis_upgrade_tx: OnceCell::new(),
         }
@@ -96,7 +92,7 @@ impl Genesis {
 
     pub async fn genesis_upgrade_tx(&self) -> GenesisUpgradeTxInfo {
         self.genesis_upgrade_tx
-            .get_or_try_init(|| load_genesis_upgrade_tx(&self.l1_provider, self.zk_chain_address))
+            .get_or_try_init(|| load_genesis_upgrade_tx(self.zk_chain.clone()))
             .await
             .expect("Failed to load genesis upgrade transaction")
             .clone()
@@ -212,16 +208,16 @@ async fn build_genesis(
 }
 
 async fn load_genesis_upgrade_tx(
-    provider: &DynProvider<Ethereum>,
-    zk_chain_address: Address,
+    zk_chain: Arc<ZkChain<DynProvider>>,
 ) -> anyhow::Result<GenesisUpgradeTxInfo> {
     const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-    let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
-    let current_l1_block = provider.get_block_number().await?;
+    let zk_chain_address = *zk_chain.address();
+    let provider = zk_chain.provider().clone();
+    let current_l1_block = zk_chain.provider().get_block_number().await?;
     // Find the block when the zk chain was deployed or fallback to [0; latest_block] in localhost case.
     let (from_block, to_block) = zksync_os_l1_watcher::util::find_l1_block_by_predicate(
-            Arc::new(zk_chain),
+            zk_chain,
             |_zk, _block| async { Ok(true) },
         )
         .await
