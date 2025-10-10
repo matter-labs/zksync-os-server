@@ -35,9 +35,11 @@ backon.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+regex = "1.11.1"
 
 [dev-dependencies]
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
+regex.workspace = true
 
 [features]
 prover-tests = ["dep:zksync_os_prover_service"]

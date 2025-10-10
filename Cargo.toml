@@ -54,6 +54,7 @@ serde = { version = "1", features = ["derive"] }
 serde_with = "3.14.0"
 serde_json = "1"
 sentry = "0.43.0"
+regex = "1.11.3"
 
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 #zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility", "no_print"] }
