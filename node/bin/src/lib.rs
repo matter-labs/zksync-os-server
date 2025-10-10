@@ -70,7 +70,6 @@ use zksync_os_l1_sender::run_l1_sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_mempool::RethPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
-use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
@@ -161,15 +160,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .unwrap(),
     );
 
-    tracing::info!("Initializing BlockReplayStorage");
-
-    let block_replay_storage = BlockReplayStorage::new(
-        config.general_config.rocks_db_path.clone(),
-        chain_id,
-        node_version.clone(),
-        LATEST_EXECUTION_VERSION,
-    );
-
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
@@ -193,6 +183,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l1_provider.clone().erased(),
         l1_state.diamond_proxy,
     );
+
+    tracing::info!("Initializing BlockReplayStorage");
+
+    let block_replay_storage =
+        BlockReplayStorage::new(config.general_config.rocks_db_path.clone(), &genesis).await;
 
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
