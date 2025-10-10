@@ -84,11 +84,10 @@ impl BlockReplayStorage {
                 "block replay DB is empty, assuming start of the chain; appending genesis"
             );
             this.append_replay_unchecked(ReplayRecord {
-                block_context: genesis_context.clone(),
+                block_context: *genesis_context,
                 starting_l1_priority_id: 0,
                 transactions: vec![],
                 previous_block_timestamp: 0,
-                // todo: this is incorrect for ENs, needs to be taken from main node
                 node_version: NODE_VERSION.parse().unwrap(),
                 block_output_hash: B256::ZERO,
             })
