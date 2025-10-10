@@ -14,5 +14,5 @@
     ]
   ],
   "additional_storage": [],
-  "genesis_root_hash": "0xc346a158cce093e99ab65a95c884a26629d0e4f8d00ae20bbca4bfc4b204eec2"
+  "genesis_root": "0xc346a158cce093e99ab65a95c884a26629d0e4f8d00ae20bbca4bfc4b204eec2"
 }

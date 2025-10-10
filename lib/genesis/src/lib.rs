@@ -29,7 +29,7 @@ pub struct GenesisInput {
     /// Additional (not related to contract deployments) storage entries to add in genesis state.
     pub additional_storage: Vec<(B256, B256)>,
     /// The expected root hash of the genesis state.
-    pub genesis_root_hash: B256,
+    pub genesis_root: B256,
 }
 
 impl GenesisInput {
