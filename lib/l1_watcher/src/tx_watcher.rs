@@ -1,6 +1,6 @@
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
 use crate::{L1WatcherConfig, util};
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use std::sync::Arc;
 use std::time::Duration;

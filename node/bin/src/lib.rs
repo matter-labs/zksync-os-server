@@ -171,7 +171,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if config.sequencer_config.is_main_node() {
         // On a main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         l1_state = l1_state
-            .wait_to_finalize(&l1_provider, chain_id)
+            .wait_to_finalize()
             .await
             .expect("failed to wait for L1 state finalization");
     }

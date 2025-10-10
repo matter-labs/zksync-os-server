@@ -3,7 +3,7 @@ use crate::models::BatchDaInputMode;
 use crate::{Bridgehub, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::providers::DynProvider;
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::{Debug, Display, Formatter};
@@ -66,11 +66,7 @@ impl L1State {
 
     /// Waits until pending L1 state is consistent with latest L1 state (i.e. there are no pending
     /// transactions that are modifying our L2 chain state).
-    pub async fn wait_to_finalize(
-        self,
-        provider: impl Provider + Clone,
-        chain_id: u64,
-    ) -> anyhow::Result<Self> {
+    pub async fn wait_to_finalize(self) -> anyhow::Result<Self> {
         let zk_chain = self.diamond_proxy.as_ref();
         let last_committed_batch =
             wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))

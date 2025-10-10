@@ -1,6 +1,5 @@
 use crate::metrics::METRICS;
-use alloy::network::Ethereum;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;

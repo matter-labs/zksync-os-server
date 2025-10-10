@@ -1,6 +1,5 @@
 use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header};
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
-use alloy::network::Ethereum;
 use alloy::primitives::{Address, B64, B256, Bloom, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
