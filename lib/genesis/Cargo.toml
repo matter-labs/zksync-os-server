@@ -10,6 +10,12 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+zksync_os_types.workspace = true
+zksync_os_l1_watcher.workspace = true
+zksync_os_contract_interface.workspace = true
+
+zksync_os_interface.workspace = true
+
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -19,6 +25,3 @@ zk_os_basic_system.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-zksync_os_types.workspace = true
-zksync_os_l1_watcher.workspace = true
-zksync_os_contract_interface.workspace = true
