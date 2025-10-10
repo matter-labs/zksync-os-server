@@ -1,9 +1,9 @@
 use crate::BLOCK_REPLAY_WAL_DB_NAME;
+use crate::metadata::NODE_VERSION;
 use alloy::primitives::{B256, BlockNumber};
 use futures::Stream;
 use futures::stream::{self, BoxStream, StreamExt};
 use pin_project::pin_project;
-use ruint::aliases::U256;
 use std::convert::TryInto;
 use std::path::PathBuf;
 use std::task::Poll;
@@ -12,6 +12,7 @@ use tokio::pin;
 use tokio::time::{Instant, Sleep};
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
+use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
@@ -70,12 +71,7 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub fn new(
-        rocks_db_path: PathBuf,
-        chain_id: u64,
-        node_version: semver::Version,
-        execution_version: u32,
-    ) -> Self {
+    pub async fn new(rocks_db_path: PathBuf, genesis: &Genesis) -> Self {
         let db =
             RocksDB::<BlockReplayColumnFamily>::new(&rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME))
                 .expect("Failed to open BlockReplayWAL")
@@ -83,29 +79,16 @@ impl BlockReplayStorage {
 
         let this = Self { db };
         if this.latest_block().is_none() {
+            let genesis_context = &genesis.state().await.context;
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
             );
             this.append_replay_unchecked(ReplayRecord {
-                // todo: save real genesis here once we have genesis logic
-                block_context: BlockContext {
-                    chain_id,
-                    block_number: 0,
-                    block_hashes: Default::default(),
-                    timestamp: 0,
-                    eip1559_basefee: U256::from(0),
-                    pubdata_price: U256::from(0),
-                    native_price: U256::from(1),
-                    coinbase: Default::default(),
-                    gas_limit: 100_000_000,
-                    pubdata_limit: 100_000_000,
-                    mix_hash: Default::default(),
-                    execution_version,
-                },
+                block_context: *genesis_context,
                 starting_l1_priority_id: 0,
                 transactions: vec![],
                 previous_block_timestamp: 0,
-                node_version,
+                node_version: NODE_VERSION.parse().unwrap(),
                 block_output_hash: B256::ZERO,
             })
         }
