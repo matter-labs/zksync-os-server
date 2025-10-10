@@ -6,7 +6,7 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use backon::{ConstantBuilder, Retryable};
 use std::time::Duration;
-use zksync_os_l1_sender::l1_discovery::get_l1_state;
+use zksync_os_contract_interface::l1_discovery::get_l1_state;
 
 pub struct ProverTester {
     l1_provider: EthDynProvider,
