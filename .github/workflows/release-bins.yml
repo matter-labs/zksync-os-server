@@ -23,8 +23,10 @@ on:
 env:
   ZKSYNC_OS_SERVER_BIN: 'zksync_os_bin'
   RELEASE_PROFILE: 'maxperf'
+  SERVER_LOGFILE: zksync-os-server.log.txt
 
 jobs:
+  # Build server binaries for all target platforms
   release-bins:
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -37,12 +39,12 @@ jobs:
           # Ubuntu-22.04 based ARM linux runner
           - runner: matterlabs-ci-runner-arm
             target: aarch64-unknown-linux-gnu
-    #          # Latest x86 macos runner
-    #          - runner: macos-latest-large
-    #            target: x86_64-apple-darwin
-    #          # Latest ARM (M-series) macos runner
-    #          - runner: macos-latest-xlarge
-    #            target: aarch64-apple-darwin
+          # Latest x86 macos runner
+          - runner: macos-latest-large
+            target: x86_64-apple-darwin
+          # Latest ARM (M-series) macos runner
+          - runner: macos-latest-xlarge
+            target: aarch64-apple-darwin
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -50,11 +52,13 @@ jobs:
           ref: ${{ inputs.tag || '' }}
 
       - name: Install default packages
+        if: ${{ runner.os == 'Linux' }}
         run: |
-          sudo apt update && sudo apt --assume-yes install libssl-dev libclang-dev pkg-config build-essential
+          sudo apt update && sudo apt --assume-yes install \
+            curl jq libssl-dev libclang-dev pkg-config build-essential
 
       - name: Install arm64 libssl
-        if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+        if: ${{ runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu' }}
         run: |
           sudo dpkg --add-architecture arm64
           sudo apt update && sudo apt --assume-yes install libssl-dev:arm64
@@ -69,20 +73,48 @@ jobs:
           cache: false
 
       - name: Build
+        env:
+          # Build static binaries
+          RUSTFLAGS: '-C target-feature=+crt-static'
         run: |
-          # For aarch64, set the page size for jemalloc.
-          # When cross compiling, we must compile jemalloc with a large page size,
-          # otherwise it will use the current system's page size which may not work
-          # on other systems. JEMALLOC_SYS_WITH_LG_PAGE=16 tells jemalloc to use 64-KiB
-          # pages.
-          [[ ${{ matrix.target }} == 'aarch64-unknown-linux-gnu' ]] && export JEMALLOC_SYS_WITH_LG_PAGE=16
-          
-          RUSTFLAGS="-C target-feature=+crt-static" \
-            cargo build --profile "${RELEASE_PROFILE}" \
+          cargo build --profile "${RELEASE_PROFILE}" \
             --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}"
-          
-          if [[ $RUNNER_OS == 'Linux' ]]; then
-            ldd ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN}
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
+        with:
+          version: 'v1.3.4'
+
+      - name: Check executable
+        env:
+          TIMEOUT: 60
+          INTERVAL: 2
+        run: |
+          anvil --load-state ./zkos-l1-state.json --port 8545 > anvil.log.txt 2>&1 &
+          ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN} > ${SERVER_LOGFILE} 2>&1 &
+          elapsed=0
+          while ! nc -z localhost 3050; do
+            if (( elapsed >= TIMEOUT )); then
+              echo "Timeout reached after $elapsed seconds. Server did not start."
+              exit 1
+            fi
+            echo "Waiting for server to start..."
+            sleep ${INTERVAL}
+            (( elapsed += INTERVAL ))
+          done
+          echo "Sequencer is up and running."
+          FIRST_BLOCK=$(curl -X POST http://localhost:3050 \
+            -H "Content-Type: application/json" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "eth_getBlockByNumber",
+              "params": ["0x1", false],
+              "id": 1
+            }')
+          if echo "${FIRST_BLOCK}" | jq -e '.result.hash and (.result.transactions | length > 0)' >/dev/null; then
+            echo "✅ First block is correct."
+          else
+            echo "❌ Missing hash or transactions array is empty."
+            echo "${FIRST_BLOCK}"
+            cat "${SERVER_LOGFILE}"
           fi
-          du -hs ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN}
-          ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN}
