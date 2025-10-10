@@ -102,6 +102,12 @@ impl<S: ObjectStore> ObjectStore for StoreWithRetries<S> {
             })
             .await;
         latency.observe();
+        OBJECT_STORE_METRICS.read_write_ops[&"read"].inc();
+        if let Ok(ref bytes) = result {
+            OBJECT_STORE_METRICS
+                .storage_read_total_bytes
+                .inc_by(bytes.len() as u64);
+        }
         result
     }
 
@@ -111,7 +117,6 @@ impl<S: ObjectStore> ObjectStore for StoreWithRetries<S> {
         key: &str,
         value: Vec<u8>,
     ) -> Result<(), ObjectStoreError> {
-        OBJECT_STORE_METRICS.payload_size[&bucket.0].observe(value.len());
         let latency = OBJECT_STORE_METRICS.start_store(bucket);
         let result = Request::Put(bucket, key)
             .retry(&self.inner, self.max_retries, || {
@@ -119,6 +124,8 @@ impl<S: ObjectStore> ObjectStore for StoreWithRetries<S> {
             })
             .await;
         latency.observe();
+        OBJECT_STORE_METRICS.payload_size[&bucket.0].observe(value.len());
+        OBJECT_STORE_METRICS.read_write_ops[&"write"].inc();
         result
     }
 

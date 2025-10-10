@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use vise::{Buckets, Histogram, LabeledFamily, LatencyObserver, Metrics};
+use vise::{Buckets, Counter, Histogram, LabeledFamily, LatencyObserver, Metrics};
 
 use crate::Bucket;
 
@@ -18,6 +18,11 @@ pub(crate) struct ObjectStoreMetrics {
     /// Size of the payloads stored in the object store.
     #[metrics(buckets = Buckets::exponential(1.0..=16.0 * 1_024.0 * 1_024.0, 8.0), labels = ["bucket"])]
     pub payload_size: LabeledFamily<&'static str, Histogram<usize>>,
+    /// Total number of bytes read from the object store.
+    pub storage_read_total_bytes: Counter,
+    /// Number of read/write operations performed, labeled by operation type (`read` or `write`).
+    #[metrics(labels = ["op"])]
+    pub read_write_ops: LabeledFamily<&'static str, Counter>,
 }
 
 impl ObjectStoreMetrics {
