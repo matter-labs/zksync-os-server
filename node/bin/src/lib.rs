@@ -280,7 +280,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         L1CommitWatcher::new(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
             finality_storage.clone(),
             batch_storage.clone(),
         )
@@ -293,7 +293,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         L1ExecuteWatcher::new(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
             finality_storage.clone(),
             batch_storage.clone(),
         )
@@ -316,7 +316,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         L1TxWatcher::new(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
             l1_transactions_sender,
             next_l1_priority_id,
         )

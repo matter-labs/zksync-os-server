@@ -196,6 +196,7 @@ alloy::sol! {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Bridgehub<P: Provider> {
     instance: IBridgehubInstance<P, Ethereum>,
     l2_chain_id: u64,

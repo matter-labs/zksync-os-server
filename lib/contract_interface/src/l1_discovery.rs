@@ -6,33 +6,18 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::DynProvider;
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
-use std::fmt::{Debug, Display, Formatter};
-use std::sync::Arc;
+use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct L1State {
-    pub bridgehub: Arc<Bridgehub<DynProvider>>,
-    pub diamond_proxy: Arc<ZkChain<DynProvider>>,
+    pub bridgehub: Bridgehub<DynProvider>,
+    pub diamond_proxy: ZkChain<DynProvider>,
     pub validator_timelock: Address,
     pub last_committed_batch: u64,
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
     pub da_input_mode: BatchDaInputMode,
-}
-
-impl Debug for L1State {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("L1State")
-            .field("bridgehub", &self.bridgehub.address())
-            .field("diamond_proxy", &self.diamond_proxy.address())
-            .field("validator_timelock", &self.validator_timelock)
-            .field("last_committed_batch", &self.last_committed_batch)
-            .field("last_proved_batch", &self.last_proved_batch)
-            .field("last_executed_batch", &self.last_executed_batch)
-            .field("da_input_mode", &self.da_input_mode)
-            .finish()
-    }
 }
 
 impl L1State {
@@ -64,8 +49,8 @@ impl L1State {
         };
 
         Ok(Self {
-            bridgehub: Arc::new(bridgehub),
-            diamond_proxy: Arc::new(diamond_proxy),
+            bridgehub,
+            diamond_proxy,
             validator_timelock: validator_timelock_address,
             last_committed_batch,
             last_proved_batch,
@@ -86,7 +71,7 @@ impl L1State {
         chain_id: u64,
     ) -> anyhow::Result<Self> {
         let this = Self::fetch(provider, bridgehub_address, chain_id).await?;
-        let zk_chain = this.diamond_proxy.as_ref();
+        let zk_chain = &this.diamond_proxy;
         let last_committed_batch =
             wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
                 .await
@@ -112,10 +97,6 @@ impl L1State {
 
     pub fn bridgehub_address(&self) -> Address {
         *self.bridgehub.address()
-    }
-
-    pub fn diamond_proxy(&self) -> ZkChain<DynProvider> {
-        self.diamond_proxy.as_ref().clone()
     }
 
     pub fn diamond_proxy_address(&self) -> Address {

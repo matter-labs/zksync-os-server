@@ -55,7 +55,7 @@ pub struct GenesisUpgradeTxInfo {
 #[derive(Clone)]
 pub struct Genesis {
     input_source: Arc<dyn GenesisInputSource>,
-    zk_chain: Arc<ZkChain<DynProvider>>,
+    zk_chain: ZkChain<DynProvider>,
     state: OnceCell<GenesisState>,
     genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
 }
@@ -72,10 +72,7 @@ impl Debug for Genesis {
 }
 
 impl Genesis {
-    pub fn new(
-        input_source: Arc<dyn GenesisInputSource>,
-        zk_chain: Arc<ZkChain<DynProvider>>,
-    ) -> Self {
+    pub fn new(input_source: Arc<dyn GenesisInputSource>, zk_chain: ZkChain<DynProvider>) -> Self {
         Self {
             input_source,
             zk_chain,
@@ -212,7 +209,7 @@ async fn build_genesis(
 }
 
 async fn load_genesis_upgrade_tx(
-    zk_chain: Arc<ZkChain<DynProvider>>,
+    zk_chain: ZkChain<DynProvider>,
 ) -> anyhow::Result<GenesisUpgradeTxInfo> {
     const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
@@ -221,7 +218,7 @@ async fn load_genesis_upgrade_tx(
     let current_l1_block = zk_chain.provider().get_block_number().await?;
     // Find the block when the zk chain was deployed or fallback to [0; latest_block] in localhost case.
     let (from_block, to_block) = zksync_os_l1_watcher::util::find_l1_block_by_predicate(
-            zk_chain,
+            Arc::new(zk_chain),
             |_zk, _block| async { Ok(true) },
         )
         .await
