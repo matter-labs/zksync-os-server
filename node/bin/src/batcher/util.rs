@@ -7,7 +7,8 @@ use zksync_os_storage_api::RepositoryBlock;
 pub async fn load_genesis_stored_batch_info(
     genesis_block: RepositoryBlock,
     tree: MerkleTree<RocksDBWrapper>,
-) -> StoredBatchInfo {
+    expected_genesis_root: B256,
+) -> anyhow::Result<StoredBatchInfo> {
     let tree_at_genesis = MerkleTreeVersion { tree, block: 0 };
     let genesis_root_info = tree_at_genesis
         .root_info()
@@ -34,7 +35,12 @@ pub async fn load_genesis_stored_batch_info(
     hasher.update(timestamp.to_be_bytes());
     let state_commitment = B256::from_slice(&hasher.finalize());
 
-    StoredBatchInfo {
+    anyhow::ensure!(
+        expected_genesis_root == state_commitment,
+        "Genesis state commitment mismatch, expected from genesis.json {expected_genesis_root:?}, calculated {state_commitment:?}"
+    );
+
+    Ok(StoredBatchInfo {
         batch_number: 0,
         state_commitment,
         number_of_layer1_txs: 0,
@@ -45,5 +51,5 @@ pub async fn load_genesis_stored_batch_info(
         l2_to_l1_logs_root_hash: B256::ZERO,
         commitment: B256::from(U256::ONE.to_be_bytes()),
         last_block_timestamp: timestamp,
-    }
+    })
 }
