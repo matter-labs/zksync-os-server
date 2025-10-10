@@ -1,5 +1,6 @@
-use crate::config::BatchDaInputMode;
 use crate::metrics::L1_STATE_METRICS;
+use crate::models::BatchDaInputMode;
+use crate::{Bridgehub, PubdataPricingMode};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
@@ -7,7 +8,6 @@ use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Display;
 use std::time::Duration;
-use zksync_os_contract_interface::{Bridgehub, PubdataPricingMode};
 
 #[derive(Debug, Clone)]
 pub struct L1State {
@@ -153,7 +153,7 @@ pub async fn get_l1_state(
     let da_input_mode = match pubdata_pricing_mode {
         PubdataPricingMode::Rollup => BatchDaInputMode::Rollup,
         PubdataPricingMode::Validium => BatchDaInputMode::Validium,
-        v => panic!("Unexpected pubdata pricing mode: {}", v as u8),
+        v => panic!("unexpected pubdata pricing mode: {}", v as u8),
     };
 
     Ok(L1State {
