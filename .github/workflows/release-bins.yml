@@ -1,0 +1,88 @@
+name: Release binaries
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+on:
+  # TODO: remove after testing
+  pull_request:
+#  schedule:
+#    - cron: "0 6 * * *"
+#  workflow_dispatch:
+#  # Workflow call trigger for stable releases generation
+#  workflow_call:
+#    inputs:
+#      tag:
+#        description: "Tag to use for the release."
+#        type: string
+#        required: true
+#        default: ""
+
+env:
+  ZKSYNC_OS_SERVER_BIN: 'zksync_os_bin'
+  RELEASE_PROFILE: 'maxperf'
+
+jobs:
+  release-bins:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu-22.04 based high performance runner
+          - runner: matterlabs-ci-runner-high-performance
+            target: x86_64-unknown-linux-gnu
+          # Ubuntu-22.04 based ARM linux runner
+          - runner: matterlabs-ci-runner-arm
+            target: aarch64-unknown-linux-gnu
+    #          # Latest x86 macos runner
+    #          - runner: macos-latest-large
+    #            target: x86_64-apple-darwin
+    #          # Latest ARM (M-series) macos runner
+    #          - runner: macos-latest-xlarge
+    #            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || '' }}
+
+      - name: Install default packages
+        run: |
+          sudo apt update && sudo apt --assume-yes install libssl-dev libclang-dev pkg-config build-essential
+
+      - name: Install arm64 libssl
+        if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt update && sudo apt --assume-yes install libssl-dev:arm64
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
+        env:
+          # To fix rate limiting issues with GitHub API
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          inherit-toolchain: true
+          cache: false
+
+      - name: Build
+        run: |
+          # For aarch64, set the page size for jemalloc.
+          # When cross compiling, we must compile jemalloc with a large page size,
+          # otherwise it will use the current system's page size which may not work
+          # on other systems. JEMALLOC_SYS_WITH_LG_PAGE=16 tells jemalloc to use 64-KiB
+          # pages.
+          [[ ${{ matrix.target }} == 'aarch64-unknown-linux-gnu' ]] && export JEMALLOC_SYS_WITH_LG_PAGE=16
+          
+          RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --profile "${RELEASE_PROFILE}" \
+            --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}"
+          
+          if [[ $RUNNER_OS == 'Linux' ]]; then
+            ldd ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN}
+          fi
+          du -hs ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN}
+          ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN}
