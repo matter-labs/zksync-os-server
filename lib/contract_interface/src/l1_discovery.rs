@@ -36,6 +36,80 @@ impl Debug for L1State {
 }
 
 impl L1State {
+    /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
+    pub async fn fetch(
+        provider: DynProvider,
+        bridgehub_address: Address,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
+        let bridgehub = Bridgehub::new(bridgehub_address, provider, chain_id);
+        let all_chain_ids = bridgehub.get_all_zk_chain_chain_ids().await?;
+        anyhow::ensure!(
+            all_chain_ids.contains(&U256::from(chain_id)),
+            "chain ID {chain_id} is not registered on L1"
+        );
+        let diamond_proxy = bridgehub.zk_chain().await?;
+        let validator_timelock_address = bridgehub.validator_timelock_address().await?;
+
+        let latest = BlockId::latest();
+        let last_committed_batch = diamond_proxy.get_total_batches_committed(latest).await?;
+        let last_proved_batch = diamond_proxy.get_total_batches_proved(latest).await?;
+        let last_executed_batch = diamond_proxy.get_total_batches_executed(latest).await?;
+
+        let pubdata_pricing_mode = diamond_proxy.get_pubdata_pricing_mode().await?;
+        let da_input_mode = match pubdata_pricing_mode {
+            PubdataPricingMode::Rollup => BatchDaInputMode::Rollup,
+            PubdataPricingMode::Validium => BatchDaInputMode::Validium,
+            v => panic!("unexpected pubdata pricing mode: {}", v as u8),
+        };
+
+        Ok(Self {
+            bridgehub: Arc::new(bridgehub),
+            diamond_proxy: Arc::new(diamond_proxy),
+            validator_timelock: validator_timelock_address,
+            last_committed_batch,
+            last_proved_batch,
+            last_executed_batch,
+            da_input_mode,
+        })
+    }
+
+    /// Equivalent to [`Self::fetch`] that also waits until the pending L1 state is consistent with the
+    /// latest L1 state (i.e., there are no pending transactions that are committing/proving/executing
+    /// batches on L1).
+    ///
+    /// NOTE: This should only be called on the main node as ENs will observe pending changes that
+    /// are being submitted by the main node.
+    pub async fn fetch_finalized(
+        provider: DynProvider,
+        bridgehub_address: Address,
+        chain_id: u64,
+    ) -> anyhow::Result<Self> {
+        let this = Self::fetch(provider, bridgehub_address, chain_id).await?;
+        let zk_chain = this.diamond_proxy.as_ref();
+        let last_committed_batch =
+            wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
+                .await
+                .context("getTotalBatchesCommitted")?;
+        let last_proved_batch =
+            wait_to_finalize(|block_id| zk_chain.get_total_batches_proved(block_id))
+                .await
+                .context("getTotalBatchesVerified")?;
+        let last_executed_batch =
+            wait_to_finalize(|block_id| zk_chain.get_total_batches_executed(block_id))
+                .await
+                .context("getTotalBatchesExecuted")?;
+        Ok(Self {
+            bridgehub: this.bridgehub,
+            diamond_proxy: this.diamond_proxy,
+            validator_timelock: this.validator_timelock,
+            last_committed_batch,
+            last_proved_batch,
+            last_executed_batch,
+            da_input_mode: this.da_input_mode,
+        })
+    }
+
     pub fn bridgehub_address(&self) -> Address {
         *self.bridgehub.address()
     }
@@ -62,33 +136,6 @@ impl L1State {
             BatchDaInputMode::Validium => "validium",
         };
         L1_STATE_METRICS.da_input_mode[&da_input_mode].set(1);
-    }
-
-    /// Waits until pending L1 state is consistent with latest L1 state (i.e. there are no pending
-    /// transactions that are modifying our L2 chain state).
-    pub async fn wait_to_finalize(self) -> anyhow::Result<Self> {
-        let zk_chain = self.diamond_proxy.as_ref();
-        let last_committed_batch =
-            wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
-                .await
-                .context("getTotalBatchesCommitted")?;
-        let last_proved_batch =
-            wait_to_finalize(|block_id| zk_chain.get_total_batches_proved(block_id))
-                .await
-                .context("getTotalBatchesVerified")?;
-        let last_executed_batch =
-            wait_to_finalize(|block_id| zk_chain.get_total_batches_executed(block_id))
-                .await
-                .context("getTotalBatchesExecuted")?;
-        Ok(Self {
-            bridgehub: self.bridgehub,
-            diamond_proxy: self.diamond_proxy,
-            validator_timelock: self.validator_timelock,
-            last_committed_batch,
-            last_proved_batch,
-            last_executed_batch,
-            da_input_mode: self.da_input_mode,
-        })
     }
 }
 
@@ -149,41 +196,4 @@ async fn wait_to_finalize<
             "pending state did not finalize in time; last value: {last_value}"
         )),
     }
-}
-
-pub async fn get_l1_state(
-    provider: DynProvider,
-    bridgehub_address: Address,
-    chain_id: u64,
-) -> anyhow::Result<L1State> {
-    let bridgehub = Bridgehub::new(bridgehub_address, provider, chain_id);
-    let all_chain_ids = bridgehub.get_all_zk_chain_chain_ids().await?;
-    anyhow::ensure!(
-        all_chain_ids.contains(&U256::from(chain_id)),
-        "chain ID {chain_id} is not registered on L1"
-    );
-    let diamond_proxy = bridgehub.zk_chain().await?;
-    let validator_timelock_address = bridgehub.validator_timelock_address().await?;
-
-    let latest = BlockId::latest();
-    let last_committed_batch = diamond_proxy.get_total_batches_committed(latest).await?;
-    let last_proved_batch = diamond_proxy.get_total_batches_proved(latest).await?;
-    let last_executed_batch = diamond_proxy.get_total_batches_executed(latest).await?;
-
-    let pubdata_pricing_mode = diamond_proxy.get_pubdata_pricing_mode().await?;
-    let da_input_mode = match pubdata_pricing_mode {
-        PubdataPricingMode::Rollup => BatchDaInputMode::Rollup,
-        PubdataPricingMode::Validium => BatchDaInputMode::Validium,
-        v => panic!("unexpected pubdata pricing mode: {}", v as u8),
-    };
-
-    Ok(L1State {
-        bridgehub: Arc::new(bridgehub),
-        diamond_proxy: Arc::new(diamond_proxy),
-        validator_timelock: validator_timelock_address,
-        last_committed_batch,
-        last_proved_batch,
-        last_executed_batch,
-        da_input_mode,
-    })
 }

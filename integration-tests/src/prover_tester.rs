@@ -6,7 +6,7 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use backon::{ConstantBuilder, Retryable};
 use std::time::Duration;
-use zksync_os_contract_interface::l1_discovery::get_l1_state;
+use zksync_os_contract_interface::l1_discovery::L1State;
 
 pub struct ProverTester {
     l1_provider: EthDynProvider,
@@ -36,7 +36,7 @@ impl ProverTester {
         let chain_id = self.l2_provider.get_chain_id().await?;
 
         // Get L1 state which contains diamond proxy address
-        let l1_state = get_l1_state(
+        let l1_state = L1State::fetch(
             self.l1_provider.clone().erased(),
             bridgehub_address,
             chain_id,

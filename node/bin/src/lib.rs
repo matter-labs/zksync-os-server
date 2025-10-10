@@ -58,7 +58,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use zksync_os_contract_interface::l1_discovery::{L1State, get_l1_state};
+use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
@@ -165,16 +165,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
 
     tracing::info!("Reading L1 state");
-    let mut l1_state = get_l1_state(l1_provider.clone().erased(), bridgehub_address, chain_id)
-        .await
-        .expect("Failed to read L1 state");
-    if config.sequencer_config.is_main_node() {
-        // On a main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
-        l1_state = l1_state
-            .wait_to_finalize()
+    let l1_state = if config.sequencer_config.is_main_node() {
+        // On the main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
+        L1State::fetch_finalized(l1_provider.clone().erased(), bridgehub_address, chain_id)
             .await
-            .expect("failed to wait for L1 state finalization");
-    }
+            .expect("failed to fetch finalized L1 state")
+    } else {
+        L1State::fetch(l1_provider.clone().erased(), bridgehub_address, chain_id)
+            .await
+            .expect("failed to fetch L1 state")
+    };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
 
