@@ -127,3 +127,10 @@ runs:
       uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
       with:
         version: ${{ inputs.foundry_version }}
+
+    - name: Download setup.key
+      shell: 'bash -ex {0}'
+      env:
+        SETUP_KEY_URL: "https://storage.googleapis.com/matterlabs-setup-keys-us/setup-keys/setup_2^24.key"
+      run: |
+        wget "${SETUP_KEY_URL}" -O setup.key

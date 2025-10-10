@@ -2,3 +2,14 @@
 # Workspace directory to properly resolve artifacts relative paths
 # it will always be relative to the workspace and can be rewritten if required
 WORKSPACE_DIR = { value = "./", relative = true, force = false }
+
+# `build-override` is needed for airbender to compile in a reasonable time; by default build dependencies are not optimized
+[profile.dev.build-override]
+opt-level = 1
+codegen-units = 256
+overflow-checks = true
+
+[profile.release.build-override]
+opt-level = 1
+codegen-units = 256
+overflow-checks = true

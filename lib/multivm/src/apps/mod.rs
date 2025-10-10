@@ -1,4 +1,6 @@
 pub mod v3 {
+    use alloy::hex;
+    use alloy::primitives::B256;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
@@ -58,4 +60,17 @@ pub mod v3 {
         })
         .clone()
     }
+
+    pub const VERIFICATION_KEY_HASH: B256 = {
+        let vk_hash_hex = include_bytes!(concat!(
+            env!("ZKSYNC_OS_0_0_26_SOURCE_PATH"),
+            "/snark_vk_hash.txt"
+        ));
+        match hex::const_decode_to_array::<32>(vk_hash_hex) {
+            Ok(hash) => B256::new(hash),
+            Err(_) => {
+                panic!("malformed VK hash")
+            }
+        }
+    };
 }
