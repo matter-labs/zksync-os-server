@@ -1,18 +1,19 @@
 use crate::metrics::L1_STATE_METRICS;
 use crate::models::BatchDaInputMode;
-use crate::{Bridgehub, PubdataPricingMode};
+use crate::{Bridgehub, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
-use alloy::providers::Provider;
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct L1State {
-    pub bridgehub: Address,
-    pub diamond_proxy: Address,
+    pub bridgehub: Arc<Bridgehub<DynProvider>>,
+    pub diamond_proxy: Arc<ZkChain<DynProvider>>,
     pub validator_timelock: Address,
     pub last_committed_batch: u64,
     pub last_proved_batch: u64,
@@ -20,12 +21,38 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
 }
 
+impl Debug for L1State {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("L1State")
+            .field("bridgehub", &self.bridgehub.address())
+            .field("diamond_proxy", &self.diamond_proxy.address())
+            .field("validator_timelock", &self.validator_timelock)
+            .field("last_committed_batch", &self.last_committed_batch)
+            .field("last_proved_batch", &self.last_proved_batch)
+            .field("last_executed_batch", &self.last_executed_batch)
+            .field("da_input_mode", &self.da_input_mode)
+            .finish()
+    }
+}
+
 impl L1State {
+    pub fn bridgehub_address(&self) -> Address {
+        *self.bridgehub.address()
+    }
+
+    pub fn diamond_proxy(&self) -> ZkChain<DynProvider> {
+        self.diamond_proxy.as_ref().clone()
+    }
+
+    pub fn diamond_proxy_address(&self) -> Address {
+        *self.diamond_proxy.address()
+    }
+
     pub fn report_metrics(&self) {
         // Need to leak Strings here as metric exporter expects label names as `&'static`
         // This only happens once per process lifetime so is safe
-        let bridgehub: &'static str = self.bridgehub.to_string().leak();
-        let diamond_proxy: &'static str = self.diamond_proxy.to_string().leak();
+        let bridgehub: &'static str = self.bridgehub.address().to_string().leak();
+        let diamond_proxy: &'static str = self.diamond_proxy.address().to_string().leak();
         let validator_timelock: &'static str = self.validator_timelock.to_string().leak();
         L1_STATE_METRICS.l1_contract_addresses[&(bridgehub, diamond_proxy, validator_timelock)]
             .set(1);
@@ -44,8 +71,7 @@ impl L1State {
         provider: impl Provider + Clone,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
-        let bridgehub = Bridgehub::new(self.bridgehub, provider, chain_id);
-        let zk_chain = bridgehub.zk_chain().await?;
+        let zk_chain = self.diamond_proxy.as_ref();
         let last_committed_batch =
             wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
                 .await
@@ -130,7 +156,7 @@ async fn wait_to_finalize<
 }
 
 pub async fn get_l1_state(
-    provider: impl Provider + Clone,
+    provider: DynProvider,
     bridgehub_address: Address,
     chain_id: u64,
 ) -> anyhow::Result<L1State> {
@@ -140,16 +166,15 @@ pub async fn get_l1_state(
         all_chain_ids.contains(&U256::from(chain_id)),
         "chain ID {chain_id} is not registered on L1"
     );
-    let zk_chain = bridgehub.zk_chain().await?;
-    let diamond_proxy = *zk_chain.address();
+    let diamond_proxy = bridgehub.zk_chain().await?;
     let validator_timelock_address = bridgehub.validator_timelock_address().await?;
 
     let latest = BlockId::latest();
-    let last_committed_batch = zk_chain.get_total_batches_committed(latest).await?;
-    let last_proved_batch = zk_chain.get_total_batches_proved(latest).await?;
-    let last_executed_batch = zk_chain.get_total_batches_executed(latest).await?;
+    let last_committed_batch = diamond_proxy.get_total_batches_committed(latest).await?;
+    let last_proved_batch = diamond_proxy.get_total_batches_proved(latest).await?;
+    let last_executed_batch = diamond_proxy.get_total_batches_executed(latest).await?;
 
-    let pubdata_pricing_mode = zk_chain.get_pubdata_pricing_mode().await?;
+    let pubdata_pricing_mode = diamond_proxy.get_pubdata_pricing_mode().await?;
     let da_input_mode = match pubdata_pricing_mode {
         PubdataPricingMode::Rollup => BatchDaInputMode::Rollup,
         PubdataPricingMode::Validium => BatchDaInputMode::Validium,
@@ -157,8 +182,8 @@ pub async fn get_l1_state(
     };
 
     Ok(L1State {
-        bridgehub: bridgehub_address,
-        diamond_proxy,
+        bridgehub: Arc::new(bridgehub),
+        diamond_proxy: Arc::new(diamond_proxy),
         validator_timelock: validator_timelock_address,
         last_committed_batch,
         last_proved_batch,

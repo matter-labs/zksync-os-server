@@ -165,7 +165,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
 
     tracing::info!("Reading L1 state");
-    let mut l1_state = get_l1_state(&l1_provider, bridgehub_address, chain_id)
+    let mut l1_state = get_l1_state(l1_provider.clone().erased(), bridgehub_address, chain_id)
         .await
         .expect("Failed to read L1 state");
     if config.sequencer_config.is_main_node() {
@@ -178,11 +178,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
 
-    let genesis = Genesis::new(
-        genesis_input_source.clone(),
-        l1_provider.clone().erased(),
-        l1_state.diamond_proxy,
-    );
+    let genesis = Genesis::new(genesis_input_source.clone(), l1_state.diamond_proxy.clone());
 
     tracing::info!("Initializing BlockReplayStorage");
 
@@ -284,8 +280,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         L1CommitWatcher::new(
             config.l1_watcher_config.clone().into(),
-            l1_provider.clone().erased(),
-            node_startup_state.l1_state.diamond_proxy,
+            node_startup_state.l1_state.diamond_proxy(),
             finality_storage.clone(),
             batch_storage.clone(),
         )
@@ -298,8 +293,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         L1ExecuteWatcher::new(
             config.l1_watcher_config.clone().into(),
-            l1_provider.clone().erased(),
-            node_startup_state.l1_state.diamond_proxy,
+            node_startup_state.l1_state.diamond_proxy(),
             finality_storage.clone(),
             batch_storage.clone(),
         )
@@ -322,8 +316,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         L1TxWatcher::new(
             config.l1_watcher_config.clone().into(),
-            l1_provider.clone().erased(),
-            node_startup_state.l1_state.diamond_proxy,
+            node_startup_state.l1_state.diamond_proxy(),
             l1_transactions_sender,
             next_l1_priority_id,
         )
@@ -356,7 +349,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
             chain_id,
-            node_startup_state.l1_state.bridgehub,
+            node_startup_state.l1_state.bridgehub_address(),
             rpc_storage,
             l2_mempool.clone(),
             genesis_input_source,
@@ -625,7 +618,7 @@ async fn run_main_node_pipeline<
         })
         .pipe(Batcher {
             chain_id,
-            chain_address: node_state_on_startup.l1_state.diamond_proxy,
+            chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
             first_block_to_process: batcher_subsystem_first_block_to_process,
             last_persisted_block: node_state_on_startup.repositories_persisted_block,
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
