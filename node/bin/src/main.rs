@@ -1,3 +1,4 @@
+use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
@@ -243,6 +244,18 @@ fn build_configs() -> Config {
                 &mut prover_api_config,
             )
             .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
+    }
+
+    // Validate that operator keys are different
+    if l1_sender_config.operator_commit_pk.expose_secret()
+        == l1_sender_config.operator_prove_pk.expose_secret()
+        || l1_sender_config.operator_prove_pk.expose_secret()
+            == l1_sender_config.operator_execute_pk.expose_secret()
+        || l1_sender_config.operator_execute_pk.expose_secret()
+            == l1_sender_config.operator_commit_pk.expose_secret()
+    {
+        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
+        panic!("Operator addresses for commit, prove and execute must be different");
     }
 
     Config {
