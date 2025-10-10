@@ -50,7 +50,7 @@ impl L1TxType for UpgradeTxType {
 ///
 /// Specific to ZKsync OS and hence has a custom transaction type.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", into = "tx_serde::TransactionSerdeHelper<T>")]
 pub struct L1Tx<T: L1TxType> {
     pub hash: TxHash,
     /// The 160-bit address of the initiator on L1.
@@ -96,6 +96,79 @@ pub struct L1Tx<T: L1TxType> {
 
     #[serde(skip)]
     pub marker: std::marker::PhantomData<T>,
+}
+
+mod tx_serde {
+    use super::*;
+
+    // This is the "JSON shape". It mirrors L1Tx fields PLUS the signature fields.
+    // Copy over the same serde attributes so wire format matches.
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TransactionSerdeHelper<T: L1TxType> {
+        pub hash: TxHash,
+        pub initiator: Address,
+        pub to: Address,
+        #[serde(rename = "gas", with = "alloy::serde::quantity")]
+        pub gas_limit: u64,
+        #[serde(with = "alloy::serde::quantity")]
+        pub gas_per_pubdata_byte_limit: u64,
+        #[serde(with = "alloy::serde::quantity")]
+        pub max_fee_per_gas: u128,
+        #[serde(with = "alloy::serde::quantity")]
+        pub max_priority_fee_per_gas: u128,
+        #[serde(with = "alloy::serde::quantity")]
+        pub nonce: u64,
+        pub value: U256,
+        pub to_mint: U256,
+        pub refund_recipient: Address,
+        pub input: Bytes,
+        pub factory_deps: Vec<B256>,
+        #[serde(skip)]
+        pub marker: std::marker::PhantomData<T>,
+
+        // Extra signature fields to be compatible with standard tx JSON.
+        /// ECDSA recovery id
+        #[serde(with = "alloy::serde::quantity")]
+        pub v: u64,
+        /// ECDSA signature r
+        pub r: B256,
+        /// ECDSA signature s
+        pub s: B256,
+        /// Y-parity for EIP-2930 and EIP-1559 transactions. In theory these
+        /// transactions types shouldn't have a `v` field, but in practice they
+        /// are returned by nodes.
+        #[serde(with = "alloy::serde::quantity")]
+        pub y_parity: bool,
+    }
+
+    // Serialize: inject defaults for (r,s,v,yParity)
+    impl<T: L1TxType> From<L1Tx<T>> for TransactionSerdeHelper<T> {
+        fn from(tx: L1Tx<T>) -> Self {
+            Self {
+                hash: tx.hash,
+                initiator: tx.initiator,
+                to: tx.to,
+                gas_limit: tx.gas_limit,
+                gas_per_pubdata_byte_limit: tx.gas_per_pubdata_byte_limit,
+                max_fee_per_gas: tx.max_fee_per_gas,
+                max_priority_fee_per_gas: tx.max_priority_fee_per_gas,
+                nonce: tx.nonce,
+                value: tx.value,
+                to_mint: tx.to_mint,
+                refund_recipient: tx.refund_recipient,
+                input: tx.input,
+                factory_deps: tx.factory_deps,
+                marker: std::marker::PhantomData,
+
+                // Put defaults for signature fields
+                v: 0,
+                r: B256::ZERO,
+                s: B256::ZERO,
+                y_parity: false,
+            }
+        }
+    }
 }
 
 impl<T: L1TxType> Typed2718 for L1Tx<T> {
@@ -507,7 +580,11 @@ mod tests {
           "blockNumber": "0x3",
           "transactionIndex": "0x0",
           "from": "0x357fe6c9f85dc429596577cf2e7a191f60b6865b",
-          "gasPrice": "0xee6fcf4"
+          "gasPrice": "0xee6fcf4",
+          "v": "0x0",
+          "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "yParity": "0x0",
         });
         let l1_tx: alloy::rpc::types::Transaction<ZkEnvelope> =
             serde_json::from_value(l1_tx_json.clone()).unwrap();

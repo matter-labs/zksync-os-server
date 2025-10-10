@@ -19,6 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_types::L1UpgradeEnvelope;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +29,10 @@ pub struct GenesisInput {
     pub initial_contracts: Vec<(Address, alloy::primitives::Bytes)>,
     /// Additional (not related to contract deployments) storage entries to add in genesis state.
     pub additional_storage: Vec<(B256, B256)>,
+    /// Execution version used for genesis.
+    pub execution_version: u32,
+    /// The expected root hash of the genesis state.
+    pub genesis_root: B256,
 }
 
 impl GenesisInput {
@@ -111,6 +116,10 @@ pub struct GenesisState {
     pub preimages: Vec<(B256, Vec<u8>)>,
     /// The header of the genesis block.
     pub header: Header,
+    /// Context of the genesis block.
+    pub context: BlockContext,
+    /// Expected genesis root (state commitment).
+    pub expected_genesis_root: B256,
 }
 
 async fn build_genesis(
@@ -182,10 +191,28 @@ async fn build_genesis(
         requests_hash: None,
     };
 
+    let context = BlockContext {
+        // todo: This shouldn't matter for genesis, right? maybe populate anyways
+        chain_id: 0,
+        block_number: 0,
+        block_hashes: Default::default(),
+        timestamp: 0,
+        eip1559_basefee: U256::from(header.base_fee_per_gas.unwrap()),
+        pubdata_price: U256::from(0),
+        native_price: U256::from(1),
+        coinbase: header.beneficiary,
+        gas_limit: 100_000_000,
+        pubdata_limit: 100_000_000,
+        mix_hash: U256::ZERO,
+        execution_version: genesis_input.execution_version,
+    };
+
     Ok(GenesisState {
         storage_logs: storage_logs.into_iter().collect(),
         preimages,
         header,
+        context,
+        expected_genesis_root: genesis_input.genesis_root,
     })
 }
 

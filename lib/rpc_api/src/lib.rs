@@ -5,4 +5,5 @@ pub mod net;
 pub mod ots;
 pub mod pubsub;
 pub mod types;
+pub mod web3;
 pub mod zks;

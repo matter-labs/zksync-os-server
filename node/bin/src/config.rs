@@ -159,8 +159,15 @@ pub struct SequencerConfig {
     #[config(default_t = "./db/block_dumps".into())]
     pub block_dump_path: PathBuf,
 
+    /// Address that receives the transaction fees.
     #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
     pub fee_collector_address: Address,
+
+    /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
+    pub base_fee_override: Option<u64>,
+
+    /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
+    pub pubdata_price_override: Option<u64>,
 }
 
 impl SequencerConfig {

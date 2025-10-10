@@ -26,6 +26,10 @@ impl RetryPolicy for OptimisticRetryPolicy {
                 // networking issues.
                 msg.contains("error sending request")
             }
+            TransportError::ErrorResp(e) => {
+                // Internal error as observed on Infura
+                e.code == -32603
+            }
             _ => false,
         }
     }

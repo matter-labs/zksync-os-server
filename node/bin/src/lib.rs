@@ -66,7 +66,6 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
 use zksync_os_mempool::RethPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
-use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
@@ -78,7 +77,7 @@ use zksync_os_status_server::run_status_server;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, RepositoryBlock,
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteState,
 };
 
@@ -158,15 +157,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .unwrap(),
     );
 
-    tracing::info!("Initializing BlockReplayStorage");
-
-    let block_replay_storage = BlockReplayStorage::new(
-        config.general_config.rocks_db_path.clone(),
-        chain_id,
-        node_version.clone(),
-        LATEST_EXECUTION_VERSION,
-    );
-
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
@@ -190,6 +180,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l1_provider.clone().erased(),
         l1_state.diamond_proxy,
     );
+
+    tracing::info!("Initializing BlockReplayStorage");
+
+    let block_replay_storage =
+        BlockReplayStorage::new(config.general_config.rocks_db_path.clone(), &genesis).await;
 
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
@@ -378,6 +373,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
+    let genesis = Arc::new(genesis);
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
     let block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>> =
@@ -391,8 +387,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.sequencer_config.block_gas_limit,
             config.sequencer_config.block_pubdata_limit_bytes,
             node_version,
-            genesis,
+            genesis.clone(),
             config.sequencer_config.fee_collector_address,
+            config.sequencer_config.base_fee_override,
+            config.sequencer_config.pubdata_price_override,
         );
 
     // ========== Start Sequencer ===========
@@ -421,14 +419,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     if config.sequencer_config.is_main_node() {
         // Main Node
-        let genesis_block = repositories
-            .get_block_by_number(0)
-            .expect("Failed to read genesis block from repositories")
-            .expect("Missing genesis block in repositories");
         run_main_node_pipeline(
             config,
             l1_provider.clone(),
-            genesis_block,
             batch_storage,
             node_startup_state,
             block_replay_storage,
@@ -440,6 +433,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             finality_storage,
             chain_id,
+            &genesis,
             _stop_receiver.clone(),
         )
         .await;
@@ -507,7 +501,6 @@ async fn run_main_node_pipeline<
 >(
     config: Config,
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
-    genesis_block: RepositoryBlock,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: BlockReplayStorage,
@@ -519,10 +512,21 @@ async fn run_main_node_pipeline<
     tree: MerkleTree<RocksDBWrapper>,
     finality: Finality,
     chain_id: u64,
+    genesis: &Genesis,
     _stop_receiver: watch::Receiver<bool>,
 ) {
     let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
-        load_genesis_stored_batch_info(genesis_block, tree.clone()).await
+        let genesis_block = repositories
+            .get_block_by_number(0)
+            .expect("Failed to read genesis block from repositories")
+            .expect("Missing genesis block in repositories");
+        load_genesis_stored_batch_info(
+            genesis_block,
+            tree.clone(),
+            genesis.state().await.expected_genesis_root,
+        )
+        .await
+        .unwrap()
     } else {
         batch_storage
             .get(node_state_on_startup.l1_state.last_committed_batch)

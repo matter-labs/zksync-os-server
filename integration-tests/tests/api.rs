@@ -1,5 +1,6 @@
 use alloy::network::{ReceiptResponse, TxSigner};
 use alloy::providers::Provider;
+use regex::Regex;
 use std::time::Duration;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
@@ -102,5 +103,15 @@ async fn get_net_version() -> anyhow::Result<()> {
     let net_version = tester.l2_provider.get_net_version().await?;
     let chain_id = tester.l2_provider.get_chain_id().await?;
     assert_eq!(net_version, chain_id);
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn get_client_version() -> anyhow::Result<()> {
+    // Test that the node returns sensible value in `web3_clientVersion` RPC call
+    let tester = Tester::setup().await?;
+    let client_version = tester.l2_provider.get_client_version().await?;
+    let regex = Regex::new(r"^zksync-os/v(\d+)\.(\d+)\.(\d+)")?;
+    assert!(regex.is_match(&client_version));
     Ok(())
 }
