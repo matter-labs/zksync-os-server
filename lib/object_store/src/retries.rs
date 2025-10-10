@@ -103,6 +103,11 @@ impl<S: ObjectStore> ObjectStore for StoreWithRetries<S> {
             .await;
         latency.observe();
         OBJECT_STORE_METRICS.read_write_ops[&"read"].inc();
+        if let Ok(ref bytes) = result {
+            OBJECT_STORE_METRICS
+                .storage_read_total_bytes
+                .inc_by(bytes.len() as u64);
+        }
         result
     }
 

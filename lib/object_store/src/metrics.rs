@@ -20,6 +20,8 @@ pub(crate) struct ObjectStoreMetrics {
     /// Size of the payloads stored in the object store.
     #[metrics(buckets = BYTES_BUCKETS, labels = ["bucket"])]
     pub payload_size: LabeledFamily<&'static str, Histogram<usize>>,
+    /// Total number of bytes read from the object store.
+    pub storage_read_total_bytes: Counter,
     /// Number of read/write operations performed, labeled by operation type (`read` or `write`).
     #[metrics(labels = ["op"])]
     pub read_write_ops: LabeledFamily<&'static str, Counter>,
