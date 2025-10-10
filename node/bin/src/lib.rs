@@ -81,7 +81,7 @@ use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    RepositoryBlock, WriteState,
+    WriteState,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -376,6 +376,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
+    let genesis = Arc::new(genesis);
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`. Left here to reduce the PR size.
     let block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>> =
@@ -389,7 +390,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.sequencer_config.block_gas_limit,
             config.sequencer_config.block_pubdata_limit_bytes,
             node_version,
-            genesis,
+            genesis.clone(),
             config.sequencer_config.fee_collector_address,
             config.sequencer_config.base_fee_override,
             config.sequencer_config.pubdata_price_override,
@@ -421,14 +422,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     if config.sequencer_config.is_main_node() {
         // Main Node
-        let genesis_block = repositories
-            .get_block_by_number(0)
-            .expect("Failed to read genesis block from repositories")
-            .expect("Missing genesis block in repositories");
         run_main_node_pipeline(
             config,
             l1_provider.clone(),
-            genesis_block,
             batch_storage,
             node_startup_state,
             block_replay_storage,
@@ -440,6 +436,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             finality_storage,
             chain_id,
+            &genesis,
             _stop_receiver.clone(),
         )
         .await;
@@ -507,7 +504,6 @@ async fn run_main_node_pipeline<
 >(
     config: Config,
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
-    genesis_block: RepositoryBlock,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: BlockReplayStorage,
@@ -519,6 +515,7 @@ async fn run_main_node_pipeline<
     tree: MerkleTree<RocksDBWrapper>,
     finality: Finality,
     chain_id: u64,
+    genesis: &Genesis,
     _stop_receiver: watch::Receiver<bool>,
 ) {
     // NOTE: the execution pipeline is being migrated to the Pipeline Framework.
@@ -551,7 +548,17 @@ async fn run_main_node_pipeline<
         tokio::sync::mpsc::channel::<BatchEnvelope<FriProof>>(5);
 
     let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
-        load_genesis_stored_batch_info(genesis_block, tree.clone()).await
+        let genesis_block = repositories
+            .get_block_by_number(0)
+            .expect("Failed to read genesis block from repositories")
+            .expect("Missing genesis block in repositories");
+        load_genesis_stored_batch_info(
+            genesis_block,
+            tree.clone(),
+            genesis.state().await.expected_genesis_root,
+        )
+        .await
+        .unwrap()
     } else {
         batch_storage
             .get(node_state_on_startup.l1_state.last_committed_batch)

@@ -31,6 +31,8 @@ pub struct GenesisInput {
     pub additional_storage: Vec<(B256, B256)>,
     /// Execution version used for genesis.
     pub execution_version: u32,
+    /// The expected root hash of the genesis state.
+    pub genesis_root: B256,
 }
 
 impl GenesisInput {
@@ -116,6 +118,8 @@ pub struct GenesisState {
     pub header: Header,
     /// Context of the genesis block.
     pub context: BlockContext,
+    /// Expected genesis root (state commitment).
+    pub expected_genesis_root: B256,
 }
 
 async fn build_genesis(
@@ -208,6 +212,7 @@ async fn build_genesis(
         preimages,
         header,
         context,
+        expected_genesis_root: genesis_input.genesis_root,
     })
 }
 

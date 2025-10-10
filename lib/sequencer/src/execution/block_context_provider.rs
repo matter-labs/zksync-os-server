@@ -4,6 +4,7 @@ use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use zksync_os_genesis::Genesis;
@@ -35,7 +36,7 @@ pub struct BlockContextProvider<Mempool> {
     gas_limit: u64,
     pubdata_limit: u64,
     node_version: semver::Version,
-    genesis: Genesis,
+    genesis: Arc<Genesis>,
     fee_collector_address: Address,
     base_fee_override: Option<u64>,
     pubdata_price_override: Option<u64>,
@@ -53,7 +54,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         gas_limit: u64,
         pubdata_limit: u64,
         node_version: semver::Version,
-        genesis: Genesis,
+        genesis: Arc<Genesis>,
         fee_collector_address: Address,
         base_fee_override: Option<u64>,
         pubdata_price_override: Option<u64>,
