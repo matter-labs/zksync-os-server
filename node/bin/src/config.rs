@@ -280,6 +280,19 @@ pub struct BatcherConfig {
     /// Max number of blocks per batch
     #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
+
+    /// Force creating a batch with properties provided.
+    /// Useful for mitigation or debugging.
+    #[config(nest, default_t = None)]
+    pub forced_batch: Option<BatcherForcedBatchConfig>,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+pub struct BatcherForcedBatchConfig {
+    /// First block to include to the forced batch
+    pub block_number_from: u64,
+    /// Forced batch number
+    pub batch_number: u64,
 }
 
 /// Only used on the Main Node.

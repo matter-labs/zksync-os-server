@@ -693,10 +693,33 @@ async fn run_main_node_pipeline<
 
     tasks.spawn(pipeline.execute().map(report_exit("Pipeline")));
 
+    let (batcher_first_block, batcher_last_committed_batch) =
+        if let Some(forced_batch) = config.batcher_config.clone().forced_batch {
+            tracing::warn!(
+                ?config.batcher_config.forced_batch,
+                "Forced batch is enabled. Batcher will create the specified batch and halt."
+            );
+            (
+                forced_batch.block_number_from,
+                batch_storage
+                    .get(forced_batch.batch_number - 1)
+                    .await
+                    .expect("Failed to get forced_batch.batch_number - 1 from proof storage")
+                    .expect("Batch `forced_batch.batch_number - 1` is not present in proof storage")
+                    .batch
+                    .commit_batch_info
+                    .into(),
+            )
+        } else {
+            (
+                batcher_subsystem_first_block_to_process,
+                last_committed_batch_info,
+            )
+        };
     let batcher = Batcher::new(
         chain_id,
         node_state_on_startup.l1_state.diamond_proxy,
-        batcher_subsystem_first_block_to_process,
+        batcher_first_block,
         node_state_on_startup.repositories_persisted_block,
         config.sequencer_config.block_pubdata_limit_bytes,
         config.batcher_config,
@@ -705,7 +728,7 @@ async fn run_main_node_pipeline<
     );
     tasks.spawn(
         batcher
-            .run_loop(last_committed_batch_info)
+            .run_loop(batcher_last_committed_batch)
             .map(report_exit("Batcher")),
     );
     let fri_job_manager = Arc::new(FriJobManager::new(
