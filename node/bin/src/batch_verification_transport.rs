@@ -8,10 +8,10 @@ use futures::{SinkExt, StreamExt};
 use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::ToSocketAddrs;
+use tokio::sync::broadcast;
 use tokio::sync::{Mutex, mpsc};
 use tokio::{
     io::AsyncWriteExt,
@@ -35,7 +35,7 @@ use crate::tree_manager::BlockMerkleTreeData;
 
 /// Manages connected clients and collects their responses
 pub struct BatchVerificationServer {
-    clients: Arc<Mutex<HashMap<String, mpsc::Sender<BatchVerificationRequest>>>>,
+    verification_request_broadcast: broadcast::Sender<BatchVerificationRequest>,
     response_sender: mpsc::Sender<BatchVerificationResponse>,
 }
 
@@ -43,14 +43,17 @@ pub struct BatchVerificationServer {
 pub enum BatchVerificationRequestError {
     #[error("Not enough clients connected")]
     NotEnoughClients,
+    #[error("Failed to send batch verification request: {0}")]
+    SendError(#[from] broadcast::error::SendError<BatchVerificationRequest>),
 }
 
 impl BatchVerificationServer {
     pub fn new() -> (Self, mpsc::Receiver<BatchVerificationResponse>) {
         let (response_sender, response_receiver) = mpsc::channel(100);
+        let (verification_request_broadcast, _rx_unused) = broadcast::channel(16);
 
         let server = Self {
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            verification_request_broadcast,
             response_sender,
         };
 
@@ -60,18 +63,22 @@ impl BatchVerificationServer {
     /// Start the TCP server that accepts connections from external nodes
     pub async fn run_server(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
         let listener = TcpListener::bind(address).await?;
-        let clients = self.clients.clone();
         let response_sender = self.response_sender.clone();
 
         loop {
             let (socket, addr) = listener.accept().await?;
-            let clients = clients.clone();
+            let verification_request_rx = self.verification_request_broadcast.subscribe();
             let response_sender = response_sender.clone();
             let client_addr = addr.to_string();
 
             tokio::spawn(async move {
-                if let Err(e) =
-                    Self::handle_client(socket, client_addr, clients, response_sender).await
+                if let Err(e) = Self::handle_client(
+                    socket,
+                    client_addr,
+                    verification_request_rx,
+                    response_sender,
+                )
+                .await
                 {
                     tracing::error!("Error handling client {}: {}", addr, e);
                 }
@@ -82,7 +89,7 @@ impl BatchVerificationServer {
     async fn handle_client(
         mut socket: TcpStream,
         client_addr: String,
-        clients: Arc<Mutex<HashMap<String, mpsc::Sender<BatchVerificationRequest>>>>,
+        mut verification_request_rx: broadcast::Receiver<BatchVerificationRequest>,
         response_sender: mpsc::Sender<BatchVerificationResponse>,
     ) -> anyhow::Result<()> {
         let (recv, mut send) = socket.split();
@@ -97,14 +104,6 @@ impl BatchVerificationServer {
             return Ok(());
         }
 
-        let (request_sender, mut request_receiver) = mpsc::channel::<BatchVerificationRequest>(10);
-
-        // Register this client
-        {
-            let mut clients_guard = clients.lock().await;
-            clients_guard.insert(client_addr.clone(), request_sender);
-        }
-
         tracing::info!("Batch verification client connected: {}", client_addr);
 
         let mut writer = FramedWrite::new(send, BatchVerificationRequestCodec::new());
@@ -114,15 +113,18 @@ impl BatchVerificationServer {
         loop {
             tokio::select! {
                 // Send batches for signing to the client (verifier EN)
-                request = request_receiver.recv() => {
+                request = verification_request_rx.recv() => {
                     match request {
-                        Some(req) => {
+                        Ok(req) => {
                             if let Err(e) = writer.send(req).await {
                                 tracing::error!("Failed to send request to client {}: {}", client_addr, e);
                                 break;
                             }
                         }
-                        None => break, // Channel closed
+                        Err(e) => {
+                            tracing::error!("Error reading request for client {}: {}", client_addr, e);
+                            break;
+                        }
                     }
                 }
 
@@ -144,12 +146,6 @@ impl BatchVerificationServer {
             }
         }
 
-        // Cleanup client registration
-        {
-            let mut clients_guard = clients.lock().await;
-            clients_guard.remove(&client_addr);
-        }
-
         tracing::info!("Batch verification client disconnected: {}", client_addr);
         Ok(())
     }
@@ -169,47 +165,19 @@ impl BatchVerificationServer {
             request_id,
         };
 
-        // Clone senders while holding the lock, then drop the lock before awaiting.
-        let senders: Vec<(String, mpsc::Sender<BatchVerificationRequest>)> = {
-            let clients = self.clients.lock().await;
-            clients
-                .iter()
-                .map(|(id, tx)| (id.clone(), tx.clone()))
-                .collect()
-        };
+        let clients_count = self.verification_request_broadcast.receiver_count();
 
-        let senders_len = senders.len();
-        if senders_len < required_clients {
+        if clients_count < required_clients {
             return Err(BatchVerificationRequestError::NotEnoughClients);
         }
 
-        // Dispatch sends concurrently and await them together.
-        let send_futs = senders
-            .into_iter()
-            .map(|(client_id, sender)| {
-                let req = request.clone();
-                async move {
-                    if let Err(e) = sender.send(req).await {
-                        tracing::error!(
-                            "Failed to send verification request to client {}: {}",
-                            client_id,
-                            e
-                        );
-                        false
-                    } else {
-                        true
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let _results = join_all(send_futs).await;
+        self.verification_request_broadcast.send(request)?;
 
         tracing::info!(
             "Sent batch verification request {} for batch {} to {} clients",
             request_id,
             batch_envelope.batch_number(),
-            senders_len
+            clients_count,
         );
 
         Ok(())
