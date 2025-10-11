@@ -18,12 +18,16 @@ on:
 #        description: "Tag to use for the release."
 #        type: string
 #        required: true
-#        default: ""
 
 env:
   ZKSYNC_OS_SERVER_BIN: 'zksync_os_bin'
   RELEASE_PROFILE: 'maxperf'
   SERVER_LOGFILE: zksync-os-server.log.txt
+  FOUNDRY_VERSION: 'v1.3.4'
+
+defaults:
+  run:
+    shell: 'bash -ex {0}'
 
 jobs:
   # Build server binaries for all target platforms
@@ -51,17 +55,15 @@ jobs:
         with:
           ref: ${{ inputs.tag || '' }}
 
-      - name: Install default packages
+      - name: Install required packages
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt update && sudo apt --assume-yes install \
             curl jq libssl-dev libclang-dev pkg-config build-essential
-
-      - name: Install arm64 libssl
-        if: ${{ runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu' }}
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt update && sudo apt --assume-yes install libssl-dev:arm64
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            sudo dpkg --add-architecture arm64
+            sudo apt --assume-yes install libssl-dev:arm64
+          fi
 
       - name: Install Rust toolchain
         uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
@@ -72,6 +74,11 @@ jobs:
           inherit-toolchain: true
           cache: false
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
+        with:
+          version: '${{ env.FOUNDRY_VERSION }}'
+
       - name: Build
         env:
           # Build static binaries
@@ -79,11 +86,6 @@ jobs:
         run: |
           cargo build --profile "${RELEASE_PROFILE}" \
             --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}"
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
-        with:
-          version: 'v1.3.4'
 
       - name: Check executable
         env:
@@ -111,10 +113,22 @@ jobs:
               "params": ["0x1", false],
               "id": 1
             }')
+          # Check that the response contains a hash and a non-empty transactions array
           if echo "${FIRST_BLOCK}" | jq -e '.result.hash and (.result.transactions | length > 0)' >/dev/null; then
             echo "✅ First block is correct."
           else
-            echo "❌ Missing hash or transactions array is empty."
+            echo "❌ Missing hash or transactions array is empty in the first block."
             echo "${FIRST_BLOCK}"
             cat "${SERVER_LOGFILE}"
           fi
+
+      - name: Prepare tarballs
+        run: |
+          mv ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN} ./${ZKSYNC_OS_SERVER_BIN}
+          tar -czf ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v1.2.3' }}-${{ matrix.target }}.tar.gz ${{ env.ZKSYNC_OS_SERVER_BIN }}
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v1.2.3' }}-${{ matrix.target }}.tar.gz
+          path: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v1.2.3' }}-${{ matrix.target }}.tar.gz
