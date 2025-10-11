@@ -32,12 +32,7 @@ impl L1SenderCommand for ProofCommand {
 
     fn solidity_call(&self) -> impl SolCall {
         proveBatchesSharedBridgeCall::new((
-            self.batches
-                .first()
-                .unwrap()
-                .batch
-                .commit_batch_info
-                .chain_address,
+            self.batches.first().unwrap().batch.batch_info.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),
@@ -132,7 +127,7 @@ impl ProofCommand {
         let stored_batch_infos: Vec<StoredBatchInfo> = self
             .batches
             .iter()
-            .map(|batch| StoredBatchInfo::from(batch.batch.commit_batch_info.clone()))
+            .map(|batch| batch.batch.batch_info.clone().into_stored())
             .collect();
         // todo: awful and temporary
         let verifier_version = match self.proof.proving_execution_version() {
