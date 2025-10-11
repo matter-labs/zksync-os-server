@@ -1,11 +1,10 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;
-use crate::commitment::StoredBatchInfo;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
+use zksync_os_contract_interface::models::{PriorityOpsBatchInfo, StoredBatchInfo};
 use zksync_os_contract_interface::{IExecutor, InteropRoot};
 
 #[derive(Debug)]
