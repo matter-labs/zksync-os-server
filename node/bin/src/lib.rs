@@ -559,8 +559,8 @@ async fn run_main_node_pipeline<
             .expect("Failed to get last committed block from proof storage")
             .expect("Committed batch is not present in proof storage")
             .batch
-            .commit_batch_info
-            .into()
+            .batch_info
+            .into_stored()
     };
 
     let committed_batch = batch_storage
