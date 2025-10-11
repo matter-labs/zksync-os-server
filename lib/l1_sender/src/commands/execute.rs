@@ -4,7 +4,7 @@ use crate::commands::L1SenderCommand;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use zksync_os_contract_interface::models::{PriorityOpsBatchInfo, StoredBatchInfo};
+use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_contract_interface::{IExecutor, InteropRoot};
 
 #[derive(Debug)]
@@ -33,12 +33,7 @@ impl L1SenderCommand for ExecuteCommand {
 
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::executeBatchesSharedBridgeCall::new((
-            self.batches
-                .first()
-                .unwrap()
-                .batch
-                .commit_batch_info
-                .chain_address,
+            self.batches.first().unwrap().batch.batch_info.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),
@@ -81,7 +76,7 @@ impl ExecuteCommand {
         let stored_batch_infos = self
             .batches
             .iter()
-            .map(|batch| StoredBatchInfo::from(batch.batch.commit_batch_info.clone()))
+            .map(|batch| batch.batch.batch_info.clone().into_stored())
             .map(|batch| IExecutor::StoredBatchInfo::from(&batch))
             .collect::<Vec<_>>();
         let priority_ops = self

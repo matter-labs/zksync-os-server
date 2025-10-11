@@ -212,7 +212,7 @@ impl FriJobManager {
 
         if let Err(err) = fri_proof_verifier::verify_fri_proof(
             batch_metadata.previous_stored_batch_info.state_commitment,
-            batch_metadata.commit_batch_info.clone().into(),
+            batch_metadata.batch_info.clone().into_stored(),
             program_proof,
         ) {
             tracing::warn!(batch_number, "Proof verification failed. {err}");

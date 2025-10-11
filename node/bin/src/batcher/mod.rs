@@ -77,13 +77,13 @@ impl PipelineComponent for Batcher {
                 batch_number = batch_envelope.batch_number(),
                 batch_metadata = ?batch_envelope.batch,
                 block_count = batch_envelope.batch.last_block_number - batch_envelope.batch.first_block_number + 1,
-                new_state_commitment = ?batch_envelope.batch.commit_batch_info.new_state_commitment,
+                new_state_commitment = ?batch_envelope.batch.batch_info.new_state_commitment,
                 "Batch created"
             );
 
             tracing::debug!(
                 batch_number = batch_envelope.batch_number(),
-                da_commitment = ?batch_envelope.batch.commit_batch_info.operator_da_input,
+                da_commitment = ?batch_envelope.batch.batch_info.operator_da_input,
                 "Batch da_input",
             );
 
@@ -213,7 +213,7 @@ impl Batcher {
             self.chain_id,
             self.chain_address,
         )?;
-        self.prev_batch_info = batch_envelope.batch.commit_batch_info.clone().into();
+        self.prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored();
         Ok(batch_envelope)
     }
 }

@@ -1,5 +1,5 @@
 use crate::IExecutor;
-use alloy::primitives::{Address, B256, Bytes, Keccak256, U256, keccak256};
+use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -89,27 +89,7 @@ pub struct CommitBatchInfo {
     pub first_block_timestamp: u64,
     pub last_block_timestamp: u64,
     pub chain_id: u64,
-    pub chain_address: Address,
     pub operator_da_input: Vec<u8>,
-    pub upgrade_tx_hash: Option<B256>,
-}
-
-impl CommitBatchInfo {
-    /// Calculate keccak256 hash of public input
-    pub fn public_input_hash(&self) -> B256 {
-        let mut hasher = Keccak256::new();
-        hasher.update(U256::from(self.chain_id).to_be_bytes::<32>());
-        hasher.update(&self.first_block_timestamp.to_be_bytes());
-        hasher.update(&self.last_block_timestamp.to_be_bytes());
-        hasher.update(&self.l2_da_validator);
-        hasher.update(&self.da_commitment);
-        hasher.update(U256::from(self.number_of_layer1_txs).to_be_bytes::<32>());
-        hasher.update(&self.priority_operations_hash);
-        hasher.update(&self.l2_to_l1_logs_root_hash);
-        hasher.update(&self.upgrade_tx_hash.unwrap_or_default());
-        hasher.update(&self.dependency_roots_rolling_hash);
-        hasher.finalize()
-    }
 }
 
 impl From<CommitBatchInfo> for IExecutor::CommitBatchInfoZKsyncOS {
@@ -148,25 +128,7 @@ impl fmt::Debug for CommitBatchInfo {
             .field("first_block_timestamp", &self.first_block_timestamp)
             .field("last_block_timestamp", &self.last_block_timestamp)
             .field("chain_id", &self.chain_id)
-            .field("chain_address", &self.chain_address)
             // .field("operator_da_input", skipped to keep concise!)
-            .field("upgrade_tx_hash", &self.upgrade_tx_hash)
             .finish()
-    }
-}
-
-impl From<CommitBatchInfo> for StoredBatchInfo {
-    fn from(value: CommitBatchInfo) -> Self {
-        let commitment = value.public_input_hash();
-        Self {
-            batch_number: value.batch_number,
-            state_commitment: value.new_state_commitment,
-            number_of_layer1_txs: value.number_of_layer1_txs,
-            priority_operations_hash: value.priority_operations_hash,
-            dependency_roots_rolling_hash: value.dependency_roots_rolling_hash,
-            l2_to_l1_logs_root_hash: value.l2_to_l1_logs_root_hash,
-            commitment,
-            last_block_timestamp: value.last_block_timestamp,
-        }
     }
 }
