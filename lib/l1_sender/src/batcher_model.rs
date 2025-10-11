@@ -1,10 +1,10 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
-use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
+use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`

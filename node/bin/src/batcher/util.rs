@@ -1,6 +1,6 @@
 use alloy::primitives::{B256, U256, keccak256};
 use blake2::{Blake2s256, Digest};
-use zksync_os_l1_sender::commitment::StoredBatchInfo;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_storage_api::RepositoryBlock;
 

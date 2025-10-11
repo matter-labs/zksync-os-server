@@ -3,7 +3,6 @@ pub mod batcher_model;
 pub mod commands;
 pub mod commitment;
 pub mod config;
-mod debug_formatting;
 mod metrics;
 mod new_blocks;
 pub mod pipeline_component;

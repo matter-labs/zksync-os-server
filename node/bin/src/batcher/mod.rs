@@ -8,10 +8,10 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::Sleep;
 use tracing;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, ProverInput};
-use zksync_os_l1_sender::commitment::StoredBatchInfo;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,

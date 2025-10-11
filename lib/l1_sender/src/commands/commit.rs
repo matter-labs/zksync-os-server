@@ -70,12 +70,15 @@ impl CommitCommand {
 
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
-        let commit_batch_info = self
-            .input
-            .batch
-            .commit_batch_info
-            .clone()
-            .into_l1_commit_data(self.da_input_mode);
+        let mut commit_batch_info = self.input.batch.commit_batch_info.clone();
+        // `CommitBatchInfo` has full da input - even for validium chains we only drop `operator_da_input`
+        // field when we are actually committing the batch this way, we don't need to consider the DA
+        // mode in advance - it's only known to the l1-sender.
+        commit_batch_info.operator_da_input = match self.da_input_mode {
+            BatchDaInputMode::Rollup => commit_batch_info.operator_da_input,
+            BatchDaInputMode::Validium => U256::ZERO.to_be_bytes_vec(),
+        };
+        let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(commit_batch_info);
         tracing::debug!(
             last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
             last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
