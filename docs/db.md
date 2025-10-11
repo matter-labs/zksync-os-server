@@ -8,6 +8,7 @@ All persistent data is stored across multiple RocksDB databases:
 - state
 - tree
 - proofs (JSON files, not RocksDB)
+- batch_index
 
 ---
 
@@ -79,3 +80,15 @@ Note: The 'default' column also stores a serialized Manifest at key '0'.
 
 Stored as JSON files in a separate directory:
 ../shared/fri_batch_envelopes
+
+---
+
+## 7. batch_index
+
+Local index for fast batch lookups used by RPC and watchers.
+
+| Column | Key | Value |
+|--------|-----|--------|
+| block_to_batch | first_block (u64 BE) | Batch number (u64 BE) |
+| batch_ranges | batch (u64 BE) | first_block (u64 BE) || last_block (u64 BE) |
+| meta | 'latest_block' | Latest indexed block (u64 BE) |

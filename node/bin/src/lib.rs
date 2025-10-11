@@ -50,6 +50,7 @@ use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use prover_api::batch_index::BatchIndex;
 use ruint::aliases::U256;
 use std::path::Path;
 use std::sync::Arc;
@@ -83,6 +84,7 @@ use zksync_os_storage_api::{
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
+const BATCH_INDEX_DB_NAME: &str = "batch_index";
 const REPOSITORY_DB_NAME: &str = "repository";
 
 #[allow(clippy::too_many_arguments)]
@@ -148,12 +150,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel between L1Watcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
 
+    tracing::info!("Initializing BatchIndex");
+    let batch_index = BatchIndex::new(
+        &config
+            .general_config
+            .rocks_db_path
+            .join(BATCH_INDEX_DB_NAME),
+    );
+
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
         ObjectStoreFactory::new(config.prover_api_config.object_store.clone())
             .create_store()
             .await
             .unwrap(),
+        batch_index,
     );
 
     // This is the only place where we initialize L1 provider, every component shares the same

@@ -18,3 +18,14 @@ pub trait ReadBatch: Send + Sync + 'static {
         batch_number: u64,
     ) -> anyhow::Result<Option<(BlockNumber, BlockNumber)>>;
 }
+
+#[async_trait::async_trait]
+pub trait UpdateBatchIndex: Send + Sync + 'static {
+    /// Update the index to include information about the given batch and all previous batches.
+    async fn sync_index_to_batch(
+        &self,
+        batch_number: u64,
+        first_block: u64,
+        last_block: u64,
+    ) -> anyhow::Result<()>;
+}

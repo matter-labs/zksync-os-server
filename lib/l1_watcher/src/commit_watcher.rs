@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_storage_api::{ReadBatch, WriteFinality};
+use zksync_os_storage_api::{ReadBatch, UpdateBatchIndex, WriteFinality};
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
@@ -20,7 +20,9 @@ pub struct L1CommitWatcher<Finality, BatchStorage> {
     batch_storage: BatchStorage,
 }
 
-impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality, BatchStorage> {
+impl<Finality: WriteFinality, BatchStorage: ReadBatch + UpdateBatchIndex>
+    L1CommitWatcher<Finality, BatchStorage>
+{
     pub async fn new(
         config: L1WatcherConfig,
         provider: DynProvider,
@@ -74,7 +76,9 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
     }
 }
 
-impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality, BatchStorage> {
+impl<Finality: WriteFinality, BatchStorage: ReadBatch + UpdateBatchIndex>
+    L1CommitWatcher<Finality, BatchStorage>
+{
     pub async fn run(mut self) -> L1CommitWatcherResult<()> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
@@ -103,7 +107,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
                     ?batch_commitment,
                     "discovered committed batch"
                 );
-                let (_, last_committed_block) = self
+                let (first_committed_block, last_committed_block) = self
                     .batch_storage
                     .get_batch_range_by_number(batch_number)
                     .await?
@@ -115,6 +119,10 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
                     );
                     finality.last_committed_block = last_committed_block;
                 });
+
+                self.batch_storage
+                    .sync_index_to_batch(batch_number, first_committed_block, last_committed_block)
+                    .await?;
             }
         }
 

@@ -7,7 +7,7 @@ mod replay;
 pub use replay::{ReadReplay, WriteReplay};
 
 mod batch;
-pub use batch::ReadBatch;
+pub use batch::{ReadBatch, UpdateBatchIndex};
 
 pub mod notifications;
 

@@ -1,3 +1,4 @@
+pub mod batch_index;
 pub mod fake_fri_provers_pool;
 pub mod fri_job_manager;
 mod fri_proof_verifier;
