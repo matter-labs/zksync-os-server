@@ -125,10 +125,71 @@ jobs:
       - name: Prepare tarballs
         run: |
           mv ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN} ./${ZKSYNC_OS_SERVER_BIN}
-          tar -czf ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v1.2.3' }}-${{ matrix.target }}.tar.gz ${{ env.ZKSYNC_OS_SERVER_BIN }}
+          tar -czf ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz ${{ env.ZKSYNC_OS_SERVER_BIN }}
 
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v1.2.3' }}-${{ matrix.target }}.tar.gz
-          path: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v1.2.3' }}-${{ matrix.target }}.tar.gz
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz
+          path: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz
+
+  update-release:
+    needs: release-bins
+    # Run on macOS to combine binaries into a single one for macOS
+    runs-on: macos-latest-xlarge
+    steps:
+
+      - name: Download binaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: ${{ env.ZKSYNC_OS_SERVER_BIN }}-*.tar.gz
+          path: dist
+
+      - name: Create universal macOS binary
+        run: |
+          for TARGET in x86_64-apple-darwin aarch64-apple-darwin; do
+            tar xzf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${TARGET}.tar.gz
+            mv ${{ env.ZKSYNC_OS_SERVER_BIN }} ${{ env.ZKSYNC_OS_SERVER_BIN }}-${TARGET}
+            rm -f dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${TARGET}.tar.gz
+          done
+          lipo -create -o "${{ env.ZKSYNC_OS_SERVER_BIN }}" \
+            ${{ env.ZKSYNC_OS_SERVER_BIN }}-x86_64-apple-darwin ${{ env.ZKSYNC_OS_SERVER_BIN }}-aarch64-apple-darwin
+          tar -czf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz \
+            ${{ env.ZKSYNC_OS_SERVER_BIN }}
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz
+          path: dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz
+
+      - name: Binaries attestation
+        id: attestation
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        if: github.ref_type == 'tag'
+        with:
+          subject-path: 'dist/**'
+
+      - name: Upload bins to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag || 'v0.8.0' }}" dist/* --clobber
+
+      - name: Update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REALASE_BODY=$(gh release view "${{ inputs.tag || 'v0.8.0' }}" --json body -q '.body')
+          BINARIES_SECTION=$(cat <<- "ENDBODY"
+          ## Binaries
+          
+          | System | Architecture | Binary | Attestation |
+          |:---:|:---:|:---:|:---|
+          | <img src="https://www.svgrepo.com/download/473700/linux.svg" width="50"/> | x86_64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || 'v0.8.0' }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/473700/linux.svg" width="50"/> | aarch64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || 'v0.8.0' }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/511330/apple-173.svg" width="50"/> | universal | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/473589/docker.svg" width="50"/> | Docker | [${{ env.ZKSYNC_OS_SERVER_BIN }}](https://github.com/matter-labs/zksync-os-server/pkgs/container/zksync-os-server/539872628?tag=${{ inputs.tag || 'v0.8.0' }}) | - |
+          ENDBODY
+          )
+          echo -e "${REALASE_BODY}\n\n${BINARIES_SECTION}" > updated_body.md
+          gh release edit "${{ inputs.tag }}" --notes-file updated_body.md
