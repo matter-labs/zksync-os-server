@@ -1643,7 +1643,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c953fe1ba023e6b7730c0d4b031d06f267f23a46167dcbd40316644b10a17ba"
 dependencies = [
  "aws-lc-sys",
- "zeroize",
+ "zeroiz--ce",
 ]
 
 [[package]]
@@ -11462,6 +11462,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "zksync_os_bin"
 version = "0.8.2-non-semver-compat"
 dependencies = [
@@ -11531,6 +11532,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> f26ed92 (chore: use zksync-os-server binary name)
 name = "zksync_os_contract_interface"
 version = "0.8.2-non-semver-compat"
 dependencies = [
@@ -11628,13 +11631,13 @@ dependencies = [
  "test-log",
  "tokio",
  "tracing",
- "zksync_os_bin",
  "zksync_os_contract_interface",
  "zksync_os_l1_sender",
  "zksync_os_multivm",
  "zksync_os_object_store",
  "zksync_os_prover_service",
  "zksync_os_rpc_api",
+ "zksync_os_server",
  "zksync_os_state_full_diffs",
  "zksync_os_types",
 ]
@@ -11949,6 +11952,74 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_storage_api",
+ "zksync_os_types",
+]
+
+[[package]]
+name = "zksync_os_server"
+version = "0.8.2-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "backon",
+ "base64 0.22.1",
+ "basic_system",
+ "bincode 2.0.1",
+ "blake2 0.10.6",
+ "dashmap",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.4.5)",
+ "forward_system",
+ "full_statement_verifier",
+ "futures",
+ "http 1.3.1",
+ "itertools 0.14.0",
+ "jsonrpsee",
+ "pin-project 1.1.10",
+ "reth-chainspec",
+ "reth-execution-types",
+ "reth-primitives",
+ "reth-primitives-traits",
+ "reth-revm",
+ "reth-storage-api",
+ "reth-trie-common",
+ "ruint",
+ "semver 1.0.26",
+ "sentry",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "smart-config",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "vise",
+ "zk_ee",
+ "zksync_os_api",
+ "zksync_os_genesis",
+ "zksync_os_interface",
+ "zksync_os_l1_sender",
+ "zksync_os_l1_watcher",
+ "zksync_os_mempool",
+ "zksync_os_merkle_tree",
+ "zksync_os_multivm",
+ "zksync_os_object_store",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_priority_tree",
+ "zksync_os_rocksdb",
+ "zksync_os_rpc",
+ "zksync_os_rpc_api",
+ "zksync_os_sequencer",
+ "zksync_os_state",
+ "zksync_os_state_full_diffs",
+ "zksync_os_status_server",
+ "zksync_os_storage",
+ "zksync_os_storage_api",
+ "zksync_os_tracing",
  "zksync_os_types",
 ]
 

@@ -68,44 +68,17 @@ runs:
         cmake --version
 
     - name: Install sccache
-      shell: 'bash -ex {0}'
       if: ${{ contains(runner.name, 'matterlabs') }}
+      shell: 'bash -ex {0}'
       env:
         SCCACHE_VERSION: 'v0.10.0'
-        SCCACHE_URL: "https://github.com/mozilla/sccache/releases/download"
+        SCCACHE_URL: "https://github.com/mozilla/sccache/releases/download/"
       run: |
-        # Determine the correct archive base name for the platform
-        case "${RUNNER_OS}" in
-          Linux)
-            if [ "${RUNNER_ARCH}" = "X64" ]; then
-              # Linux x86_64 uses the "dist" artifact
-              SCCACHE_BASENAME="sccache-dist-${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
-            elif [ "${RUNNER_ARCH}" = "ARM64" ]; then
-              SCCACHE_BASENAME="sccache-${SCCACHE_VERSION}-aarch64-unknown-linux-musl"
-            else
-              echo "Unsupported Linux arch: ${RUNNER_ARCH}"; exit 1
-            fi
-            ;;
-          macOS)
-            if [ "${RUNNER_ARCH}" = "X64" ]; then
-              SCCACHE_BASENAME="sccache-${SCCACHE_VERSION}-x86_64-apple-darwin"
-            elif [ "${RUNNER_ARCH}" = "ARM64" ]; then
-              SCCACHE_BASENAME="sccache-${SCCACHE_VERSION}-aarch64-apple-darwin"
-            else
-              echo "Unsupported macOS arch: ${RUNNER_ARCH}"; exit 1
-            fi
-            ;;
-          *)
-            echo "Unsupported OS: ${RUNNER_OS}"; exit 1
-            ;;
-        esac
-        TARBALL="${SCCACHE_BASENAME}.tar.gz"
-        wget --no-verbose "${SCCACHE_URL}/${SCCACHE_VERSION}/${TARBALL}"
-        tar xzf "${TARBALL}"
-        echo "${PWD}/${SCCACHE_BASENAME}" >> "${GITHUB_PATH}"
-        export PATH="${PWD}/${SCCACHE_BASENAME}:${PATH}"
-        which sccache
-        sccache --version
+        SCCACHE_FILENAME="sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+        wget --no-verbose "${SCCACHE_URL}/${SCCACHE_VERSION}/${SCCACHE_FILENAME}.tar.gz"
+        tar xzf "${SCCACHE_FILENAME}.tar.gz"
+        echo "${PWD}/${SCCACHE_FILENAME}" >> "${GITHUB_PATH}"
+        export PATH="${PWD}/${SCCACHE_FILENAME}:${PATH}"
 
     - name: Setup sccache
       if: ${{ contains(runner.name, 'matterlabs') }}
