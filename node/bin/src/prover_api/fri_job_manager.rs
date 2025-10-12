@@ -16,15 +16,17 @@
 
 use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
+use crate::prover_api::proof_storage::{ProofStorage, StoredFailedProof};
 use crate::prover_api::prover_job_map::ProverJobMap;
 use itertools::MinMaxResult::MinMax;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
+use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
 use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{
@@ -44,6 +46,16 @@ pub enum SubmitError {
     Other(String),
 }
 
+/// A FRI proof that failed verification, stored for debugging purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailedFriProof {
+    /// Batch Metadata
+    pub batch_metadata: BatchMetadata,
+
+    /// The raw proof bytes that were submitted
+    pub proof_bytes: Vec<u8>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct JobState {
     pub batch_number: u64,
@@ -60,6 +72,8 @@ pub struct FriJobManager {
     inbound: Mutex<PeekableReceiver<BatchEnvelope<ProverInput>>>,
     // outbound
     batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+    // == storage ==
+    proof_storage: ProofStorage,
     // == config ==
     max_assigned_batch_range: usize,
     // == metrics ==
@@ -70,7 +84,7 @@ impl FriJobManager {
     pub fn new(
         batches_for_prove_receiver: mpsc::Receiver<BatchEnvelope<ProverInput>>,
         batches_with_proof_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
-
+        proof_storage: ProofStorage,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> Self {
@@ -83,6 +97,7 @@ impl FriJobManager {
             assigned_jobs: jobs,
             inbound: Mutex::new(PeekableReceiver::new(batches_for_prove_receiver)),
             batches_with_proof_sender,
+            proof_storage,
             max_assigned_batch_range,
             latency_tracker,
         }
@@ -199,7 +214,30 @@ impl FriJobManager {
             batch_metadata.commit_batch_info.clone().into(),
             program_proof,
         ) {
-            tracing::warn!(batch_number, "Proof verification failed: {err}");
+            tracing::warn!(batch_number, "Proof verification failed. {err}",);
+
+            // Persist the failed proof with batch metadata for debugging
+            let failed_proof = FailedFriProof {
+                batch_metadata,
+                proof_bytes,
+            };
+
+            if let Err(save_err) = self
+                .proof_storage
+                .save_failed_proof(&StoredFailedProof { failed_proof })
+                .await
+            {
+                tracing::error!(
+                    batch_number,
+                    "Failed to persist failed proof for debugging: {save_err}",
+                );
+            } else {
+                tracing::info!(
+                    batch_number,
+                    "Failed proof saved for debugging. Prover: {prover_id}",
+                );
+            }
+
             return Err(SubmitError::VerificationFailed);
         }
         // Now we know that the proof is valid.
