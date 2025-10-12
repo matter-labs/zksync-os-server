@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
     Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
