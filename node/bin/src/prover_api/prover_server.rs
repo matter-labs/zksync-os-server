@@ -278,17 +278,14 @@ async fn get_failed_fri_proof(
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            format!("No failed proof found for batch {}", batch_number),
+            format!("No failed proof found for batch {batch_number}"),
         )
             .into_response(),
         Err(e) => {
-            error!(
-                "Error retrieving failed proof for batch {}: {}",
-                batch_number, e
-            );
+            error!("Error retrieving failed proof for batch {batch_number}: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Error retrieving failed proof: {}", e),
+                format!("Error retrieving failed proof: {e}"),
             )
                 .into_response()
         }

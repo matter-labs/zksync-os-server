@@ -114,7 +114,7 @@ impl ProofStorage {
         }
     }
 
-    /// Save a failed FRI proof with batch metadatafor debugging.
+    /// Save a failed FRI proof with batch metadata for debugging.
     pub async fn save_failed_proof(&self, failed_proof: &StoredFailedProof) -> anyhow::Result<()> {
         self.object_store
             .put(failed_proof.batch_number(), failed_proof)
