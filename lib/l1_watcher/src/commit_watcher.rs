@@ -110,9 +110,14 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
                     .expect("committed batch is missing");
                 self.finality.update_finality_status(|finality| {
                     assert!(
+                        batch_number > finality.last_committed_batch,
+                        "non-monotonous committed batch"
+                    );
+                    assert!(
                         last_committed_block > finality.last_committed_block,
                         "non-monotonous committed block"
                     );
+                    finality.last_committed_batch = batch_number;
                     finality.last_committed_block = last_committed_block;
                 });
             }

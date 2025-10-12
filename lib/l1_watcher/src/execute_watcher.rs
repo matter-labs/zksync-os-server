@@ -104,9 +104,14 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
                     .expect("executed batch is missing");
                 self.finality.update_finality_status(|finality| {
                     assert!(
+                        batch_number > finality.last_executed_batch,
+                        "non-monotonous executed batch"
+                    );
+                    assert!(
                         last_executed_block > finality.last_executed_block,
                         "non-monotonous executed block"
                     );
+                    finality.last_executed_batch = batch_number;
                     finality.last_executed_block = last_executed_block;
                 });
                 tracing::debug!(
