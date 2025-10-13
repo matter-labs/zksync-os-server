@@ -6,28 +6,26 @@ permissions:
   attestations: write
 
 on:
-  # TODO: remove after testing
-  pull_request:
-#  workflow_dispatch:
-#    inputs:
-#      tag:
-#        description: "Tag to use for the release."
-#        type: string
-#        required: true
-#  workflow_call:
-#    inputs:
-#      tag:
-#        description: "Tag to use for the release."
-#        type: string
-#        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to use for the release."
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to use for the release."
+        type: string
+        required: true
 
 env:
   ZKSYNC_OS_SERVER_BIN: 'zksync-os-server'
   RELEASE_PROFILE: 'maxperf'
   SERVER_LOGFILE: zksync-os-server.log.txt
   FOUNDRY_VERSION: 'v1.3.4'
-  L1_STATE_JSON: zkos-l1-state
-  GENESIS: genesis # directory with genesis.json file
+  L1_STATE_JSON: 'zkos-l1-state.json'
+  GENESIS_JSON: 'genesis/genesis.json'
 
 defaults:
   run:
@@ -89,24 +87,24 @@ jobs:
       - name: Prepare tarballs
         run: |
           mv ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN} ./${ZKSYNC_OS_SERVER_BIN}
-          L1_STATE_VERSIONED="${{ env.L1_STATE_JSON }}-${{ inputs.tag || 'v0.8.0' }}-${{ env.FOUNDRY_VERSION }}.json"
-          cp ${{ env.L1_STATE_JSON }}.json ${L1_STATE_VERSIONED}
-          tar -czf ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz \
-              ${{ env.ZKSYNC_OS_SERVER_BIN }} ${L1_STATE_VERSIONED} ${GENESIS}
+          tar -czf ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz \
+              ${{ env.ZKSYNC_OS_SERVER_BIN }}
 
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz
-          path: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+          path: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
 
-#      - name: Slack notification
-#        if: ${{ failure() }}
-#        uses: .github/actions/slack-notify
-#        with:
-#          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
-#          context: "Failed to build release binaries for ${{ inputs.tag || 'v0.8.0' }}"
+      - name: Slack notification
+        if: ${{ failure() }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          context: "Failed to build release binaries for ${{ inputs.tag }}"
 
+  # Smoke test release binaries
+  # on different macOS and Linux runners
   test-bins:
     needs: build-bins
     runs-on: ${{ matrix.runner }}
@@ -127,11 +125,15 @@ jobs:
           - runner: macos-latest-xlarge
             target: aarch64-apple-darwin
     steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || '' }}
 
       - name: Download binaries
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
-          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
@@ -144,8 +146,8 @@ jobs:
           INTERVAL: 2
           PORT: 3050
         run: |
-          tar xzf ${ZKSYNC_OS_SERVER_BIN}-${{ inputs.tag || 'v0.8.0' }}-${{ matrix.target }}.tar.gz
-          anvil --load-state ${L1_STATE_JSON}-${{ inputs.tag || 'v0.8.0' }}-${FOUNDRY_VERSION}.json \
+          tar xzf ${ZKSYNC_OS_SERVER_BIN}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+          anvil --load-state "${L1_STATE_JSON}" \
             --port 8545 > anvil.log.txt 2>&1 &
           ./${ZKSYNC_OS_SERVER_BIN} > ${SERVER_LOGFILE} 2>&1 &
           elapsed=0
@@ -177,19 +179,21 @@ jobs:
             cat "${SERVER_LOGFILE}"
           fi
 
-#      - name: Slack notification
-#        if: ${{ failure() }}
-#        uses: .github/actions/slack-notify
-#        with:
-#          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
-#          context: "Failed to test release binaries for ${{ inputs.tag || 'v0.8.0' }}"
-          
+      - name: Slack notification
+        if: ${{ failure() }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          context: "Failed to test release binaries for ${{ inputs.tag }}"
 
+
+  # Attach binaries to the GitHub release
   release-bins:
     needs: [build-bins, test-bins]
     # Run on macOS to combine binaries into a single one for macOS
     runs-on: macos-latest-xlarge
     steps:
+
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -206,20 +210,20 @@ jobs:
         run: |
           find .
           for TARGET in x86_64-apple-darwin aarch64-apple-darwin; do
-            tar xzf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${TARGET}.tar.gz
+            tar xzf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${TARGET}.tar.gz
             mv ${{ env.ZKSYNC_OS_SERVER_BIN }} ${{ env.ZKSYNC_OS_SERVER_BIN }}-${TARGET}
-            rm -f dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-${TARGET}.tar.gz
+            rm -f dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${TARGET}.tar.gz
           done
           lipo -create -o "${{ env.ZKSYNC_OS_SERVER_BIN }}" \
             ${{ env.ZKSYNC_OS_SERVER_BIN }}-x86_64-apple-darwin ${{ env.ZKSYNC_OS_SERVER_BIN }}-aarch64-apple-darwin
-          tar -czf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz \
+          tar -czf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz \
             ${{ env.ZKSYNC_OS_SERVER_BIN }}
 
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz
-          path: dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz
+          path: dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz
 
       - name: Binaries attestation
         id: attestation
@@ -227,33 +231,33 @@ jobs:
         with:
           subject-path: 'dist/**'
 
-      - name: Upload bins to release
+      - name: Upload artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag || 'v0.8.0' }}" dist/* --clobber
+        run: gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
 
       - name: Update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          REALASE_BODY=$(gh release view "${{ inputs.tag || 'v0.8.0' }}" --json body -q '.body')
+          REALASE_BODY=$(gh release view "${{ inputs.tag }}" --json body -q '.body')
           BINARIES_SECTION=$(cat <<- "ENDBODY"
           ## Binaries
           
           | System | Architecture | Binary | Attestation |
           |:---:|:---:|:---:|:---|
-          | <img src="https://www.svgrepo.com/download/473700/linux.svg" width="50"/> | x86_64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || 'v0.8.0' }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}/-x86_64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
-          | <img src="https://www.svgrepo.com/download/473700/linux.svg" width="50"/> | aarch64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || 'v0.8.0' }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}/-aarch64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
-          | <img src="https://www.svgrepo.com/download/511330/apple-173.svg" width="50"/> | universal | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || 'v0.8.0' }}//${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag || 'v0.8.0' }}-universal-apple-darwin.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
-          | <img src="https://www.svgrepo.com/download/473589/docker.svg" width="50"/> | Docker | [${{ env.ZKSYNC_OS_SERVER_BIN }}](https://github.com/matter-labs/zksync-os-server/pkgs/container/zksync-os-server/539872628?tag=${{ inputs.tag || 'v0.8.0' }}) | - |
+          | <img src="https://www.svgrepo.com/download/448236/linux.svg" width="50"/> | x86_64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-x86_64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/448236/linux.svg" width="50"/> | aarch64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-aarch64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/475429/apple.svg" width="50"/> | universal | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/452192/docker.svg" width="50"/> | Docker | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}](https://github.com/matter-labs/zksync-os-server/pkgs/container/zksync-os-server/539872628?tag=${{ inputs.tag }}) | - |
           ENDBODY
           )
           echo -e "${REALASE_BODY}\n\n${BINARIES_SECTION}" > updated_body.md
-          gh release edit "${{ inputs.tag || 'v0.8.0' }}" --notes-file updated_body.md
+          gh release edit "${{ inputs.tag }}" --notes-file updated_body.md
 
-#      - name: Slack notification
-#        if: ${{ failure() }}
-#        uses: .github/actions/slack-notify
-#        with:
-#          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
-#          context: "Failed to update ${{ inputs.tag || 'v0.8.0' }} release with prebuilt binaries"
+      - name: Slack notification
+        if: ${{ failure() }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          context: "Failed to update ${{ inputs.tag }} release with prebuilt binaries"

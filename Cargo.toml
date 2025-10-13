@@ -177,10 +177,6 @@ zksync_os_server = { version = "=0.8.2-non-semver-compat", path = "node/bin" }
 overflow-checks = true
 opt-level = 3
 lto = "thin"
-debug = "none"
-strip = "symbols"
-panic = "unwind"
-codegen-units = 16
 
 [profile.maxperf]
 inherits = "release"
