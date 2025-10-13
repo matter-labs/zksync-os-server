@@ -11463,7 +11463,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_bin"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11531,14 +11531,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_contract_interface"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
 ]
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "blake2 0.10.6",
@@ -11575,7 +11575,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_generate_deposit"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11587,7 +11587,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11606,7 +11606,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11647,7 +11647,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11680,7 +11680,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11695,7 +11695,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11712,7 +11712,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11741,7 +11741,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "criterion",
@@ -11752,7 +11752,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11766,7 +11766,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_object_store"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -11787,7 +11787,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -11799,7 +11799,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_pipeline"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11810,7 +11810,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11851,7 +11851,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -11864,7 +11864,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11897,7 +11897,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -11920,7 +11920,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11972,7 +11972,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11991,7 +11991,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
@@ -12009,7 +12009,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "anyhow",
  "axum",
@@ -12020,7 +12020,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "dashmap",
@@ -12037,7 +12037,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -12062,7 +12062,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_tracing"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "sentry",
  "serde",
@@ -12073,7 +12073,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_types"
-version = "0.8.0-non-semver-compat"
+version = "0.8.1-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",

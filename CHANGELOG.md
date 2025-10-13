@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.1](https://github.com/matter-labs/zksync-os-server/compare/v0.8.0...v0.8.1) (2025-10-11)
+
+
+### Features
+
+* **genesis:** Add genesis root hash to genesis.json ([#494](https://github.com/matter-labs/zksync-os-server/issues/494)) ([4887597](https://github.com/matter-labs/zksync-os-server/commit/4887597e1dbff1bd101af32eea91383c31b6c998))
+* **l1:** retry RPC requests on internal error ([#496](https://github.com/matter-labs/zksync-os-server/issues/496)) ([e89d88a](https://github.com/matter-labs/zksync-os-server/commit/e89d88a46fe1319177bd6a24584eb09faca94faf))
+* pipeline framework (8/X) - migrate executor l1 and batch sink ([#481](https://github.com/matter-labs/zksync-os-server/issues/481)) ([44d5776](https://github.com/matter-labs/zksync-os-server/commit/44d577669fa8a3c722c4e212563c9d59f1edc510))
+* **rpc:** implement `web3` namespace ([#497](https://github.com/matter-labs/zksync-os-server/issues/497)) ([0ff0cc4](https://github.com/matter-labs/zksync-os-server/commit/0ff0cc4bd607ddd22883b5dce61177b609251bfa))
+* track `execution_version` in genesis config ([#498](https://github.com/matter-labs/zksync-os-server/issues/498)) ([136a9a9](https://github.com/matter-labs/zksync-os-server/commit/136a9a982dc2ed132d31efe9b5b26b3c22dfe7a5))
+
+
+### Bug Fixes
+
+* add default v,r,s,yParity fields in L1TxType during serialization ([#500](https://github.com/matter-labs/zksync-os-server/issues/500)) ([a1f28ab](https://github.com/matter-labs/zksync-os-server/commit/a1f28ab7bfabe659bffc9902bee036fadd7ed406))
+
 ## [0.8.0](https://github.com/matter-labs/zksync-os-server/compare/v0.7.5...v0.8.0) (2025-10-09)
 
 
