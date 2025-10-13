@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2](https://github.com/matter-labs/zksync-os-server/compare/v0.8.1...v0.8.2) (2025-10-13)
+
+
+### Bug Fixes
+
+* **l1-sender:** allow non-empty buffer for rescheduling ([#511](https://github.com/matter-labs/zksync-os-server/issues/511)) ([beec7ec](https://github.com/matter-labs/zksync-os-server/commit/beec7ec87ac1547b353c8a4db4b177896e1cb280))
+* **l1-watcher:** update batch finality ([#506](https://github.com/matter-labs/zksync-os-server/issues/506)) ([ca11ba7](https://github.com/matter-labs/zksync-os-server/commit/ca11ba7593883ddbdadbe4e1d65dbd7b82a33857))
+
 ## [0.8.1](https://github.com/matter-labs/zksync-os-server/compare/v0.8.0...v0.8.1) (2025-10-11)
 
 
