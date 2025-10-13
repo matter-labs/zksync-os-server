@@ -11,7 +11,12 @@ pub mod v3 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v3");
+            let dir_path = base_dir.join(
+                module_path!()
+                    .rsplit_once("::")
+                    .expect("failed to get module name")
+                    .1,
+            );
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("server_app.bin");
@@ -30,7 +35,12 @@ pub mod v3 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v3");
+            let dir_path = base_dir.join(
+                module_path!()
+                    .rsplit_once("::")
+                    .expect("failed to get module name")
+                    .1,
+            );
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("server_app_logging_enabled.bin");
@@ -49,7 +59,12 @@ pub mod v3 {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
 
         PATH.get_or_init(|| {
-            let dir_path = base_dir.join("v3");
+            let dir_path = base_dir.join(
+                module_path!()
+                    .rsplit_once("::")
+                    .expect("failed to get module name")
+                    .1,
+            );
             std::fs::create_dir_all(&dir_path).unwrap();
 
             let full_path = dir_path.join("multiblock_batch.bin");
