@@ -30,8 +30,9 @@ use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 use zksync_os_observability::ComponentStateReporter;
+use zksync_os_pipeline::PeekableReceiver;
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
@@ -51,7 +52,7 @@ use zksync_os_observability::ComponentStateReporter;
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
 pub async fn run_l1_sender<Input: L1SenderCommand>(
     // == plumbing ==
-    mut inbound: Receiver<Input>,
+    mut inbound: PeekableReceiver<Input>,
     outbound: Sender<BatchEnvelope<FriProof>>,
 
     // == command-specific settings ==

@@ -12,6 +12,7 @@ use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
+use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
@@ -102,7 +103,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
     pub async fn prepare_execute_commands(
         self,
         main_node_channels: Option<(
-            mpsc::Receiver<BatchEnvelope<FriProof>>,
+            PeekableReceiver<BatchEnvelope<FriProof>>,
             mpsc::Sender<ExecuteCommand>,
         )>,
         priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
@@ -115,7 +116,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
             main_node_channels.unzip();
         let mut last_processed_batch = self.last_executed_batch_on_init;
 
-        async fn take_n<T>(receiver: &mut mpsc::Receiver<T>, n: usize) -> anyhow::Result<Vec<T>> {
+        async fn take_n<T>(receiver: &mut PeekableReceiver<T>, n: usize) -> anyhow::Result<Vec<T>> {
             let mut out = Vec::default();
             while out.len() < n {
                 match receiver.recv().await {
