@@ -18,6 +18,7 @@ use crate::prover_api::fri_proof_verifier;
 use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
 use crate::prover_api::proof_storage::{ProofStorage, StoredFailedProof};
 use crate::prover_api::prover_job_map::ProverJobMap;
+use alloy::primitives::Bytes;
 use itertools::MinMaxResult::MinMax;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -53,7 +54,7 @@ pub struct FailedFriProof {
     pub batch_metadata: BatchMetadata,
 
     /// The raw proof bytes that were submitted
-    pub proof_bytes: Vec<u8>,
+    pub proof_bytes: Bytes,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,7 +192,7 @@ impl FriJobManager {
     pub async fn submit_proof(
         &self,
         batch_number: u64,
-        proof_bytes: Vec<u8>,
+        proof_bytes: Bytes,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -214,7 +215,7 @@ impl FriJobManager {
             batch_metadata.commit_batch_info.clone().into(),
             program_proof,
         ) {
-            tracing::warn!(batch_number, "Proof verification failed. {err}",);
+            tracing::warn!(batch_number, "Proof verification failed. {err}");
 
             // Persist the failed proof with batch metadata for debugging
             let failed_proof = FailedFriProof {

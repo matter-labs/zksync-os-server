@@ -99,7 +99,7 @@ async fn submit_fri_proof(
     let prover_id = query.id.as_deref().unwrap_or("unknown_prover");
     match state
         .fri_job_manager
-        .submit_proof(payload.block_number, proof_bytes, prover_id)
+        .submit_proof(payload.block_number, proof_bytes.into(), prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
