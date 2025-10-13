@@ -118,7 +118,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    execution_version: LATEST_EXECUTION_VERSION,
+                    execution_version: LATEST_EXECUTION_VERSION as u32,
                 };
                 PreparedBlockCommand {
                     block_context,

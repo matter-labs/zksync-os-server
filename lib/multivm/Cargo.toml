@@ -15,8 +15,7 @@ build = "build.rs"
 zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
 anyhow.workspace = true
-tempfile.workspace = true
-alloy = { workspace = true, default-features = false }
+num_enum.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true

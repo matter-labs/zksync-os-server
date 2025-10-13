@@ -231,7 +231,7 @@ impl FriJobManager {
             proof: proof_bytes,
             proving_execution_version: proving_run_execution_version(
                 batch_metadata.execution_version,
-            ),
+            ) as u32,
         };
         let envelope = removed_job
             .batch_envelope
