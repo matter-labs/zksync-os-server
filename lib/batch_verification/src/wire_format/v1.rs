@@ -17,9 +17,15 @@ pub struct BatchVerificationRequestWireFormatV1 {
     pub commit_data: Vec<u8>,
 }
 
+#[derive(Encode, Decode)]
+pub enum BatchVerificationResponseResultWireFormatV1 {
+    Success([u8; 65]),
+    Refused(String),
+}
+
 /// The format BatchVerificationResponse is currently sent in
 #[derive(Encode, Decode)]
 pub struct BatchVerificationResponseWireFormatV1 {
     pub request_id: u64,
-    pub signature: Vec<u8>,
+    pub result: BatchVerificationResponseResultWireFormatV1,
 }

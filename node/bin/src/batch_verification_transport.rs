@@ -1,9 +1,7 @@
 use alloy::primitives::Address;
-use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
 use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
-use futures::future::join_all;
 use futures::{SinkExt, StreamExt};
 use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
@@ -12,7 +10,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::ToSocketAddrs;
 use tokio::sync::broadcast;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
@@ -21,7 +19,8 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use zksync_os_batch_verification::{
     BATCH_VERIFICATION_WIRE_FORMAT_VERSION, BatchVerificationRequest,
     BatchVerificationRequestCodec, BatchVerificationRequestDecoder, BatchVerificationResponse,
-    BatchVerificationResponseCodec, BatchVerificationResponseDecoder,
+    BatchVerificationResponseCodec, BatchVerificationResponseDecoder, BatchVerificationResult,
+    Signature,
 };
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
@@ -40,6 +39,7 @@ pub struct BatchVerificationServer {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[allow(clippy::large_enum_variant)]
 pub enum BatchVerificationRequestError {
     #[error("Not enough clients connected")]
     NotEnoughClients,
@@ -271,34 +271,16 @@ impl BatchVerificationClient {
         )
         .commit_info;
 
-        // For now, create a dummy signature. Think of something better in the future
-        let signature = self.sign_batch_verification(&request).await?;
+        if commit_batch_info != request.commit_data {
+            return Err(anyhow::anyhow!("Batch data mismatch"));
+        }
+
+        let signature = Signature::sign_batch(&request.commit_data, &self.signer).await;
 
         Ok(BatchVerificationResponse {
             request_id: request.request_id,
-            signature,
+            result: BatchVerificationResult::Success(signature),
         })
-    }
-
-    async fn sign_batch_verification(
-        &self,
-        request: &BatchVerificationRequest,
-    ) -> anyhow::Result<Vec<u8>> {
-        // TODO: Implement actual cryptographic signing
-        // For now, return a dummy signature based on request data
-        let signature_data = format!(
-            "{}:{}:{}:{}",
-            request.batch_number,
-            request.first_block_number,
-            request.last_block_number,
-            request.request_id
-        );
-
-        Ok(self
-            .signer
-            .sign_message(signature_data.as_bytes())
-            .await?
-            .into())
     }
 }
 

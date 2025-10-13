@@ -1,3 +1,4 @@
+use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{self, LengthDelimitedCodec};
 use zksync_os_contract_interface::models::CommitBatchInfo;
 
@@ -40,10 +41,7 @@ impl codec::Decoder for BatchVerificationRequestDecoder {
     type Item = BatchVerificationRequest;
     type Error = std::io::Error;
 
-    fn decode(
-        &mut self,
-        src: &mut alloy::rlp::BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         self.inner.decode(src).map(|inner| {
             inner.map(|bytes| BatchVerificationRequest::decode(&bytes, self.wire_format_version))
         })
@@ -53,6 +51,7 @@ impl codec::Decoder for BatchVerificationRequestDecoder {
 pub struct BatchVerificationRequestCodec(LengthDelimitedCodec);
 
 impl BatchVerificationRequestCodec {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(LengthDelimitedCodec::new())
     }
@@ -64,7 +63,7 @@ impl codec::Encoder<BatchVerificationRequest> for BatchVerificationRequestCodec 
     fn encode(
         &mut self,
         item: BatchVerificationRequest,
-        dst: &mut alloy::rlp::BytesMut,
+        dst: &mut BytesMut,
     ) -> Result<(), Self::Error> {
         self.0
             .encode(item.encode_with_current_version().into(), dst)

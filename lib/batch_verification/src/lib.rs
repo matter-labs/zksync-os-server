@@ -10,7 +10,8 @@ mod verification_response;
 pub use verification_response::BatchVerificationResponse;
 pub use verification_response::BatchVerificationResponseCodec;
 pub use verification_response::BatchVerificationResponseDecoder;
+pub use verification_response::BatchVerificationResult;
 
 mod signature;
 pub use signature::Signature;
-pub use signature::Signatures;
+pub use signature::SignatureSet;

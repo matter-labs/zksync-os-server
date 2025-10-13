@@ -19,7 +19,7 @@ zk_os_forward_system.workspace = true
 zksync_os_interface.workspace = true
 zksync_os_contract_interface.workspace = true
 
-alloy = { workspace = true, default-features = false, features = ["eips", "rlp", "sol-types"] }
+alloy = { workspace = true, default-features = false }
 # In order to use RlpDecodable, RlpEncodable alloy-rlp crate must be imported directly.
 alloy-rlp.workspace = true
 futures.workspace = true

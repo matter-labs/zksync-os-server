@@ -53,14 +53,12 @@ impl BatchVerificationResponse {
 
     /// Decodes the response from the given bytes using the specified wire format version.
     /// Panics if the wire format version is too old.
-    pub fn decode(bytes: &[u8], version: u32) -> Self {
+    pub fn decode(bytes: &[u8], version: u32) -> Result<Self, anyhow::Error> {
         match version {
             1 => {
                 let wire_format: v1::BatchVerificationResponseWireFormatV1 =
-                    bincode::decode_from_slice(bytes, bincode::config::standard())
-                        .unwrap()
-                        .0;
-                wire_format.into()
+                    bincode::decode_from_slice(bytes, bincode::config::standard())?.0;
+                Ok(wire_format.try_into()?)
             }
             _ => panic!("Unsupported batch verification wire format version: {version}"),
         }

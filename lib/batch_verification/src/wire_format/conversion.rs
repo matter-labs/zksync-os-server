@@ -1,5 +1,9 @@
 use super::v1::{BatchVerificationRequestWireFormatV1, BatchVerificationResponseWireFormatV1};
-use crate::{BatchVerificationRequest, BatchVerificationResponse};
+use crate::{
+    BatchVerificationRequest, BatchVerificationResponse, Signature,
+    verification_response::BatchVerificationResult,
+    wire_format::v1::BatchVerificationResponseResultWireFormatV1,
+};
 use alloy::sol_types::SolValue;
 use zksync_os_contract_interface::{IExecutor::CommitBatchInfoZKsyncOS, models::CommitBatchInfo};
 
@@ -46,28 +50,40 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
     }
 }
 
-impl From<BatchVerificationResponseWireFormatV1> for BatchVerificationResponse {
-    fn from(value: BatchVerificationResponseWireFormatV1) -> Self {
+impl TryFrom<BatchVerificationResponseWireFormatV1> for BatchVerificationResponse {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BatchVerificationResponseWireFormatV1) -> Result<Self, Self::Error> {
         let BatchVerificationResponseWireFormatV1 {
             request_id,
-            signature,
+            result: wire_result,
         } = value;
-        Self {
-            request_id,
-            signature,
-        }
+        let result = match wire_result {
+            BatchVerificationResponseResultWireFormatV1::Success(bytes) => {
+                BatchVerificationResult::Success(Signature::from_raw_array(&bytes)?)
+            }
+            BatchVerificationResponseResultWireFormatV1::Refused(reason) => {
+                BatchVerificationResult::Refused(reason)
+            }
+        };
+        Ok(Self { request_id, result })
     }
 }
 
 impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV1 {
     fn from(value: BatchVerificationResponse) -> Self {
-        let BatchVerificationResponse {
-            request_id,
-            signature,
-        } = value;
+        let BatchVerificationResponse { request_id, result } = value;
+        let wire_result = match result {
+            BatchVerificationResult::Success(signature) => {
+                BatchVerificationResponseResultWireFormatV1::Success(signature.into_raw())
+            }
+            BatchVerificationResult::Refused(reason) => {
+                BatchVerificationResponseResultWireFormatV1::Refused(reason)
+            }
+        };
         Self {
             request_id,
-            signature,
+            result: wire_result,
         }
     }
 }

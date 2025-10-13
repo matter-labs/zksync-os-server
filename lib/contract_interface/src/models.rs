@@ -76,7 +76,7 @@ impl From<&StoredBatchInfo> for IExecutor::StoredBatchInfo {
 }
 
 /// User-friendly version of [`IExecutor::CommitBatchInfoZKsyncOS`].
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommitBatchInfo {
     pub batch_number: u64,
     pub new_state_commitment: B256,

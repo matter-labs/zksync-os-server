@@ -7,9 +7,11 @@ use futures::future::join_all;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
-use zksync_os_batch_verification::{BatchVerificationResponse, Signatures};
+use zksync_os_batch_verification::{
+    BatchVerificationResponse, BatchVerificationResult, SignatureSet,
+};
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
 };
@@ -142,6 +144,9 @@ impl From<BatchVerificationRequestError> for BatchVerificationError {
             BatchVerificationRequestError::NotEnoughClients => {
                 BatchVerificationError::NotEnoughSigners
             }
+            BatchVerificationRequestError::SendError(e) => {
+                BatchVerificationError::Internal(e.to_string())
+            }
         }
     }
 }
@@ -218,7 +223,7 @@ impl BatchVerifier {
     async fn verify_batch<E: Send + Sync>(
         &self,
         batch_envelope: &BatchForSigning<E>,
-    ) -> Result<Signatures, BatchVerificationError> {
+    ) -> Result<SignatureSet, BatchVerificationError> {
         let request_id = self.request_id_counter.fetch_add(1, Ordering::SeqCst);
 
         tracing::info!(
@@ -240,7 +245,7 @@ impl BatchVerifier {
             .await?;
 
         // Collect responses with timeout
-        let mut responses = Vec::new();
+        let mut responses = SignatureSet::new();
         let deadline = Instant::now() + self.config.request_timeout;
 
         loop {
@@ -250,9 +255,12 @@ impl BatchVerifier {
             }
 
             match tokio::time::timeout(remaining_time, response_receiver.recv()).await {
-                Ok(Some(response)) => {
+                Ok(Some(BatchVerificationResponse {
+                    result: BatchVerificationResult::Success(signature),
+                    ..
+                })) => {
                     // TODO add validation of signatures incl. uniqueness
-                    responses.push(response.signature);
+                    responses.push(signature);
                     tracing::debug!(
                         "Validated response for batch {} (request {}), {} of {}",
                         batch_envelope.batch_number(),
@@ -263,6 +271,17 @@ impl BatchVerifier {
                     if responses.len() >= self.config.threshold {
                         break;
                     }
+                }
+                Ok(Some(BatchVerificationResponse {
+                    result: BatchVerificationResult::Refused(reason),
+                    ..
+                })) => {
+                    tracing::info!(
+                        "Verification refused for batch {} (request {}): {}",
+                        batch_envelope.batch_number(),
+                        request_id,
+                        reason
+                    );
                 }
                 Ok(None) => {
                     return Err(BatchVerificationError::Internal(

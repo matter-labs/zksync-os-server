@@ -57,9 +57,7 @@ use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
-use zksync_os_l1_sender::batcher_model::{
-    BatchForSigning, FriProof, ProverInput, SignedBatchEnvelope,
-};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;

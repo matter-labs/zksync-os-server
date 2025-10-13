@@ -11845,6 +11845,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
+ "zksync_os_batch_verification",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",

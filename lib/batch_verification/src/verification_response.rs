@@ -1,13 +1,19 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{self, LengthDelimitedCodec};
 
-use crate::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
+use crate::{BATCH_VERIFICATION_WIRE_FORMAT_VERSION, Signature};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum BatchVerificationResult {
+    Success(Signature),
+    Refused(String),
+}
 
 /// Response sent from external nodes back to main sequencer
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchVerificationResponse {
     pub request_id: u64,
-    pub signature: Vec<u8>, // TODO better type, Placeholder for signature bytes
+    pub result: BatchVerificationResult,
 }
 
 pub struct BatchVerificationResponseDecoder {
@@ -16,6 +22,7 @@ pub struct BatchVerificationResponseDecoder {
 }
 
 impl BatchVerificationResponseDecoder {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             inner: LengthDelimitedCodec::new(),
@@ -32,13 +39,17 @@ impl codec::Decoder for BatchVerificationResponseDecoder {
         &mut self,
         src: &mut alloy::rlp::BytesMut,
     ) -> Result<Option<Self::Item>, Self::Error> {
-        self.inner.decode(src).map(|inner| {
-            inner.map(|bytes| BatchVerificationResponse::decode(&bytes, self.wire_format_version))
-        })
+        self.inner
+            .decode(src)?
+            .map(|bytes| {
+                BatchVerificationResponse::decode(&bytes, self.wire_format_version)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })
+            .transpose()
     }
 }
 
-//TODO verification respons version should match verification request version / current protocol version
+//TODO verification response version should match verification request version / current protocol version
 pub struct BatchVerificationResponseCodec {
     inner: LengthDelimitedCodec,
     wire_format_version: u32,
