@@ -1,13 +1,12 @@
 use crate::PipelineComponent;
 use crate::peekable_receiver::PeekableReceiver;
 use anyhow::Result;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use tokio::sync::mpsc;
 
 /// A named pipeline task: component name and its spawnable task function
-type PipelineTask = (
-    &'static str,
-    Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<()>> + Send>,
-);
+type PipelineTask = (&'static str, BoxFuture<'static, Result<()>>);
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
@@ -34,9 +33,8 @@ impl Pipeline<()> {
     pub fn spawn(self, tasks: &mut tokio::task::JoinSet<()>) {
         // Spawn all component tasks into JoinSet (these run indefinitely)
         for (name, task_fn) in self.tasks {
-            let handle = task_fn();
             tasks.spawn(async move {
-                match handle.await {
+                match task_fn.await {
                     Ok(_) => tracing::warn!("{name} unexpectedly exited"),
                     Err(e) => tracing::error!("{name} failed: {e:#?}"),
                 }
@@ -58,9 +56,7 @@ impl<Output: Send + 'static> Pipeline<Output> {
 
         self.tasks.push((
             C::NAME,
-            Box::new(move || {
-                tokio::spawn(async move { component.run(input_receiver, output_sender).await })
-            }),
+            async move { component.run(input_receiver, output_sender).await }.boxed(),
         ));
 
         Pipeline {
@@ -82,9 +78,7 @@ impl<Output: Send + 'static> Pipeline<Output> {
 
         self.tasks.push((
             C::NAME,
-            Box::new(move || {
-                tokio::spawn(async move { component.run(input_receiver, output_sender).await })
-            }),
+            async move { component.run(input_receiver, output_sender).await }.boxed(),
         ));
 
         Pipeline {
