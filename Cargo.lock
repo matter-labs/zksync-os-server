@@ -11754,12 +11754,11 @@ dependencies = [
 name = "zksync_os_multivm"
 version = "0.8.2-non-semver-compat"
 dependencies = [
- "alloy",
  "anyhow",
  "cargo_metadata",
  "forward_system",
+ "num_enum 0.7.4",
  "reqwest",
- "tempfile",
  "url",
  "zksync_os_interface",
 ]
