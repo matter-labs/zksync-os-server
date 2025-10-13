@@ -50,6 +50,19 @@ impl<T> PeekableReceiver<T> {
         self.rx.recv().await
     }
 
+    /// Receive the next item, awaiting if necessary.
+    /// If a buffered item exists, it is returned first.
+    pub async fn recv_many(&mut self, buffer: &mut Vec<T>, limit: usize) -> usize {
+        if !self.buf.is_empty() {
+            // Take up to `limit` items from the inner buffer
+            let last = self.buf.len().min(limit);
+            buffer.extend(self.buf.drain(..last));
+            last
+        } else {
+            self.rx.recv_many(buffer, limit).await
+        }
+    }
+
     /// Peek at the next item **without consuming it**, applying `f` to a reference.
     /// Returns `None` if the channel was closed.
     pub async fn peek_recv<R, F>(&mut self, f: F) -> Option<R>

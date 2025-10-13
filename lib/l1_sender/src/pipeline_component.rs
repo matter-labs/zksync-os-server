@@ -34,13 +34,6 @@ where
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        run_l1_sender(
-            input.into_inner(),
-            output,
-            self.to_address,
-            self.provider,
-            self.config,
-        )
-        .await
+        run_l1_sender(input, output, self.to_address, self.provider, self.config).await
     }
 }
