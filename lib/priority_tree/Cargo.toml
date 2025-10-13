@@ -18,6 +18,7 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_rocksdb.workspace = true
+zksync_os_pipeline.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false }

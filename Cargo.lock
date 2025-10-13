@@ -11822,6 +11822,7 @@ dependencies = [
  "zksync_os_l1_sender",
  "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
+ "zksync_os_pipeline",
  "zksync_os_rocksdb",
  "zksync_os_storage_api",
  "zksync_os_types",
