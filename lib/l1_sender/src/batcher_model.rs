@@ -1,5 +1,6 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
+use alloy::primitives::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -104,9 +105,9 @@ pub enum FriProof {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealFriProof {
-    V1(Vec<u8>),
+    V1(Bytes),
     V2 {
-        proof: Vec<u8>,
+        proof: Bytes,
         proving_execution_version: u32,
     },
 }
@@ -137,8 +138,8 @@ impl FriProof {
 impl RealFriProof {
     pub fn proof(&self) -> &[u8] {
         match self {
-            RealFriProof::V1(proof) => proof.as_slice(),
-            RealFriProof::V2 { proof, .. } => proof.as_slice(),
+            RealFriProof::V1(proof) => proof.as_ref(),
+            RealFriProof::V2 { proof, .. } => proof.as_ref(),
         }
     }
 }

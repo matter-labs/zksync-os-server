@@ -1,4 +1,5 @@
 use super::fri_job_manager::FriJobManager;
+use super::proof_storage::ProofStorage;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +25,7 @@ pub struct FriProvingPipelineStep {
 
 impl FriProvingPipelineStep {
     pub fn new(
+        proof_storage: ProofStorage,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<FriJobManager>) {
@@ -39,6 +41,7 @@ impl FriProvingPipelineStep {
         let fri_job_manager = Arc::new(FriJobManager::new(
             batches_for_prove_receiver,
             batches_with_proof_sender,
+            proof_storage,
             assignment_timeout,
             max_assigned_batch_range,
         ));

@@ -528,7 +528,7 @@ async fn run_main_node_pipeline<
         .unwrap()
     } else {
         batch_storage
-            .get(node_state_on_startup.l1_state.last_committed_batch)
+            .get_batch_with_proof(node_state_on_startup.l1_state.last_committed_batch)
             .await
             .expect("Failed to get last committed block from proof storage")
             .expect("Committed batch is not present in proof storage")
@@ -566,6 +566,7 @@ async fn run_main_node_pipeline<
     };
 
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
+        batch_storage.clone(),
         config.prover_api_config.job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
@@ -759,7 +760,7 @@ async fn get_committed_not_proven_batches(
     let mut batches_to_reschedule = Vec::new();
     while batch_to_prove <= l1_state.last_committed_batch {
         let batch_with_proof = proof_storage
-            .get(batch_to_prove)
+            .get_batch_with_proof(batch_to_prove)
             .await?
             .context("Failed to get batch")?;
         batches_to_reschedule.push(batch_with_proof);
@@ -776,7 +777,7 @@ async fn get_proven_not_executed_batches(
     let mut batches_to_reschedule = Vec::new();
     while batch_to_execute <= l1_state.last_proved_batch {
         let batch_with_proof = proof_storage
-            .get(batch_to_execute)
+            .get_batch_with_proof(batch_to_execute)
             .await?
             .context("Failed to get batch")?;
         batches_to_reschedule.push(batch_with_proof);
@@ -793,7 +794,7 @@ async fn commit_proof_execute_block_numbers(
         0
     } else {
         batch_storage
-            .get(l1_state.last_committed_batch)
+            .get_batch_with_proof(l1_state.last_committed_batch)
             .await
             .expect("Failed to get last committed block from proof storage")
             .map(|envelope| envelope.batch.last_block_number)
@@ -805,7 +806,7 @@ async fn commit_proof_execute_block_numbers(
         0
     } else {
         batch_storage
-            .get(l1_state.last_proved_batch)
+            .get_batch_with_proof(l1_state.last_proved_batch)
             .await
             .expect("Failed to get last proved block from proof storage")
             .map(|envelope| envelope.batch.last_block_number)
@@ -816,7 +817,7 @@ async fn commit_proof_execute_block_numbers(
         0
     } else {
         batch_storage
-            .get(l1_state.last_executed_batch)
+            .get_batch_with_proof(l1_state.last_executed_batch)
             .await
             .expect("Failed to get last proved block from execute storage")
             .map(|envelope| envelope.batch.last_block_number)
