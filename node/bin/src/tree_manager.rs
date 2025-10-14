@@ -117,6 +117,7 @@ impl PipelineComponent for TreeManager {
                     block: block_number,
                 },
             };
+            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             output
                 .send((block_output, replay_record, tree_block))
                 .await?;
