@@ -1,8 +1,8 @@
 use metrics::{
-    CounterFn, GaugeFn, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
+    CounterFn, GaugeFn, HistogramFn, Key, KeyName, Metadata, Recorder, SharedString, Unit,
 };
 use std::sync::Arc;
-use vise::{Counter, Gauge, Metrics};
+use vise::{Buckets, Counter, Gauge, Histogram, Metrics};
 
 /// Mempool metrics.
 ///
@@ -102,10 +102,37 @@ pub struct AllTransactionsMetrics {
     pub(crate) base_fee: Gauge,
 }
 
+/// Transaction pool validation metrics.
+///
+/// This is a direct copy of [`reth_transaction_pool::metrics::TxPoolValidationMetrics`] but with `vise`
+/// instead of `metrics`.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "transaction_pool")]
+pub struct TxPoolValidationMetrics {
+    /// How long to successfully validate a blob
+    #[metrics(buckets = Buckets::LATENCIES)]
+    pub(crate) blob_validation_duration: Histogram,
+}
+
+/// Transaction pool validator task metrics.
+///
+/// This is a direct copy of [`reth_transaction_pool::metrics::TxPoolValidatorMetrics`] but with `vise`
+/// instead of `metrics`.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "transaction_pool")]
+pub struct TxPoolValidatorMetrics {
+    /// Number of in-flight validation job sends waiting for channel capacity
+    pub(crate) inflight_validation_jobs: Gauge,
+}
+
 #[vise::register]
 pub(crate) static TRANSACTION_POOL_METRICS: vise::Global<TxPoolMetrics> = vise::Global::new();
 pub(crate) static BLOB_STORE_METRICS: vise::Global<BlobStoreMetrics> = vise::Global::new();
 pub(crate) static ALL_TRANSACTIONS_POOL_METRICS: vise::Global<AllTransactionsMetrics> =
+    vise::Global::new();
+pub(crate) static VALIDATION_POOL_METRICS: vise::Global<TxPoolValidationMetrics> =
+    vise::Global::new();
+pub(crate) static VALIDATOR_POOL_METRICS: vise::Global<TxPoolValidatorMetrics> =
     vise::Global::new();
 
 /// A recorder that wraps `vise` metrics as into `metrics`-compatible structs.
@@ -226,6 +253,10 @@ impl Recorder for ViseRecorder {
             }
             "transaction_pool.blob_base_fee" => &ALL_TRANSACTIONS_POOL_METRICS.blob_base_fee,
             "transaction_pool.base_fee" => &ALL_TRANSACTIONS_POOL_METRICS.base_fee,
+            // Validation gauges
+            "transaction_pool.inflight_validation_jobs" => {
+                &VALIDATOR_POOL_METRICS.inflight_validation_jobs
+            }
             _ => {
                 tracing::warn!(?key, "unknown gauge metric");
                 return metrics::Gauge::noop();
@@ -234,9 +265,17 @@ impl Recorder for ViseRecorder {
         metrics::Gauge::from_arc(Arc::new(ViseGauge(gauge.clone())))
     }
 
-    fn register_histogram(&self, _key: &Key, _metadata: &Metadata<'_>) -> Histogram {
-        tracing::warn!("histogram metrics are not expected to be used in reth mempool");
-        Histogram::noop()
+    fn register_histogram(&self, key: &Key, _metadata: &Metadata<'_>) -> metrics::Histogram {
+        let gauge = match key.name() {
+            "transaction_pool.blob_validation_duration" => {
+                &VALIDATION_POOL_METRICS.blob_validation_duration
+            }
+            _ => {
+                tracing::warn!(?key, "unknown histogram metric");
+                return metrics::Histogram::noop();
+            }
+        };
+        metrics::Histogram::from_arc(Arc::new(ViseHistogram(gauge.clone())))
     }
 }
 
@@ -267,5 +306,14 @@ impl GaugeFn for ViseGauge {
 
     fn set(&self, value: f64) {
         self.0.set(value.floor() as i64);
+    }
+}
+
+/// A wrapper around `vise::Histogram` that implements `metrics::HistogramFn`.
+struct ViseHistogram(Histogram);
+
+impl HistogramFn for ViseHistogram {
+    fn record(&self, value: f64) {
+        self.0.observe(value);
     }
 }
