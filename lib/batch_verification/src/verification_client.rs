@@ -38,6 +38,8 @@ enum BatchVerificationError {
     MissingBlock(u64),
     #[error("Tree error")]
     TreeError,
+    #[error("Batch data mismatch: {0}")]
+    BatchDataMismatch(String),
 }
 
 impl BatchVerificationClient {
@@ -60,7 +62,7 @@ impl BatchVerificationClient {
     async fn handle_verification_request(
         &self,
         request: BatchVerificationRequest,
-    ) -> anyhow::Result<BatchVerificationResponse> {
+    ) -> Result<BatchSignature, BatchVerificationError> {
         tracing::info!(
             "Handling batch verification request {} for batch {} (blocks {}-{})",
             request.request_id,
@@ -111,15 +113,99 @@ impl BatchVerificationClient {
         .commit_info;
 
         if commit_batch_info != request.commit_data {
-            return Err(anyhow::anyhow!("Batch data mismatch"));
+            let mut mismatches = Vec::new();
+
+            // I don't like this, but it works great :/
+            if commit_batch_info.batchNumber != request.commit_data.batchNumber {
+                mismatches.push(format!(
+                    "batchNumber: local={}, remote={}",
+                    commit_batch_info.batchNumber, request.commit_data.batchNumber
+                ));
+            }
+            if commit_batch_info.newStateCommitment != request.commit_data.newStateCommitment {
+                mismatches.push(format!(
+                    "newStateCommitment: local={:?}, remote={:?}",
+                    commit_batch_info.newStateCommitment, request.commit_data.newStateCommitment
+                ));
+            }
+            if commit_batch_info.numberOfLayer1Txs != request.commit_data.numberOfLayer1Txs {
+                mismatches.push(format!(
+                    "numberOfLayer1Txs: local={}, remote={}",
+                    commit_batch_info.numberOfLayer1Txs, request.commit_data.numberOfLayer1Txs
+                ));
+            }
+            if commit_batch_info.priorityOperationsHash
+                != request.commit_data.priorityOperationsHash
+            {
+                mismatches.push(format!(
+                    "priorityOperationsHash: local={:?}, remote={:?}",
+                    commit_batch_info.priorityOperationsHash,
+                    request.commit_data.priorityOperationsHash
+                ));
+            }
+            if commit_batch_info.dependencyRootsRollingHash
+                != request.commit_data.dependencyRootsRollingHash
+            {
+                mismatches.push(format!(
+                    "dependencyRootsRollingHash: local={:?}, remote={:?}",
+                    commit_batch_info.dependencyRootsRollingHash,
+                    request.commit_data.dependencyRootsRollingHash
+                ));
+            }
+            if commit_batch_info.l2LogsTreeRoot != request.commit_data.l2LogsTreeRoot {
+                mismatches.push(format!(
+                    "l2LogsTreeRoot: local={:?}, remote={:?}",
+                    commit_batch_info.l2LogsTreeRoot, request.commit_data.l2LogsTreeRoot
+                ));
+            }
+            if commit_batch_info.l2DaValidator != request.commit_data.l2DaValidator {
+                mismatches.push(format!(
+                    "l2DaValidator: local={:?}, remote={:?}",
+                    commit_batch_info.l2DaValidator, request.commit_data.l2DaValidator
+                ));
+            }
+            if commit_batch_info.daCommitment != request.commit_data.daCommitment {
+                mismatches.push(format!(
+                    "daCommitment: local={:?}, remote={:?}",
+                    commit_batch_info.daCommitment, request.commit_data.daCommitment
+                ));
+            }
+            if commit_batch_info.firstBlockTimestamp != request.commit_data.firstBlockTimestamp {
+                mismatches.push(format!(
+                    "firstBlockTimestamp: local={}, remote={}",
+                    commit_batch_info.firstBlockTimestamp, request.commit_data.firstBlockTimestamp
+                ));
+            }
+            if commit_batch_info.lastBlockTimestamp != request.commit_data.lastBlockTimestamp {
+                mismatches.push(format!(
+                    "lastBlockTimestamp: local={}, remote={}",
+                    commit_batch_info.lastBlockTimestamp, request.commit_data.lastBlockTimestamp
+                ));
+            }
+            if commit_batch_info.chainId != request.commit_data.chainId {
+                mismatches.push(format!(
+                    "chainId: local={}, remote={}",
+                    commit_batch_info.chainId, request.commit_data.chainId
+                ));
+            }
+            if commit_batch_info.operatorDAInput != request.commit_data.operatorDAInput {
+                mismatches.push(format!(
+                    "operatorDAInput: local={} bytes, remote={} bytes",
+                    commit_batch_info.operatorDAInput.len(),
+                    request.commit_data.operatorDAInput.len()
+                ));
+            }
+
+            return Err(BatchVerificationError::BatchDataMismatch(format!(
+                "Batch data mismatch - {} field(s) differ: {}",
+                mismatches.len(),
+                mismatches.join("; ")
+            )));
         }
 
         let signature = BatchSignature::sign_batch(&request.commit_data, &self.signer).await;
 
-        Ok(BatchVerificationResponse {
-            request_id: request.request_id,
-            result: BatchVerificationResult::Success(signature),
-        })
+        Ok(signature)
     }
 }
 
@@ -191,11 +277,14 @@ impl PipelineComponent for BatchVerificationClient {
                             //TODO a way to send errors
                             let batch_number = message.batch_number;
                             match self.handle_verification_request(message).await {
-                                Ok(response) => {
+                                Ok(signature) => {
                                     tracing::info!("Approved batch verification request for {}", batch_number);
-                                    writer.send(response).await?;
+                                    writer.send(BatchVerificationResponse { request_id: batch_number, result: BatchVerificationResult::Success(signature) }).await?;
                                 },
-                                Err(reason) => {tracing::info!("Batch {} verification failed: {}", batch_number, reason);},
+                                Err(reason) => {
+                                    tracing::info!("Batch {} verification failed: {}", batch_number, reason);
+                                    writer.send(BatchVerificationResponse { request_id: batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
+                                },
                             }
                         }
                         Some(Err(parsing_err)) =>
