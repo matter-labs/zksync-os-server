@@ -1,6 +1,6 @@
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
 use crate::{L1WatcherConfig, util};
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,21 +22,19 @@ pub struct L1TxWatcher {
 impl L1TxWatcher {
     pub async fn new(
         config: L1WatcherConfig,
-        provider: DynProvider,
-        zk_chain_address: Address,
+        zk_chain: ZkChain<DynProvider>,
         output: mpsc::Sender<L1PriorityEnvelope>,
         next_l1_priority_id: u64,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
-            ?zk_chain_address,
+            zk_chain_address = ?zk_chain.address(),
             "initializing L1 transaction watcher"
         );
-        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
 
-        let current_l1_block = provider.get_block_number().await?;
-        let next_l1_block = find_l1_block_by_priority_id(zk_chain, next_l1_priority_id)
+        let current_l1_block = zk_chain.provider().get_block_number().await?;
+        let next_l1_block = find_l1_block_by_priority_id(zk_chain.clone(), next_l1_priority_id)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -53,12 +51,7 @@ impl L1TxWatcher {
 
         tracing::info!(next_l1_block, "resolved on L1");
 
-        let l1_watcher = L1Watcher::new(
-            provider,
-            zk_chain_address,
-            next_l1_block,
-            config.max_blocks_to_process,
-        );
+        let l1_watcher = L1Watcher::new(zk_chain, next_l1_block, config.max_blocks_to_process);
 
         Ok(Self {
             l1_watcher,

@@ -1,14 +1,13 @@
 use crate::metrics::METRICS;
-use alloy::network::Ethereum;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use std::marker::PhantomData;
+use zksync_os_contract_interface::ZkChain;
 
 pub(crate) struct L1Watcher<Event> {
-    provider: DynProvider<Ethereum>,
-    contract_address: Address,
+    zk_chain: ZkChain<DynProvider>,
     next_l1_block: BlockNumber,
     max_blocks_to_process: u64,
     _event: PhantomData<Event>,
@@ -16,14 +15,12 @@ pub(crate) struct L1Watcher<Event> {
 
 impl<Event> L1Watcher<Event> {
     pub(crate) fn new(
-        provider: DynProvider,
-        contract_address: Address,
+        zk_chain: ZkChain<DynProvider>,
         next_l1_block: BlockNumber,
         max_blocks_to_process: u64,
     ) -> Self {
         Self {
-            provider,
-            contract_address,
+            zk_chain,
             next_l1_block,
             max_blocks_to_process,
             _event: PhantomData,
@@ -35,7 +32,7 @@ impl<Event: WatchedEvent> L1Watcher<Event> {
     /// Scans up to `self.max_blocks_to_process` next L1 blocks for new events of type `Event`
     /// and returns them.
     pub(crate) async fn poll(&mut self) -> Result<Vec<Event>, L1WatcherError<Event::Error>> {
-        let latest_block = self.provider.get_block_number().await?;
+        let latest_block = self.zk_chain.provider().get_block_number().await?;
         let from_block = self.next_l1_block;
         // Inspect up to `self.max_blocks_to_process` blocks at a time
         let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
@@ -62,8 +59,8 @@ impl<Event: WatchedEvent> L1Watcher<Event> {
             .from_block(from)
             .to_block(to)
             .event_signature(Event::SolEvent::SIGNATURE_HASH)
-            .address(self.contract_address);
-        let new_logs = self.provider.get_logs(&filter).await?;
+            .address(*self.zk_chain.address());
+        let new_logs = self.zk_chain.provider().get_logs(&filter).await?;
         let new_events = new_logs
             .into_iter()
             .map(|log| {

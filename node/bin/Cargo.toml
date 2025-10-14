@@ -28,6 +28,7 @@ zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_tracing.workspace = true
+zksync_os_contract_interface.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true

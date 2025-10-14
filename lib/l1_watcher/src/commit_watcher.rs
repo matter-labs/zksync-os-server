@@ -1,6 +1,6 @@
 use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
 use crate::{L1WatcherConfig, util};
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -23,23 +23,21 @@ pub struct L1CommitWatcher<Finality, BatchStorage> {
 impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality, BatchStorage> {
     pub async fn new(
         config: L1WatcherConfig,
-        provider: DynProvider,
-        zk_chain_address: Address,
+        zk_chain: ZkChain<DynProvider>,
         finality: Finality,
         batch_storage: BatchStorage,
     ) -> anyhow::Result<Self> {
-        let zk_chain = ZkChain::new(zk_chain_address, provider.clone());
-        let current_l1_block = provider.get_block_number().await?;
+        let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
         tracing::info!(
             current_l1_block,
             last_committed_batch,
             config.max_blocks_to_process,
             ?config.poll_interval,
-            ?zk_chain_address,
+            zk_chain_address = ?zk_chain.address(),
             "initializing L1 commit watcher"
         );
-        let last_l1_block = find_l1_commit_block_by_batch_number(zk_chain, last_committed_batch)
+        let last_l1_block = find_l1_commit_block_by_batch_number(zk_chain.clone(), last_committed_batch)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -57,12 +55,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
 
         // We start from last L1 block as it may contain more committed batches apart from the last
         // one.
-        let l1_watcher = L1Watcher::new(
-            provider,
-            zk_chain_address,
-            last_l1_block,
-            config.max_blocks_to_process,
-        );
+        let l1_watcher = L1Watcher::new(zk_chain, last_l1_block, config.max_blocks_to_process);
 
         Ok(Self {
             l1_watcher,

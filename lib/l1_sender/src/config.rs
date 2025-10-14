@@ -1,6 +1,5 @@
 use alloy::consensus::constants::GWEI_TO_WEI;
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::time::Duration;
 
@@ -24,12 +23,6 @@ pub struct L1SenderConfig<Input> {
     pub poll_interval: Duration,
 
     pub phantom_data: PhantomData<Input>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum BatchDaInputMode {
-    Rollup,
-    Validium,
 }
 
 impl<T> L1SenderConfig<T> {

@@ -1,3 +1,5 @@
+pub mod l1_discovery;
+mod metrics;
 pub mod models;
 
 use crate::IBridgehub::{
@@ -194,6 +196,7 @@ alloy::sol! {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Bridgehub<P: Provider> {
     instance: IBridgehubInstance<P, Ethereum>,
     l2_chain_id: u64,

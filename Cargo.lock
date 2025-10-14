@@ -11505,6 +11505,7 @@ dependencies = [
  "vise",
  "zk_ee",
  "zksync_os_api",
+ "zksync_os_contract_interface",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_l1_sender",
@@ -11534,6 +11535,11 @@ name = "zksync_os_contract_interface"
 version = "0.8.2-non-semver-compat"
 dependencies = [
  "alloy",
+ "anyhow",
+ "backon",
+ "serde",
+ "tracing",
+ "vise",
 ]
 
 [[package]]
@@ -11653,10 +11659,8 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "backon",
  "basic_system",
  "blake2 0.10.6",
- "forward_system",
  "futures",
  "itertools 0.14.0",
  "ruint",
@@ -11672,7 +11676,6 @@ dependencies = [
  "zksync_os_interface",
  "zksync_os_merkle_tree",
  "zksync_os_mini_merkle_tree",
- "zksync_os_multivm",
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_types",
