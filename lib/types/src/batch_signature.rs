@@ -7,15 +7,15 @@ use zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS;
 use zksync_os_contract_interface::models::CommitBatchInfo;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SignatureSet(Vec<Signature>);
+pub struct BatchSignatureSet(Vec<BatchSignature>);
 
-impl SignatureSet {
+impl BatchSignatureSet {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        SignatureSet(Vec::new())
+        BatchSignatureSet(Vec::new())
     }
 
-    pub fn push(&mut self, signature: Signature) {
+    pub fn push(&mut self, signature: BatchSignature) {
         self.0.push(signature)
     }
 
@@ -29,13 +29,13 @@ impl SignatureSet {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Signature(AlloySignature);
+pub struct BatchSignature(AlloySignature);
 
-impl Signature {
+impl BatchSignature {
     pub async fn sign_batch(batch_info: &CommitBatchInfo, private_key: &PrivateKeySigner) -> Self {
         let encoded = encode_batch_for_signing(batch_info);
         let signature = private_key.sign_message(&encoded).await.unwrap();
-        Signature(signature)
+        BatchSignature(signature)
     }
 
     pub fn verify_signature(
@@ -52,7 +52,7 @@ impl Signature {
 
     pub fn from_raw_array(array: &[u8; 65]) -> Result<Self, SignatureError> {
         let signature = AlloySignature::from_raw_array(array)?;
-        Ok(Signature(signature))
+        Ok(BatchSignature(signature))
     }
 }
 

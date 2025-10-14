@@ -6,10 +6,10 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
-use zksync_os_batch_verification::SignatureSet;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::LatencyDistributionTracker;
+use zksync_os_types::BatchSignatureSet;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
@@ -61,7 +61,7 @@ pub enum MissingSignature {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub enum BatchSignatureData {
     Signed {
-        signatures: SignatureSet,
+        signatures: BatchSignatureSet,
     },
     // to allow deserializing older objects
     #[default]

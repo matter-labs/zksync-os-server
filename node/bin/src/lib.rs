@@ -2,8 +2,6 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 mod batch_sink;
-mod batch_verification_manager;
-mod batch_verification_transport;
 pub mod batcher;
 mod command_source;
 pub mod config;
@@ -20,8 +18,6 @@ pub mod tree_manager;
 pub mod zkstack_config;
 
 use crate::batch_sink::{BatchSink, NoOpSink};
-use crate::batch_verification_manager::BatchVerificationPipelineStep;
-use crate::batch_verification_transport::BatchVerificationClient;
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
@@ -53,6 +49,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};

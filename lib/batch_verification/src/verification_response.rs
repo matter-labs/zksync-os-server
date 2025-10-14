@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{self, LengthDelimitedCodec};
 
-use crate::{BATCH_VERIFICATION_WIRE_FORMAT_VERSION, Signature};
+use crate::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
+use zksync_os_types::BatchSignature;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BatchVerificationResult {
-    Success(Signature),
+    Success(BatchSignature),
     Refused(String),
 }
 

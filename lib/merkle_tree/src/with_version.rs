@@ -12,6 +12,11 @@ pub struct MerkleTreeVersion<DB: Database = RocksDBWrapper, P: TreeParams = Defa
     pub block: u64,
 }
 
+pub struct BlockMerkleTreeData {
+    pub block_start: MerkleTreeVersion,
+    pub block_end: MerkleTreeVersion,
+}
+
 impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
     pub fn root_info(&self) -> Result<(B256, u64), anyhow::Error> {
         // We know that the root exists, as some version was loaded into the tree already.

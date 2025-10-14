@@ -1,11 +1,12 @@
 use super::v1::{BatchVerificationRequestWireFormatV1, BatchVerificationResponseWireFormatV1};
 use crate::{
-    BatchVerificationRequest, BatchVerificationResponse, Signature,
+    BatchVerificationRequest, BatchVerificationResponse,
     verification_response::BatchVerificationResult,
     wire_format::v1::BatchVerificationResponseResultWireFormatV1,
 };
 use alloy::sol_types::SolValue;
 use zksync_os_contract_interface::{IExecutor::CommitBatchInfoZKsyncOS, models::CommitBatchInfo};
+use zksync_os_types::BatchSignature;
 
 impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
     fn from(value: BatchVerificationRequestWireFormatV1) -> Self {
@@ -60,7 +61,7 @@ impl TryFrom<BatchVerificationResponseWireFormatV1> for BatchVerificationRespons
         } = value;
         let result = match wire_result {
             BatchVerificationResponseResultWireFormatV1::Success(bytes) => {
-                BatchVerificationResult::Success(Signature::from_raw_array(&bytes)?)
+                BatchVerificationResult::Success(BatchSignature::from_raw_array(&bytes)?)
             }
             BatchVerificationResponseResultWireFormatV1::Refused(reason) => {
                 BatchVerificationResult::Refused(reason)

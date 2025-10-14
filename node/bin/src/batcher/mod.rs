@@ -1,6 +1,5 @@
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
-use crate::tree_manager::BlockMerkleTreeData;
 use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -14,7 +13,7 @@ use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
-use zksync_os_merkle_tree::TreeBatchOutput;
+use zksync_os_merkle_tree::{BlockMerkleTreeData, TreeBatchOutput};
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
