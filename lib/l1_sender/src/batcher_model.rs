@@ -54,16 +54,15 @@ fn default_execution_version() -> u32 {
 }
 
 #[derive(Debug)]
-pub enum MissingSignature {
-    ForSigning,
-}
+pub struct MissingSignature;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub enum BatchSignatureData {
     Signed {
         signatures: BatchSignatureSet,
     },
-    // to allow deserializing older objects
+    // default to allow deserializing of older objects
+    /// Batch signatures are not enabled
     #[default]
     NotNeeded,
 }
@@ -86,7 +85,7 @@ impl<E> BatchEnvelope<E, MissingSignature> {
         Self {
             batch,
             data,
-            signature_data: MissingSignature::ForSigning,
+            signature_data: MissingSignature,
             latency_tracker: LatencyDistributionTracker::default(),
         }
     }

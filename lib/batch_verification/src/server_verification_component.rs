@@ -120,6 +120,12 @@ async fn run_batch_response_processor(
     Ok(())
 }
 
+/// Processes batches without signatures by broadcasting signing requests to all
+/// connected signer ENs. When enough signatures are collected it added signatures
+/// to the batch and sends it to the next component. If not enough signatures are
+/// collected within the timeout, signing requests are resend. More ENs maybe
+/// available on next attempt or already connected ENs may now be able to verify
+/// the batch. IDs are used to correlate requests and responses.
 struct BatchVerifier {
     config: BatchVerificationConfig,
     request_id_counter: AtomicU64,
@@ -176,6 +182,7 @@ impl BatchVerifier {
         singed_batcher_sender: Sender<SignedBatchEnvelope<E>>,
     ) -> anyhow::Result<()> {
         loop {
+            // We process the batches one by one. Consider adding concurrency here when we need it.
             let Some(batch_envelope) = batch_for_signing_receiver.recv().await else {
                 // Channel closed, exit the loop
                 tracing::info!("BatchForSigning channel closed, exiting verifier",);
@@ -184,7 +191,10 @@ impl BatchVerifier {
             let mut retry_count = 0;
             let deadline = Instant::now() + self.config.total_timeout;
             let signatures = loop {
-                match self.verify_batch(&batch_envelope).await {
+                match self
+                    .collect_batch_verification_signatures(&batch_envelope)
+                    .await
+                {
                     Ok(result) => break Ok(result),
                     Err(err) if err.retryable() => {
                         if Instant::now() < deadline {
@@ -219,7 +229,7 @@ impl BatchVerifier {
     }
 
     /// Process a batch envelope and collect verification signatures
-    async fn verify_batch<E: Send + Sync>(
+    async fn collect_batch_verification_signatures<E: Send + Sync>(
         &self,
         batch_envelope: &BatchForSigning<E>,
     ) -> Result<BatchSignatureSet, BatchVerificationError> {

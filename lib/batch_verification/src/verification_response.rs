@@ -50,7 +50,6 @@ impl codec::Decoder for BatchVerificationResponseDecoder {
     }
 }
 
-//TODO verification response version should match verification request version / current protocol version
 pub struct BatchVerificationResponseCodec {
     inner: LengthDelimitedCodec,
     wire_format_version: u32,

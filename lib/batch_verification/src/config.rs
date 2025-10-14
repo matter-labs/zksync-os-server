@@ -5,28 +5,30 @@ use smart_config::{DescribeConfig, DeserializeConfig, config, value::SecretStrin
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct BatchVerificationConfig {
-    /// If we are using batch verification
+    /// [server] If we are collecting batch verification signatures
+    /// [en] If we are signing batches
     #[config(default_t = false)]
     pub enabled: bool,
-    /// Batch verification server address to listen on.
+    /// [server] Batch verification server address to listen on.
+    /// [en] Batch verification server address to connect to.
     #[config(default_t = "0.0.0.0:3072".into())]
     pub address: String,
-    /// Threshold (number of needed signatures)
+    /// [server] Threshold (number of needed signatures)
     #[config(default_t = 1)]
     pub threshold: usize,
-    /// Accepted signer pubkeys
+    /// [server] Accepted signer pubkeys
     #[config(default)]
     pub accepted_signers: Vec<String>,
-    /// Iteration timeout
+    /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]
     pub request_timeout: Duration,
-    /// Retry delay between attempts
+    /// [server] Retry delay between attempts
     #[config(default_t = Duration::from_secs(1))]
     pub retry_delay: Duration,
-    /// Total timeout
+    /// [server] Total timeout
     #[config(default_t = Duration::from_secs(300))]
     pub total_timeout: Duration,
-    /// Signing key
+    /// [EN] Signing key
     #[config(default_t = "0x".into())]
     pub signing_key: SecretString,
 }

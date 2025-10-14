@@ -15,7 +15,9 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
 use zksync_os_storage_api::skip_http_headers;
 
-/// Manages connected clients and collects their responses
+/// Accepts connections from batch verification clients. Crafts and sends
+/// BatchVerificationRequests to all clients. Receives responses and forwards
+/// them through the channel to batch_response_processor
 pub struct BatchVerificationServer {
     verification_request_broadcast: broadcast::Sender<BatchVerificationRequest>,
     response_sender: mpsc::Sender<BatchVerificationResponse>,
@@ -63,7 +65,7 @@ impl BatchVerificationServer {
                 )
                 .await
                 {
-                    tracing::error!("Error handling client {}: {}", addr, e);
+                    tracing::info!("Error handling client {}: {}", addr, e);
                 }
             });
         }
@@ -82,10 +84,8 @@ impl BatchVerificationServer {
         skip_http_headers(&mut reader).await?;
 
         // Write wire format version
-        if let Err(e) = send.write_u32(BATCH_VERIFICATION_WIRE_FORMAT_VERSION).await {
-            tracing::info!("Could not write batch verification version: {}", e);
-            return Ok(());
-        }
+        send.write_u32(BATCH_VERIFICATION_WIRE_FORMAT_VERSION)
+            .await?;
 
         tracing::info!("Batch verification client connected: {}", client_addr);
 

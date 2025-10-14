@@ -26,7 +26,7 @@ use zksync_os_types::BatchSignature;
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient {
     chain_id: u64,
-    chain_address: Address,
+    diamond_proxy: Address,
     signer: PrivateKeySigner, // TODO, we probably want to move to BLS?
     block_storage: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     server_address: String,
@@ -46,14 +46,14 @@ impl BatchVerificationClient {
     pub fn new(
         private_key: SecretString,
         chain_id: u64,
-        chain_address: Address,
+        diamond_proxy: Address,
         server_address: String,
     ) -> Self {
         Self {
             signer: PrivateKeySigner::from_str(private_key.expose_secret())
                 .expect("Invalid batch verification private key"),
             chain_id,
-            chain_address,
+            diamond_proxy,
             block_storage: HashMap::new(),
             server_address,
         }
@@ -107,7 +107,7 @@ impl BatchVerificationClient {
                 })
                 .collect(),
             self.chain_id,
-            self.chain_address,
+            self.diamond_proxy,
             request.batch_number,
         )
         .commit_info;
@@ -247,12 +247,12 @@ impl PipelineComponent for BatchVerificationClient {
             .await?;
 
         // After HTTP headers we drop directly to simple TCP
-        let replay_version = socket.read_u32().await?;
+        let batch_verification_version = socket.read_u32().await?;
         let (recv, send) = socket.split();
         let mut reader =
-            FramedRead::new(recv, BatchVerificationRequestDecoder::new(replay_version));
+            FramedRead::new(recv, BatchVerificationRequestDecoder::new(batch_verification_version));
         let mut writer =
-            FramedWrite::new(send, BatchVerificationResponseCodec::new(replay_version));
+            FramedWrite::new(send, BatchVerificationResponseCodec::new(batch_verification_version));
 
         tracing::info!("Connected to main sequencer for batch verification");
 
