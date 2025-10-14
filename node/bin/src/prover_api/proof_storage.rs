@@ -78,10 +78,7 @@ impl StoredObject for StoredFailedProof {
 
 impl StoredFailedProof {
     pub fn batch_number(&self) -> u64 {
-        self.failed_proof
-            .batch_metadata
-            .commit_batch_info
-            .batch_number
+        self.failed_proof.batch_metadata.batch_info.batch_number
     }
 }
 
