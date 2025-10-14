@@ -215,9 +215,11 @@ async fn peek_fri_proofs(
                         fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))
                     }
                     FriProof::Fake => {
-                        error!(
+                        tracing::info!(
                             "Requested FRI proof for batch {} is fake (range {}-{})",
-                            batch_number, from_batch_number, to_batch_number
+                            batch_number,
+                            from_batch_number,
+                            to_batch_number
                         );
                         return (
                             StatusCode::BAD_REQUEST,
@@ -228,9 +230,10 @@ async fn peek_fri_proofs(
                 };
             }
             Ok(None) => {
-                error!(
+                tracing::info!(
                     "No FRI proof found for batch {batch_number} (range {}-{})",
-                    from_batch_number, to_batch_number
+                    from_batch_number,
+                    to_batch_number
                 );
                 return (
                     StatusCode::NOT_FOUND,
@@ -239,7 +242,7 @@ async fn peek_fri_proofs(
                     .into_response();
             }
             Err(e) => {
-                error!("Error retrieving FRI proof for batch {batch_number}: {e}");
+                tracing::info!("Error retrieving FRI proof for batch {batch_number}: {e}");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Error retrieving proof: {e}"),
@@ -282,7 +285,7 @@ async fn get_failed_fri_proof(
         )
             .into_response(),
         Err(e) => {
-            error!("Error retrieving failed proof for batch {batch_number}: {e}");
+            tracing::info!("Error retrieving failed proof for batch {batch_number}: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Error retrieving failed proof: {e}"),
@@ -291,6 +294,7 @@ async fn get_failed_fri_proof(
         }
     }
 }
+
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
