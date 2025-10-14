@@ -81,10 +81,7 @@ where
         let prepare_task = tokio::spawn({
             async move {
                 priority_tree_manager_for_prepare
-                    .prepare_execute_commands(
-                        Some((input.into_inner(), output)),
-                        priority_txs_internal_sender,
-                    )
+                    .prepare_execute_commands(Some((input, output)), priority_txs_internal_sender)
                     .await
             }
         });

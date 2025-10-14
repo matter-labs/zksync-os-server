@@ -11,7 +11,7 @@ use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
-use zksync_os_multivm::proving_run_execution_version;
+use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
@@ -128,8 +128,10 @@ fn compute_prover_input(
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let prover_input =
         match proving_run_execution_version(replay_record.block_context.execution_version) {
-            1 | 2 => unreachable!("proving_run_execution_version does not return 1 or 2"), // we prove v1 and v2 blocks with v3, it's reflected in `proving_run_execution_version`
-            3 => {
+            ExecutionVersion::V1 | ExecutionVersion::V2 => {
+                unreachable!("proving_run_execution_version does not return 1 or 2")
+            } // we prove v1 and v2 blocks with v3, it's reflected in `proving_run_execution_version`
+            ExecutionVersion::V3 => {
                 use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
                 use zk_os_forward_system::run::{
                     StorageCommitment, convert::FromInterface, generate_proof_input,
@@ -162,7 +164,6 @@ fn compute_prover_input(
                 )
                 .expect("proof gen failed")
             }
-            v => panic!("Unsupported ZKsync OS execution version: {v}"),
         };
     let latency = prover_input_generation_latency.observe();
 

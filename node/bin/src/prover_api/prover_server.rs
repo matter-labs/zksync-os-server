@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::batcher_model::FriProof;
+use zksync_os_l1_sender::batcher_model::{BatchMetadata, FriProof};
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,6 +53,12 @@ struct AvailableProofsPayload {
 #[derive(Debug, Deserialize)]
 struct ProverQuery {
     id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FailedProofResponse {
+    pub batch_metadata: BatchMetadata,
+    pub proof: String, // base64‑encoded FRI proof (little‑endian u32 array)
 }
 
 // ───────────── Application state ─────────────
@@ -93,7 +99,7 @@ async fn submit_fri_proof(
     let prover_id = query.id.as_deref().unwrap_or("unknown_prover");
     match state
         .fri_job_manager
-        .submit_proof(payload.block_number, proof_bytes, prover_id)
+        .submit_proof(payload.block_number, proof_bytes.into(), prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
@@ -202,7 +208,7 @@ async fn peek_fri_proofs(
 
     let mut fri_proofs = vec![];
     for batch_number in from_batch_number..=to_batch_number {
-        match state.proof_storage.get(batch_number).await {
+        match state.proof_storage.get_batch_with_proof(batch_number).await {
             Ok(Some(env)) => {
                 match env.data {
                     FriProof::Real(real) => {
@@ -254,6 +260,37 @@ async fn status(State(state): State<AppState>) -> Response {
     let status = state.fri_job_manager.status();
     Json(status).into_response()
 }
+
+/// Get detailed information about a failed FRI proof for debugging.
+/// Returns the most recent failed proof for the given batch number.
+async fn get_failed_fri_proof(
+    Path(batch_number): Path<u64>,
+    State(state): State<AppState>,
+) -> Response {
+    match state.proof_storage.get_failed_proof(batch_number).await {
+        Ok(Some(failed_proof)) => {
+            let response = FailedProofResponse {
+                batch_metadata: failed_proof.batch_metadata,
+                proof: general_purpose::STANDARD.encode(failed_proof.proof_bytes),
+            };
+
+            Json(response).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("No failed proof found for batch {batch_number}"),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Error retrieving failed proof for batch {batch_number}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error retrieving failed proof: {e}"),
+            )
+                .into_response()
+        }
+    }
+}
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
@@ -271,6 +308,7 @@ pub async fn run(
         .route("/prover-jobs/FRI/{id}/peek", get(peek_batch_data))
         .route("/prover-jobs/FRI/pick", post(pick_fri_job))
         .route("/prover-jobs/FRI/submit", post(submit_fri_proof))
+        .route("/prover-jobs/FRI/{id}/failed", get(get_failed_fri_proof))
         .route("/prover-jobs/SNARK/{from}/{to}/peek", get(peek_fri_proofs))
         .route("/prover-jobs/SNARK/pick", post(pick_snark_job))
         .route("/prover-jobs/SNARK/submit", post(submit_snark_proof))

@@ -24,8 +24,22 @@ where
         db_path: &Path,
         batch_storage: BatchStorage,
         finality: Finality,
-        last_ready_batch: u64,
+        last_ready_block: u64,
     ) -> anyhow::Result<Self> {
+        let batch_of_last_ready_block = batch_storage
+            .get_batch_by_block_number(last_ready_block, &finality)
+            .await?
+            .unwrap();
+        let batch_range = batch_storage
+            .get_batch_range_by_number(batch_of_last_ready_block)
+            .await?
+            .unwrap();
+        let last_ready_batch = if last_ready_block == batch_range.1 {
+            batch_of_last_ready_block
+        } else {
+            batch_of_last_ready_block.saturating_sub(1)
+        };
+
         let priority_tree_manager = PriorityTreeManager::new(
             block_storage,
             db_path,

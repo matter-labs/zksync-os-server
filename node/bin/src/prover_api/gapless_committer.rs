@@ -65,7 +65,9 @@ impl PipelineComponent for GaplessCommitter {
                         for batch in ready {
                             let batch = batch.with_stage(BatchExecutionStage::FriProofStored);
                             let stored_batch = StoredBatch::V1(batch);
-                            self.proof_storage.save_proof(&stored_batch).await?;
+                            self.proof_storage
+                                .save_batch_with_proof(&stored_batch)
+                                .await?;
                             latency_tracker.enter_state(GenericComponentState::WaitingSend);
                             output
                                 .send(CommitCommand::new(

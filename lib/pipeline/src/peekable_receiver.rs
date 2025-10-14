@@ -50,6 +50,19 @@ impl<T> PeekableReceiver<T> {
         self.rx.recv().await
     }
 
+    /// Receive the next item, awaiting if necessary.
+    /// If a buffered item exists, it is returned first.
+    pub async fn recv_many(&mut self, buffer: &mut Vec<T>, limit: usize) -> usize {
+        if !self.buf.is_empty() {
+            // Take up to `limit` items from the inner buffer
+            let last = self.buf.len().min(limit);
+            buffer.extend(self.buf.drain(..last));
+            last
+        } else {
+            self.rx.recv_many(buffer, limit).await
+        }
+    }
+
     /// Peek at the next item **without consuming it**, applying `f` to a reference.
     /// Returns `None` if the channel was closed.
     pub async fn peek_recv<R, F>(&mut self, f: F) -> Option<R>
@@ -208,7 +221,6 @@ impl<T> PeekableReceiver<T> {
 
     /// Convert into the inner receiver, consuming buffered items first
     /// WARNING: panics if there are any buffered items!
-    /// todo: only used in prover_input_generator sa it expects a Stream - remove when it's migrated to `PeekableReceiver`
     pub fn into_inner(self) -> mpsc::Receiver<T> {
         assert!(
             self.buf.is_empty(),

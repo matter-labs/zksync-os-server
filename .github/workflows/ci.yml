@@ -238,15 +238,17 @@ jobs:
           name: ${{ env.PROVER_GPU_TESTS }}
 
       - name: Download CRS setup file
-        run: |
-          mkdir -p crs
-          wget https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key -O crs/setup_compact.key
+        if: steps.cache-crs.outputs.cache-hit != 'true'
+        env:
+          # Download CRS file from US storage as all runners are US-based
+          CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-us/setup-keys/setup_compact.key
+        run: wget "${CRS_FILE_URL}"
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
         env:
-          COMPACT_CRS_FILE: ${{ github.workspace }}/crs/setup_compact.key
+          COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
           RUST_MIN_STACK: 267108864
         run: |
           ulimit -s 300000
