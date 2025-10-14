@@ -11705,11 +11705,14 @@ dependencies = [
  "auto_impl",
  "dashmap",
  "futures",
+ "metrics",
  "reth-chainspec",
  "reth-primitives-traits",
  "reth-storage-api",
  "reth-transaction-pool",
  "tokio",
+ "tracing",
+ "vise",
  "zksync_os_types",
 ]
 

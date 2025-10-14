@@ -130,6 +130,7 @@ cargo_metadata = { version = "0.20.0", default-features = false }
 tracing-logfmt = { version = "0.3.5" }
 url = "2.5.7"
 num_enum = "0.7.2"
+metrics = "0.24.2"
 
 # Reth dependencies
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
