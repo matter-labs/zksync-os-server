@@ -23,3 +23,6 @@ auto_impl.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+vise.workspace = true
+metrics.workspace = true
