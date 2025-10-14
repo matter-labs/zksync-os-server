@@ -27,7 +27,6 @@ use tokio::sync::mpsc::Permit;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
 use zksync_os_multivm::proving_run_execution_version;
 use zksync_os_observability::{
@@ -38,7 +37,7 @@ use zksync_os_pipeline::PeekableReceiver;
 #[derive(Error, Debug)]
 pub enum SubmitError {
     #[error("proof did not pass verification")]
-    VerificationFailed,
+    VerificationFailed([u32; 8], [u32; 16]),
     #[error("batch {0} is not known to the server")]
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
@@ -47,13 +46,30 @@ pub enum SubmitError {
     Other(String),
 }
 
+impl SubmitError {
+    pub fn expected_hash_u32s(&self) -> [u32; 8] {
+        match self {
+            SubmitError::VerificationFailed(expected_hash_u32s, _) => *expected_hash_u32s,
+            _ => panic!("Expected hash u32s not found"),
+        }
+    }
+    pub fn proof_final_register_values(&self) -> [u32; 16] {
+        match self {
+            SubmitError::VerificationFailed(_, proof_final_register_values) => {
+                *proof_final_register_values
+            }
+            _ => panic!("Proof final register values not found"),
+        }
+    }
+}
+
 /// A FRI proof that failed verification, stored for debugging purposes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailedFriProof {
-    /// Batch Metadata
-    pub batch_metadata: BatchMetadata,
-
-    /// The raw proof bytes that were submitted
+    pub batch_number: u64,
+    pub last_block_timestamp: u64,
+    pub expected_hash_u32s: [u32; 8],
+    pub proof_final_register_values: [u32; 16],
     pub proof_bytes: Bytes,
 }
 
@@ -217,9 +233,12 @@ impl FriJobManager {
         ) {
             tracing::warn!(batch_number, "Proof verification failed. {err}");
 
-            // Persist the failed proof with batch metadata for debugging
+            // Persist the failed proof with some information about the batch for debugging
             let failed_proof = FailedFriProof {
-                batch_metadata,
+                batch_number,
+                last_block_timestamp: batch_metadata.commit_batch_info.last_block_timestamp,
+                expected_hash_u32s: err.expected_hash_u32s(),
+                proof_final_register_values: err.proof_final_register_values(),
                 proof_bytes,
             };
 
@@ -239,7 +258,7 @@ impl FriJobManager {
                 );
             }
 
-            return Err(SubmitError::VerificationFailed);
+            return Err(err);
         }
         // Now we know that the proof is valid.
 

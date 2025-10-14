@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use zksync_os_l1_sender::batcher_model::{BatchMetadata, FriProof};
+use zksync_os_l1_sender::batcher_model::FriProof;
 // ───────────── JSON payloads ─────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,7 +57,10 @@ struct ProverQuery {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FailedProofResponse {
-    pub batch_metadata: BatchMetadata,
+    pub batch_number: u64,
+    pub last_block_timestamp: u64,
+    pub expected_hash_u32s: [u32; 8],
+    pub proof_final_register_values: [u32; 16],
     pub proof: String, // base64‑encoded FRI proof (little‑endian u32 array)
 }
 
@@ -103,7 +106,7 @@ async fn submit_fri_proof(
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::VerificationFailed) => Err((
+        Err(SubmitError::VerificationFailed(_, _)) => Err((
             StatusCode::BAD_REQUEST,
             "proof verification failed".to_string(),
         )),
@@ -273,7 +276,10 @@ async fn get_failed_fri_proof(
     match state.proof_storage.get_failed_proof(batch_number).await {
         Ok(Some(failed_proof)) => {
             let response = FailedProofResponse {
-                batch_metadata: failed_proof.batch_metadata,
+                batch_number: failed_proof.batch_number,
+                last_block_timestamp: failed_proof.last_block_timestamp,
+                expected_hash_u32s: failed_proof.expected_hash_u32s,
+                proof_final_register_values: failed_proof.proof_final_register_values,
                 proof: general_purpose::STANDARD.encode(failed_proof.proof_bytes),
             };
 
