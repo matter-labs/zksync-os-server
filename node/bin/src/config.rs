@@ -262,7 +262,14 @@ pub struct L1SenderConfig {
 #[config(derive(Default))]
 pub struct L1WatcherConfig {
     /// Max number of L1 blocks to be processed at a time.
-    #[config(default_t = 100)]
+    ///
+    /// L1 providers have different limits:
+    /// * Alchemy - 2k blocks per request
+    /// * Chainstack - 10k blocks per request
+    /// * reth (by default) - 100k blocks per request
+    ///
+    /// Overall, 1000 blocks is a fairly conservative default for the general case.
+    #[config(default_t = 1000)]
     pub max_blocks_to_process: u64,
 
     /// How often to poll L1 for new priority requests.
