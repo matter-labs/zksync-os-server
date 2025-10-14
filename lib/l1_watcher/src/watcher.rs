@@ -13,6 +13,14 @@ pub(crate) struct L1Watcher<Event> {
     _event: PhantomData<Event>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct L1WatcherOutput<Event> {
+    /// New events that have been discovered since the last poll.
+    pub(crate) events: Vec<Event>,
+    /// Whether there are more blocks to process.
+    pub(crate) more_available: bool,
+}
+
 impl<Event> L1Watcher<Event> {
     pub(crate) fn new(
         zk_chain: ZkChain<DynProvider>,
@@ -31,20 +39,28 @@ impl<Event> L1Watcher<Event> {
 impl<Event: WatchedEvent> L1Watcher<Event> {
     /// Scans up to `self.max_blocks_to_process` next L1 blocks for new events of type `Event`
     /// and returns them.
-    pub(crate) async fn poll(&mut self) -> Result<Vec<Event>, L1WatcherError<Event::Error>> {
+    pub(crate) async fn poll(
+        &mut self,
+    ) -> Result<L1WatcherOutput<Event>, L1WatcherError<Event::Error>> {
         let latest_block = self.zk_chain.provider().get_block_number().await?;
         let from_block = self.next_l1_block;
         // Inspect up to `self.max_blocks_to_process` blocks at a time
         let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
         if from_block > to_block {
-            return Ok(vec![]);
+            return Ok(L1WatcherOutput {
+                events: vec![],
+                more_available: false,
+            });
         }
-        let new_events = self.process_l1_blocks(from_block, to_block).await?;
-        METRICS.events_loaded[&Event::NAME].inc_by(new_events.len() as u64);
+        let events = self.process_l1_blocks(from_block, to_block).await?;
+        METRICS.events_loaded[&Event::NAME].inc_by(events.len() as u64);
         METRICS.most_recently_scanned_l1_block[&Event::NAME].set(to_block);
 
         self.next_l1_block = to_block + 1;
-        Ok(new_events)
+        Ok(L1WatcherOutput {
+            events,
+            more_available: to_block != latest_block,
+        })
     }
 
     /// Processes a range of L1 blocks for new events.

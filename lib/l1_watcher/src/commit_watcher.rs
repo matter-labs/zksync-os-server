@@ -77,46 +77,50 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
     }
 
     async fn poll(&mut self) -> L1CommitWatcherResult<()> {
-        let batch_commits = self.l1_watcher.poll().await?;
-        for batch_commit in batch_commits {
-            let batch_number = batch_commit.batchNumber.to::<u64>();
-            let batch_hash = batch_commit.batchHash;
-            let batch_commitment = batch_commit.commitment;
-            if batch_number < self.next_batch_number {
-                tracing::debug!(
-                    batch_number,
-                    ?batch_hash,
-                    ?batch_commitment,
-                    "skipping already processed committed batch",
-                );
-            } else {
-                tracing::debug!(
-                    batch_number,
-                    ?batch_hash,
-                    ?batch_commitment,
-                    "discovered committed batch"
-                );
-                let (_, last_committed_block) = self
-                    .batch_storage
-                    .get_batch_range_by_number(batch_number)
-                    .await?
-                    .expect("committed batch is missing");
-                self.finality.update_finality_status(|finality| {
-                    assert!(
-                        batch_number > finality.last_committed_batch,
-                        "non-monotonous committed batch"
+        // Proactively iterate while there are more blocks to process.
+        loop {
+            let output = self.l1_watcher.poll().await?;
+            for batch_commit in output.events {
+                let batch_number = batch_commit.batchNumber.to::<u64>();
+                let batch_hash = batch_commit.batchHash;
+                let batch_commitment = batch_commit.commitment;
+                if batch_number < self.next_batch_number {
+                    tracing::debug!(
+                        batch_number,
+                        ?batch_hash,
+                        ?batch_commitment,
+                        "skipping already processed committed batch",
                     );
-                    assert!(
-                        last_committed_block > finality.last_committed_block,
-                        "non-monotonous committed block"
+                } else {
+                    tracing::debug!(
+                        batch_number,
+                        ?batch_hash,
+                        ?batch_commitment,
+                        "discovered committed batch"
                     );
-                    finality.last_committed_batch = batch_number;
-                    finality.last_committed_block = last_committed_block;
-                });
+                    let (_, last_committed_block) = self
+                        .batch_storage
+                        .get_batch_range_by_number(batch_number)
+                        .await?
+                        .expect("committed batch is missing");
+                    self.finality.update_finality_status(|finality| {
+                        assert!(
+                            batch_number > finality.last_committed_batch,
+                            "non-monotonous committed batch"
+                        );
+                        assert!(
+                            last_committed_block > finality.last_committed_block,
+                            "non-monotonous committed block"
+                        );
+                        finality.last_committed_batch = batch_number;
+                        finality.last_committed_block = last_committed_block;
+                    });
+                }
+            }
+            if !output.more_available {
+                return Ok(());
             }
         }
-
-        Ok(())
     }
 }
 

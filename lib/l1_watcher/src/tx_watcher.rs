@@ -72,29 +72,33 @@ impl L1TxWatcher {
 
 impl L1TxWatcher {
     async fn poll(&mut self) -> L1TxWatcherResult<()> {
-        let priority_txs = self.l1_watcher.poll().await?;
-        for tx in priority_txs {
-            if tx.priority_id() < self.next_l1_priority_id {
-                tracing::debug!(
-                    priority_id = tx.priority_id(),
-                    hash = ?tx.hash(),
-                    "skipping already processed priority transaction",
-                )
-            } else {
-                self.next_l1_priority_id = tx.priority_id() + 1;
-                tracing::debug!(
-                    priority_id = tx.priority_id(),
-                    hash = ?tx.hash(),
-                    "sending new priority transaction for processing",
-                );
-                self.output
-                    .send(tx)
-                    .await
-                    .map_err(|_| L1TxWatcherError::OutputClosed)?;
+        // Proactively iterate while there are more blocks to process.
+        loop {
+            let output = self.l1_watcher.poll().await?;
+            for tx in output.events {
+                if tx.priority_id() < self.next_l1_priority_id {
+                    tracing::debug!(
+                        priority_id = tx.priority_id(),
+                        hash = ?tx.hash(),
+                        "skipping already processed priority transaction",
+                    )
+                } else {
+                    self.next_l1_priority_id = tx.priority_id() + 1;
+                    tracing::debug!(
+                        priority_id = tx.priority_id(),
+                        hash = ?tx.hash(),
+                        "sending new priority transaction for processing",
+                    );
+                    self.output
+                        .send(tx)
+                        .await
+                        .map_err(|_| L1TxWatcherError::OutputClosed)?;
+                }
+            }
+            if !output.more_available {
+                return Ok(());
             }
         }
-
-        Ok(())
     }
 }
 

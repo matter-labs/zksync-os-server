@@ -77,47 +77,51 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
     }
 
     async fn poll(&mut self) -> L1ExecuteWatcherResult<()> {
-        let batch_executions = self.l1_watcher.poll().await?;
-        for batch_execute in batch_executions {
-            let batch_number = batch_execute.batchNumber.to::<u64>();
-            let batch_hash = batch_execute.batchHash;
-            let batch_commitment = batch_execute.commitment;
-            if batch_number < self.next_batch_number {
-                tracing::debug!(
-                    batch_number,
-                    ?batch_hash,
-                    ?batch_commitment,
-                    "skipping already processed executed batch",
-                );
-            } else {
-                let (_, last_executed_block) = self
-                    .batch_storage
-                    .get_batch_range_by_number(batch_number)
-                    .await?
-                    .expect("executed batch is missing");
-                self.finality.update_finality_status(|finality| {
-                    assert!(
-                        batch_number > finality.last_executed_batch,
-                        "non-monotonous executed batch"
+        // Proactively iterate while there are more blocks to process.
+        loop {
+            let output = self.l1_watcher.poll().await?;
+            for batch_execute in output.events {
+                let batch_number = batch_execute.batchNumber.to::<u64>();
+                let batch_hash = batch_execute.batchHash;
+                let batch_commitment = batch_execute.commitment;
+                if batch_number < self.next_batch_number {
+                    tracing::debug!(
+                        batch_number,
+                        ?batch_hash,
+                        ?batch_commitment,
+                        "skipping already processed executed batch",
                     );
-                    assert!(
-                        last_executed_block > finality.last_executed_block,
-                        "non-monotonous executed block"
+                } else {
+                    let (_, last_executed_block) = self
+                        .batch_storage
+                        .get_batch_range_by_number(batch_number)
+                        .await?
+                        .expect("executed batch is missing");
+                    self.finality.update_finality_status(|finality| {
+                        assert!(
+                            batch_number > finality.last_executed_batch,
+                            "non-monotonous executed batch"
+                        );
+                        assert!(
+                            last_executed_block > finality.last_executed_block,
+                            "non-monotonous executed block"
+                        );
+                        finality.last_executed_batch = batch_number;
+                        finality.last_executed_block = last_executed_block;
+                    });
+                    tracing::debug!(
+                        batch_number,
+                        ?batch_hash,
+                        ?batch_commitment,
+                        last_executed_block,
+                        "discovered executed batch"
                     );
-                    finality.last_executed_batch = batch_number;
-                    finality.last_executed_block = last_executed_block;
-                });
-                tracing::debug!(
-                    batch_number,
-                    ?batch_hash,
-                    ?batch_commitment,
-                    last_executed_block,
-                    "discovered executed batch"
-                );
+                }
+            }
+            if !output.more_available {
+                return Ok(());
             }
         }
-
-        Ok(())
     }
 }
 
