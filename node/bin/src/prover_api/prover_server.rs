@@ -112,8 +112,7 @@ async fn submit_fri_proof(
         }) => Err((
             StatusCode::BAD_REQUEST,
             format!(
-                "FRI proof verification failed. Expected: {:?}, Got: {:?}",
-                expected_hash_u32s, proof_final_register_values
+                "FRI proof verification failed. Expected: {expected_hash_u32s:?}, Got: {proof_final_register_values:?}"
             )
             .to_string(),
         )),
