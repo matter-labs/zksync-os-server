@@ -158,7 +158,7 @@ jobs:
   #  Build prover integration tests  #
   ####################################
   build-prover-tests:
-    runs-on: matterlabs-ci-runner-ultra-performance
+    runs-on: matterlabs-ci-runner-high-performance
     container:
       image: nvidia/cuda:12.9.1-devel-ubuntu22.04
     steps:
