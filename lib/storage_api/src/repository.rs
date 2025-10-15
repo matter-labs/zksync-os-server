@@ -1,6 +1,7 @@
 use crate::model::{StoredTxData, TxMeta};
 use alloy::consensus::Block;
 use alloy::primitives::{Address, BlockHash, BlockNumber, Sealed, TxHash, TxNonce};
+use std::fmt::Debug;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_rocksdb::rocksdb;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTransaction};
@@ -13,7 +14,7 @@ pub type RepositoryBlock = Sealed<Block<TxHash>>;
 /// Read-only view on repositories that can fetch data required for RPC but not for VM execution.
 ///
 /// This includes auxiliary data such as block headers, raw transactions and transaction receipts.
-pub trait ReadRepository: Send + Sync + 'static {
+pub trait ReadRepository: Debug + Send + Sync + 'static {
     /// Get sealed block with transaction hashes by its number.
     fn get_block_by_number(&self, number: BlockNumber)
     -> RepositoryResult<Option<RepositoryBlock>>;

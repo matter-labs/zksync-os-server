@@ -17,18 +17,17 @@ use reth_trie_common::{
 use std::fmt::Debug;
 use std::sync::Arc;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
 
 #[derive(Debug)]
-pub struct ZkClient<ReadState> {
+pub(crate) struct ZkClient<State, Repository> {
     chain_spec: Arc<ChainSpec>,
-    repositories: RepositoryManager,
-    state_handle: ReadState,
+    state: State,
+    repository: Repository,
 }
 
-impl<ReadState: ReadStateHistory> ZkClient<ReadState> {
-    pub fn new(repositories: RepositoryManager, state_handle: ReadState, chain_id: u64) -> Self {
+impl<State: ReadStateHistory, Repository: ReadRepository> ZkClient<State, Repository> {
+    pub(crate) fn new(state: State, repository: Repository, chain_id: u64) -> Self {
         let builder = ChainSpecBuilder::default()
             .chain(Chain::from(chain_id))
             // Activate everything up to Cancun
@@ -40,13 +39,15 @@ impl<ReadState: ReadStateHistory> ZkClient<ReadState> {
             .genesis(Default::default());
         Self {
             chain_spec: Arc::new(builder.build()),
-            repositories,
-            state_handle,
+            state,
+            repository,
         }
     }
 }
 
-impl<ReadState: ReadStateHistory> ChainSpecProvider for ZkClient<ReadState> {
+impl<State: ReadStateHistory, Repository: ReadRepository> ChainSpecProvider
+    for ZkClient<State, Repository>
+{
     type ChainSpec = ChainSpec;
 
     fn chain_spec(&self) -> Arc<Self::ChainSpec> {
@@ -54,11 +55,13 @@ impl<ReadState: ReadStateHistory> ChainSpecProvider for ZkClient<ReadState> {
     }
 }
 
-impl<ReadState: ReadStateHistory + Clone> StateProviderFactory for ZkClient<ReadState> {
+impl<State: ReadStateHistory + Clone, Repository: ReadRepository + Clone> StateProviderFactory
+    for ZkClient<State, Repository>
+{
     fn latest(&self) -> ProviderResult<StateProviderBox> {
         Ok(Box::new(ZkState {
-            state_handle: self.state_handle.clone(),
-            latest_block: self.repositories.get_latest_block(),
+            state: self.state.clone(),
+            latest_block: self.repository.get_latest_block(),
         }))
     }
 
@@ -95,15 +98,15 @@ impl<ReadState: ReadStateHistory + Clone> StateProviderFactory for ZkClient<Read
 }
 
 #[derive(Debug)]
-pub struct ZkState<ReadState> {
-    state_handle: ReadState,
+pub(crate) struct ZkState<State> {
+    state: State,
     latest_block: u64,
 }
 
-impl<ReadState: ReadStateHistory> AccountReader for ZkState<ReadState> {
+impl<State: ReadStateHistory> AccountReader for ZkState<State> {
     fn basic_account(&self, address: &Address) -> ProviderResult<Option<Account>> {
         Ok(self
-            .state_handle
+            .state
             .state_view_at(self.latest_block)
             .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?
             .get_account(*address)
@@ -134,7 +137,7 @@ impl<ReadStorage: ReadStateHistory> BytecodeReader for ZkState<ReadStorage> {
 //
 //
 
-impl<ReadStorage: ReadStateHistory> BlockHashReader for ZkState<ReadStorage> {
+impl<State: ReadStateHistory> BlockHashReader for ZkState<State> {
     fn block_hash(&self, _number: BlockNumber) -> ProviderResult<Option<B256>> {
         todo!()
     }
@@ -148,7 +151,7 @@ impl<ReadStorage: ReadStateHistory> BlockHashReader for ZkState<ReadStorage> {
     }
 }
 
-impl<ReadStorage: ReadStateHistory> StateRootProvider for ZkState<ReadStorage> {
+impl<State: ReadStateHistory> StateRootProvider for ZkState<State> {
     fn state_root(&self, _hashed_state: HashedPostState) -> ProviderResult<B256> {
         todo!()
     }
@@ -172,7 +175,7 @@ impl<ReadStorage: ReadStateHistory> StateRootProvider for ZkState<ReadStorage> {
     }
 }
 
-impl<ReadStorage: ReadStateHistory> StorageRootProvider for ZkState<ReadStorage> {
+impl<State: ReadStateHistory> StorageRootProvider for ZkState<State> {
     fn storage_root(
         &self,
         _address: Address,
@@ -200,7 +203,7 @@ impl<ReadStorage: ReadStateHistory> StorageRootProvider for ZkState<ReadStorage>
     }
 }
 
-impl<ReadStorage: ReadStateHistory> StateProofProvider for ZkState<ReadStorage> {
+impl<State: ReadStateHistory> StateProofProvider for ZkState<State> {
     fn proof(
         &self,
         _input: TrieInput,
@@ -223,13 +226,13 @@ impl<ReadStorage: ReadStateHistory> StateProofProvider for ZkState<ReadStorage> 
     }
 }
 
-impl<ReadStorage: ReadStateHistory> HashedPostStateProvider for ZkState<ReadStorage> {
+impl<State: ReadStateHistory> HashedPostStateProvider for ZkState<State> {
     fn hashed_post_state(&self, _bundle_state: &BundleState) -> HashedPostState {
         todo!()
     }
 }
 
-impl<ReadStorage: ReadStateHistory> StateProvider for ZkState<ReadStorage> {
+impl<State: ReadStateHistory> StateProvider for ZkState<State> {
     fn storage(
         &self,
         _account: Address,
@@ -239,7 +242,9 @@ impl<ReadStorage: ReadStateHistory> StateProvider for ZkState<ReadStorage> {
     }
 }
 
-impl<ReadStorage: ReadStateHistory> BlockHashReader for ZkClient<ReadStorage> {
+impl<State: ReadStateHistory, Repository: ReadRepository> BlockHashReader
+    for ZkClient<State, Repository>
+{
     fn block_hash(&self, _number: BlockNumber) -> ProviderResult<Option<B256>> {
         todo!()
     }
@@ -253,7 +258,9 @@ impl<ReadStorage: ReadStateHistory> BlockHashReader for ZkClient<ReadStorage> {
     }
 }
 
-impl<ReadStorage: ReadStateHistory> BlockNumReader for ZkClient<ReadStorage> {
+impl<State: ReadStateHistory, Repository: ReadRepository> BlockNumReader
+    for ZkClient<State, Repository>
+{
     fn chain_info(&self) -> ProviderResult<ChainInfo> {
         todo!()
     }
@@ -271,7 +278,9 @@ impl<ReadStorage: ReadStateHistory> BlockNumReader for ZkClient<ReadStorage> {
     }
 }
 
-impl<ReadStorage: ReadStateHistory> BlockIdReader for ZkClient<ReadStorage> {
+impl<State: ReadStateHistory, Repository: ReadRepository> BlockIdReader
+    for ZkClient<State, Repository>
+{
     fn pending_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
         todo!()
     }

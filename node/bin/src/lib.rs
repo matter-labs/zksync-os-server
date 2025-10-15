@@ -13,7 +13,6 @@ mod priority_tree_steps;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
-pub mod reth_state;
 pub mod sentry;
 mod state_initializer;
 pub mod tree_manager;
@@ -39,7 +38,6 @@ use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::replay_server;
-use crate::reth_state::ZkClient;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::network::EthereumWallet;
@@ -60,7 +58,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
-use zksync_os_mempool::RethPool;
+use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
@@ -205,7 +203,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing mempools");
     let l2_mempool = zksync_os_mempool::in_memory(
-        ZkClient::new(repositories.clone(), state.clone(), chain_id),
+        state.clone(),
+        repositories.clone(),
+        chain_id,
         config.mempool_config.clone().into(),
         config.tx_validator_config.clone().into(),
     );
@@ -386,22 +386,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let genesis = Arc::new(genesis);
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
-    let block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>> =
-        BlockContextProvider::new(
-            next_l1_priority_id,
-            l1_transactions_for_sequencer,
-            l2_mempool,
-            block_hashes_for_next_block,
-            previous_block_timestamp,
-            chain_id,
-            config.sequencer_config.block_gas_limit,
-            config.sequencer_config.block_pubdata_limit_bytes,
-            node_version,
-            genesis.clone(),
-            config.sequencer_config.fee_collector_address,
-            config.sequencer_config.base_fee_override,
-            config.sequencer_config.pubdata_price_override,
-        );
+    let block_context_provider = BlockContextProvider::new(
+        next_l1_priority_id,
+        l1_transactions_for_sequencer,
+        l2_mempool,
+        block_hashes_for_next_block,
+        previous_block_timestamp,
+        chain_id,
+        config.sequencer_config.block_gas_limit,
+        config.sequencer_config.block_pubdata_limit_bytes,
+        node_version,
+        genesis.clone(),
+        config.sequencer_config.fee_collector_address,
+        config.sequencer_config.base_fee_override,
+        config.sequencer_config.pubdata_price_override,
+    );
 
     // ========== Start Sequencer ===========
     tasks.spawn(
@@ -477,6 +476,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline<
     State: ReadStateHistory + WriteState + StateInitializer + Clone,
+    Mempool: L2TransactionPool,
     Finality: ReadFinality + Clone,
 >(
     config: Config,
@@ -488,7 +488,7 @@ async fn run_main_node_pipeline<
     state: State,
     starting_block: u64,
     repositories: RepositoryManager,
-    block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>>,
+    block_context_provider: BlockContextProvider<Mempool>,
     tree: MerkleTree<RocksDBWrapper>,
     finality: Finality,
     chain_id: u64,
@@ -658,6 +658,7 @@ async fn run_main_node_pipeline<
 #[allow(clippy::too_many_arguments)]
 async fn run_en_pipeline<
     State: ReadStateHistory + WriteState + StateInitializer + Clone,
+    Mempool: L2TransactionPool,
     Finality: ReadFinality + Clone,
 >(
     config: Config,
@@ -665,7 +666,7 @@ async fn run_en_pipeline<
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
-    block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>>,
+    block_context_provider: BlockContextProvider<Mempool>,
     state: State,
     tree: MerkleTree<RocksDBWrapper>,
     starting_block: u64,
