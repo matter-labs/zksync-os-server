@@ -74,17 +74,18 @@ where
             };
             let block_number = cmd.block_number();
 
-            // For Produce commands: check limit and update counter (will await indefinitely if limit reached)
+            // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
                 && let Some(limit) = self.sequencer_config.max_blocks_to_produce
             {
-                produced_blocks_count = check_block_production_limit(
+                check_block_production_limit(
                     limit,
                     produced_blocks_count,
                     &self.tx_acceptance_state_sender,
                     &latency_tracker,
                 )
                 .await;
+                produced_blocks_count += 1;
             }
 
             tracing::info!(
@@ -171,16 +172,15 @@ where
     }
 }
 
-/// Checks if block production limit has been reached and increments counter.
-/// If limit is reached, signals to stop accepting transactions and awaits indefinitely.
+/// Checks if block production limit has been reached.
+/// If limit is reached, signals to stop accepting transactions and awaits indefinitely (never returns).
 /// Should only be called for Produce commands.
-/// Returns updated counter.
 async fn check_block_production_limit(
     limit: u64,
     already_produced_blocks_count: u64,
     tx_acceptance_state_sender: &watch::Sender<TransactionAcceptanceState>,
     latency_tracker: &ComponentStateHandle<SequencerState>,
-) -> u64 {
+) {
     if already_produced_blocks_count >= limit {
         tracing::warn!(
             already_produced_blocks_count,
@@ -196,5 +196,4 @@ async fn check_block_production_limit(
         latency_tracker.enter_state(SequencerState::ConfiguredBlockLimitReached);
         std::future::pending::<()>().await;
     }
-    already_produced_blocks_count + 1
 }
