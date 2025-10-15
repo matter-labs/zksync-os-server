@@ -232,7 +232,7 @@ impl FriJobManager {
             // Persist the failed proof with some information about the batch for debugging
             let failed_proof = FailedFriProof {
                 batch_number,
-                last_block_timestamp: batch_metadata.commit_batch_info.last_block_timestamp,
+                last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
                 expected_hash_u32s,
                 proof_final_register_values,
                 proof_bytes,
