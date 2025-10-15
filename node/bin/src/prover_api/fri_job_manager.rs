@@ -37,30 +37,18 @@ use zksync_os_pipeline::PeekableReceiver;
 #[derive(Error, Debug)]
 pub enum SubmitError {
     #[error("proof did not pass verification")]
-    VerificationFailed([u32; 8], [u32; 16]),
+    VerificationFailed,
+    #[error("FRI proof verification error")]
+    FriProofVerificationError {
+        expected_hash_u32s: [u32; 8],
+        proof_final_register_values: [u32; 16],
+    },
     #[error("batch {0} is not known to the server")]
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
     DeserializationFailed(bincode::error::DecodeError),
     #[error("internal error: {0}")]
     Other(String),
-}
-
-impl SubmitError {
-    pub fn expected_hash_u32s(&self) -> [u32; 8] {
-        match self {
-            SubmitError::VerificationFailed(expected_hash_u32s, _) => *expected_hash_u32s,
-            _ => panic!("Expected hash u32s not found"),
-        }
-    }
-    pub fn proof_final_register_values(&self) -> [u32; 16] {
-        match self {
-            SubmitError::VerificationFailed(_, proof_final_register_values) => {
-                *proof_final_register_values
-            }
-            _ => panic!("Proof final register values not found"),
-        }
-    }
 }
 
 /// A FRI proof that failed verification, stored for debugging purposes.
@@ -226,19 +214,27 @@ impl FriJobManager {
                 })?
                 .0;
 
-        if let Err(err) = fri_proof_verifier::verify_fri_proof(
+        if let Err(SubmitError::FriProofVerificationError {
+            expected_hash_u32s,
+            proof_final_register_values,
+        }) = fri_proof_verifier::verify_fri_proof(
             batch_metadata.previous_stored_batch_info.state_commitment,
             batch_metadata.commit_batch_info.clone().into(),
             program_proof,
         ) {
-            tracing::warn!(batch_number, "Proof verification failed. {err}");
+            tracing::warn!(
+                batch_number,
+                "Proof verification failed. Expected: {:?}, Got: {:?}",
+                expected_hash_u32s,
+                proof_final_register_values
+            );
 
             // Persist the failed proof with some information about the batch for debugging
             let failed_proof = FailedFriProof {
                 batch_number,
                 last_block_timestamp: batch_metadata.commit_batch_info.last_block_timestamp,
-                expected_hash_u32s: err.expected_hash_u32s(),
-                proof_final_register_values: err.proof_final_register_values(),
+                expected_hash_u32s,
+                proof_final_register_values,
                 proof_bytes,
             };
 
@@ -258,7 +254,10 @@ impl FriJobManager {
                 );
             }
 
-            return Err(err);
+            return Err(SubmitError::FriProofVerificationError {
+                expected_hash_u32s,
+                proof_final_register_values,
+            });
         }
         // Now we know that the proof is valid.
 
