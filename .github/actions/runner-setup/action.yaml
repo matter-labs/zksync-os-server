@@ -40,6 +40,7 @@ runs:
       shell: 'bash -ex {0}'
       env:
         DEBIAN_FRONTEND: noninteractive
+      if: ${{ runner.os == 'Linux' }}
       run: |
         if command -v sudo >/dev/null 2>&1; then
           SUDO=sudo
@@ -48,36 +49,11 @@ runs:
 
     - name: Add cuda to path
       shell: 'bash -ex {0}'
+      if: ${{ contains(runner.name, 'gpu') }}
       run: echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> "${GITHUB_PATH}"
 
-    - name: Install sccache
-      shell: 'bash -ex {0}'
-      env:
-        SCCACHE_VERSION: 'v0.10.0'
-        SCCACHE_URL: "https://github.com/mozilla/sccache/releases/download/"
-      run: |
-        SCCACHE_FILENAME="sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
-        wget --no-verbose "${SCCACHE_URL}/${SCCACHE_VERSION}/${SCCACHE_FILENAME}.tar.gz"
-        tar xzf "${SCCACHE_FILENAME}.tar.gz"
-        echo "${PWD}/${SCCACHE_FILENAME}" >> "${GITHUB_PATH}"
-        export PATH="${PWD}/${SCCACHE_FILENAME}:${PATH}"
-        which sccache
-        sccache --version
-
-    - name: Setup sccache
-      shell: 'bash -ex {0}'
-      run: |
-        echo SCCACHE_CACHE_SIZE=50G >> "${GITHUB_ENV}"
-        echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> "${GITHUB_ENV}"
-        echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> "${GITHUB_ENV}"
-        echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> "${GITHUB_ENV}"
-        echo SCCACHE_GCS_RW_MODE=READ_WRITE >> "${GITHUB_ENV}"
-        echo RUSTC_WRAPPER=sccache >> "${GITHUB_ENV}"
-        echo SCCACHE_SERVER_PORT=4225 >> "${GITHUB_ENV}"
-        sccache --start-server
-
     - name: Install cmake
-      if: ${{ contains(runner.name, 'matterlabs') }}
+      if: ${{ contains(runner.name, 'matterlabs') && runner.arch == 'X64' }}
       shell: 'bash -ex {0}'
       env:
         CMAKE_VERSION: '4.1.1'
@@ -90,6 +66,32 @@ runs:
         export PATH="${PWD}/${CMAKE_FILENAME}/bin:${PATH}"
         which cmake
         cmake --version
+
+    - name: Install sccache
+      if: ${{ contains(runner.name, 'matterlabs') }}
+      shell: 'bash -ex {0}'
+      env:
+        SCCACHE_VERSION: 'v0.10.0'
+        SCCACHE_URL: "https://github.com/mozilla/sccache/releases/download/"
+      run: |
+        SCCACHE_FILENAME="sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl"
+        wget --no-verbose "${SCCACHE_URL}/${SCCACHE_VERSION}/${SCCACHE_FILENAME}.tar.gz"
+        tar xzf "${SCCACHE_FILENAME}.tar.gz"
+        echo "${PWD}/${SCCACHE_FILENAME}" >> "${GITHUB_PATH}"
+        export PATH="${PWD}/${SCCACHE_FILENAME}:${PATH}"
+
+    - name: Setup sccache
+      if: ${{ contains(runner.name, 'matterlabs') }}
+      shell: 'bash -ex {0}'
+      run: |
+        echo SCCACHE_CACHE_SIZE=50G >> "${GITHUB_ENV}"
+        echo SCCACHE_GCS_BUCKET=matterlabs-infra-sccache-storage >> "${GITHUB_ENV}"
+        echo SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com >> "${GITHUB_ENV}"
+        echo SCCACHE_ERROR_LOG=/tmp/sccache_log.txt >> "${GITHUB_ENV}"
+        echo SCCACHE_GCS_RW_MODE=READ_WRITE >> "${GITHUB_ENV}"
+        echo RUSTC_WRAPPER=sccache >> "${GITHUB_ENV}"
+        echo SCCACHE_SERVER_PORT=4225 >> "${GITHUB_ENV}"
+        sccache --start-server
 
     - name: Install yq
       if: ${{ contains(runner.name, 'matterlabs') }}

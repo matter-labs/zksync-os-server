@@ -2,7 +2,7 @@ use crate::prover_api::fri_job_manager::SubmitError;
 use alloy::primitives::B256;
 use execution_utils::{ProgramProof, generate_oracle_data_from_metadata_and_proof_list};
 use zk_os_basic_system::system_implementation::system::BatchPublicInput;
-use zksync_os_l1_sender::commitment::StoredBatchInfo;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 
 pub fn verify_fri_proof(
     previous_state_commitment: B256,

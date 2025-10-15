@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use zksync_os_bin::config::{
+use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
+use zksync_os_server::config::{
     Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
-use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
@@ -197,7 +197,7 @@ impl Tester {
             log_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
-            zksync_os_bin::run::<FullDiffsState>(stop_receiver, config).await;
+            zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;
         });
 
         #[cfg(feature = "prover-tests")]

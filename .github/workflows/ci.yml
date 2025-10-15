@@ -42,7 +42,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Build server
-        run: cargo build --release --bin zksync_os_bin
+        run: cargo build --release --bin zksync-os-server
 
 
   ############################
