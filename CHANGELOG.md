@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.3](https://github.com/matter-labs/zksync-os-server/compare/v0.8.2...v0.8.3) (2025-10-15)
+
+
+### Features
+
+* add execution version enum ([#517](https://github.com/matter-labs/zksync-os-server/issues/517)) ([c5703f9](https://github.com/matter-labs/zksync-os-server/commit/c5703f9736bbe3511a833b75070b593bf854bf03))
+* **l1-watcher:** poll events actively when behind ([#523](https://github.com/matter-labs/zksync-os-server/issues/523)) ([93d6b4b](https://github.com/matter-labs/zksync-os-server/commit/93d6b4becbc1bf27ca5331df72fbb3184c4fdc2f))
+* **l1:** move `{Commit,Stored}BatchInfo` + introduce `BatchInfo` ([#505](https://github.com/matter-labs/zksync-os-server/issues/505)) ([fe0a6bd](https://github.com/matter-labs/zksync-os-server/commit/fe0a6bdf7df9f3488dff48fe779a383d337ebe23))
+* **l1:** move L1 discovery out of `L1Sender` ([#502](https://github.com/matter-labs/zksync-os-server/issues/502)) ([32aff65](https://github.com/matter-labs/zksync-os-server/commit/32aff6570eec9b6e2061e6ac791d08f588da7c96))
+* **mempool:** export even more metrics ([#529](https://github.com/matter-labs/zksync-os-server/issues/529)) ([1152166](https://github.com/matter-labs/zksync-os-server/commit/1152166d3516e6e6cd28878e3074fcd5e3ab6378))
+* **mempool:** expose metrics ([#522](https://github.com/matter-labs/zksync-os-server/issues/522)) ([6de3a50](https://github.com/matter-labs/zksync-os-server/commit/6de3a50f50536676533ce356ef22989bcd9e688f))
+* replace str with module name for app bin unpack path ([#516](https://github.com/matter-labs/zksync-os-server/issues/516)) ([3f90248](https://github.com/matter-labs/zksync-os-server/commit/3f90248b620088449fcdf60b6b608c5d533d2a74))
+* Saving failed proofs to bucket and exposing endpoint to get them ([#507](https://github.com/matter-labs/zksync-os-server/issues/507)) ([0dc2093](https://github.com/matter-labs/zksync-os-server/commit/0dc2093b97115266b40589efd4a9bf54e68d1d66))
+* **sequencer:** validate last 256 blocks for replayed blocks ([#524](https://github.com/matter-labs/zksync-os-server/issues/524)) ([9b17514](https://github.com/matter-labs/zksync-os-server/commit/9b175143313ff33294507aa790fe2276ff30f3c3))
+
+
+### Bug Fixes
+
+* **pipeline:** simplify task spawning ([#519](https://github.com/matter-labs/zksync-os-server/issues/519)) ([cdcfec5](https://github.com/matter-labs/zksync-os-server/commit/cdcfec5a0724ac9c06ea0e7c27cc320064980f7d))
+* Reduced tracing level for debug functions ([#531](https://github.com/matter-labs/zksync-os-server/issues/531)) ([b960deb](https://github.com/matter-labs/zksync-os-server/commit/b960debd6a41b448a2f10d64551710334d5422b5))
+* **storage:** read replay record atomically ([#521](https://github.com/matter-labs/zksync-os-server/issues/521)) ([ff474a7](https://github.com/matter-labs/zksync-os-server/commit/ff474a76c4b864c1041b5a4a32b0ac0450fb5a5d))
+* **tree:** report backpressure ([#520](https://github.com/matter-labs/zksync-os-server/issues/520)) ([7efb8a7](https://github.com/matter-labs/zksync-os-server/commit/7efb8a701158234bec88ede6d142e5145b1189b3))
+
 ## [0.8.2](https://github.com/matter-labs/zksync-os-server/compare/v0.8.1...v0.8.2) (2025-10-13)
 
 
