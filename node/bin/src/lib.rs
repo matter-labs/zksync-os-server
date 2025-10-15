@@ -474,23 +474,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_main_node_pipeline<
-    State: ReadStateHistory + WriteState + StateInitializer + Clone,
-    Mempool: L2TransactionPool,
-    Finality: ReadFinality + Clone,
->(
+async fn run_main_node_pipeline(
     config: Config,
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
-    state: State,
+    state: impl ReadStateHistory + WriteState + Clone,
     starting_block: u64,
     repositories: impl WriteRepository + Clone,
-    block_context_provider: BlockContextProvider<Mempool>,
+    block_context_provider: BlockContextProvider<impl L2TransactionPool>,
     tree: MerkleTree<RocksDBWrapper>,
-    finality: Finality,
+    finality: impl ReadFinality + Clone,
     chain_id: u64,
     genesis: &Genesis,
     _stop_receiver: watch::Receiver<bool>,
@@ -656,22 +652,18 @@ async fn run_main_node_pipeline<
 /// Only for EN - we still populate channels destined for the batcher subsystem -
 /// need to drain them to not get stuck
 #[allow(clippy::too_many_arguments)]
-async fn run_en_pipeline<
-    State: ReadStateHistory + WriteState + StateInitializer + Clone,
-    Mempool: L2TransactionPool,
-    Finality: ReadFinality + Clone,
->(
+async fn run_en_pipeline(
     config: Config,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
-    block_context_provider: BlockContextProvider<Mempool>,
-    state: State,
+    block_context_provider: BlockContextProvider<impl L2TransactionPool>,
+    state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
     starting_block: u64,
     repositories: impl WriteRepository + Clone,
-    finality: Finality,
+    finality: impl ReadFinality + Clone,
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
