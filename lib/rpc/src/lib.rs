@@ -4,6 +4,7 @@ mod config;
 
 pub use config::RpcConfig;
 use std::sync::Arc;
+use tokio::sync::watch;
 
 mod eth_call_handler;
 mod eth_filter_impl;
@@ -50,6 +51,7 @@ use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
+use zksync_os_types::TransactionAcceptanceState;
 
 pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>(
     config: RpcConfig,
@@ -58,6 +60,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     storage: RpcStorage,
     mempool: Mempool,
     genesis_input_source: Arc<dyn GenesisInputSource>,
+    acceptance_state: watch::Receiver<TransactionAcceptanceState>,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -69,6 +72,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
             mempool.clone(),
             eth_call_handler.clone(),
             chain_id,
+            acceptance_state,
         )
         .into_rpc(),
     )?;
