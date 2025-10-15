@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 /// Stages must have a deterministic and linear order.
 ///
 /// Currently only used to track Batch stages (e.g. committing to l1, proving etc):
-/// 2025-09-15T16:26:50.305797Z  INFO zksync_os_bin::batch_sink: ▶▶▶ Batch has been fully processed
+/// 2025-09-15T16:26:50.305797Z  INFO zksync_os_server::batch_sink: ▶▶▶ Batch has been fully processed
 /// batch_number=1 latency_tracker=total: 27.470830125s (ProveL1TxSent: 947.967416ms (3.45%);
 /// SnarkProvedFake: 1.015951917s (3.70%); ExecuteL1TxSent: 1.225118875s (4.46%);
 /// ExecuteL1TxMined: 10.730509125s (39.06%); ProveL1TxMined: 13.551282792s (49.33%); )

@@ -36,3 +36,12 @@ jobs:
       publish-to-crates-io: false                           # Enable publishing to crates.io
       version-suffix: 'non-semver-compat'                   # Version suffix for the crates.io release
       dependencies: 'clang libclang-dev'                    # Additional Linux dependencies to install
+
+  # Trigger workflow to generate artifacts
+  release-bins:
+    if: ${{ always() && needs.release-please.outputs.releases_created == 'true' }}
+    needs: release-please
+    uses: ./.github/workflows/release-bins.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
