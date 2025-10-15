@@ -16,6 +16,11 @@ on:
       - main
   workflow_dispatch:
 
+# Ensure all release-please jobs are sequentially executed for all commits
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false # never cancel in-progress runs
+
 jobs:
   # Prepare the release PR with changelog updates and create github releases
   release-please:
