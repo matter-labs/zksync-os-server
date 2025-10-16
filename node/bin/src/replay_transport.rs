@@ -1,5 +1,7 @@
+use crate::block_replay_storage::BlockReplayStorage;
 use alloy::primitives::BlockNumber;
-use backon::{ConstantBuilder, Retryable};
+use anyhow::Context as _;
+use backon::{ExponentialBuilder, Retryable};
 use futures::{SinkExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
@@ -11,8 +13,6 @@ use tokio::{
 use tokio_util::codec::{self, FramedRead, FramedWrite, LengthDelimitedCodec};
 use zksync_os_sequencer::model::blocks::BlockCommand;
 use zksync_os_storage_api::{REPLAY_WIRE_FORMAT_VERSION, ReplayRecord};
-
-use crate::block_replay_storage::BlockReplayStorage;
 
 pub async fn replay_server(
     block_replays: BlockReplayStorage,
@@ -102,14 +102,17 @@ pub async fn replay_receiver(
 ) -> anyhow::Result<BoxStream<'static, BlockCommand>> {
     let mut socket = (|| TcpStream::connect(&address))
         .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_secs(1))
-                .with_max_times(10),
+            ExponentialBuilder::default()
+                .with_factor(2.0)
+                .with_min_delay(Duration::from_secs(1))
+                .with_max_delay(Duration::from_secs(20))
+                .with_max_times(15),
         )
         .notify(|err, dur| {
-            tracing::warn!(?err, ?dur, "retrying connection to main node");
+            tracing::info!(?err, ?dur, "retrying connection to main node");
         })
-        .await?;
+        .await
+        .context("Failed to connect to main node")?;
 
     // This makes it valid HTTP
     socket
