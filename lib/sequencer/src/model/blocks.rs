@@ -8,14 +8,14 @@ use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{L1TxSerialId, ZkTransaction};
 
 /// `BlockCommand`s drive the sequencer execution.
-/// Produced by `CommandProducer` - first blocks are `Replay`ed from WAL
+/// Produced by `CommandProducer` - first blocks are `Replay`ed from block replay storage
 /// and then `Produce`d indefinitely.
 ///
 /// Downstream transform:
 /// `BlockTransactionProvider: (L1Mempool/L1Watcher, L2Mempool, BlockCommand) -> (PreparedBlockCommand)`
 #[derive(Clone, Debug)]
 pub enum BlockCommand {
-    /// Replay a block from the WAL.
+    /// Replay a block from block replay storage.
     Replay(Box<ReplayRecord>),
     /// Produce a new block from the mempool.
     /// Second argument - local seal criteria - target block time and max transaction number

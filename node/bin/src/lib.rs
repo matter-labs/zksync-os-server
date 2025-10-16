@@ -589,7 +589,7 @@ async fn run_main_node_pipeline<
         .pipe(Sequencer {
             block_context_provider,
             state: state.clone(),
-            wal: block_replay_storage.clone(),
+            replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
             tx_acceptance_state_sender,
@@ -686,7 +686,7 @@ async fn run_en_pipeline<
         .pipe(Sequencer {
             block_context_provider,
             state: state.clone(),
-            wal: block_replay_storage.clone(),
+            replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
             tx_acceptance_state_sender,

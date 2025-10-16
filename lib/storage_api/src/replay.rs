@@ -38,11 +38,8 @@ pub trait ReadReplay: Send + Sync + 'static {
     ///
     /// This method:
     /// * MUST be thread-safe
-    /// * MUST return `Some(_)` for block number 0 (genesis)
-    /// * MUST, for a given number, return the same value every time as long as it returned `Some(_)`
-    ///   at least once
-    /// * MUST return `Some(_)` for all block numbers `<N` if it returned `Some(_)` for `N`
-    /// * MUST return `Some(_)` for block number returned by [`latest_record`](Self::latest_record)
+    /// * MUST return `Some(_)` for all block numbers in range `[0; latest_record()]`
+    /// * MUST return the same value for any block number once it returns `Some(_)` at least once
     /// * MAY return `Some(_)` for block numbers after latest
     fn get_replay_record(&self, block_number: BlockNumber) -> Option<ReplayRecord>;
 
@@ -50,9 +47,8 @@ pub trait ReadReplay: Send + Sync + 'static {
     ///
     /// This method:
     /// * MUST be thread-safe
-    /// * MUST be infallible, as replay storage is guaranteed to hold at least genesis under `0`.
-    /// * MUST return monotonically increasing values for multiple invocations provided there is a
-    ///   strict time ordering between these invocations.
+    /// * MUST be infallible, as replay storage is guaranteed to hold at least genesis under `0`
+    /// * MUST be monotonically non-decreasing
     ///
     /// If this method returned `N`, then **all** replay records in range `[0; N]` MUST be available
     /// in storage. "Available" here means that they can be fetched by
@@ -64,7 +60,7 @@ pub trait ReadReplay: Send + Sync + 'static {
 /// Extension methods for [`ReadReplay`].
 pub trait ReadReplayExt: ReadReplay {
     /// Streams all replay records with block_number ≥ `start`, in ascending block order. Finishes
-    /// when after reaching the latest stored record.
+    /// after reaching the latest stored record. Used to replay all blocks when recovering state.
     fn stream_from(&self, start: u64) -> BoxStream<ReplayRecord> {
         let latest = self.latest_record();
         let stream = futures::stream::iter(start..=latest).filter_map(move |block_num| {
@@ -78,7 +74,7 @@ pub trait ReadReplayExt: ReadReplay {
     }
 
     /// Streams all replay records with block_number ≥ `start`, in ascending block order. On reaching
-    /// the latest stored record continuously waits for new records to appear.
+    /// the latest stored record continuously waits for new records to appear. Used to send blocks to ENs.
     fn stream_from_forever(&self, start: BlockNumber) -> BoxStream<ReplayRecord>
     where
         Self: Clone,
@@ -130,7 +126,8 @@ impl<T: ReadReplay> ReadReplayExt for T {}
 /// Implementation MUST guarantee that [`append`](Self::append) is the only way to mutate state
 /// inside storage. Trait's consumer MAY depend on state being immutable while they do not call `append`.
 pub trait WriteReplay: ReadReplay {
-    /// Appends a new record to replay storage.
+    /// Appends a new record to replay storage. Returns `true` when a new `RelayRecord` was appended
+    /// - `false` otherwise.
     ///
     /// This method:
     /// * MAY be thread-safe

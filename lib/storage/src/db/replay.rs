@@ -15,7 +15,7 @@ use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
 /// Used for (but not limited to) the following purposes:
 /// * Sequencer's state recovery (provides all information needed to replay a block after restart).
 /// * Execution environment for historical blocks (e.g., as required in `eth_call`).
-/// * Main node <-> EN transport layer.
+/// * Provides replay records for MainNode -> EN synchronization.
 ///
 /// Implements [`ReadReplay`] and [`WriteReplay`] traits and satisfies their requirements for the
 /// entire lifetime of the disk containing RocksDB data underpinning this storage (see
@@ -31,7 +31,7 @@ pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,
 }
 
-/// Column families for WAL storage of block replay commands.
+/// Column families for storage of block replay commands.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
     Context,
@@ -133,7 +133,9 @@ impl BlockReplayStorage {
             &record.block_output_hash.0,
         );
 
-        self.db.write(batch).expect("Failed to write to WAL");
+        self.db
+            .write(batch)
+            .expect("Failed to write to block replay storage");
     }
 
     /// Returns the greatest block number that has been appended, or `None` if empty.
@@ -247,9 +249,10 @@ impl WriteReplay for BlockReplayStorage {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let current_latest_record = self.latest_record();
         if record.block_context.block_number <= current_latest_record {
+            // todo: consider asserting that the passed `ReplayRecord` matches the one currently stored
             tracing::debug!(
                 block_number = record.block_context.block_number,
-                "not appending block: already exists in WAL",
+                "not appending block: already exists in block replay storage",
             );
             return false;
         } else if record.block_context.block_number > current_latest_record + 1 {
