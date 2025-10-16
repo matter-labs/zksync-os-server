@@ -11605,7 +11605,6 @@ version = "0.8.3-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
- "async-stream",
  "async-trait",
  "basic_system",
  "blake2 0.10.6",
