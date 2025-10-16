@@ -24,16 +24,16 @@ pub mod vm_wrapper;
 
 /// Sequencer pipeline component
 /// Contains all the dependencies needed to run the sequencer
-pub struct Sequencer<Mempool, State, Wal, Repo>
+pub struct Sequencer<Mempool, State, Replay, Repo>
 where
     Mempool: L2TransactionPool + Send + 'static,
     State: ReadStateHistory + WriteState + Clone + Send + 'static,
-    Wal: WriteReplay + Send + 'static,
+    Replay: WriteReplay + Send + 'static,
     Repo: WriteRepository + Send + 'static,
 {
     pub block_context_provider: BlockContextProvider<Mempool>,
     pub state: State,
-    pub wal: Wal,
+    pub replay: Replay,
     pub repositories: Repo,
     pub sequencer_config: SequencerConfig,
     /// Controls transaction acceptance state.
@@ -42,11 +42,11 @@ where
 }
 
 #[async_trait]
-impl<Mempool, State, Wal, Repo> PipelineComponent for Sequencer<Mempool, State, Wal, Repo>
+impl<Mempool, State, Replay, Repo> PipelineComponent for Sequencer<Mempool, State, Replay, Repo>
 where
     Mempool: L2TransactionPool + Send + 'static,
     State: ReadStateHistory + WriteState + Clone + Send + 'static,
-    Wal: WriteReplay + Send + 'static,
+    Replay: WriteReplay + Send + 'static,
     Repo: WriteRepository + Send + 'static,
 {
     type Input = BlockCommand;
@@ -147,10 +147,13 @@ where
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider.remove_txs(purged_txs_hashes);
 
-            tracing::debug!(block_number, "Reported to mempools. Adding to wal...");
-            latency_tracker.enter_state(SequencerState::AddingToWal);
+            tracing::debug!(
+                block_number,
+                "Reported to mempools. Adding to block replay storage..."
+            );
+            latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
-            self.wal.append(replay_record.clone());
+            self.replay.append(replay_record.clone());
 
             tracing::debug!(
                 block_number,

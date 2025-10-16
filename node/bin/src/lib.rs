@@ -3,7 +3,6 @@
 #![feature(generic_const_exprs)]
 mod batch_sink;
 pub mod batcher;
-pub mod block_replay_storage;
 mod command_source;
 pub mod config;
 mod en_remote_config;
@@ -22,7 +21,6 @@ pub mod zkstack_config;
 
 use crate::batch_sink::{BatchSink, NoOpSink};
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
-use crate::block_replay_storage::BlockReplayStorage;
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, ProverApiConfig};
 use crate::en_remote_config::load_remote_config;
@@ -48,12 +46,10 @@ use alloy::network::EthereumWallet;
 use alloy::providers::{Provider, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
-use futures::StreamExt;
-use futures::stream::BoxStream;
 use ruint::aliases::U256;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -72,12 +68,13 @@ use zksync_os_pipeline::Pipeline;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
-use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
 use zksync_os_status_server::run_status_server;
+use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteState,
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteReplay,
+    WriteState,
 };
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
@@ -179,8 +176,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing BlockReplayStorage");
 
-    let block_replay_storage =
-        BlockReplayStorage::new(config.general_config.rocks_db_path.clone(), &genesis).await;
+    let block_replay_storage = BlockReplayStorage::new(
+        &config
+            .general_config
+            .rocks_db_path
+            .join(BLOCK_REPLAY_WAL_DB_NAME),
+        &genesis,
+        node_version.clone(),
+    )
+    .await;
 
     tracing::info!("Initializing Tree RocksDB");
     let tree_db = TreeManager::load_or_initialize_tree(
@@ -213,7 +217,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         is_main_node: config.sequencer_config.is_main_node(),
         l1_state: l1_state.clone(),
         state_block_range_available: state.block_range_available(),
-        block_replay_storage_last_block: block_replay_storage.latest_block().unwrap_or(0),
+        block_replay_storage_last_block: block_replay_storage.latest_record(),
         tree_last_block: tree_db
             .latest_version()
             .expect("cannot read tree last processed block after initialization")
@@ -470,38 +474,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("One of the subsystems exited - exiting process.");
 }
 
-// todo: extract to a `command_source.rs` - left here to reduce PR size.
-pub fn command_source(
-    block_replay_wal: &BlockReplayStorage,
-    block_to_start: u64,
-    block_time: Duration,
-    max_transactions_in_block: usize,
-) -> BoxStream<BlockCommand> {
-    let last_block_in_wal = block_replay_wal.latest_block().unwrap_or(0);
-    tracing::info!(last_block_in_wal, "Last block in WAL: {last_block_in_wal}");
-    tracing::info!(block_to_start, "block_to_start: {block_to_start}");
-
-    // Stream of replay commands from WAL
-    let replay_wal_stream: BoxStream<BlockCommand> =
-        Box::pin(block_replay_wal.replay_commands_from(block_to_start));
-
-    // Combined source: run WAL replay first, then produce blocks from mempool
-    let produce_stream: BoxStream<BlockCommand> =
-        futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
-            Some((
-                BlockCommand::Produce(ProduceCommand {
-                    block_number,
-                    block_time,
-                    max_transactions_in_block,
-                }),
-                block_number + 1,
-            ))
-        })
-        .boxed();
-    let stream = replay_wal_stream.chain(produce_stream);
-    stream.boxed()
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline<
     State: ReadStateHistory + WriteState + StateInitializer + Clone,
@@ -511,7 +483,7 @@ async fn run_main_node_pipeline<
     l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
-    block_replay_storage: BlockReplayStorage,
+    block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
     state: State,
     starting_block: u64,
@@ -617,7 +589,7 @@ async fn run_main_node_pipeline<
         .pipe(Sequencer {
             block_context_provider,
             state: state.clone(),
-            wal: block_replay_storage.clone(),
+            replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
             tx_acceptance_state_sender,
@@ -691,7 +663,7 @@ async fn run_en_pipeline<
     config: Config,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
-    block_replay_storage: BlockReplayStorage,
+    block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
     block_context_provider: BlockContextProvider<RethPool<ZkClient<State>>>,
     state: State,
@@ -714,7 +686,7 @@ async fn run_en_pipeline<
         .pipe(Sequencer {
             block_context_provider,
             state: state.clone(),
-            wal: block_replay_storage.clone(),
+            replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
             tx_acceptance_state_sender,

@@ -1,17 +1,17 @@
-use crate::block_replay_storage::BlockReplayStorage;
-use crate::command_source;
 use crate::replay_transport::replay_receiver;
 use async_trait::async_trait;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_sequencer::model::blocks::BlockCommand;
+use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand};
+use zksync_os_storage_api::{ReadReplay, ReadReplayExt};
 
 /// Main node command source
 #[derive(Debug)]
-pub struct MainNodeCommandSource {
-    pub block_replay_storage: BlockReplayStorage,
+pub struct MainNodeCommandSource<Replay> {
+    pub block_replay_storage: Replay,
     pub starting_block: u64,
     pub block_time: Duration,
     pub max_transactions_in_block: usize,
@@ -25,7 +25,7 @@ pub struct ExternalNodeCommandSource {
 }
 
 #[async_trait]
-impl PipelineComponent for MainNodeCommandSource {
+impl<Replay: ReadReplay> PipelineComponent for MainNodeCommandSource<Replay> {
     type Input = ();
     type Output = BlockCommand;
 
@@ -88,4 +88,40 @@ impl PipelineComponent for ExternalNodeCommandSource {
 
         Ok(())
     }
+}
+
+fn command_source(
+    block_replay_wal: &impl ReadReplay,
+    block_to_start: u64,
+    block_time: Duration,
+    max_transactions_in_block: usize,
+) -> BoxStream<BlockCommand> {
+    let last_block_in_wal = block_replay_wal.latest_record();
+    tracing::info!(last_block_in_wal, block_to_start, "starting command source");
+
+    // Stream of replay commands from WAL
+    // Guaranteed to stream exactly `[block_to_start; last_block_in_wal]` and have no extra records
+    // in it when it finishes. Reasoning:
+    // * WriteReplay guarantees immutability if `append` returns `false`
+    // * `append` returns `false` for all `BlockCommand::Replay` commands as the record was taken
+    //   from the storage
+    let replay_wal_stream = block_replay_wal
+        .stream_from(block_to_start)
+        .map(|record| BlockCommand::Replay(Box::new(record)));
+
+    // Combined source: run WAL replay first, then produce blocks from mempool
+    let produce_stream: BoxStream<BlockCommand> =
+        futures::stream::unfold(last_block_in_wal + 1, move |block_number| async move {
+            Some((
+                BlockCommand::Produce(ProduceCommand {
+                    block_number,
+                    block_time,
+                    max_transactions_in_block,
+                }),
+                block_number + 1,
+            ))
+        })
+        .boxed();
+    let stream = replay_wal_stream.chain(produce_stream);
+    stream.boxed()
 }

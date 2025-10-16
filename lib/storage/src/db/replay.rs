@@ -1,38 +1,37 @@
-use crate::BLOCK_REPLAY_WAL_DB_NAME;
-use crate::metadata::NODE_VERSION;
 use alloy::primitives::{B256, BlockNumber};
-use futures::Stream;
-use futures::stream::{self, BoxStream, StreamExt};
-use pin_project::pin_project;
 use std::convert::TryInto;
-use std::path::PathBuf;
-use std::task::Poll;
+use std::path::Path;
 use std::time::Duration;
-use tokio::pin;
-use tokio::time::{Instant, Sleep};
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
-use zksync_os_sequencer::model::blocks::BlockCommand;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
 
-/// A write-ahead log storing BlockReplayData.
-/// It is then used for:
-///  * Context + Transaction list: sequencer recovery.
-///  * Context: provides execution environment for `eth_call`s against older blocks
+/// A write-ahead log storing [`ReplayRecord`]s.
 ///
-/// Acts as canonization provider for centralized sequencers.
-/// Writes must be synchronous.
+/// Used for (but not limited to) the following purposes:
+/// * Sequencer's state recovery (provides all information needed to replay a block after restart).
+/// * Execution environment for historical blocks (e.g., as required in `eth_call`).
+/// * Provides replay records for MainNode -> EN synchronization.
 ///
+/// Implements [`ReadReplay`] and [`WriteReplay`] traits and satisfies their requirements for the
+/// entire lifetime of the disk containing RocksDB data underpinning this storage (see
+/// [`ReadReplay`]'s documentation for details on lifetime). Assumes no external manipulation with
+/// on-disk data.
+///
+/// Writes are synchronous to accommodate the lifetime requirement above. Otherwise, an OS crash
+/// can cause data to be lost (not being written on disk), thus rolling back an already appended replay
+/// record. See [RocksDB docs](https://github.com/facebook/rocksdb/wiki/basic-operations#synchronous-writes)
+/// for more info.
 #[derive(Clone, Debug)]
 pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,
 }
 
-/// Column families for WAL storage of block replay commands.
+/// Column families for storage of block replay commands.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
     Context,
@@ -71,14 +70,13 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub async fn new(rocks_db_path: PathBuf, genesis: &Genesis) -> Self {
-        let db =
-            RocksDB::<BlockReplayColumnFamily>::new(&rocks_db_path.join(BLOCK_REPLAY_WAL_DB_NAME))
-                .expect("Failed to open BlockReplayWAL")
-                .with_sync_writes();
+    pub async fn new(db_path: &Path, genesis: &Genesis, node_version: semver::Version) -> Self {
+        let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
+            .expect("Failed to open BlockReplayStorage")
+            .with_sync_writes();
 
         let this = Self { db };
-        if this.latest_block().is_none() {
+        if this.latest_record_checked().is_none() {
             let genesis_context = &genesis.state().await.context;
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
@@ -88,7 +86,7 @@ impl BlockReplayStorage {
                 starting_l1_priority_id: 0,
                 transactions: vec![],
                 previous_block_timestamp: 0,
-                node_version: NODE_VERSION.parse().unwrap(),
+                node_version,
                 block_output_hash: B256::ZERO,
             })
         }
@@ -135,11 +133,14 @@ impl BlockReplayStorage {
             &record.block_output_hash.0,
         );
 
-        self.db.write(batch).expect("Failed to write to WAL");
+        self.db
+            .write(batch)
+            .expect("Failed to write to block replay storage");
     }
 
-    /// Returns the greatest block number that has been appended, or None if empty.
-    pub fn latest_block(&self) -> Option<u64> {
+    /// Returns the greatest block number that has been appended, or `None` if empty.
+    /// This can only return `None` on the very first start before genesis got inserted.
+    fn latest_record_checked(&self) -> Option<BlockNumber> {
         self.db
             .get_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY)
             .expect("Cannot read from DB")
@@ -148,59 +149,6 @@ impl BlockReplayStorage {
                 let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
                 u64::from_be_bytes(arr)
             })
-    }
-
-    /// Streams all replay commands with block_number ≥ `start`, in ascending block order - used for state recovery
-    pub fn replay_commands_from(&self, start: u64) -> BoxStream<BlockCommand> {
-        let latest = self.latest_block().unwrap_or(0);
-        let stream = stream::iter(start..=latest).filter_map(move |block_num| {
-            let record = self.get_replay_record(block_num);
-            match record {
-                Some(record) => {
-                    futures::future::ready(Some(BlockCommand::Replay(Box::new(record))))
-                }
-                None => futures::future::ready(None),
-            }
-        });
-        Box::pin(stream)
-    }
-
-    /// Streams all replay commands with block_number ≥ `start`, in ascending block order and waits for new ones on running out
-    pub fn replay_commands_forever(&self, start: BlockNumber) -> BoxStream<ReplayRecord> {
-        #[pin_project]
-        struct BlockStream {
-            replays: BlockReplayStorage,
-            current_block: BlockNumber,
-            #[pin]
-            sleep: Sleep,
-        }
-        impl Stream for BlockStream {
-            type Item = ReplayRecord;
-
-            fn poll_next(
-                self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Self::Item>> {
-                let mut this = self.project();
-                if let Some(record) = this.replays.get_replay_record(*this.current_block) {
-                    *this.current_block += 1;
-                    Poll::Ready(Some(record))
-                } else {
-                    // TODO: would be nice to be woken up only when the next block is available
-                    this.sleep
-                        .as_mut()
-                        .reset(Instant::now() + Duration::from_millis(50));
-                    assert_eq!(this.sleep.poll(cx), Poll::Pending);
-                    Poll::Pending
-                }
-            }
-        }
-
-        Box::pin(BlockStream {
-            replays: self.clone(),
-            current_block: start,
-            sleep: tokio::time::sleep(Duration::from_millis(50)),
-        })
     }
 }
 
@@ -288,24 +236,35 @@ impl ReadReplay for BlockReplayStorage {
             block_output_hash: B256::from_slice(&block_output_hash),
         })
     }
+
+    fn latest_record(&self) -> BlockNumber {
+        // This is guaranteed to be non-`None` because genesis is always inserted on storage initialization.
+        self.latest_record_checked()
+            .expect("no blocks in BlockReplayStorage")
+    }
 }
 
 impl WriteReplay for BlockReplayStorage {
-    fn append(&self, record: ReplayRecord) {
+    fn append(&self, record: ReplayRecord) -> bool {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
-        assert!(!record.transactions.is_empty());
-
-        let current_latest_block = self.latest_block().unwrap_or(0);
-
-        if record.block_context.block_number <= current_latest_block {
+        let current_latest_record = self.latest_record();
+        if record.block_context.block_number <= current_latest_record {
+            // todo: consider asserting that the passed `ReplayRecord` matches the one currently stored
             tracing::debug!(
-                "Not appending block {}: already exists in WAL",
-                record.block_context.block_number
+                block_number = record.block_context.block_number,
+                "not appending block: already exists in block replay storage",
             );
-            return;
+            return false;
+        } else if record.block_context.block_number > current_latest_record + 1 {
+            panic!(
+                "tried to append non-sequential replay record: {} > {}",
+                record.block_context.block_number,
+                current_latest_record + 1
+            );
         }
         self.append_replay_unchecked(record);
         latency_observer.observe();
+        true
     }
 }
 
@@ -322,5 +281,5 @@ pub struct BlockReplayRocksDBMetrics {
 }
 
 #[vise::register]
-pub(crate) static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
+pub static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
     vise::Global::new();
