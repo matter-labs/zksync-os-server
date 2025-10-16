@@ -273,7 +273,7 @@ async fn validate_tx_receipt<Input: L1SenderCommand>(
             %command,
             tx_hash = ?receipt.transaction_hash,
             l1_block_number = receipt.block_number.unwrap(),
-            "failed on L1",
+            "Transaction failed on L1",
         );
         if let Ok(trace) = provider
             .debug_trace_transaction(
@@ -292,7 +292,7 @@ async fn validate_tx_receipt<Input: L1SenderCommand>(
                 ?call_frame.output,
                 ?call_frame.error,
                 ?call_frame.revert_reason,
-                "failed transaction's top-level call frame"
+                "Failed transaction's top-level call frame"
             );
         }
         anyhow::bail!(

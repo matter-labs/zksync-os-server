@@ -58,7 +58,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         let Some(block_context) = self.storage.replay_storage().get_context(block.number) else {
             tracing::error!(
                 block_number = block.number,
-                "could not load block's context"
+                "Could not load block's context"
             );
             return Err(DebugError::InternalError);
         };
@@ -70,7 +70,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 tracing::error!(
                     ?tx_hash,
                     block_number = block.number,
-                    "could not find transaction that was included in block"
+                    "Could not find transaction that was included in block"
                 );
                 return Err(DebugError::InternalError);
             };
@@ -86,7 +86,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 })
                 .collect()),
             Err(err) => {
-                tracing::error!(?err, "failed to trace transaction");
+                tracing::error!(?err, "Failed to trace transaction");
                 Err(DebugError::InternalError)
             }
         }
@@ -116,7 +116,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         .and_then(|x| match x {
             TraceResult::Success { result, .. } => Ok(result),
             TraceResult::Error { error, .. } => {
-                tracing::error!(?error, "failed to trace transaction");
+                tracing::error!(?error, "Failed to trace transaction");
                 Err(DebugError::InternalError)
             }
         })
