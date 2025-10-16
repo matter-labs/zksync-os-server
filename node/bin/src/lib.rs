@@ -216,7 +216,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         is_main_node: config.sequencer_config.is_main_node(),
         l1_state: l1_state.clone(),
         state_block_range_available: state.block_range_available(),
-        block_replay_storage_last_block: block_replay_storage.latest_record().unwrap_or(0),
+        block_replay_storage_last_block: block_replay_storage.latest_record(),
         tree_last_block: tree_db
             .latest_version()
             .expect("cannot read tree last processed block after initialization")

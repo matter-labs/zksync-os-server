@@ -96,10 +96,15 @@ fn command_source(
     block_time: Duration,
     max_transactions_in_block: usize,
 ) -> BoxStream<BlockCommand> {
-    let last_block_in_wal = block_replay_wal.latest_record().unwrap_or(0);
+    let last_block_in_wal = block_replay_wal.latest_record();
     tracing::info!(last_block_in_wal, block_to_start, "starting command source");
 
     // Stream of replay commands from WAL
+    // Guaranteed to stream exactly `[block_to_start; last_block_in_wal]` and have no extra records
+    // in it when it finishes. Reasoning:
+    // * WriteReplay guarantees immutability if `append` returns `false`
+    // * `append` returns `false` for all `BlockCommand::Replay` commands as the record was taken
+    //   from the storage
     let replay_wal_stream = block_replay_wal
         .stream_from(block_to_start)
         .map(|record| BlockCommand::Replay(Box::new(record)));

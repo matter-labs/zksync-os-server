@@ -10,14 +10,22 @@ use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
 
-/// A write-ahead log storing BlockReplayData.
-/// It is then used for:
-///  * Context + Transaction list: sequencer recovery.
-///  * Context: provides execution environment for `eth_call`s against older blocks
+/// A write-ahead log storing [`ReplayRecord`]s.
 ///
-/// Acts as canonization provider for centralized sequencers.
-/// Writes must be synchronous.
+/// Used for (but not limited to) the following purposes:
+/// * Sequencer's state recovery (provides all information needed to replay a block after restart).
+/// * Execution environment for historical blocks (e.g., as required in `eth_call`).
+/// * Main node <-> EN transport layer.
 ///
+/// Implements [`ReadReplay`] and [`WriteReplay`] traits and satisfies their requirements for the
+/// entire lifetime of the disk containing RocksDB data underpinning this storage (see
+/// [`ReadReplay`]'s documentation for details on lifetime). Assumes no external manipulation with
+/// on-disk data.
+///
+/// Writes are synchronous to accommodate the lifetime requirement above. Otherwise, an OS crash
+/// can cause data to be lost (not being written on disk), thus rolling back an already appended replay
+/// record. See [RocksDB docs](https://github.com/facebook/rocksdb/wiki/basic-operations#synchronous-writes)
+/// for more info.
 #[derive(Clone, Debug)]
 pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,
@@ -68,7 +76,7 @@ impl BlockReplayStorage {
             .with_sync_writes();
 
         let this = Self { db };
-        if this.latest_record().is_none() {
+        if this.latest_record_checked().is_none() {
             let genesis_context = &genesis.state().await.context;
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
@@ -126,6 +134,19 @@ impl BlockReplayStorage {
         );
 
         self.db.write(batch).expect("Failed to write to WAL");
+    }
+
+    /// Returns the greatest block number that has been appended, or `None` if empty.
+    /// This can only return `None` on the very first start before genesis got inserted.
+    fn latest_record_checked(&self) -> Option<BlockNumber> {
+        self.db
+            .get_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY)
+            .expect("Cannot read from DB")
+            .map(|bytes| {
+                assert_eq!(bytes.len(), 8);
+                let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
+                u64::from_be_bytes(arr)
+            })
     }
 }
 
@@ -214,34 +235,33 @@ impl ReadReplay for BlockReplayStorage {
         })
     }
 
-    fn latest_record(&self) -> Option<BlockNumber> {
-        self.db
-            .get_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY)
-            .expect("Cannot read from DB")
-            .map(|bytes| {
-                assert_eq!(bytes.len(), 8);
-                let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
-                u64::from_be_bytes(arr)
-            })
+    fn latest_record(&self) -> BlockNumber {
+        // This is guaranteed to be non-`None` because genesis is always inserted on storage initialization.
+        self.latest_record_checked()
+            .expect("no blocks in BlockReplayStorage")
     }
 }
 
 impl WriteReplay for BlockReplayStorage {
-    fn append(&self, record: ReplayRecord) {
+    fn append(&self, record: ReplayRecord) -> bool {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
-        assert!(!record.transactions.is_empty());
-
-        let current_latest_record = self.latest_record().unwrap_or(0);
-
+        let current_latest_record = self.latest_record();
         if record.block_context.block_number <= current_latest_record {
             tracing::debug!(
                 block_number = record.block_context.block_number,
                 "not appending block: already exists in WAL",
             );
-            return;
+            return false;
+        } else if record.block_context.block_number > current_latest_record + 1 {
+            panic!(
+                "tried to append non-sequential replay record: {} > {}",
+                record.block_context.block_number,
+                current_latest_record + 1
+            );
         }
         self.append_replay_unchecked(record);
         latency_observer.observe();
+        true
     }
 }
 
