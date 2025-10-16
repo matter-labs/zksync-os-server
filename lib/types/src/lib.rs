@@ -1,3 +1,6 @@
+mod transaction_acceptance_state;
+pub use transaction_acceptance_state::{NotAcceptingReason, TransactionAcceptanceState};
+
 mod block;
 pub use block::BlockExt;
 

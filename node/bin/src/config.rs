@@ -168,6 +168,16 @@ pub struct SequencerConfig {
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
     pub pubdata_price_override: Option<u64>,
+
+    /// Maximum number of blocks to produce.
+    /// `None` means unlimited (default, standard operations),
+    /// `Some(0)` means no new blocks (useful when only RPC/replay/batching functionality is needed),
+    /// `Some(n)` means seal at most n new blocks.
+    /// Replay blocks are always processed regardless of this setting.
+    /// Only affects the Main Node.
+    /// Useful for mitigation/operations.
+    #[config(default_t = None)]
+    pub max_blocks_to_produce: Option<u64>,
 }
 
 impl SequencerConfig {
@@ -447,6 +457,7 @@ impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
             block_replay_download_address: c.block_replay_download_address,
             block_gas_limit: c.block_gas_limit,
             block_pubdata_limit_bytes: c.block_pubdata_limit_bytes,
+            max_blocks_to_produce: c.max_blocks_to_produce,
         }
     }
 }

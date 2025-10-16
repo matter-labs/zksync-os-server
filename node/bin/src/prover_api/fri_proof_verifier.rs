@@ -35,7 +35,10 @@ pub fn verify_fri_proof(
     // compare expected_hash_u32s with the last 8 values of proof_final_register_values
     (proof_final_register_values[..8] == expected_hash_u32s)
         .then_some(())
-        .ok_or(SubmitError::VerificationFailed)
+        .ok_or(SubmitError::FriProofVerificationError {
+            expected_hash_u32s,
+            proof_final_register_values,
+        })
 }
 
 fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32; 8] {

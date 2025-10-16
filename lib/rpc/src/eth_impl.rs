@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
 use std::convert::identity;
+use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::{get_balance, get_code};
 use zksync_os_interface::traits::ReadStorage;
@@ -30,7 +31,7 @@ use zksync_os_rpc_api::types::{
     RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
 };
 use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
-use zksync_os_types::{L2Envelope, ZkReceiptEnvelope};
+use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
     tx_handler: TxHandler<Mempool>,
@@ -50,8 +51,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         mempool: Mempool,
         eth_call_handler: EthCallHandler<RpcStorage>,
         chain_id: u64,
+        acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     ) -> Self {
-        let tx_handler = TxHandler::new(mempool.clone());
+        let tx_handler = TxHandler::new(mempool.clone(), acceptance_state);
 
         Self {
             tx_handler,
