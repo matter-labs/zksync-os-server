@@ -117,10 +117,8 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
                         .await?
                         // We are being optimistic with our transaction inclusion here. But, even if
                         // reorg happens and transaction will not be included in the new fork (very-very
-                        // unlikely), L1 sender will crash at some point 
-                        // (because a consequent L1 transactions will fail)
-                        // and recover from the new
-                        // L1 state after restart.
+                        // unlikely), L1 sender will crash at some point (because a consequent L1
+                        // transactions will fail) and recover from the new L1 state after restart.
                         .with_required_confirmations(1)
                         // Ensure we don't wait indefinitely and crash if the transaction is not
                         // included on L1 in a reasonable time.
