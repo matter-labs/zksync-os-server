@@ -138,7 +138,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                         .iter()
                         .map(|e| {
                             (
-                                e.batch.commit_batch_info.batch_number,
+                                e.batch.batch_info.batch_number,
                                 (e.batch.first_block_number, e.batch.last_block_number),
                             )
                         })

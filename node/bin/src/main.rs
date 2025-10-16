@@ -3,15 +3,15 @@ use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use zksync_os_bin::config::{
+use zksync_os_observability::PrometheusExporterConfig;
+use zksync_os_server::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
     LogConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
     SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
-use zksync_os_bin::run;
-use zksync_os_bin::sentry::init_sentry;
-use zksync_os_bin::zkstack_config::ZkStackConfig;
-use zksync_os_observability::PrometheusExporterConfig;
+use zksync_os_server::run;
+use zksync_os_server::sentry::init_sentry;
+use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 

@@ -7,7 +7,7 @@ WORKDIR /app
 
 FROM chef AS planner
 COPY . .
-RUN cargo chef prepare --bin zksync_os_bin --recipe-path recipe.json
+RUN cargo chef prepare --bin zksync-os-server --recipe-path recipe.json
 
 FROM chef AS builder
 
@@ -21,11 +21,11 @@ ENV LD_LIBRARY_PATH=${LIBCLANG_PATH}:${LD_LIBRARY_PATH}
 
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies (this is the caching Docker layer)
-RUN cargo chef cook --bin zksync_os_bin --release --recipe-path recipe.json
+RUN cargo chef cook --bin zksync-os-server --release --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN cargo build --release --bin zksync_os_bin
+RUN cargo build --release --bin zksync-os-server
 
 #################################
 # -------- Runtime -------------#
@@ -43,7 +43,7 @@ RUN useradd -m -u ${UID} app && \
     mkdir -p /db && chown -R app:app /db
 
 # ---- copy binary + genesis.json ----
-COPY --from=builder /app/target/release/zksync_os_bin /usr/local/bin/
+COPY --from=builder /app/target/release/zksync-os-server /usr/local/bin/
 
 COPY --from=builder /app/genesis/genesis.json /app/genesis/
 
@@ -53,6 +53,6 @@ WORKDIR /
 EXPOSE 3050 3124 3312 3053
 VOLUME ["/db"]
 
-ENTRYPOINT ["/usr/bin/tini","--","zksync_os_bin"]
+ENTRYPOINT ["/usr/bin/tini","--","zksync-os-server"]
 
-LABEL org.opencontainers.image.title="zksync_os_bin"
+LABEL org.opencontainers.image.title="zksync-os-server"

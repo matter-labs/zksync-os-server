@@ -151,6 +151,12 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     self.previous_block_timestamp,
                     record.previous_block_timestamp
                 );
+                anyhow::ensure!(
+                    self.block_hashes_for_next_block == record.block_context.block_hashes,
+                    "inconsistent previous block hashes: {} in component state, {} in resolved ReplayRecord",
+                    self.previous_block_timestamp,
+                    record.previous_block_timestamp
+                );
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted,

@@ -24,6 +24,10 @@ pub struct SequencerConfig {
 
     /// Max pubdata bytes per block
     pub block_pubdata_limit_bytes: u64,
+
+    /// Maximum number of blocks to produce
+    /// None for indefinite block production (normal operations)
+    pub max_blocks_to_produce: Option<u64>,
 }
 
 impl SequencerConfig {

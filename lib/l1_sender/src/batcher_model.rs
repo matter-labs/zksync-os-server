@@ -1,11 +1,12 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
-use crate::commitment::{CommitBatchInfo, StoredBatchInfo};
+use crate::commitment::BatchInfo;
 use alloy::primitives::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -21,7 +22,10 @@ use zksync_os_observability::LatencyDistributionTracker;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchMetadata {
     pub previous_stored_batch_info: StoredBatchInfo,
-    pub commit_batch_info: CommitBatchInfo,
+    // This is not purely commitment information, but we keep old serialization name for
+    // backwards-compatibility.
+    #[serde(rename = "commit_batch_info")]
+    pub batch_info: BatchInfo,
     pub first_block_number: u64,
     pub last_block_number: u64,
     pub tx_count: usize,
@@ -50,11 +54,11 @@ impl<E> BatchEnvelope<E> {
         }
     }
     pub fn batch_number(&self) -> u64 {
-        self.batch.commit_batch_info.batch_number
+        self.batch.batch_info.batch_number
     }
     pub fn time_since_first_block(&self) -> anyhow::Result<core::time::Duration> {
         let first_block_time = SystemTime::from(UtcDateTime::from_unix_timestamp(
-            self.batch.commit_batch_info.first_block_timestamp as i64,
+            self.batch.batch_info.first_block_timestamp as i64,
         )?);
 
         Ok(SystemTime::now().duration_since(first_block_time)?)

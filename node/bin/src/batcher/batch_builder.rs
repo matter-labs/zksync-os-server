@@ -1,8 +1,9 @@
 use alloy::primitives::Address;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
-use zksync_os_l1_sender::commitment::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_storage_api::ReplayRecord;
 
 /// Takes a vector of blocks and produces a batch envelope.
@@ -23,7 +24,7 @@ pub(crate) fn seal_batch(
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let execution_version = blocks.first().unwrap().1.block_context.execution_version;
 
-    let commit_batch_info = CommitBatchInfo::new(
+    let batch_info = BatchInfo::new(
         blocks
             .iter()
             .map(|(block_output, replay_record, tree, _)| {
@@ -53,7 +54,7 @@ pub(crate) fn seal_batch(
     let batch_envelope: BatchEnvelope<ProverInput> = BatchEnvelope::new(
         BatchMetadata {
             previous_stored_batch_info: prev_batch_info,
-            commit_batch_info,
+            batch_info,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
             tx_count: blocks

@@ -1,0 +1,263 @@
+name: Release binaries
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to use for the release."
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to use for the release."
+        type: string
+        required: true
+
+env:
+  ZKSYNC_OS_SERVER_BIN: 'zksync-os-server'
+  RELEASE_PROFILE: 'maxperf'
+  SERVER_LOGFILE: zksync-os-server.log.txt
+  FOUNDRY_VERSION: 'v1.3.4'
+  L1_STATE_JSON: 'zkos-l1-state.json'
+  GENESIS_JSON: 'genesis/genesis.json'
+
+defaults:
+  run:
+    shell: 'bash -ex {0}'
+
+jobs:
+  # Build server binaries for all target platforms
+  build-bins:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu-22.04 based high performance runner
+          - runner: matterlabs-ci-runner-high-performance
+            target: x86_64-unknown-linux-gnu
+          # Ubuntu-22.04 based ARM linux runner
+          - runner: matterlabs-ci-runner-arm
+            target: aarch64-unknown-linux-gnu
+          # Latest x86 macos runner
+          - runner: macos-latest-large
+            target: x86_64-apple-darwin
+          # Latest ARM (M-series) macos runner
+          - runner: macos-latest-xlarge
+            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || '' }}
+
+      - name: Install linux packages
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt update && sudo apt --assume-yes install \
+            curl jq libssl-dev libclang-dev pkg-config build-essential
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            sudo dpkg --add-architecture arm64
+            sudo apt --assume-yes install libssl-dev:arm64
+          fi
+
+      - name: Install Rust toolchain
+        uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
+        env:
+          # To fix rate limiting issues with GitHub API
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          inherit-toolchain: true
+          cache: false
+
+      - name: Build
+        env:
+          # Build static binaries
+          RUSTFLAGS: '-C target-feature=+crt-static'
+        run: |
+          cargo build --profile "${RELEASE_PROFILE}" \
+            --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}"
+
+      - name: Prepare tarballs
+        run: |
+          mv ./target/${{ matrix.target }}/${RELEASE_PROFILE}/${ZKSYNC_OS_SERVER_BIN} ./${ZKSYNC_OS_SERVER_BIN}
+          tar -czf ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz \
+              ${{ env.ZKSYNC_OS_SERVER_BIN }}
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+          path: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+
+      - name: Slack notification
+        if: ${{ failure() }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          context: "Failed to build release binaries for ${{ inputs.tag }}"
+
+  # Smoke test release binaries
+  # on different macOS and Linux runners
+  test-bins:
+    needs: build-bins
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-latest-large
+            target: x86_64-apple-darwin
+          - runner: macos-latest-xlarge
+            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || '' }}
+
+      - name: Download binaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
+        with:
+          version: '${{ env.FOUNDRY_VERSION }}'
+
+      - name: Check executable
+        env:
+          TIMEOUT: 60
+          INTERVAL: 2
+          PORT: 3050
+        run: |
+          tar xzf ${ZKSYNC_OS_SERVER_BIN}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+          anvil --load-state "${L1_STATE_JSON}" \
+            --port 8545 > anvil.log.txt 2>&1 &
+          ./${ZKSYNC_OS_SERVER_BIN} > ${SERVER_LOGFILE} 2>&1 &
+          elapsed=0
+          while ! nc -z localhost ${PORT}; do
+            if (( elapsed >= TIMEOUT )); then
+              echo "Timeout reached after $elapsed seconds. Server did not start."
+              cat "${SERVER_LOGFILE}"
+              exit 1
+            fi
+            echo "Waiting for server to start..."
+            sleep ${INTERVAL}
+            (( elapsed += INTERVAL ))
+          done
+          echo "Sequencer is up and running."
+          FIRST_BLOCK=$(curl -X POST http://localhost:${PORT} \
+            -H "Content-Type: application/json" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "eth_getBlockByNumber",
+              "params": ["0x1", false],
+              "id": 1
+            }')
+          # Check that the response contains a hash and a non-empty transactions array
+          if echo "${FIRST_BLOCK}" | jq -e '.result.hash and (.result.transactions | length > 0)' >/dev/null; then
+            echo "✅ First block is correct."
+          else
+            echo "❌ Missing hash or transactions array is empty in the first block."
+            echo "${FIRST_BLOCK}"
+            cat "${SERVER_LOGFILE}"
+          fi
+
+      - name: Slack notification
+        if: ${{ failure() }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          context: "Failed to test release binaries for ${{ inputs.tag }}"
+
+
+  # Attach binaries to the GitHub release
+  release-bins:
+    needs: [build-bins, test-bins]
+    # Run on macOS to combine binaries into a single one for macOS
+    runs-on: macos-latest-xlarge
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || '' }}
+
+      - name: Download binaries
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: ${{ env.ZKSYNC_OS_SERVER_BIN }}-*.tar.gz
+          path: dist
+          merge-multiple: true
+
+      - name: Create universal macOS binary
+        run: |
+          find .
+          for TARGET in x86_64-apple-darwin aarch64-apple-darwin; do
+            tar xzf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${TARGET}.tar.gz
+            mv ${{ env.ZKSYNC_OS_SERVER_BIN }} ${{ env.ZKSYNC_OS_SERVER_BIN }}-${TARGET}
+            rm -f dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-${TARGET}.tar.gz
+          done
+          lipo -create -o "${{ env.ZKSYNC_OS_SERVER_BIN }}" \
+            ${{ env.ZKSYNC_OS_SERVER_BIN }}-x86_64-apple-darwin ${{ env.ZKSYNC_OS_SERVER_BIN }}-aarch64-apple-darwin
+          tar -czf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz \
+            ${{ env.ZKSYNC_OS_SERVER_BIN }}
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz
+          path: dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz
+
+      - name: Binaries attestation
+        id: attestation
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: 'dist/**'
+
+      - name: Upload artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
+
+      - name: Update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REALASE_BODY=$(gh release view "${{ inputs.tag }}" --json body -q '.body')
+          BINARIES_SECTION=$(cat <<- "ENDBODY"
+          ## Binaries
+          
+          | System | Architecture | Binary | Attestation |
+          |:---:|:---:|:---:|:---|
+          | <img src="https://www.svgrepo.com/download/448236/linux.svg" width="50"/> | x86_64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-x86_64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/448236/linux.svg" width="50"/> | aarch64 | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-aarch64-unknown-linux-gnu.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/475429/apple.svg" width="50"/> | universal | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz) | [Attestation](${{ steps.attestation.outputs.attestation-url }}) |
+          | <img src="https://www.svgrepo.com/download/452192/docker.svg" width="50"/> | Docker | [${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}](https://github.com/matter-labs/zksync-os-server/pkgs/container/zksync-os-server/539872628?tag=${{ inputs.tag }}) | - |
+          ENDBODY
+          )
+          echo -e "${REALASE_BODY}\n\n${BINARIES_SECTION}" > updated_body.md
+          gh release edit "${{ inputs.tag }}" --notes-file updated_body.md
+
+      - name: Slack notification
+        if: ${{ failure() }}
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
+          context: "Failed to update ${{ inputs.tag }} release with prebuilt binaries"
