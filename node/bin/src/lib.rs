@@ -79,6 +79,7 @@ use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteState,
 };
+use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -341,6 +342,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         state.clone(),
     );
 
+    // Transaction acceptance state - tracks whether we're accepting new transactions
+    // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
+    // External nodes: always reject
+    let (tx_acceptance_state_sender, tx_acceptance_state_receiver) =
+        if config.sequencer_config.is_main_node() {
+            watch::channel(TransactionAcceptanceState::Accepting)
+        } else {
+            watch::channel(TransactionAcceptanceState::NotAccepting(
+                NotAcceptingReason::ExternalNode,
+            ))
+        };
+
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
@@ -349,6 +362,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             rpc_storage,
             l2_mempool.clone(),
             genesis_input_source,
+            tx_acceptance_state_receiver,
         )
         .map(report_exit("JSON-RPC server")),
     );
@@ -427,6 +441,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             &genesis,
             _stop_receiver.clone(),
+            tx_acceptance_state_sender,
         )
         .await;
     } else {
@@ -444,6 +459,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             repositories,
             finality_storage,
             _stop_receiver.clone(),
+            tx_acceptance_state_sender,
         )
         .await;
     };
@@ -506,6 +522,7 @@ async fn run_main_node_pipeline<
     chain_id: u64,
     genesis: &Genesis,
     _stop_receiver: watch::Receiver<bool>,
+    tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
     let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
         let genesis_block = repositories
@@ -603,6 +620,7 @@ async fn run_main_node_pipeline<
             wal: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
+            tx_acceptance_state_sender,
         })
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(ProverInputGenerator {
@@ -682,6 +700,7 @@ async fn run_en_pipeline<
     repositories: RepositoryManager,
     finality: Finality,
     _stop_receiver: watch::Receiver<bool>,
+    tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
@@ -698,6 +717,7 @@ async fn run_en_pipeline<
             wal: block_replay_storage.clone(),
             repositories: repositories.clone(),
             sequencer_config: config.sequencer_config.clone().into(),
+            tx_acceptance_state_sender,
         })
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(NoOpSink::new())

@@ -8,6 +8,8 @@ use zksync_os_storage_api::StateAccessLabel;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "state", rename_all = "snake_case")]
 pub enum SequencerState {
+    ConfiguredBlockLimitReached,
+
     WaitingForCommand,
 
     WaitingForTx,
@@ -27,13 +29,16 @@ pub enum SequencerState {
 impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            Self::WaitingForCommand | Self::WaitingForTx => GenericComponentState::WaitingRecv,
+            Self::WaitingForCommand | Self::WaitingForTx | Self::ConfiguredBlockLimitReached => {
+                GenericComponentState::WaitingRecv
+            }
             Self::WaitingSend => GenericComponentState::WaitingSend,
             _ => GenericComponentState::Processing,
         }
     }
     fn specific(&self) -> &'static str {
         match self {
+            SequencerState::ConfiguredBlockLimitReached => "configured_limit_reached",
             SequencerState::WaitingForCommand => "waiting_for_command",
             SequencerState::WaitingForTx => "waiting_for_tx",
             SequencerState::Execution => "execution",
