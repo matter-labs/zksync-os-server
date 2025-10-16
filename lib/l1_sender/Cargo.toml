@@ -33,7 +33,6 @@ tokio.workspace = true
 tracing.workspace = true
 time = { workspace = true, features = ["parsing", "formatting"] }
 itertools.workspace = true
-async-stream.workspace = true
 vise.workspace = true
 
 [dev-dependencies]
