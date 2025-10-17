@@ -73,7 +73,7 @@ pub async fn main() {
                         tracing::warn!("Prometheus exporter unexpectedly exited")
                     }
                 },
-                Err(e) => tracing::error!("Prometheus exporter failed: {e:#}"),
+                Err(err) => tracing::error!(?err, "Prometheus exporter failed"),
             }
         },
     }

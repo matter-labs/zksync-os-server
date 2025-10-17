@@ -209,7 +209,7 @@ impl FriJobManager {
         let program_proof =
             bincode::serde::decode_from_slice(&proof_bytes, bincode::config::standard())
                 .map_err(|err| {
-                    tracing::warn!(batch_number, "failed to deserialize proof: {err}");
+                    tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
                     SubmitError::DeserializationFailed(err)
                 })?
                 .0;
@@ -224,9 +224,9 @@ impl FriJobManager {
         ) {
             tracing::warn!(
                 batch_number,
-                "Proof verification failed. Expected: {:?}, Got: {:?}",
-                expected_hash_u32s,
-                proof_final_register_values
+                expected = ?expected_hash_u32s,
+                actual = ?proof_final_register_values,
+                "Proof verification failed",
             );
 
             // Persist the failed proof with some information about the batch for debugging
@@ -245,13 +245,11 @@ impl FriJobManager {
             {
                 tracing::error!(
                     batch_number,
-                    "Failed to persist failed proof for debugging: {save_err}",
+                    ?save_err,
+                    "Failed to persist failed proof for debugging",
                 );
             } else {
-                tracing::info!(
-                    batch_number,
-                    "Failed proof saved for debugging. Prover: {prover_id}",
-                );
+                tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
             }
 
             return Err(SubmitError::FriProofVerificationError {

@@ -108,8 +108,8 @@ impl ObjectStoreFactory {
 
                 if let Some(mirror_path) = &config.local_mirror_path {
                     tracing::warn!(
-                        "Mirroring doesn't make sense with file-backed object store; ignoring mirror path `{}`",
-                        mirror_path.display()
+                        mirror_path = ?mirror_path,
+                        "Mirroring doesn't make sense with file-backed object store; ignoring mirror path"
                     );
                 }
                 Ok(Arc::new(store))
