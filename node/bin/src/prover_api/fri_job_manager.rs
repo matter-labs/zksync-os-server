@@ -209,11 +209,7 @@ impl FriJobManager {
         let program_proof =
             bincode::serde::decode_from_slice(&proof_bytes, bincode::config::standard())
                 .map_err(|err| {
-                    tracing::warn!(
-                        batch_number,
-                        error = format!("{err:#?}"),
-                        "Failed to deserialize proof"
-                    );
+                    tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
                     SubmitError::DeserializationFailed(err)
                 })?
                 .0;
@@ -249,7 +245,7 @@ impl FriJobManager {
             {
                 tracing::error!(
                     batch_number,
-                    error = format!("{save_err:#?}"),
+                    ?save_err,
                     "Failed to persist failed proof for debugging",
                 );
             } else {

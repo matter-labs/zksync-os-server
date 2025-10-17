@@ -35,12 +35,8 @@ impl Pipeline<()> {
         for (name, task_fn) in self.tasks {
             tasks.spawn(async move {
                 match task_fn.await {
-                    Ok(_) => tracing::warn!(component_name = name, "Component unexpectedly exited"),
-                    Err(e) => tracing::error!(
-                        component_name = name,
-                        error = format!("{e:#?}"),
-                        "Component failed"
-                    ),
+                    Ok(_) => tracing::warn!("{name} component unexpectedly exited"),
+                    Err(err) => tracing::error!(?err, "{name} component failed"),
                 }
             });
         }

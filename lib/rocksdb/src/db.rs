@@ -389,7 +389,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             tracing::warn!(
                 db_name = CF::DB_NAME,
                 path = ?path,
-                error = format!("{err:#?}"),
+                ?err,
                 "Failed getting column families for RocksDB, assuming CFs are empty",
             );
             vec![]
