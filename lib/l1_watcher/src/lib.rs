@@ -4,13 +4,13 @@ pub use config::L1WatcherConfig;
 mod metrics;
 
 mod tx_watcher;
-pub use tx_watcher::{L1TxWatcher, L1TxWatcherError, L1TxWatcherResult};
+pub use tx_watcher::L1TxWatcher;
 
 mod commit_watcher;
-pub use commit_watcher::{L1CommitWatcher, L1CommitWatcherError, L1CommitWatcherResult};
+pub use commit_watcher::L1CommitWatcher;
 
 mod execute_watcher;
-pub use execute_watcher::{L1ExecuteWatcher, L1ExecuteWatcherError, L1ExecuteWatcherResult};
+pub use execute_watcher::L1ExecuteWatcher;
 
 pub mod util;
 mod watcher;
