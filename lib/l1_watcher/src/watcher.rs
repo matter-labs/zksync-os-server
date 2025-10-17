@@ -42,16 +42,16 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError<Processor::Error>> {
-        // Proactively iterate while there are more blocks to process.
-        loop {
-            let latest_block = self.zk_chain.provider().get_block_number().await?;
+        let latest_block = self.zk_chain.provider().get_block_number().await?;
+
+        while self.next_l1_block <= latest_block {
             let from_block = self.next_l1_block;
             // Inspect up to `self.max_blocks_to_process` blocks at a time
             let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
-            if from_block > to_block {
-                return Ok(());
-            }
-            let events = self.process_l1_blocks(from_block, to_block).await?;
+
+            let events = self
+                .extract_events_from_l1_blocks(from_block, to_block)
+                .await?;
             METRICS.events_loaded[&Processor::NAME].inc_by(events.len() as u64);
             METRICS.most_recently_scanned_l1_block[&Processor::NAME].set(to_block);
 
@@ -60,17 +60,15 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
             }
 
             self.next_l1_block = to_block + 1;
-            if to_block == latest_block {
-                // Ran out of blocks to process, finish for now
-                return Ok(());
-            }
         }
+
+        Ok(())
     }
 
     /// Processes a range of L1 blocks for new events.
     ///
     /// Returns a list of new events as extracted from the L1 blocks.
-    async fn process_l1_blocks(
+    async fn extract_events_from_l1_blocks(
         &self,
         from: BlockNumber,
         to: BlockNumber,
@@ -90,9 +88,14 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
             .collect::<Result<Vec<_>, _>>()?;
 
         if new_events.is_empty() {
-            tracing::trace!("no new events");
+            tracing::trace!(l1_block_from = from, l1_block_to = to, "no new events");
         } else {
-            tracing::info!(event_count = new_events.len(), "received new events");
+            tracing::info!(
+                event_count = new_events.len(),
+                l1_block_from = from,
+                l1_block_to = to,
+                "received new events"
+            );
         }
 
         Ok(new_events)
