@@ -733,7 +733,7 @@ fn block_hashes_for_first_block(repositories: &RepositoryManager) -> BlockHashes
 fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E>) {
     move |result| match result {
         Ok(_) => tracing::warn!("{name} component unexpectedly exited"),
-        Err(e) => tracing::error!(error = format!("{e:#?}"), "{name} component failed"),
+        Err(err) => tracing::error!(?err "{name} component failed"),
     }
 }
 
