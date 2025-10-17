@@ -17,7 +17,7 @@ pub fn init_sentry(url: &str) -> sentry::ClientInitGuard {
                 let ty = match event.level {
                     sentry::Level::Error => "Error".to_string(),
                     sentry::Level::Warning => "Warning".to_string(),
-                    _ => unreachable!("We should not promote other levels to sentry events"),
+                    _ => "Unexpected level".to_string(),
                 };
 
                 event.exception = Values::from(vec![Exception {
