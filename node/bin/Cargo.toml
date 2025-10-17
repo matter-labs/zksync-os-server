@@ -37,19 +37,10 @@ zksync_os_contract_interface.workspace = true
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
-zk_os_api.workspace = true
 zksync_os_interface.workspace = true
 
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
-
-reth-chainspec = { workspace = true }
-reth-trie-common = { workspace = true }
-reth-primitives.workspace = true
-reth-primitives-traits = { workspace = true }
-reth-revm = { workspace = true }
-reth-storage-api = { workspace = true }
-reth-execution-types = { workspace = true }
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256", "rand"] }

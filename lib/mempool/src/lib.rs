@@ -1,6 +1,3 @@
-mod reth;
-pub use reth::RethPool;
-
 mod stream;
 pub use stream::{BestTransactionsStream, ReplayTxStream, TxStream, best_transactions};
 
@@ -14,32 +11,36 @@ mod config;
 pub use config::TxValidatorConfig;
 
 mod metrics;
+mod reth_state;
 
 // Re-export some of the reth mempool's types.
 pub use reth_transaction_pool::error::PoolError;
 pub use reth_transaction_pool::{
     CanonicalStateUpdate, NewSubpoolTransactionStream, NewTransactionEvent, PoolConfig,
-    PoolUpdateKind, SubPoolLimit, TransactionPool as RethTransactionPool,
-    TransactionPoolExt as RethTransactionPoolExt,
+    PoolUpdateKind, SubPoolLimit,
 };
 
 use crate::metrics::ViseRecorder;
-use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
-use reth_storage_api::StateProviderFactory;
+use crate::reth_state::ZkClient;
+use crate::traits::RethPool;
 use reth_transaction_pool::CoinbaseTipOrdering;
 use reth_transaction_pool::blobstore::NoopBlobStore;
 use reth_transaction_pool::validate::EthTransactionValidatorBuilder;
+use zksync_os_storage_api::{ReadRepository, ReadStateHistory};
 
-pub fn in_memory<Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory>(
-    client: Client,
+pub fn in_memory<State: ReadStateHistory + Clone, Repository: ReadRepository + Clone>(
+    state: State,
+    repository: Repository,
+    chain_id: u64,
     pool_config: PoolConfig,
     validator_config: TxValidatorConfig,
-) -> RethPool<Client> {
+) -> impl L2TransactionPool {
+    let client = ZkClient::new(state, repository, chain_id);
     let blob_store = NoopBlobStore::default();
     // Use `ViseRecorder` during mempool initialization to register metrics. This will make sure
     // reth mempool metrics are propagated to `vise` collector. Only code inside the closure is
     // affected.
-    ::metrics::with_local_recorder(&ViseRecorder, || {
+    ::metrics::with_local_recorder(&ViseRecorder, move || {
         RethPool::new(
             EthTransactionValidatorBuilder::new(client)
                 .no_prague()
