@@ -14,17 +14,12 @@ pub fn init_sentry(url: &str) -> sentry::ClientInitGuard {
             );
 
             if event.exception.is_empty() {
-                let ty = match event.level {
-                    sentry::Level::Error => "Error".to_string(),
-                    sentry::Level::Warning => "Warning".to_string(),
-                    _ => {
-                        tracing::warn!(?event, level = ?event.level, "Unexpected level is used for sentry event");
-                        "Unexpected level".to_string()
-                    }
-                };
+                if !event.level.is_error() && !event.level.is_warning() {
+                    tracing::warn!(?event, "Unexpected level is used for sentry event");
+                }
 
                 event.exception = Values::from(vec![Exception {
-                    ty,
+                    ty: event.level.to_string(),
                     value: event.message.clone(),
                     ..Default::default()
                 }]);
