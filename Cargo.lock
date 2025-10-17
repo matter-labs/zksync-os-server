@@ -9565,6 +9565,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "structdiff"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ded2e61f645b60f23f1ee69c122a77ba68dd187abb751c67ad2387bcb773f0b"
+dependencies = [
+ "structdiff-derive",
+]
+
+[[package]]
+name = "structdiff-derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cec3cf082379c048a963041e18a8e741a4e0a1afb14b825bd4bd771366b9a6e"
+
+[[package]]
 name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11683,6 +11698,7 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "smart-config",
+ "structdiff",
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
@@ -11707,6 +11723,7 @@ dependencies = [
  "anyhow",
  "backon",
  "serde",
+ "structdiff",
  "tracing",
  "vise",
 ]

@@ -11,6 +11,7 @@ use smart_config::value::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
+use structdiff::StructDiff;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
@@ -113,9 +114,11 @@ impl BatchVerificationClient {
         .commit_info;
 
         if commit_batch_info != request.commit_data {
-            return Err(BatchVerificationError::BatchDataMismatch(
-                "Batch data mismatch".to_string(), //TODO more info
-            ));
+            let diff = request.commit_data.diff(&commit_batch_info);
+
+            return Err(BatchVerificationError::BatchDataMismatch(format!(
+                "Batch data mismatch: {diff:?}",
+            )));
         }
 
         let signature = BatchSignature::sign_batch(&request.commit_data, &self.signer).await;

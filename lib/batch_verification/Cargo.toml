@@ -12,17 +12,16 @@ categories.workspace = true
 [dependencies]
 zksync_os_types.workspace = true
 zksync_os_observability.workspace = true
-
-zk_ee.workspace = true
-zk_os_basic_system.workspace = true
-zk_os_forward_system.workspace = true
-zksync_os_interface.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_merkle_tree.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_pipeline.workspace = true
 
+zk_ee.workspace = true
+zk_os_basic_system.workspace = true
+zk_os_forward_system.workspace = true
+zksync_os_interface.workspace = true
 
 alloy = { workspace = true, default-features = false }
 # In order to use RlpDecodable, RlpEncodable alloy-rlp crate must be imported directly.
@@ -41,4 +40,4 @@ anyhow.workspace = true
 backon.workspace = true
 smart-config.workspace = true
 dashmap.workspace = true
-
+structdiff.workspace = true

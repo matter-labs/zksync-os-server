@@ -143,6 +143,7 @@ url = "2.5.7"
 num_enum = "0.7.2"
 metrics = "0.24.2"
 chrono = { version = "0.4", default-features = false }
+structdiff = { version = "0.7.3", features = ["debug_diffs"] }
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
