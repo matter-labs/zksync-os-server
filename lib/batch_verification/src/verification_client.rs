@@ -195,14 +195,15 @@ impl PipelineComponent for BatchVerificationClient {
                         Some(Ok(message)) => {
                             //TODO a way to send errors
                             let batch_number = message.batch_number;
+                            let request_id = message.request_id;
                             match self.handle_verification_request(message).await {
                                 Ok(signature) => {
                                     tracing::info!("Approved batch verification request for {}", batch_number);
-                                    writer.send(BatchVerificationResponse { request_id: batch_number, result: BatchVerificationResult::Success(signature) }).await?;
+                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Success(signature) }).await?;
                                 },
                                 Err(reason) => {
                                     tracing::info!("Batch {} verification failed: {}", batch_number, reason);
-                                    writer.send(BatchVerificationResponse { request_id: batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
+                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }
                         }
