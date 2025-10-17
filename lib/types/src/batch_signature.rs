@@ -7,7 +7,13 @@ use zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS;
 use zksync_os_contract_interface::models::CommitBatchInfo;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BatchSignatureSet(Vec<BatchSignature>);
+pub struct BatchSignatureSet(Vec<ValidatedBatchSignature>);
+
+#[derive(Debug, thiserror::Error)]
+pub enum BatchSignatureSetError {
+    #[error("Duplicated signature")]
+    DuplicatedSignature,
+}
 
 impl BatchSignatureSet {
     #[allow(clippy::new_without_default)]
@@ -15,8 +21,15 @@ impl BatchSignatureSet {
         BatchSignatureSet(Vec::new())
     }
 
-    pub fn push(&mut self, signature: BatchSignature) {
-        self.0.push(signature)
+    pub fn push(
+        &mut self,
+        signature: ValidatedBatchSignature,
+    ) -> Result<(), BatchSignatureSetError> {
+        if self.0.contains(&signature) {
+            return Err(BatchSignatureSetError::DuplicatedSignature);
+        }
+        self.0.push(signature);
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -39,11 +52,14 @@ impl BatchSignature {
     }
 
     pub fn verify_signature(
-        &self,
+        self,
         batch_info: &CommitBatchInfo,
-    ) -> Result<Address, SignatureError> {
+    ) -> Result<ValidatedBatchSignature, SignatureError> {
         let encoded = encode_batch_for_signing(batch_info);
-        self.0.recover_address_from_msg(encoded)
+        Ok(ValidatedBatchSignature {
+            signer: self.0.recover_address_from_msg(encoded)?,
+            signature: self,
+        })
     }
 
     pub fn into_raw(self) -> [u8; 65] {
@@ -59,4 +75,26 @@ impl BatchSignature {
 fn encode_batch_for_signing(batch_info: &CommitBatchInfo) -> Vec<u8> {
     let alloy_batch_info = CommitBatchInfoZKsyncOS::from(batch_info.clone());
     alloy_batch_info.abi_encode_params()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ValidatedBatchSignature {
+    signature: BatchSignature,
+    signer: Address,
+}
+
+impl ValidatedBatchSignature {
+    pub fn signature(&self) -> &BatchSignature {
+        &self.signature
+    }
+
+    pub fn signer(&self) -> &Address {
+        &self.signer
+    }
+}
+
+impl PartialEq for ValidatedBatchSignature {
+    fn eq(&self, other: &Self) -> bool {
+        self.signer == other.signer
+    }
 }

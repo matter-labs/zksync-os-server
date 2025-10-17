@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
 use futures::{SinkExt, StreamExt};
 use smart_config::value::{ExposeSecret, SecretString};
-use zksync_os_l1_sender::commitment::BatchInfo;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
@@ -17,6 +16,7 @@ use tokio::sync::mpsc;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_merkle_tree::BlockMerkleTreeData;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -113,94 +113,9 @@ impl BatchVerificationClient {
         .commit_info;
 
         if commit_batch_info != request.commit_data {
-            let mut mismatches = Vec::new();
-
-            // I don't like this, but it works great :/
-            if commit_batch_info.batchNumber != request.commit_data.batchNumber {
-                mismatches.push(format!(
-                    "batchNumber: local={}, remote={}",
-                    commit_batch_info.batchNumber, request.commit_data.batchNumber
-                ));
-            }
-            if commit_batch_info.newStateCommitment != request.commit_data.newStateCommitment {
-                mismatches.push(format!(
-                    "newStateCommitment: local={:?}, remote={:?}",
-                    commit_batch_info.newStateCommitment, request.commit_data.newStateCommitment
-                ));
-            }
-            if commit_batch_info.numberOfLayer1Txs != request.commit_data.numberOfLayer1Txs {
-                mismatches.push(format!(
-                    "numberOfLayer1Txs: local={}, remote={}",
-                    commit_batch_info.numberOfLayer1Txs, request.commit_data.numberOfLayer1Txs
-                ));
-            }
-            if commit_batch_info.priorityOperationsHash
-                != request.commit_data.priorityOperationsHash
-            {
-                mismatches.push(format!(
-                    "priorityOperationsHash: local={:?}, remote={:?}",
-                    commit_batch_info.priorityOperationsHash,
-                    request.commit_data.priorityOperationsHash
-                ));
-            }
-            if commit_batch_info.dependencyRootsRollingHash
-                != request.commit_data.dependencyRootsRollingHash
-            {
-                mismatches.push(format!(
-                    "dependencyRootsRollingHash: local={:?}, remote={:?}",
-                    commit_batch_info.dependencyRootsRollingHash,
-                    request.commit_data.dependencyRootsRollingHash
-                ));
-            }
-            if commit_batch_info.l2LogsTreeRoot != request.commit_data.l2LogsTreeRoot {
-                mismatches.push(format!(
-                    "l2LogsTreeRoot: local={:?}, remote={:?}",
-                    commit_batch_info.l2LogsTreeRoot, request.commit_data.l2LogsTreeRoot
-                ));
-            }
-            if commit_batch_info.l2DaValidator != request.commit_data.l2DaValidator {
-                mismatches.push(format!(
-                    "l2DaValidator: local={:?}, remote={:?}",
-                    commit_batch_info.l2DaValidator, request.commit_data.l2DaValidator
-                ));
-            }
-            if commit_batch_info.daCommitment != request.commit_data.daCommitment {
-                mismatches.push(format!(
-                    "daCommitment: local={:?}, remote={:?}",
-                    commit_batch_info.daCommitment, request.commit_data.daCommitment
-                ));
-            }
-            if commit_batch_info.firstBlockTimestamp != request.commit_data.firstBlockTimestamp {
-                mismatches.push(format!(
-                    "firstBlockTimestamp: local={}, remote={}",
-                    commit_batch_info.firstBlockTimestamp, request.commit_data.firstBlockTimestamp
-                ));
-            }
-            if commit_batch_info.lastBlockTimestamp != request.commit_data.lastBlockTimestamp {
-                mismatches.push(format!(
-                    "lastBlockTimestamp: local={}, remote={}",
-                    commit_batch_info.lastBlockTimestamp, request.commit_data.lastBlockTimestamp
-                ));
-            }
-            if commit_batch_info.chainId != request.commit_data.chainId {
-                mismatches.push(format!(
-                    "chainId: local={}, remote={}",
-                    commit_batch_info.chainId, request.commit_data.chainId
-                ));
-            }
-            if commit_batch_info.operatorDAInput != request.commit_data.operatorDAInput {
-                mismatches.push(format!(
-                    "operatorDAInput: local={} bytes, remote={} bytes",
-                    commit_batch_info.operatorDAInput.len(),
-                    request.commit_data.operatorDAInput.len()
-                ));
-            }
-
-            return Err(BatchVerificationError::BatchDataMismatch(format!(
-                "Batch data mismatch - {} field(s) differ: {}",
-                mismatches.len(),
-                mismatches.join("; ")
-            )));
+            return Err(BatchVerificationError::BatchDataMismatch(
+                "Batch data mismatch".to_string(), //TODO more info
+            ));
         }
 
         let signature = BatchSignature::sign_batch(&request.commit_data, &self.signer).await;
@@ -249,10 +164,14 @@ impl PipelineComponent for BatchVerificationClient {
         // After HTTP headers we drop directly to simple TCP
         let batch_verification_version = socket.read_u32().await?;
         let (recv, send) = socket.split();
-        let mut reader =
-            FramedRead::new(recv, BatchVerificationRequestDecoder::new(batch_verification_version));
-        let mut writer =
-            FramedWrite::new(send, BatchVerificationResponseCodec::new(batch_verification_version));
+        let mut reader = FramedRead::new(
+            recv,
+            BatchVerificationRequestDecoder::new(batch_verification_version),
+        );
+        let mut writer = FramedWrite::new(
+            send,
+            BatchVerificationResponseCodec::new(batch_verification_version),
+        );
 
         tracing::info!("Connected to main sequencer for batch verification");
 
