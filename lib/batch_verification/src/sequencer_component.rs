@@ -11,9 +11,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
+use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
 };
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_types::BatchSignatureSet;
 
@@ -94,7 +96,12 @@ async fn run_batch_response_processor(
     mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
     response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
 ) -> anyhow::Result<()> {
+    let latency_tracker = ComponentStateReporter::global().handle_for(
+        "batch_response_processor",
+        GenericComponentState::WaitingRecv,
+    );
     while let Some(response) = response_receiver.recv().await {
+        latency_tracker.enter_state(GenericComponentState::Processing);
         let request_id = response.request_id;
 
         tracing::debug!(
@@ -104,6 +111,7 @@ async fn run_batch_response_processor(
 
         // Route response to the appropriate channel
         if let Some(sender) = response_channels.get(&request_id) {
+            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Err(e) = sender.send(response).await {
                 tracing::warn!(
                     "Failed to route response for request {}: {:?}",
@@ -115,6 +123,7 @@ async fn run_batch_response_processor(
             // debug, because probably we finished processing this batch and this is an extra response
             tracing::debug!("Response for unknown request_id {}, dropping", request_id);
         }
+        latency_tracker.enter_state(GenericComponentState::WaitingRecv);
     }
 
     tracing::info!("Batch response processor shutting down");
@@ -190,13 +199,19 @@ impl BatchVerifier {
         mut batch_for_signing_receiver: PeekableReceiver<BatchForSigning<E>>,
         singed_batcher_sender: Sender<SignedBatchEnvelope<E>>,
     ) -> anyhow::Result<()> {
+        let latency_tracker = ComponentStateReporter::global()
+            .handle_for("batch_verifier", GenericComponentState::WaitingRecv);
+
         loop {
+            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             // We process the batches one by one. Consider adding concurrency here when we need it.
             let Some(batch_envelope) = batch_for_signing_receiver.recv().await else {
                 // Channel closed, exit the loop
                 tracing::info!("BatchForSigning channel closed, exiting verifier",);
                 break Ok(());
             };
+            latency_tracker.enter_state(GenericComponentState::Processing);
+            let batch_envelope = batch_envelope.with_stage(BatchExecutionStage::SigningStarted);
             let mut retry_count = 0;
             let deadline = Instant::now() + self.config.total_timeout;
             let signatures = loop {
@@ -230,8 +245,13 @@ impl BatchVerifier {
                     }
                 }
             }?;
+            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             singed_batcher_sender
-                .send(batch_envelope.with_signatures(BatchSignatureData::Signed { signatures }))
+                .send(
+                    batch_envelope
+                        .with_signatures(BatchSignatureData::Signed { signatures })
+                        .with_stage(BatchExecutionStage::BatchSigned),
+                )
                 .await
                 .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
         }

@@ -17,6 +17,9 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_merkle_tree::BlockMerkleTreeData;
 use zksync_os_merkle_tree::TreeBatchOutput;
+use zksync_os_observability::ComponentStateReporter;
+use zksync_os_observability::GenericComponentState;
+use zksync_os_observability::StateLabel;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_socket::connect;
 use zksync_os_storage_api::ReplayRecord;
@@ -26,7 +29,7 @@ use zksync_os_types::BatchSignature;
 pub struct BatchVerificationClient {
     chain_id: u64,
     diamond_proxy: Address,
-    signer: PrivateKeySigner, // TODO, we probably want to move to BLS?
+    signer: PrivateKeySigner,
     block_storage: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     server_address: String,
 }
@@ -92,7 +95,6 @@ impl BatchVerificationClient {
                 })
                 .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
-        // TODO VALIDATE
         let commit_batch_info = BatchInfo::new(
             blocks
                 .iter()
@@ -125,6 +127,39 @@ impl BatchVerificationClient {
     }
 }
 
+enum BatchVerificationClientState {
+    Connecting,
+    WaitingRecv,
+    Processing,
+    WaitingSend,
+}
+
+impl StateLabel for BatchVerificationClientState {
+    fn generic(&self) -> GenericComponentState {
+        match self {
+            BatchVerificationClientState::Connecting => GenericComponentState::WaitingRecv,
+            BatchVerificationClientState::WaitingRecv => GenericComponentState::WaitingRecv,
+            BatchVerificationClientState::Processing => GenericComponentState::Processing,
+            BatchVerificationClientState::WaitingSend => GenericComponentState::WaitingSend,
+        }
+    }
+
+    fn specific(&self) -> &'static str {
+        match self {
+            BatchVerificationClientState::Connecting => "connecting",
+            BatchVerificationClientState::WaitingRecv => {
+                GenericComponentState::WaitingRecv.specific()
+            }
+            BatchVerificationClientState::Processing => {
+                GenericComponentState::Processing.specific()
+            }
+            BatchVerificationClientState::WaitingSend => {
+                GenericComponentState::WaitingSend.specific()
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl PipelineComponent for BatchVerificationClient {
     type Input = (
@@ -142,9 +177,13 @@ impl PipelineComponent for BatchVerificationClient {
         mut input: PeekableReceiver<Self::Input>,
         _output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
+        let latency_tracker = ComponentStateReporter::global().handle_for(
+            "batch_verification_client",
+            BatchVerificationClientState::Connecting,
+        );
+
         let mut socket = connect(&self.server_address, "/batch_verification").await?;
 
-        // After HTTP headers we drop directly to simple TCP
         let batch_verification_version = socket.read_u32().await?;
         let (recv, send) = socket.split();
         let mut reader = FramedRead::new(
@@ -159,6 +198,7 @@ impl PipelineComponent for BatchVerificationClient {
         tracing::info!("Connected to main sequencer for batch verification");
 
         loop {
+            latency_tracker.enter_state(BatchVerificationClientState::WaitingRecv);
             tokio::select! {
                 block = input.recv() => {
                     match block {
@@ -176,10 +216,13 @@ impl PipelineComponent for BatchVerificationClient {
                 server_message = reader.next() => {
                     match server_message {
                         Some(Ok(message)) => {
+                            latency_tracker.enter_state(BatchVerificationClientState::Processing);
                             //TODO a way to send errors
                             let batch_number = message.batch_number;
                             let request_id = message.request_id;
-                            match self.handle_verification_request(message).await {
+                            let verification_result = self.handle_verification_request(message).await;
+                            latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
+                            match verification_result {
                                 Ok(signature) => {
                                     tracing::info!("Approved batch verification request for {}", batch_number);
                                     writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Success(signature) }).await?;
