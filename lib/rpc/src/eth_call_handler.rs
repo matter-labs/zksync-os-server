@@ -18,7 +18,9 @@ use zksync_os_interface::{
     types::{BlockContext, ExecutionResult},
 };
 use zksync_os_storage_api::ViewState;
-use zksync_os_storage_api::{RepositoryError, StateError};
+use zksync_os_storage_api::{
+    RepositoryError, StateError, state_override_view::OverriddenStateView,
+};
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType,
@@ -186,12 +188,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block: Option<BlockId>,
-        state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<ExecutionEnv, EthCallError> {
-        if state_overrides.is_some() {
-            return Err(EthCallError::StateOverridesNotSupported);
-        }
         if block_overrides.is_some() {
             return Err(EthCallError::BlockOverridesNotSupported);
         }
@@ -205,7 +203,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
+
         let transaction = self.create_tx_from_request(request, &block_context)?;
+
         Ok(ExecutionEnv {
             transaction,
             block_context,
@@ -219,17 +219,23 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<Bytes, EthCallError> {
-        let execution_env =
-            self.prepare_execution_env(request, block, state_overrides, block_overrides)?;
+        let execution_env = self.prepare_execution_env(request, block, block_overrides)?;
         let storage_view = self
             .storage
             .state_view_at(execution_env.block_context.block_number)?;
 
-        let res = execute(
-            execution_env.transaction,
-            execution_env.block_context,
-            storage_view,
-        )
+        let res = match state_overrides {
+            Some(overrides) => execute(
+                execution_env.transaction,
+                execution_env.block_context,
+                OverriddenStateView::new(storage_view, overrides),
+            ),
+            None => execute(
+                execution_env.transaction,
+                execution_env.block_context,
+                storage_view,
+            ),
+        }
         .map_err(EthCallError::ForwardSubsystemError)?
         .map_err(EthCallError::InvalidTransaction)?;
 
@@ -252,18 +258,25 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<GethTrace, EthCallError> {
-        let execution_env =
-            self.prepare_execution_env(request, block, state_overrides, block_overrides)?;
+        let execution_env = self.prepare_execution_env(request, block, block_overrides)?;
         let storage_view = self
             .storage
             .state_view_at(execution_env.block_context.block_number)?;
 
-        call_trace_simulate(
-            execution_env.transaction,
-            execution_env.block_context,
-            storage_view,
-            call_config,
-        )
+        match state_overrides {
+            Some(overrides) => call_trace_simulate(
+                execution_env.transaction,
+                execution_env.block_context,
+                OverriddenStateView::new(storage_view, overrides),
+                call_config,
+            ),
+            None => call_trace_simulate(
+                execution_env.transaction,
+                execution_env.block_context,
+                storage_view,
+                call_config,
+            ),
+        }
         .map(GethTrace::CallTracer)
         .map_err(|err| EthCallError::ForwardSubsystemError(anyhow::anyhow!(err)))
     }
