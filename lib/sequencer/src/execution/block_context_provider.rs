@@ -133,7 +133,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     mix_hash: Default::default(),
                     execution_version: LATEST_EXECUTION_VERSION as u32,
                 };
-                dbg!(block_context);
                 self.pending_block_context_sender
                     .send_replace(Some(block_context));
                 PreparedBlockCommand {

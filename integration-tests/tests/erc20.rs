@@ -12,7 +12,7 @@ use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
 use zksync_os_integration_tests::contracts::{IL2AssetRouter, L1AssetRouter, TestERC20};
-use zksync_os_integration_tests::dyn_wallet_provider::{EthDynProvider, EthWalletProvider};
+use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType};
 
@@ -62,13 +62,9 @@ async fn erc20_deposit() -> anyhow::Result<()> {
 
 #[test_log::test(tokio::test)]
 async fn erc20_transfer() -> anyhow::Result<()> {
-    let mut tester = Tester::setup().await?;
-
-    tester
-        .l2_provider
-        .wallet_mut()
-        .register_signer(tester.l1_provider.wallet().default_signer());
-    let alice = tester.l1_wallet.default_signer().address();
+    let tester = Tester::setup().await?;
+    // We use L2 wallet's default signer as Alice because it already has L2 ETH.
+    let alice = tester.l2_wallet.default_signer().address();
     let bob_signer = PrivateKeySigner::random();
     let bob = bob_signer.address();
 

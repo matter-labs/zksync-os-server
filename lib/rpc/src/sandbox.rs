@@ -20,12 +20,10 @@ pub const ERGS_PER_GAS: u64 = 256;
 
 pub fn execute(
     tx: ZkTransaction,
-    mut block_context: BlockContext,
+    block_context: BlockContext,
     state_view: impl ViewState,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     let encoded_tx = tx.encode();
-
-    block_context.eip1559_basefee = U256::from(0);
 
     simulate_tx(
         encoded_tx,

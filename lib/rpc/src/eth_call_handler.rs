@@ -59,6 +59,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
+        for_estimate_gas: bool,
     ) -> Result<ZkTransaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
@@ -104,6 +105,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
+            for_estimate_gas
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
@@ -213,7 +215,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .replay_storage()
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
-        let transaction = self.create_tx_from_request(request, &block_context)?;
+        let transaction = self.create_tx_from_request(request, &block_context, false)?;
         Ok(ExecutionEnv {
             transaction,
             block_context,
@@ -227,12 +229,13 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<Bytes, EthCallError> {
-        let execution_env =
+        let mut execution_env =
             self.prepare_execution_env(request, block, state_overrides, block_overrides)?;
         let storage_view = self
             .storage
             .state_view_at(execution_env.block_context.block_number)?;
 
+        execution_env.block_context.eip1559_basefee = U256::from(0);
         let res = execute(
             execution_env.transaction,
             execution_env.block_context,
@@ -288,28 +291,31 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let block_id = block_number.unwrap_or_default();
 
         let block_context = {
-            let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
+            let Some(resolved_block_number) = self.storage.resolve_block_number(block_id)? else {
                 return Err(EthCallError::BlockNotFound(block_id));
             };
             match block_id {
                 BlockId::Number(BlockNumberOrTag::Pending) => {
-                    if let Some(pending_block_context) = *self.pending_block_context.borrow() {
+                    if let Some(mut pending_block_context) = *self.pending_block_context.borrow() {
+                        if pending_block_context.block_number > resolved_block_number {
+                            // Decrease block number so we get latest available state view
+                            pending_block_context.block_number = resolved_block_number;
+                        }
                         pending_block_context
                     } else {
                         self.storage
                             .replay_storage()
-                            .get_context(block_number)
+                            .get_context(resolved_block_number)
                             .ok_or(EthCallError::BlockNotFound(block_id))?
                     }
                 }
                 block_id => self
                     .storage
                     .replay_storage()
-                    .get_context(block_number)
+                    .get_context(resolved_block_number)
                     .ok_or(EthCallError::BlockNotFound(block_id))?,
             }
         };
-        tracing::info!(?block_context, "estimate start");
 
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:
@@ -375,8 +381,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .unwrap_or(highest_gas_limit)
                 .min(highest_gas_limit),
         );
-        let tx = self.create_tx_from_request(request, &block_context)?;
-        tracing::info!("tx.gas_limit() = {}", tx.gas_limit());
+        let tx = self.create_tx_from_request(request, &block_context, true)?;
 
         let storage_view = self.storage.state_view_at(block_context.block_number)?;
 
@@ -398,6 +403,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // we know the tx succeeded with the configured gas limit, so we can use that as the
         // highest, in case we applied a gas cap due to caller allowance above
         highest_gas_limit = tx.gas_limit();
+        let initial_highest_gas_limit = highest_gas_limit;
 
         // NOTE: this is the gas the transaction used, which is less than the
         // transaction requires to succeed.
@@ -501,6 +507,23 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             // New midpoint
             mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
         }
+
+        // At the moment there is an additional pubdata that is charged for each non-first tx for publishing changes of the coinbase account.
+        // To account for it we gas needed to publish 50 bytes of pubdata.
+        // It should be fixed in ZKsync OS v1.3 and this extra margin should be removed.
+        const PUBDATA_BYTES_MARGIN: u64 = 50;
+        let gas_per_pubdata = block_context.pubdata_price.div_ceil(block_context.eip1559_basefee);
+
+        let new_estimate = {
+            let mut gas = U256::from(highest_gas_limit);
+            gas += gas_per_pubdata * U256::from(PUBDATA_BYTES_MARGIN);
+            if gas > U256::from(u64::MAX) {
+                u64::MAX
+            } else {
+                gas.to()
+            }
+        };
+        highest_gas_limit = initial_highest_gas_limit.min(new_estimate);
 
         Ok(U256::from(highest_gas_limit))
     }
