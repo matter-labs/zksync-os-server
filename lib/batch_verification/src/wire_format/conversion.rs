@@ -1,7 +1,7 @@
 use super::v1::{BatchVerificationRequestWireFormatV1, BatchVerificationResponseWireFormatV1};
 use crate::{
     BatchVerificationRequest, BatchVerificationResponse,
-    verification_response::BatchVerificationResult,
+    response::BatchVerificationResult,
     wire_format::v1::BatchVerificationResponseResultWireFormatV1,
 };
 use alloy::sol_types::SolValue;

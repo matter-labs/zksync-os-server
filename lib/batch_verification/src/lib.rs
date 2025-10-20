@@ -1,26 +1,26 @@
 mod wire_format;
 pub use wire_format::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
 
-mod verification_request;
-pub use verification_request::BatchVerificationRequest;
-pub use verification_request::BatchVerificationRequestCodec;
-pub use verification_request::BatchVerificationRequestDecoder;
+mod request;
+pub use request::BatchVerificationRequest;
+pub use request::BatchVerificationRequestCodec;
+pub use request::BatchVerificationRequestDecoder;
 
-mod verification_response;
-pub use verification_response::BatchVerificationResponse;
-pub use verification_response::BatchVerificationResponseCodec;
-pub use verification_response::BatchVerificationResponseDecoder;
-pub use verification_response::BatchVerificationResult;
+mod response;
+pub use response::BatchVerificationResponse;
+pub use response::BatchVerificationResponseCodec;
+pub use response::BatchVerificationResponseDecoder;
+pub use response::BatchVerificationResult;
 
-mod verification_server;
-pub use verification_server::BatchVerificationRequestError;
-pub use verification_server::BatchVerificationServer;
+mod server;
+pub use server::BatchVerificationRequestError;
+pub use server::BatchVerificationServer;
 
-mod verification_client;
-pub use verification_client::BatchVerificationClient;
+mod client;
+pub use client::BatchVerificationClient;
 
 mod config;
 pub use config::BatchVerificationConfig;
 
-mod server_verification_component;
-pub use server_verification_component::BatchVerificationPipelineStep;
+mod sequencer_component;
+pub use sequencer_component::BatchVerificationPipelineStep;
