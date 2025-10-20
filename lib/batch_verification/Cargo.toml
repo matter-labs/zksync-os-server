@@ -38,6 +38,6 @@ semver = { workspace = true, features = ["serde"] }
 async-trait.workspace = true
 anyhow.workspace = true
 backon.workspace = true
-smart-config.workspace = true
 dashmap.workspace = true
 structdiff.workspace = true
+secrecy.workspace = true

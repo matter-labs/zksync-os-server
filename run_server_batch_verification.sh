@@ -5,4 +5,5 @@
 batch_verification_enabled=true \
 batch_verification_address=0.0.0.0:3072 \
 batch_verification_threshold=1 \
+rust_log=info,zksync_os_batch_verification=debug \
 cargo run #--release

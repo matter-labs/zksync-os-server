@@ -677,7 +677,7 @@ async fn run_main_node_pipeline(
             prev_batch_info: last_committed_batch_info,
         })
         .pipe(BatchVerificationPipelineStep::new(
-            config.batch_verification_config.clone(),
+            config.batch_verification_config.into(),
         ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {

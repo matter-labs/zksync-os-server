@@ -7,7 +7,7 @@ use alloy::signers::local::PrivateKeySigner;
 use async_trait::async_trait;
 use backon::{ConstantBuilder, Retryable};
 use futures::{SinkExt, StreamExt};
-use smart_config::value::{ExposeSecret, SecretString};
+use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
