@@ -28,6 +28,7 @@ members = [
     "lib/pipeline",
     "lib/gas_adjuster",
     "lib/batch_verification",
+    "lib/socket",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -190,6 +191,7 @@ zksync_os_pipeline = { version = "=0.9.1-non-semver-compat", path = "lib/pipelin
 zksync_os_revm_consistency_checker = { version = "=0.9.1-non-semver-compat", path = "lib/revm_consistency_checker" }
 zksync_os_gas_adjuster = { version = "=0.9.1-non-semver-compat", path = "lib/gas_adjuster" }
 zksync_os_batch_verification = { version = "=0.9.1-non-semver-compat", path = "lib/batch_verification" }
+zksync_os_socket = { version = "=0.9.1-non-semver-compat", path = "lib/socket" }
 
 zksync_os_server = { version = "=0.9.1-non-semver-compat", path = "node/bin" }
 

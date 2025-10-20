@@ -5,22 +5,20 @@ use crate::{
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use async_trait::async_trait;
-use backon::{ConstantBuilder, Retryable};
 use futures::{SinkExt, StreamExt};
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::time::Duration;
 use structdiff::StructDiff;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
-use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_merkle_tree::BlockMerkleTreeData;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_socket::connect;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::BatchSignature;
 
@@ -144,25 +142,7 @@ impl PipelineComponent for BatchVerificationClient {
         mut input: PeekableReceiver<Self::Input>,
         _output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        let mut socket = (|| TcpStream::connect(&self.server_address))
-            .retry(
-                ConstantBuilder::default()
-                    .with_delay(Duration::from_secs(1))
-                    .with_max_times(10),
-            )
-            .notify(|err, dur| {
-                tracing::warn!(
-                    ?err,
-                    ?dur,
-                    "retrying connection to main node for batch verification"
-                );
-            })
-            .await?;
-
-        // This makes it valid HTTP
-        socket
-            .write_all(b"POST /batch_verification HTTP/1.0\r\n\r\n")
-            .await?;
+        let mut socket = connect(&self.server_address, "/batch_verification").await?;
 
         // After HTTP headers we drop directly to simple TCP
         let batch_verification_version = socket.read_u32().await?;

@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite};
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
-use zksync_os_storage_api::skip_http_headers;
+use zksync_os_socket::skip_http_headers;
 
 /// Accepts connections from batch verification clients. Crafts and sends
 /// BatchVerificationRequests to all clients. Receives responses and forwards

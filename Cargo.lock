@@ -11711,6 +11711,7 @@ dependencies = [
  "zksync_os_merkle_tree",
  "zksync_os_observability",
  "zksync_os_pipeline",
+ "zksync_os_socket",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -12265,6 +12266,7 @@ dependencies = [
  "zksync_os_rpc",
  "zksync_os_rpc_api",
  "zksync_os_sequencer",
+ "zksync_os_socket",
  "zksync_os_state",
  "zksync_os_state_full_diffs",
  "zksync_os_status_server",
@@ -12292,6 +12294,16 @@ dependencies = [
  "vise-exporter",
  "zkos-wrapper",
  "zksync_sequencer_proof_client",
+]
+
+[[package]]
+name = "zksync_os_socket"
+version = "0.9.1-non-semver-compat"
+dependencies = [
+ "anyhow",
+ "backon",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
