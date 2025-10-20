@@ -33,6 +33,7 @@ zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_tracing.workspace = true
 zksync_os_contract_interface.workspace = true
+zksync_os_revm_consistency_checker.workspace = true
 
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
@@ -51,7 +52,6 @@ reth-revm = { workspace = true }
 reth-storage-api = { workspace = true }
 reth-execution-types = { workspace = true }
 zksync-revm = { workspace = true }
-revm-inspectors = { workspace = true }
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256", "rand"] }

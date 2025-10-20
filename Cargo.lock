@@ -8073,24 +8073,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "revm-inspectors"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9b329afcc0f9fd5adfa2c6349a7435a8558e82bcae203142103a9a95e2a63b6"
-dependencies = [
- "alloy-primitives",
- "alloy-rpc-types-eth",
- "alloy-rpc-types-trace",
- "alloy-sol-types",
- "anstyle",
- "colorchoice",
- "revm",
- "serde",
- "serde_json",
- "thiserror 2.0.12",
-]
-
-[[package]]
 name = "revm-interpreter"
 version = "25.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11419,7 +11401,7 @@ dependencies = [
 [[package]]
 name = "zksync-revm"
 version = "0.1.0"
-source = "git+https://github.com/vladbochok/zksync-revm#e0db3c20c61a94d797e14f0e935b7a586531fde2"
+source = "git+https://github.com/vladbochok/zksync-revm?branch=main#af49e96a0df0e3e0eb1f6d3bc521025e864cabdc"
 dependencies = [
  "auto_impl",
  "revm",
@@ -11832,6 +11814,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_revm_consistency_checker"
+version = "0.8.3-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "basic_system",
+ "blake2 0.10.6",
+ "forward_system",
+ "futures",
+ "reth-execution-types",
+ "reth-primitives",
+ "reth-revm",
+ "ruint",
+ "semver 1.0.26",
+ "serde",
+ "serde_json",
+ "smart-config",
+ "tokio",
+ "tracing",
+ "vise",
+ "zk_ee",
+ "zksync-revm",
+ "zksync_os_genesis",
+ "zksync_os_interface",
+ "zksync_os_mempool",
+ "zksync_os_merkle_tree",
+ "zksync_os_multivm",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_rocksdb"
 version = "0.8.3-non-semver-compat"
 dependencies = [
@@ -11960,7 +11977,6 @@ dependencies = [
  "reth-revm",
  "reth-storage-api",
  "reth-trie-common",
- "revm-inspectors",
  "ruint",
  "semver 1.0.26",
  "sentry",
@@ -11989,6 +12005,7 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_priority_tree",
+ "zksync_os_revm_consistency_checker",
  "zksync_os_rocksdb",
  "zksync_os_rpc",
  "zksync_os_rpc_api",

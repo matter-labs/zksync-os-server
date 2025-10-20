@@ -11,9 +11,9 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_revm::{DefaultZk, ZkBuilder};
 
-use crate::revm_consistency_checker::helpers::zk_tx_into_revm_tx;
-use crate::revm_consistency_checker::revm_state_db::RevmStateDb;
-use crate::revm_consistency_checker::storage_diff_comp::CompareReport;
+use crate::helpers::zk_tx_into_revm_tx;
+use crate::revm_state_db::RevmStateDb;
+use crate::storage_diff_comp::CompareReport;
 
 pub struct RevmConsistencyChecker<State>
 where
