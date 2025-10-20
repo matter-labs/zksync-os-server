@@ -7,12 +7,10 @@ use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256, ruint::aliases::B160};
+use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
-use std::collections::HashMap;
-use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_interface::types::ExecutionOutput;
 use zksync_os_interface::{
@@ -21,8 +19,7 @@ use zksync_os_interface::{
 };
 use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{
-    RepositoryError, StateError,
-    state_override_view::{AccountViewOverride, OverriddenStateView},
+    RepositoryError, StateError, state_override_view::OverriddenStateView,
 };
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
@@ -228,14 +225,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .state_view_at(execution_env.block_context.block_number)?;
 
         let res = match state_overrides {
-            Some(overrides) => {
-                let (slot_overrides, account) = parse_state_overrides(overrides);
-                execute(
-                    execution_env.transaction,
-                    execution_env.block_context,
-                    OverriddenStateView::new(storage_view, slot_overrides, account),
-                )
-            }
+            Some(overrides) => execute(
+                execution_env.transaction,
+                execution_env.block_context,
+                OverriddenStateView::new(storage_view, overrides),
+            ),
             None => execute(
                 execution_env.transaction,
                 execution_env.block_context,
@@ -270,15 +264,12 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .state_view_at(execution_env.block_context.block_number)?;
 
         match state_overrides {
-            Some(overrides) => {
-                let (slot_overrides, account) = parse_state_overrides(overrides);
-                call_trace_simulate(
-                    execution_env.transaction,
-                    execution_env.block_context,
-                    OverriddenStateView::new(storage_view, slot_overrides, account),
-                    call_config,
-                )
-            }
+            Some(overrides) => call_trace_simulate(
+                execution_env.transaction,
+                execution_env.block_context,
+                OverriddenStateView::new(storage_view, overrides),
+                call_config,
+            ),
             None => call_trace_simulate(
                 execution_env.transaction,
                 execution_env.block_context,
@@ -592,51 +583,4 @@ pub enum EthCallError {
     Repository(#[from] RepositoryError),
     #[error(transparent)]
     State(#[from] StateError),
-}
-
-/// Parses the RPC `StateOverride` structure into separate maps of slot overrides
-/// and account-level overrides (balance/nonce/code).
-fn parse_state_overrides(
-    state_overrides: StateOverride,
-) -> (HashMap<B256, B256>, HashMap<Address, AccountViewOverride>) {
-    let mut slot_out = HashMap::new();
-    let mut acc_out: HashMap<Address, AccountViewOverride> = HashMap::new();
-
-    // `StateOverride` is expected to be a map-like structure of Address => AccountOverride
-    for (address, account) in state_overrides {
-        // Merge `state` and `state_diff` if present. Latter should take precedence on overlap.
-        if let Some(state) = account.state {
-            for (slot, value) in state {
-                let flat_key = derive_flat_storage_key(
-                    &B160::from_be_bytes(address.into_array()),
-                    &(slot.0.into()),
-                );
-                slot_out.insert(B256::from(flat_key.as_u8_array()), value);
-            }
-        }
-        if let Some(state_diff) = account.state_diff {
-            for (slot, value_override) in state_diff {
-                let flat_key = derive_flat_storage_key(
-                    &B160::from_be_bytes(address.into_array()),
-                    &(slot.0.into()),
-                );
-                slot_out.insert(B256::from(flat_key.as_u8_array()), value_override);
-            }
-        }
-
-        if account.balance.is_some() || account.nonce.is_some() || account.code.is_some() {
-            let entry = acc_out.entry(address).or_default();
-            if let Some(bal) = account.balance {
-                entry.balance = Some(bal);
-            }
-            if let Some(nonce) = account.nonce {
-                entry.nonce = Some(nonce);
-            }
-            if let Some(code) = account.code {
-                entry.code = Some(code.to_vec());
-            }
-        }
-    }
-
-    (slot_out, acc_out)
 }
