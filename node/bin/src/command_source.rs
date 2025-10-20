@@ -73,9 +73,9 @@ impl PipelineComponent for ExternalNodeCommandSource {
         // TODO: no need for a Stream in `replay_receiver` - just send to channel right away instead
         let mut stream = replay_receiver(self.starting_block, self.replay_download_address.clone())
             .await
-            .map_err(|e| {
-                tracing::error!("Failed to connect to main node to receive blocks: {e}");
-                e
+            .map_err(|err| {
+                tracing::error!(?err, "Failed to connect to main node to receive blocks");
+                err
             })?;
 
         while let Some(command) = stream.next().await {

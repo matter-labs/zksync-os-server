@@ -185,12 +185,12 @@ impl RocksDBInner {
         let property = self.db.property_int_value_cf(cf, name);
         let property = property.unwrap_or_else(|err| {
             let name_str = name.to_str().unwrap_or("(non-UTF8 string)");
-            tracing::warn!(%err, "Failed getting RocksDB property `{name_str}`");
+            tracing::warn!(%err, property_name = name_str, "Failed getting RocksDB property");
             None
         });
         if property.is_none() {
             let name_str = name.to_str().unwrap_or("(non-UTF8 string)");
-            tracing::warn!("Property `{name_str}` is not defined");
+            tracing::warn!(property_name = name_str, "Property is not defined");
         }
         property
     }
@@ -252,8 +252,8 @@ impl RocksDBInner {
         }
 
         tracing::warn!(
-            "Exceeded retries waiting for writes to resume in DB `{}`; proceeding with stopped writes",
-            self.db_name
+            db_name = self.db_name,
+            "Exceeded retries waiting for writes to resume in DB; proceeding with stopped writes"
         );
     }
 }
@@ -387,9 +387,10 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         db_options.set_max_open_files(max_open_files);
         let existing_cfs = DB::list_cf(&db_options, path).unwrap_or_else(|err| {
             tracing::warn!(
-                "Failed getting column families for RocksDB `{}` at `{}`, assuming CFs are empty; {err}",
-                CF::DB_NAME,
-                path.display()
+                db_name = CF::DB_NAME,
+                path = ?path,
+                ?err,
+                "Failed getting column families for RocksDB, assuming CFs are empty",
             );
             vec![]
         });
@@ -411,10 +412,10 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             .collect();
         if !obsolete_cfs.is_empty() {
             tracing::warn!(
-                "RocksDB `{}` at `{}` contains extra column families {obsolete_cfs:?} that are not used \
-                 in code",
-                CF::DB_NAME,
-                path.display()
+                db_name = CF::DB_NAME,
+                ?path,
+                ?obsolete_cfs,
+                "RocksDB contains extra column families that are not used in code"
             );
         }
 
@@ -574,8 +575,9 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
 
                     if let Some(retry_interval) = retries.next() {
                         tracing::warn!(
-                            "Writes stalled when writing to DB `{}`; will retry after {retry_interval:?}",
-                            CF::DB_NAME
+                            db_name = CF::DB_NAME,
+                            ?retry_interval,
+                            "Writes stalled when writing to DB; will retry"
                         );
                         thread::sleep(retry_interval);
                         raw_batch = rocksdb::WriteBatch::from_data(&raw_batch_bytes);
