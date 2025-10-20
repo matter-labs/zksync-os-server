@@ -105,7 +105,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
-            for_estimate_gas
+            for_estimate_gas,
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
@@ -423,7 +423,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             let mut optimistic_tx = tx.clone();
             set_gas_limit(&mut optimistic_tx, optimistic_gas_limit);
 
-            tracing::info!("execute with {optimistic_gas_limit}");
             // Re-execute the transaction with the new gas limit and update the result and
             // environment.
             res = execute(optimistic_tx, block_context, storage_view.clone())
@@ -472,7 +471,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 gas_limit = mid_tx.gas_limit(),
                 "trying to simulate transaction"
             );
-            tracing::info!("execute with {mid_gas_limit}");
 
             // Execute transaction and handle potential gas errors, adjusting limits accordingly.
             match execute(mid_tx, block_context, storage_view.clone())
@@ -512,7 +510,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // To account for it we gas needed to publish 50 bytes of pubdata.
         // It should be fixed in ZKsync OS v1.3 and this extra margin should be removed.
         const PUBDATA_BYTES_MARGIN: u64 = 50;
-        let gas_per_pubdata = block_context.pubdata_price.div_ceil(block_context.eip1559_basefee);
+        let gas_per_pubdata = block_context
+            .pubdata_price
+            .div_ceil(block_context.eip1559_basefee);
 
         let new_estimate = {
             let mut gas = U256::from(highest_gas_limit);

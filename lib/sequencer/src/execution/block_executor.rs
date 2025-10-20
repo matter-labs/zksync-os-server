@@ -92,7 +92,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             "Executing transaction..."
                         );
                         all_processed_txs.push(tx.clone());
-                        tracing::info!("executing tx {:?}", tx);
                         match runner.execute_next_tx(tx.clone().encode())
                             .await
                             .map_err(|e| {

@@ -36,7 +36,7 @@ impl CallFees {
                     // only enforce the fee cap if provided input is not zero
                     (_, None | Some(0)) => block_base_fee,
                     (_, Some(gas_price)) if gas_price < block_base_fee => {
-                        return Err(CallFeesError::FeeCapTooLow)
+                        return Err(CallFeesError::FeeCapTooLow);
                     }
                     (_, Some(gas_price)) => gas_price,
                 };
