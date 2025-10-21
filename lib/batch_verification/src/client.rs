@@ -218,7 +218,7 @@ impl BatchVerificationClient {
                         .ok_or(BatchVerificationError::MissingBlock(block_number))?;
 
                     let (root_hash, leaf_count) = tree_data
-                        .block_start
+                        .block_end
                         .clone()
                         .root_info()
                         .map_err(|_| BatchVerificationError::TreeError)?;
