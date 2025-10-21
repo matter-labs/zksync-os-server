@@ -102,7 +102,7 @@ where
                     };
 
                     Some(zk_tx_into_revm_tx(
-                        &transaction,
+                        transaction,
                         tx_output.gas_used,
                         tx_output.is_success(),
                     ))

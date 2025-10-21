@@ -23,9 +23,11 @@ const fn padding_len(deployed_len: usize) -> usize {
 #[inline(always)]
 unsafe fn set_bit_on_unchecked(inner: &mut [u8], pos: usize) {
     let (word_idx, bit_idx) = (pos / 8, pos % 8);
-    // SAFETY: caller guarantees bounds
-    let dst = inner.get_unchecked_mut(word_idx);
-    *dst |= 1u8 << bit_idx;
+    unsafe {
+        // SAFETY: caller guarantees bounds
+        let dst = inner.get_unchecked_mut(word_idx);
+        *dst |= 1u8 << bit_idx;
+    }
 }
 
 /// Build jumpdest bitmap artifacts for the given EVM bytecode.

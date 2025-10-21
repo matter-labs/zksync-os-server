@@ -97,7 +97,7 @@ pub fn zk_tx_into_revm_tx(
     let mut tx_env_builder = TxEnv::builder()
         .caller(caller)
         .gas_limit(tx.gas_limit())
-        .gas_price(gas_price as u128)
+        .gas_price(gas_price)
         .kind(transact_to)
         .value(value)
         .data(data)
@@ -112,10 +112,10 @@ pub fn zk_tx_into_revm_tx(
     }
 
     if let Some(priority_fee) = gas_priority_fee {
-        tx_env_builder = tx_env_builder.gas_priority_fee(Some(priority_fee as u128));
+        tx_env_builder = tx_env_builder.gas_priority_fee(Some(priority_fee));
     }
 
-    let tx = ZKsyncTxBuilder::new()
+    ZKsyncTxBuilder::new()
         .base(tx_env_builder)
         .mint(to_mint)
         .refund_recipient(refund_recipient)
@@ -123,7 +123,5 @@ pub fn zk_tx_into_revm_tx(
         .force_fail(!execution_status)
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {:?}", e))
-        .unwrap();
-
-    tx
+        .unwrap()
 }

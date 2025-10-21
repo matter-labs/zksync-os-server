@@ -65,7 +65,7 @@ impl Error for RevmStateDbError {
 // convenient conversions
 impl From<anyhow::Error> for RevmStateDbError {
     fn from(e: anyhow::Error) -> Self {
-        RevmStateDbError(e.into())
+        RevmStateDbError(e)
     }
 }
 
@@ -112,7 +112,7 @@ where
                         let bytecode = self
                             .code_by_hash_ref(B256::from(props.bytecode_hash.as_u8_array()))
                             .expect("code_by_hash");
-                        Some(get_unpadded_code(bytecode.bytes_slice(), &props).into())
+                        Some(get_unpadded_code(bytecode.bytes_slice(), &props))
                     },
                 }
             }))
