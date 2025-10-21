@@ -118,10 +118,7 @@ where
                     })
                     .context("execute_block")?;
 
-            tracing::debug!(
-                block_number,
-                "Executed. Adding to block replay storage..."
-            );
+            tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
             self.replay.append(replay_record.clone());
