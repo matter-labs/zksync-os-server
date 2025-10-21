@@ -3,7 +3,7 @@ use tokio_util::codec::{self, LengthDelimitedCodec};
 use zksync_os_contract_interface::models::CommitBatchInfo;
 
 /// Request sent from main sequencer to external nodes for batch verification
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct BatchVerificationRequest {
     pub batch_number: u64,
     pub first_block_number: u64,

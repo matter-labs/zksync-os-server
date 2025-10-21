@@ -4,14 +4,14 @@ use tokio_util::codec::{self, LengthDelimitedCodec};
 use crate::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
 use zksync_os_types::BatchSignature;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum BatchVerificationResult {
     Success(BatchSignature),
     Refused(String),
 }
 
 /// Response sent from external nodes back to main sequencer
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchVerificationResponse {
     pub request_id: u64,
     pub result: BatchVerificationResult,

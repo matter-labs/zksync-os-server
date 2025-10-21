@@ -41,7 +41,7 @@ impl BatchSignatureSet {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchSignature(AlloySignature);
 
 impl BatchSignature {
