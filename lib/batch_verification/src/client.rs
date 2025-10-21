@@ -174,11 +174,11 @@ impl BatchVerificationClient {
                             latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
                             match verification_result {
                                 Ok(signature) => {
-                                    tracing::info!("Approved batch verification request for {}", batch_number);
+                                    tracing::info!(batch_number, request_id, "Approved batch verification request");
                                     writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Success(signature) }).await?;
                                 },
                                 Err(reason) => {
-                                    tracing::info!("Batch {} verification failed: {}", batch_number, reason);
+                                    tracing::info!(batch_number, request_id, "Batch verification failed: {}", reason);
                                     writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }
@@ -188,7 +188,6 @@ impl BatchVerificationClient {
                             tracing::error!("Error parsing verification request message. Ignoring: {}", parsing_err);
                         }
                         None => {
-                            tracing::error!("Server has disconnected verification client");
                             anyhow::bail!("Server has disconnected verification client");
                         }
                     }
@@ -202,9 +201,9 @@ impl BatchVerificationClient {
         request: BatchVerificationRequest,
     ) -> Result<BatchSignature, BatchVerificationError> {
         tracing::info!(
-            "Handling batch verification request {} for batch {} (blocks {}-{})",
-            request.request_id,
-            request.batch_number,
+            batch_number = request.batch_number,
+            request_id = request.request_id,
+            "Handling batch verification request (blocks {}-{})",
             request.first_block_number,
             request.last_block_number,
         );

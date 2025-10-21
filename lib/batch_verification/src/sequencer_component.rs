@@ -104,24 +104,16 @@ async fn run_batch_response_processor(
         latency_tracker.enter_state(GenericComponentState::Processing);
         let request_id = response.request_id;
 
-        tracing::debug!(
-            "Received batch verification response for request {}",
-            request_id
-        );
-
         // Route response to the appropriate channel
         if let Some(sender) = response_channels.get(&request_id) {
+            tracing::debug!(request_id, "Received batch verification response");
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Err(e) = sender.send(response).await {
-                tracing::warn!(
-                    "Failed to route response for request {}: {:?}",
-                    request_id,
-                    e
-                );
+                tracing::warn!(request_id, ?e, "Failed to route response",);
             }
         } else {
             // debug, because probably we finished processing this batch and this is an extra response
-            tracing::debug!("Response for unknown request_id {}, dropping", request_id);
+            tracing::debug!(request_id, "Response for unknown request_id, dropping");
         }
         latency_tracker.enter_state(GenericComponentState::WaitingRecv);
     }

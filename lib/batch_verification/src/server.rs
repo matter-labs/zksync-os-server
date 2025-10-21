@@ -157,9 +157,9 @@ impl BatchVerificationServer {
         self.verification_request_broadcast.send(request)?;
 
         tracing::info!(
-            "Sent batch verification request {} for batch {} to {} clients",
             request_id,
-            batch_envelope.batch_number(),
+            batch_number = batch_envelope.batch_number(),
+            "Sent batch verification request to {} clients",
             clients_count,
         );
 
