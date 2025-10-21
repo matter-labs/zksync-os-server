@@ -27,13 +27,66 @@ use zksync_os_socket::connect;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::BatchSignature;
 
+/// Cache of blocks that are to be used for batch verification
+/// Accepts blocks only in ascending order. Old blocks are evicted when not
+/// needed through a call to remove_lower_then.
+///
+/// This may be optimized by using a ring buffer for data storage instead.
+///
+/// TODO metric for blocks in signing cache
+struct BlockCache {
+    data: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
+    range: Option<(u64, u64)>,
+}
+
+impl BlockCache {
+    fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+            range: None,
+        }
+    }
+
+    /// Insert a block into the cache. Expected blocks to be added in order.
+    fn insert(
+        &mut self,
+        block_number: u64,
+        block: (BlockOutput, ReplayRecord, BlockMerkleTreeData),
+    ) -> anyhow::Result<()> {
+        self.data.insert(block_number, block);
+        if let Some((low, high)) = self.range {
+            if block_number != high + 1 {
+                anyhow::bail!("Out of order block received. This should never happen");
+            }
+            self.range = Some((low, block_number));
+        } else {
+            self.range = Some((block_number, block_number));
+        }
+        Ok(())
+    }
+
+    fn get(&self, block_number: u64) -> Option<&(BlockOutput, ReplayRecord, BlockMerkleTreeData)> {
+        self.data.get(&block_number)
+    }
+
+    /// Removes all blocks lower than the given block number
+    fn remove_lower_then(&mut self, block_number: u64) {
+        if let Some((low, _)) = self.range {
+            for num in low..block_number {
+                self.data.remove(&num);
+            }
+        }
+    }
+}
+
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient {
     chain_id: u64,
     diamond_proxy: Address,
-    signer: PrivateKeySigner,
-    block_storage: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     server_address: String,
+    signer: PrivateKeySigner,
+
+    block_cache: BlockCache,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,8 +117,83 @@ impl BatchVerificationClient {
                 .expect("Invalid batch verification private key"),
             chain_id,
             diamond_proxy,
-            block_storage: HashMap::new(),
+            block_cache: BlockCache::new(),
             server_address,
+        }
+    }
+
+    async fn connect_and_handle(
+        &mut self,
+        input: &mut PeekableReceiver<VerificationInput>,
+        latency_tracker: &ComponentStateHandle<BatchVerificationClientState>,
+    ) -> anyhow::Result<()> {
+        let mut socket = connect(&self.server_address, "/batch_verification").await?;
+
+        let batch_verification_version = socket.read_u32().await?;
+        let (recv, send) = socket.split();
+        let mut reader = FramedRead::new(
+            recv,
+            BatchVerificationRequestDecoder::new(batch_verification_version),
+        );
+        let mut writer = FramedWrite::new(
+            send,
+            BatchVerificationResponseCodec::new(batch_verification_version),
+        );
+
+        tracing::info!("Connected to main sequencer for batch verification");
+
+        loop {
+            latency_tracker.enter_state(BatchVerificationClientState::WaitingRecv);
+            tokio::select! {
+                block = input.recv() => {
+                    match block {
+                        Some((block_output, replay_record, tree_data)) => {
+                            // we remove blocks from cache based on incoming singing requests.
+                            // this prevent memory exhaustion / leak
+                            self.block_cache.insert(
+                                replay_record.block_context.block_number,
+                                (block_output, replay_record, tree_data),
+                            )?;
+                        }
+                        None => return Ok(()), // Channel closed, we are stopping now
+                    }
+                }
+                // Handling in sequence without concurrency is fine as we shouldn't get too many requests and they should handle fast
+                server_message = reader.next() => {
+                    match server_message {
+                        Some(Ok(message)) => {
+                            latency_tracker.enter_state(BatchVerificationClientState::Processing);
+                            // if we got a request to sign batch starting at a block number,
+                            // then we will never get requests for lower block numbers and
+                            // we may remove them from memory
+                            self.block_cache.remove_lower_then(message.first_block_number);
+
+                            let batch_number = message.batch_number;
+                            let request_id = message.request_id;
+                            let verification_result = self.handle_verification_request(message).await;
+                            latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
+                            match verification_result {
+                                Ok(signature) => {
+                                    tracing::info!("Approved batch verification request for {}", batch_number);
+                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Success(signature) }).await?;
+                                },
+                                Err(reason) => {
+                                    tracing::info!("Batch {} verification failed: {}", batch_number, reason);
+                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
+                                },
+                            }
+                        }
+                        Some(Err(parsing_err)) =>
+                        {
+                            tracing::error!("Error parsing verification request message. Ignoring: {}", parsing_err);
+                        }
+                        None => {
+                            tracing::error!("Server has disconnected verification client");
+                            anyhow::bail!("Server has disconnected verification client");
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -85,8 +213,8 @@ impl BatchVerificationClient {
             (request.first_block_number..=request.last_block_number)
                 .map(|block_number| {
                     let (block_output, replay_record, tree_data) = self
-                        .block_storage
-                        .get(&block_number)
+                        .block_cache
+                        .get(block_number)
                         .ok_or(BatchVerificationError::MissingBlock(block_number))?;
 
                     let (root_hash, leaf_count) = tree_data
@@ -132,76 +260,6 @@ impl BatchVerificationClient {
         let signature = BatchSignature::sign_batch(&request.commit_data, &self.signer).await;
 
         Ok(signature)
-    }
-
-    async fn connect_and_handle(
-        &mut self,
-        input: &mut PeekableReceiver<VerificationInput>,
-        latency_tracker: &ComponentStateHandle<BatchVerificationClientState>,
-    ) -> anyhow::Result<()> {
-        let mut socket = connect(&self.server_address, "/batch_verification").await?;
-
-        let batch_verification_version = socket.read_u32().await?;
-        let (recv, send) = socket.split();
-        let mut reader = FramedRead::new(
-            recv,
-            BatchVerificationRequestDecoder::new(batch_verification_version),
-        );
-        let mut writer = FramedWrite::new(
-            send,
-            BatchVerificationResponseCodec::new(batch_verification_version),
-        );
-
-        tracing::info!("Connected to main sequencer for batch verification");
-
-        loop {
-            latency_tracker.enter_state(BatchVerificationClientState::WaitingRecv);
-            tokio::select! {
-                block = input.recv() => {
-                    match block {
-                        Some((block_output, replay_record, tree_data)) => {
-                            // TODO remove old blocks from storage
-                            self.block_storage.insert(
-                                replay_record.block_context.block_number,
-                                (block_output, replay_record, tree_data),
-                            );
-                        }
-                        None => return Ok(()), // Channel closed, we are stopping now
-                    }
-                }
-                // Handling in sequence without concurrency is fine as we shouldn't get too many requests and they should handle fast
-                server_message = reader.next() => {
-                    match server_message {
-                        Some(Ok(message)) => {
-                            latency_tracker.enter_state(BatchVerificationClientState::Processing);
-                            //TODO a way to send errors
-                            let batch_number = message.batch_number;
-                            let request_id = message.request_id;
-                            let verification_result = self.handle_verification_request(message).await;
-                            latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
-                            match verification_result {
-                                Ok(signature) => {
-                                    tracing::info!("Approved batch verification request for {}", batch_number);
-                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Success(signature) }).await?;
-                                },
-                                Err(reason) => {
-                                    tracing::info!("Batch {} verification failed: {}", batch_number, reason);
-                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
-                                },
-                            }
-                        }
-                        Some(Err(parsing_err)) =>
-                        {
-                            tracing::error!("Error parsing verfication request message. Ignoring: {}", parsing_err);
-                        }
-                        None => {
-                            tracing::error!("Server has disconnected verification client");
-                            anyhow::bail!("Server has disconnected verification client");
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
