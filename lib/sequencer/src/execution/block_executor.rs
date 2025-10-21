@@ -189,7 +189,11 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             let partial_seal_block_result = runner.seal_block().await;
                             tracing::error!(
                                 ?partial_seal_block_result,
-                                error
+                                tx_hash = %tx.hash(),
+                                block_number = ctx.block_number,
+                                cumulative_gas_used = cumulative_gas_used + tx.inner.gas_limit(),
+                                gas_limit = ctx.gas_limit,
+                                "Transaction cannot be included in block: cumulative gas exceeds block gas limit"
                             );
                             return Err(
                                 BlockDump {
@@ -283,7 +287,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             "Block #{} output hash mismatch: expected {expected_hash}, got {block_hash_output}",
             ctx.block_number,
         );
-        tracing::error!(?output, error);
+        tracing::error!(?output, block_number = ctx.block_number, expected = %expected_hash, actual = %block_hash_output, "Block output hash mismatch");
         return Err(BlockDump {
             ctx,
             txs: all_processed_txs.clone(),

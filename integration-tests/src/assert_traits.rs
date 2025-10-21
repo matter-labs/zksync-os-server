@@ -43,7 +43,7 @@ impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
             .get_receipt()
             .await?;
         if !receipt.status() {
-            tracing::error!(?receipt, "transaction failed");
+            tracing::error!(?receipt, "Transaction failed");
             // Ignore error if `deubg_traceTransaction` is not implemented (which is currently the
             // case for zksync-os node).
             if let Ok(trace) = provider
@@ -56,7 +56,7 @@ impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
                 let call_frame = trace
                     .try_into_call_frame()
                     .expect("failed to convert call frame; should never happen");
-                tracing::error!(?call_frame, "failed call frame");
+                tracing::error!(?call_frame, "Failed call frame");
                 anyhow::bail!("transaction failed when it was expected to succeed");
             }
         }

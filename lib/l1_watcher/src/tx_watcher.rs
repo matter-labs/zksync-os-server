@@ -1,9 +1,8 @@
-use crate::watcher::{L1Watcher, L1WatcherError, WatchedEvent};
+use crate::watcher::{L1Watcher, L1WatcherError, ProcessL1Event};
 use crate::{L1WatcherConfig, util};
 use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
@@ -13,9 +12,7 @@ use zksync_os_types::{L1EnvelopeError, L1PriorityEnvelope};
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
 pub struct L1TxWatcher {
-    l1_watcher: L1Watcher<L1PriorityEnvelope>,
     next_l1_priority_id: u64,
-    poll_interval: Duration,
     output: mpsc::Sender<L1PriorityEnvelope>,
 }
 
@@ -25,7 +22,7 @@ impl L1TxWatcher {
         zk_chain: ZkChain<DynProvider>,
         output: mpsc::Sender<L1PriorityEnvelope>,
         next_l1_priority_id: u64,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<L1Watcher<Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -51,54 +48,19 @@ impl L1TxWatcher {
 
         tracing::info!(next_l1_block, "resolved on L1");
 
-        let l1_watcher = L1Watcher::new(zk_chain, next_l1_block, config.max_blocks_to_process);
-
-        Ok(Self {
-            l1_watcher,
+        let this = Self {
             next_l1_priority_id,
             output,
-            poll_interval: config.poll_interval,
-        })
-    }
+        };
+        let l1_watcher = L1Watcher::new(
+            zk_chain,
+            next_l1_block,
+            config.max_blocks_to_process,
+            config.poll_interval,
+            this,
+        );
 
-    pub async fn run(mut self) -> L1TxWatcherResult<()> {
-        let mut timer = tokio::time::interval(self.poll_interval);
-        loop {
-            timer.tick().await;
-            self.poll().await?;
-        }
-    }
-}
-
-impl L1TxWatcher {
-    async fn poll(&mut self) -> L1TxWatcherResult<()> {
-        // Proactively iterate while there are more blocks to process.
-        loop {
-            let output = self.l1_watcher.poll().await?;
-            for tx in output.events {
-                if tx.priority_id() < self.next_l1_priority_id {
-                    tracing::debug!(
-                        priority_id = tx.priority_id(),
-                        hash = ?tx.hash(),
-                        "skipping already processed priority transaction",
-                    )
-                } else {
-                    self.next_l1_priority_id = tx.priority_id() + 1;
-                    tracing::debug!(
-                        priority_id = tx.priority_id(),
-                        hash = ?tx.hash(),
-                        "sending new priority transaction for processing",
-                    );
-                    self.output
-                        .send(tx)
-                        .await
-                        .map_err(|_| L1TxWatcherError::OutputClosed)?;
-                }
-            }
-            if !output.more_available {
-                return Ok(());
-            }
-        }
+        Ok(l1_watcher)
     }
 }
 
@@ -113,11 +75,35 @@ async fn find_l1_block_by_priority_id(
     .await
 }
 
-impl WatchedEvent for L1PriorityEnvelope {
+impl ProcessL1Event for L1TxWatcher {
     const NAME: &'static str = "priority_tx";
 
     type SolEvent = NewPriorityRequest;
-}
+    type WatchedEvent = L1PriorityEnvelope;
+    type Error = L1EnvelopeError;
 
-pub type L1TxWatcherResult<T> = Result<T, L1TxWatcherError>;
-pub type L1TxWatcherError = L1WatcherError<L1EnvelopeError>;
+    async fn process_event(
+        &mut self,
+        tx: L1PriorityEnvelope,
+    ) -> Result<(), L1WatcherError<Self::Error>> {
+        if tx.priority_id() < self.next_l1_priority_id {
+            tracing::debug!(
+                priority_id = tx.priority_id(),
+                hash = ?tx.hash(),
+                "skipping already processed priority transaction",
+            );
+        } else {
+            self.next_l1_priority_id = tx.priority_id() + 1;
+            tracing::debug!(
+                priority_id = tx.priority_id(),
+                hash = ?tx.hash(),
+                "sending new priority transaction for processing",
+            );
+            self.output
+                .send(tx)
+                .await
+                .map_err(|_| L1WatcherError::OutputClosed)?;
+        }
+        Ok(())
+    }
+}

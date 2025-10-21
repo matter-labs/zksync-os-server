@@ -166,7 +166,7 @@ impl ReadBatch for ProofStorage {
                 tracing::warn!(
                     batch_number = mid,
                     last_committed_batch,
-                    "missing from proof storage"
+                    "Missing batch from proof storage"
                 );
                 hi = mid;
             }

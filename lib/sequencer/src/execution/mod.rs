@@ -112,7 +112,7 @@ where
                         if let Err(err) =
                             save_dump(self.sequencer_config.block_dump_path.clone(), dump)
                         {
-                            tracing::error!("Failed to write dump: {err}");
+                            tracing::error!(?err, "Failed to write block dump");
                         }
                         error
                     })
