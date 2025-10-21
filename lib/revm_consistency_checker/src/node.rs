@@ -9,7 +9,7 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_revm::{DefaultZk, ZkBuilder};
+use zksync_os_revm::{DefaultZk, ZkBuilder};
 
 use crate::helpers::zk_tx_into_revm_tx;
 use crate::revm_state_db::RevmStateDb;

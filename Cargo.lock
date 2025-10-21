@@ -11388,9 +11388,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync-revm"
+name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/vladbochok/zksync-revm?branch=main#af49e96a0df0e3e0eb1f6d3bc521025e864cabdc"
+source = "git+https://github.com/matter-labs/zksync-os-revm?branch=vb-initial-version#1191d10929d3b878c9adae66a39898651e71b152"
 dependencies = [
  "auto_impl",
  "revm",
@@ -11829,7 +11829,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
- "zksync-revm",
+ "zksync-os-revm",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_mempool",
@@ -11978,7 +11978,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
- "zksync-revm",
+ "zksync-os-revm",
  "zksync_os_contract_interface",
  "zksync_os_genesis",
  "zksync_os_interface",
