@@ -118,7 +118,12 @@ where
                     })
                     .context("execute_block")?;
 
-            tracing::debug!(block_number, "Executed. Adding to state...",);
+            tracing::debug!(block_number, "Executed. Adding to block replay storage...");
+            latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
+
+            self.replay.append(replay_record.clone());
+
+            tracing::debug!(block_number, "Added to replay storage. Adding to state...",);
             latency_tracker.enter_state(SequencerState::AddingToState);
 
             self.state.add_block_result(
@@ -146,14 +151,6 @@ where
                 .on_canonical_state_change(&block_output, &replay_record);
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider.remove_txs(purged_txs_hashes);
-
-            tracing::debug!(
-                block_number,
-                "Reported to mempools. Adding to block replay storage..."
-            );
-            latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
-
-            self.replay.append(replay_record.clone());
 
             tracing::debug!(
                 block_number,
