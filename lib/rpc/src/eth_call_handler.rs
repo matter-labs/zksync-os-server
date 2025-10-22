@@ -540,6 +540,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
         Ok(U256::from(highest_gas_limit))
     }
+
+    pub fn pending_block_context(&self) -> Option<BlockContext> {
+        *self.pending_block_context.borrow()
+    }
 }
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
