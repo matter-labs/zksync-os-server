@@ -8,8 +8,8 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 
 use crate::helpers::zk_tx_into_revm_tx;
 use crate::revm_state_db::RevmStateDb;
@@ -87,6 +87,8 @@ where
                     block.beneficiary = replay_record.block_context.coinbase;
                     block.basefee = replay_record.block_context.eip1559_basefee.saturating_to();
                     block.gas_limit = replay_record.block_context.gas_limit;
+                    // `replay_record.block_context` holds an incorrect `prevrandao` value.
+                    // We use the actual value that ZKsync OS uses instead.
                     block.prevrandao = Some(U256::ONE.into());
                 })
                 .build_zk();

@@ -5,9 +5,9 @@ use reth_revm::context::TxEnv;
 use reth_revm::primitives::TxKind;
 use reth_revm::state::Bytecode;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
-use zksync_os_types::ZkTransaction;
 use zksync_os_revm::ZKsyncTx;
 use zksync_os_revm::transaction::abstraction::ZKsyncTxBuilder;
+use zksync_os_types::ZkTransaction;
 
 /// Get unpadded code from full bytecode with artifacts.
 pub fn get_unpadded_code(full_bytecode: &[u8], account: &AccountProperties) -> Bytecode {

@@ -84,13 +84,10 @@ where
 
     /// Gets basic account information.
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        Ok(self
-            .state
+        self.state
             .state_view_at(self.latest_block)?
             .get_account(address)
-            .map(|props| {
-                // If an account has no bytecode but a non-zero nonce or balance,
-                // it has an empty keccak256 code hash
+            .map(|props| -> Result<_, Self::Error> {
                 let observable_code_hash = {
                     let is_acc_empty = props.nonce == 0 && props.balance.is_zero();
                     if props.observable_bytecode_hash.is_zero() && !is_acc_empty {
@@ -100,22 +97,22 @@ where
                     }
                 };
 
-                AccountInfo {
+                let code = if props.bytecode_hash.is_zero() {
+                    None
+                } else {
+                    let bytecode =
+                        self.code_by_hash_ref(B256::from(props.bytecode_hash.as_u8_array()))?;
+                    Some(get_unpadded_code(bytecode.bytes_slice(), &props))
+                };
+
+                Ok(AccountInfo {
                     nonce: props.nonce,
                     balance: props.balance,
                     code_hash: observable_code_hash,
-                    code: if props.bytecode_hash.is_zero() {
-                        None
-                    } else {
-                        // Retrieve ZKsync OS internal bytecode from the database.
-                        // Then clean it by removing any padding or metadata artifacts before use.
-                        let bytecode = self
-                            .code_by_hash_ref(B256::from(props.bytecode_hash.as_u8_array()))
-                            .expect("code_by_hash");
-                        Some(get_unpadded_code(bytecode.bytes_slice(), &props))
-                    },
-                }
-            }))
+                    code,
+                })
+            })
+            .transpose()
     }
 
     /// Gets account code by its hash.
