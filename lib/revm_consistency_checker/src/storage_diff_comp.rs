@@ -197,8 +197,6 @@ impl CompareReport {
     }
 }
 
-/* ------------------------------ builders ------------------------------ */
-
 fn build_revm_storage_map<DB>(
     cache_db: &CacheDB<DB>,
 ) -> Result<HashMap<(Address, B256), B256>, anyhow::Error>
@@ -285,8 +283,6 @@ fn build_zk_accounts(zksync_account_diffs: &[AccountDiff]) -> HashMap<Address, A
     }
     map
 }
-
-/* ------------------------------ comparers ----------------------------- */
 
 fn compare_storage(
     revm: &HashMap<(Address, B256), B256>,
@@ -421,8 +417,6 @@ fn compare_accounts(
 
     mismatches
 }
-
-/* ------------------------------ helpers ------------------------------- */
 
 #[inline]
 fn code_hash_equivalent(a: B256, b: B256) -> bool {
