@@ -11682,6 +11682,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_batch_types"
+version = "0.9.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "serde",
+ "thiserror 2.0.12",
+ "zksync_os_contract_interface",
+ "zksync_os_merkle_tree",
+]
+
+[[package]]
 name = "zksync_os_batch_verification"
 version = "0.9.1-non-semver-compat"
 dependencies = [
@@ -11705,6 +11716,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "zk_ee",
+ "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_l1_sender",
@@ -11870,6 +11882,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
+ "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
@@ -12247,6 +12260,7 @@ dependencies = [
  "vise",
  "zk_ee",
  "zksync-os-revm",
+ "zksync_os_batch_types",
  "zksync_os_batch_verification",
  "zksync_os_contract_interface",
  "zksync_os_gas_adjuster",

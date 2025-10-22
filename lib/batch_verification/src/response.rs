@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::codec::{self, LengthDelimitedCodec};
 
 use crate::BATCH_VERIFICATION_WIRE_FORMAT_VERSION;
-use zksync_os_types::BatchSignature;
+use zksync_os_batch_types::BatchSignature;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum BatchVerificationResult {

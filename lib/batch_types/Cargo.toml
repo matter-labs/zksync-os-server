@@ -1,0 +1,18 @@
+[package]
+name = "zksync_os_batch_types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_merkle_tree.workspace = true
+zksync_os_contract_interface.workspace = true
+
+alloy.workspace = true
+thiserror.workspace = true
+serde.workspace = true

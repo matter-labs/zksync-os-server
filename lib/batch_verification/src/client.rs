@@ -14,9 +14,10 @@ use structdiff::StructDiff;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite};
+use zksync_os_batch_types::BatchSignature;
+use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::commitment::BatchInfo;
-use zksync_os_merkle_tree::BlockMerkleTreeData;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_observability::ComponentStateReporter;
@@ -25,7 +26,6 @@ use zksync_os_observability::StateLabel;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_socket::connect;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::BatchSignature;
 
 /// Cache of blocks that are to be used for batch verification
 /// Accepts blocks only in ascending order. Old blocks are evicted when not

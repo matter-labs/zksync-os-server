@@ -1,12 +1,11 @@
 use super::v1::{BatchVerificationRequestWireFormatV1, BatchVerificationResponseWireFormatV1};
 use crate::{
-    BatchVerificationRequest, BatchVerificationResponse,
-    response::BatchVerificationResult,
+    BatchVerificationRequest, BatchVerificationResponse, response::BatchVerificationResult,
     wire_format::v1::BatchVerificationResponseResultWireFormatV1,
 };
 use alloy::sol_types::SolValue;
+use zksync_os_batch_types::BatchSignature;
 use zksync_os_contract_interface::{IExecutor::CommitBatchInfoZKsyncOS, models::CommitBatchInfo};
-use zksync_os_types::BatchSignature;
 
 impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
     fn from(value: BatchVerificationRequestWireFormatV1) -> Self {
