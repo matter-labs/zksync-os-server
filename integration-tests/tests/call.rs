@@ -1,10 +1,12 @@
 use alloy::consensus::BlobTransactionSidecar;
+use alloy::primitives::{U256, b256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
-use alloy::rpc::types::state::StateOverride;
+use alloy::rpc::types::state::{AccountOverride, StateOverride};
+use std::collections::HashMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::EthCallAssert;
-use zksync_os_integration_tests::contracts::{EventEmitter, SimpleRevert};
+use zksync_os_integration_tests::contracts::{EventEmitter, SimpleRevert, TracingSecondary};
 
 #[test_log::test(tokio::test)]
 async fn call_genesis() -> anyhow::Result<()> {
@@ -22,14 +24,6 @@ async fn call_genesis() -> anyhow::Result<()> {
 async fn call_fail() -> anyhow::Result<()> {
     // Test that the node responds with proper errors when `eth_call` fails
     let tester = Tester::setup().await?;
-
-    // Override errors
-    tester
-        .l2_provider
-        .call(TransactionRequest::default())
-        .overrides(StateOverride::from_iter([]))
-        .expect_to_fail("state overrides are not supported in `eth_call`")
-        .await;
 
     // Tx type errors
     tester
@@ -151,6 +145,48 @@ async fn call_revert() -> anyhow::Result<()> {
         error,
         "server returned an error response: error code 3: execution reverted: my message, data: \"0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000a6d79206d65737361676500000000000000000000000000000000000000000000\""
     );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn call_with_state_overrides() -> anyhow::Result<()> {
+    // Deploy a dummy contract with storage at slot 0, call it to read the value,
+    // then call again with a state override for slot 0 and expect a different result.
+    let tester = Tester::setup().await?;
+
+    // Deploy TracingSecondary with `data = 1` stored at slot 0
+    let initial_data = U256::from(1);
+    let contract = TracingSecondary::deploy(tester.l2_provider.clone(), initial_data).await?;
+
+    // Build a TransactionRequest for multiply(1) -> returns the storage-backed value
+    let tx_req = contract.multiply(U256::from(1)).into_transaction_request();
+
+    // Baseline call without overrides (should return 1)
+    let out = tester.l2_provider.call(tx_req.clone()).await?;
+    let baseline = U256::from_be_slice(&out);
+    assert_eq!(baseline, initial_data);
+
+    // Prepare state override via JSON to match expected types: set slot 0 to 2
+    let overrides = StateOverride::from_iter([(
+        *contract.address(),
+        AccountOverride {
+            balance: None,
+            nonce: None,
+            code: None,
+            state: Some(HashMap::from_iter([(
+                b256!("0x0000000000000000000000000000000000000000000000000000000000000000"),
+                b256!("0x0000000000000000000000000000000000000000000000000000000000000002"),
+            )])),
+            state_diff: None,
+            move_precompile_to: None,
+        },
+    )]);
+
+    // Call again with the override; expect 2 now
+    let out_overridden = tester.l2_provider.call(tx_req).overrides(overrides).await?;
+    let overridden = U256::from_be_slice(&out_overridden);
+    assert_eq!(overridden, U256::from(2));
 
     Ok(())
 }

@@ -17,6 +17,7 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_genesis.workspace = true
+zk_os_basic_system.workspace = true
 
 zksync_os_evm_errors.workspace = true
 zksync_os_interface.workspace = true
