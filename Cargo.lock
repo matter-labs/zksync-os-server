@@ -11825,6 +11825,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smart-config",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "vise",

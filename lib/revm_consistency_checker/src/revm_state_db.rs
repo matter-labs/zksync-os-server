@@ -1,5 +1,3 @@
-use std::{error::Error, fmt};
-
 use crate::helpers::get_unpadded_code;
 use alloy::primitives::{Address, B256, KECCAK256_EMPTY};
 use reth_revm::{
@@ -44,30 +42,11 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct RevmStateDbError(anyhow::Error);
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct RevmStateDbError(#[from] anyhow::Error);
 
-// add this:
 impl DBErrorMarker for RevmStateDbError {}
-
-impl fmt::Display for RevmStateDbError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Error for RevmStateDbError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.0.source()
-    }
-}
-
-// convenient conversions
-impl From<anyhow::Error> for RevmStateDbError {
-    fn from(e: anyhow::Error) -> Self {
-        RevmStateDbError(e)
-    }
-}
 
 impl From<StateError> for RevmStateDbError {
     fn from(e: StateError) -> Self {

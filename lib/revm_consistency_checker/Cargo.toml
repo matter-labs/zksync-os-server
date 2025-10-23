@@ -27,6 +27,7 @@ reth-primitives.workspace = true
 reth-execution-types = { workspace = true }
 reth-revm.workspace = true
 zksync-os-revm.workspace = true
+thiserror.workspace = true
 zksync_os_merkle_tree.workspace = true
 blake2.workspace = true
 
