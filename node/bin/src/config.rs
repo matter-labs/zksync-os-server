@@ -9,7 +9,8 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
 use zksync_os_object_store::ObjectStoreConfig;
-use zksync_os_tracing::LogFormat;
+use zksync_os_observability::LogFormat;
+use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -29,6 +30,7 @@ pub struct Config {
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
     pub log_config: LogConfig,
+    pub otlp_config: OtlpConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -430,6 +432,25 @@ pub struct LogConfig {
     /// Whether to use color in logs.
     #[config(default_t = true)]
     pub use_color: bool,
+}
+
+/// Configuration for the opentelemetry stack.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct OtlpConfig {
+    /// Level of spans to be exported to OpenTelemetry.
+    /// Note that it works on top of the global log level filter.
+    #[config(default)]
+    #[config(with = Serde![str])]
+    pub level: OpenTelemetryLevel,
+
+    /// Endpoint to send traces to.
+    #[config(default_t = None)]
+    pub tracing_endpoint: Option<String>,
+
+    /// Endpoint to send logs to.
+    #[config(default_t = None)]
+    pub logging_endpoint: Option<String>,
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {

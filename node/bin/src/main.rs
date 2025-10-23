@@ -3,10 +3,10 @@ use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use zksync_os_observability::PrometheusExporterConfig;
+use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-    LogConfig, MempoolConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    LogConfig, MempoolConfig, OtlpConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
     SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::run;
@@ -22,8 +22,25 @@ pub async fn main() {
     // =========== load configs ===========
     let config = build_configs();
 
-    // =========== init tracing ===========
-    zksync_os_tracing::Tracer::new(config.log_config.format, config.log_config.use_color).init();
+    // =========== init observability ===========
+    let logs =
+        zksync_os_observability::Logs::new(config.log_config.format, config.log_config.use_color);
+    let sentry = config.general_config.sentry_url.clone().map(|sentry_url| {
+        zksync_os_observability::Sentry::new(&sentry_url).expect("Failed to create Sentry config")
+        // .with_environment(config.general_config.sentry_environment.clone())
+    });
+    let otlp = zksync_os_observability::OpenTelemetry::new(
+        config.otlp_config.level,
+        config.otlp_config.tracing_endpoint.clone(),
+        config.otlp_config.logging_endpoint.clone(),
+    )
+    .expect("Failed to create OpenTelemetry config");
+
+    let _observability_guard = zksync_os_observability::ObservabilityBuilder::new()
+        .with_logs(Some(logs))
+        .with_sentry(sentry)
+        .with_opentelemetry(Some(otlp))
+        .build();
     tracing::info!(?config, "Loaded config");
 
     let prometheus: PrometheusExporterConfig =
@@ -76,7 +93,7 @@ pub async fn main() {
                 Err(err) => tracing::error!(?err, "Prometheus exporter failed"),
             }
         },
-    }
+    };
 }
 
 async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
@@ -148,6 +165,9 @@ fn build_configs() -> Config {
     schema
         .insert(&LogConfig::DESCRIPTION, "log")
         .expect("Failed to insert log config");
+    schema
+        .insert(&OtlpConfig::DESCRIPTION, "otlp")
+        .expect("Failed to insert otlp config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -229,6 +249,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse log config");
 
+    let otlp_config = repo
+        .single::<OtlpConfig>()
+        .expect("Failed to load otlp config")
+        .parse()
+        .expect("Failed to parse otlp config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -272,5 +298,6 @@ fn build_configs() -> Config {
         prover_api_config,
         status_server_config,
         log_config,
+        otlp_config,
     }
 }
