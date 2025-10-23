@@ -1,5 +1,5 @@
 use alloy::primitives::{Address, B256, U256, address};
-use reth_revm::{DatabaseRef, db::CacheDB};
+use reth_revm::{DatabaseRef, bytecode::Bytecode, db::CacheDB};
 use std::collections::{HashMap, HashSet};
 use zksync_os_interface::types::{AccountDiff, StorageWrite};
 
@@ -245,7 +245,14 @@ where
             if code.is_empty() {
                 B256::ZERO
             } else {
-                calculate_bytecode_hash(code)
+                match code {
+                    Bytecode::LegacyAnalyzed(legacy_code) => calculate_bytecode_hash(legacy_code),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "EIP-7702 bytecode is not supported on Consistency Checker"
+                        ));
+                    }
+                }
             }
         } else {
             B256::ZERO
