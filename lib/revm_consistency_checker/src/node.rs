@@ -12,14 +12,14 @@ use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 
 use crate::helpers::zk_tx_into_revm_tx;
-use crate::revm_state_db::RevmStateDb;
+use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
 pub struct RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
 {
-    state: RevmStateDb<State>,
+    state: State,
 }
 
 impl<State> RevmConsistencyChecker<State>
@@ -27,9 +27,7 @@ where
     State: ReadStateHistory + Clone + Send + 'static,
 {
     pub fn new(state: State) -> Self {
-        Self {
-            state: RevmStateDb::new(state, 0, Default::default()),
-        }
+        Self { state }
     }
 }
 
@@ -60,14 +58,18 @@ where
             };
 
             latency_tracker.enter_state(GenericComponentState::Processing);
-            self.state.set_latest_block(
-                replay_record.block_context.block_number - 1,
-                replay_record.block_context.block_hashes,
-            );
+            let state_block_number = replay_record.block_context.block_number - 1;
+            let block_hashes = replay_record.block_context.block_hashes;
+            let state_view = self
+                .state
+                .state_view_at(state_block_number)
+                .map_err(anyhow::Error::from)?;
 
             {
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
-                let mut cache_db = CacheDB::new(self.state.clone());
+                let state_provider =
+                    RevmStateProvider::new(state_view, block_hashes, state_block_number);
+                let mut cache_db = CacheDB::new(state_provider);
                 let mut evm = Context::default()
                     .with_db(&mut cache_db)
                     .modify_cfg_chained(|cfg| {

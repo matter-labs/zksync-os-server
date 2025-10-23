@@ -8,63 +8,50 @@ use reth_revm::{
 };
 use ruint::aliases::B160;
 use zk_ee::common_structs::derive_flat_storage_key;
-use zk_os_forward_system::run::ReadStorage;
-use zksync_os_interface::{traits::PreimageSource, types::BlockHashes};
+use zksync_os_interface::types::BlockHashes;
 use zksync_os_merkle_tree::fixed_bytes_to_bytes32;
-use zksync_os_storage_api::ReadStateHistory;
-use zksync_os_storage_api::{StateError, ViewState};
+use zksync_os_storage_api::ViewState;
 
 #[derive(Debug, Clone)]
-pub struct RevmStateDb<State>
+pub struct RevmStateProvider<State>
 where
-    State: ReadStateHistory + Clone + Send + 'static,
+    State: ViewState,
 {
-    state: State,
-    latest_block: u64,
+    state_view: State,
     block_hashes: BlockHashes,
+    state_block_number: u64,
 }
 
-impl<State> RevmStateDb<State>
+impl<State> RevmStateProvider<State>
 where
-    State: ReadStateHistory + Clone + Send + 'static,
+    State: ViewState,
 {
-    pub fn new(state: State, latest_block: u64, block_hashes: BlockHashes) -> Self {
-        RevmStateDb {
-            state,
-            latest_block,
+    pub fn new(state_view: State, block_hashes: BlockHashes, state_block_number: u64) -> Self {
+        Self {
+            state_view,
             block_hashes,
+            state_block_number,
         }
-    }
-
-    pub fn set_latest_block(&mut self, latest_block: u64, block_hashes: BlockHashes) {
-        self.latest_block = latest_block;
-        self.block_hashes = block_hashes;
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct RevmStateDbError(#[from] anyhow::Error);
+pub struct RevmStateProviderError(#[from] anyhow::Error);
 
-impl DBErrorMarker for RevmStateDbError {}
+impl DBErrorMarker for RevmStateProviderError {}
 
-impl From<StateError> for RevmStateDbError {
-    fn from(e: StateError) -> Self {
-        RevmStateDbError(e.into())
-    }
-}
-
-impl<State> DatabaseRef for RevmStateDb<State>
+impl<State> DatabaseRef for RevmStateProvider<State>
 where
-    State: ReadStateHistory + Clone + Send + 'static,
+    State: ViewState,
 {
     /// The database error type.
-    type Error = RevmStateDbError;
+    type Error = RevmStateProviderError;
 
     /// Gets basic account information.
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        self.state
-            .state_view_at(self.latest_block)?
+        self.state_view
+            .clone()
             .get_account(address)
             .map(|props| -> Result<_, Self::Error> {
                 let observable_code_hash = {
@@ -97,8 +84,8 @@ where
     /// Gets account code by its hash.
     fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         Ok(self
-            .state
-            .state_view_at(self.latest_block)?
+            .state_view
+            .clone()
             .get_preimage(code_hash)
             .map(|bytes| Bytecode::new_raw(bytes.into()))
             .unwrap_or_default())
@@ -115,16 +102,16 @@ where
             &fixed_bytes_to_bytes32(index.into()),
         );
         Ok(self
-            .state
-            .state_view_at(self.latest_block)?
-            .read(flat_key)
+            .state_view
+            .clone()
+            .read(B256::from(flat_key.as_u8_array()))
             .unwrap_or_default()
-            .into_u256_be())
+            .into())
     }
 
     /// Gets block hash by block number.
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        if let Some(diff) = self.latest_block.checked_sub(number)
+        if let Some(diff) = self.state_block_number.checked_sub(number)
             && diff < 256
         {
             Ok(self.block_hashes.0[255 - diff as usize].into())
