@@ -283,13 +283,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
     pub fn estimate_gas_impl(
         &self,
-        mut request: TransactionRequest,
+        request: TransactionRequest,
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> Result<U256, EthCallError> {
-        if state_override.is_some() {
-            return Err(EthCallError::StateOverridesNotSupported);
-        }
         let block_id = block_number.unwrap_or_default();
         let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
             return Err(EthCallError::BlockNotFound(block_id));
@@ -300,6 +297,26 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .get_context(block_number)
             .ok_or(EthCallError::BlockNotFound(block_id))?;
 
+        // Choose storage view (with optional overrides) once and reuse it throughout.
+        let base_view = self.storage.state_view_at(block_number)?;
+        match state_override {
+            Some(overrides) => self.estimate_gas_with_view(
+                request,
+                block_context,
+                OverriddenStateView::new(base_view, overrides),
+            ),
+            None => self.estimate_gas_with_view(request, block_context, base_view),
+        }
+    }
+}
+
+impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
+    fn estimate_gas_with_view<V: ViewState>(
+        &self,
+        mut request: TransactionRequest,
+        block_context: BlockContext,
+        mut storage_view: V,
+    ) -> Result<U256, EthCallError> {
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
         // original geth logic. Source:
         // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
@@ -329,9 +346,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .unwrap_or_default()
             > 0
         {
-            let balance = self
-                .storage
-                .state_view_at(block_context.block_number)?
+            let balance = storage_view
                 .get_account(request.from.unwrap_or_default())
                 .as_ref()
                 .map(get_balance)
@@ -365,8 +380,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .min(highest_gas_limit),
         );
         let tx = self.create_tx_from_request(request, &block_context)?;
-
-        let storage_view = self.storage.state_view_at(block_number)?;
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
@@ -539,9 +552,6 @@ pub fn update_estimated_gas_range(
 /// Error types returned by `eth_call` implementation
 #[derive(Debug, thiserror::Error)]
 pub enum EthCallError {
-    // todo: temporary, needs to be supported eventually
-    #[error("state overrides are not supported in `eth_call`")]
-    StateOverridesNotSupported,
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,
