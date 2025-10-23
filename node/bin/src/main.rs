@@ -6,11 +6,10 @@ use tokio::sync::watch;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-    LogConfig, MempoolConfig, OtlpConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
     SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::run;
-use zksync_os_server::sentry::init_sentry;
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
@@ -23,16 +22,25 @@ pub async fn main() {
     let config = build_configs();
 
     // =========== init observability ===========
-    let logs =
-        zksync_os_observability::Logs::new(config.log_config.format, config.log_config.use_color);
-    let sentry = config.general_config.sentry_url.clone().map(|sentry_url| {
-        zksync_os_observability::Sentry::new(&sentry_url).expect("Failed to create Sentry config")
-        // .with_environment(config.general_config.sentry_environment.clone())
-    });
+    let logs = zksync_os_observability::Logs::new(
+        config.observability_config.log.format,
+        config.observability_config.log.use_color,
+    );
+    let sentry = config
+        .observability_config
+        .sentry
+        .dsn_url
+        .clone()
+        .map(|sentry_url| {
+            zksync_os_observability::Sentry::new(&sentry_url)
+                .expect("Failed to create Sentry config")
+                .with_node_version(Some(zksync_os_server::metadata::NODE_VERSION.to_string()))
+                .with_environment(config.observability_config.sentry.environment.clone())
+        });
     let otlp = zksync_os_observability::OpenTelemetry::new(
-        config.otlp_config.level,
-        config.otlp_config.tracing_endpoint.clone(),
-        config.otlp_config.logging_endpoint.clone(),
+        config.observability_config.otlp.level,
+        config.observability_config.otlp.tracing_endpoint.clone(),
+        config.observability_config.otlp.logging_endpoint.clone(),
     )
     .expect("Failed to create OpenTelemetry config");
 
@@ -44,7 +52,7 @@ pub async fn main() {
     tracing::info!(?config, "Loaded config");
 
     let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(config.general_config.prometheus_port);
+        PrometheusExporterConfig::pull(config.observability_config.prometheus.port);
 
     // =========== init interruption channel ===========
 
@@ -52,12 +60,6 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
-
-    let _sentry_guard = config
-        .general_config
-        .sentry_url
-        .clone()
-        .map(|sentry_url| init_sentry(&sentry_url));
 
     let main_task = async move {
         match config.general_config.state_backend {
@@ -163,11 +165,8 @@ fn build_configs() -> Config {
         .insert(&StatusServerConfig::DESCRIPTION, "status_server")
         .expect("Failed to insert status server config");
     schema
-        .insert(&LogConfig::DESCRIPTION, "log")
-        .expect("Failed to insert log config");
-    schema
-        .insert(&OtlpConfig::DESCRIPTION, "otlp")
-        .expect("Failed to insert otlp config");
+        .insert(&ObservabilityConfig::DESCRIPTION, "observability")
+        .expect("Failed to insert observability config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -243,17 +242,11 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse status server config");
 
-    let log_config = repo
-        .single::<LogConfig>()
-        .expect("Failed to load log config")
+    let mut observability_config = repo
+        .single::<ObservabilityConfig>()
+        .expect("Failed to load observability config")
         .parse()
-        .expect("Failed to parse log config");
-
-    let otlp_config = repo
-        .single::<OtlpConfig>()
-        .expect("Failed to load otlp config")
-        .parse()
-        .expect("Failed to parse otlp config");
+        .expect("Failed to parse observability config");
 
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
@@ -268,6 +261,7 @@ fn build_configs() -> Config {
                 &mut l1_sender_config,
                 &mut genesis_config,
                 &mut prover_api_config,
+                &mut observability_config,
             )
             .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
     }
@@ -297,7 +291,6 @@ fn build_configs() -> Config {
         prover_input_generator_config,
         prover_api_config,
         status_server_config,
-        log_config,
-        otlp_config,
+        observability_config,
     }
 }

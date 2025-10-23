@@ -1,7 +1,8 @@
 use std::{fs, path::Path, str::FromStr};
 
 use crate::config::{
-    GeneralConfig, GenesisConfig, L1SenderConfig, ProverApiConfig, RpcConfig, SequencerConfig,
+    GeneralConfig, GenesisConfig, L1SenderConfig, ObservabilityConfig, ProverApiConfig, RpcConfig,
+    SequencerConfig,
 };
 use anyhow::{Context, anyhow};
 use serde_yaml::Value;
@@ -31,6 +32,7 @@ impl ZkStackConfig {
     }
 
     /// Update the configs based off the values from the yaml files.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &self,
         general_config: &mut GeneralConfig,
@@ -39,6 +41,7 @@ impl ZkStackConfig {
         l1_sender_config: &mut L1SenderConfig,
         genesis_config: &mut GenesisConfig,
         prover_api_config: &mut ProverApiConfig,
+        observability_config: &mut ObservabilityConfig,
     ) -> anyhow::Result<()> {
         let zkstack_yaml = self.get_yaml_file("ZkStack.yaml")?;
 
@@ -88,7 +91,7 @@ impl ZkStackConfig {
             .and_then(|v| v.get("listener_port").and_then(Value::as_u64))
             .ok_or(anyhow!("Failed to get prometheus port"))?;
 
-        general_config.prometheus_port = prometheus_port as u16;
+        observability_config.prometheus.port = prometheus_port as u16;
 
         let rpc_port = api
             .get("web3_json_rpc")

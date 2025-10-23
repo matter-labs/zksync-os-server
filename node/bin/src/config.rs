@@ -29,8 +29,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
-    pub log_config: LogConfig,
-    pub otlp_config: OtlpConfig,
+    pub observability_config: ObservabilityConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -61,14 +60,6 @@ pub struct GeneralConfig {
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
-
-    /// Prometheus address to listen on.
-    #[config(default_t = 3312)]
-    pub prometheus_port: u16,
-
-    /// Sentry URL.
-    #[config(default_t = None)]
-    pub sentry_url: Option<String>,
 
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
@@ -418,6 +409,48 @@ pub struct FakeSnarkProversConfig {
     /// Only pick up jobs that are this time old.
     #[config(default_t = Duration::from_secs(10))]
     pub max_batch_age: Duration,
+}
+
+/// Set of options related to the observability stack,
+/// e.g. logging, metrics, tracing, error tracking, etc.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ObservabilityConfig {
+    /// Configuration for Prometheus metrics.
+    #[config(nest, default)]
+    pub prometheus: PrometheusConfig,
+
+    /// Configuration for Sentry error tracking.
+    #[config(nest, default)]
+    pub sentry: SentryConfig,
+
+    /// Configuration for the logging stack.
+    #[config(nest, default)]
+    pub log: LogConfig,
+
+    /// Configuration for the opentelemetry stack.
+    #[config(nest, default)]
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct PrometheusConfig {
+    /// Port to expose Prometheus metrics on.
+    #[config(default_t = 3312)]
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct SentryConfig {
+    /// Sentry DSN URL.
+    #[config(default_t = None)]
+    pub dsn_url: Option<String>,
+
+    /// Environment name for Sentry.
+    #[config(default_t = None)]
+    pub environment: Option<String>,
 }
 
 /// Configuration for the logging stack.
