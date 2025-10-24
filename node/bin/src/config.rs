@@ -9,7 +9,8 @@ use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
 use zksync_os_object_store::ObjectStoreConfig;
-use zksync_os_tracing::LogFormat;
+use zksync_os_observability::LogFormat;
+use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -28,7 +29,7 @@ pub struct Config {
     pub prover_input_generator_config: ProverInputGeneratorConfig,
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
-    pub log_config: LogConfig,
+    pub observability_config: ObservabilityConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -59,14 +60,6 @@ pub struct GeneralConfig {
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = "./db/node1".into())]
     pub rocks_db_path: PathBuf,
-
-    /// Prometheus address to listen on.
-    #[config(default_t = 3312)]
-    pub prometheus_port: u16,
-
-    /// Sentry URL.
-    #[config(default_t = None)]
-    pub sentry_url: Option<String>,
 
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
@@ -427,6 +420,48 @@ pub struct FakeSnarkProversConfig {
     pub max_batch_age: Duration,
 }
 
+/// Set of options related to the observability stack,
+/// e.g. logging, metrics, tracing, error tracking, etc.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ObservabilityConfig {
+    /// Configuration for Prometheus metrics.
+    #[config(nest, default)]
+    pub prometheus: PrometheusConfig,
+
+    /// Configuration for Sentry error tracking.
+    #[config(nest, default)]
+    pub sentry: SentryConfig,
+
+    /// Configuration for the logging stack.
+    #[config(nest, default)]
+    pub log: LogConfig,
+
+    /// Configuration for the opentelemetry stack.
+    #[config(nest, default)]
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct PrometheusConfig {
+    /// Port to expose Prometheus metrics on.
+    #[config(default_t = 3312)]
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct SentryConfig {
+    /// Sentry DSN URL.
+    #[config(default_t = None)]
+    pub dsn_url: Option<String>,
+
+    /// Environment name for Sentry.
+    #[config(default_t = None)]
+    pub environment: Option<String>,
+}
+
 /// Configuration for the logging stack.
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -439,6 +474,25 @@ pub struct LogConfig {
     /// Whether to use color in logs.
     #[config(default_t = true)]
     pub use_color: bool,
+}
+
+/// Configuration for the opentelemetry stack.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct OtlpConfig {
+    /// Level of spans to be exported to OpenTelemetry.
+    /// Note that it works on top of the global log level filter.
+    #[config(default)]
+    #[config(with = Serde![str])]
+    pub level: OpenTelemetryLevel,
+
+    /// Endpoint to send traces to.
+    #[config(default_t = None)]
+    pub tracing_endpoint: Option<String>,
+
+    /// Endpoint to send logs to.
+    #[config(default_t = None)]
+    pub logging_endpoint: Option<String>,
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
