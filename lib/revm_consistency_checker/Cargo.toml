@@ -1,0 +1,45 @@
+[package]
+name = "zksync_os_revm_consistency_checker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_genesis.workspace = true
+zksync_os_mempool.workspace = true
+zksync_os_observability.workspace = true
+zksync_os_pipeline.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+zksync_os_multivm.workspace = true
+
+zk_ee.workspace = true
+zk_os_basic_system.workspace = true
+zk_os_forward_system.workspace = true
+zksync_os_interface.workspace = true
+
+reth-primitives.workspace = true
+reth-execution-types = { workspace = true }
+reth-revm.workspace = true
+zksync-os-revm.workspace = true
+thiserror.workspace = true
+zksync_os_merkle_tree.workspace = true
+blake2.workspace = true
+
+alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+ruint.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smart-config.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+vise.workspace = true
+semver.workspace = true

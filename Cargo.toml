@@ -141,6 +141,7 @@ reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "vb-initial-version" }
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.8.4-non-semver-compat", path = "lib/contract_interface" }
@@ -167,6 +168,7 @@ zksync_os_status_server = { version = "=0.8.4-non-semver-compat", path = "lib/st
 zksync_os_multivm = { version = "=0.8.4-non-semver-compat", path = "lib/multivm" }
 zksync_os_tracing = { version = "=0.8.4-non-semver-compat", path = "lib/tracing" }
 zksync_os_pipeline = { version = "=0.8.4-non-semver-compat", path = "lib/pipeline" }
+zksync_os_revm_consistency_checker = { version = "=0.8.4-non-semver-compat", path = "lib/revm_consistency_checker" }
 
 zksync_os_server = { version = "=0.8.4-non-semver-compat", path = "node/bin" }
 

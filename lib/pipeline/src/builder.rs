@@ -65,6 +65,17 @@ impl<Output: Send + 'static> Pipeline<Output> {
         }
     }
 
+    /// Conditionally add a component if present. The component must keep the same item type.
+    pub fn pipe_opt<C>(self, component: Option<C>) -> Pipeline<Output>
+    where
+        C: PipelineComponent<Input = Output, Output = Output>,
+    {
+        match component {
+            Some(c) => self.pipe(c),
+            None => self,
+        }
+    }
+
     /// Add a transformer component to the pipeline with prepended messages
     ///
     /// This is useful when you need to reschedule messages at the start of the pipeline.

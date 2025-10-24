@@ -178,6 +178,15 @@ pub struct SequencerConfig {
     /// Useful for mitigation/operations.
     #[config(default_t = None)]
     pub max_blocks_to_produce: Option<u64>,
+
+    /// Enable REVM consistency checker.
+    /// If enabled, an additional pipeline process will be executed after the sequencer.
+    /// The process re-executes transactions on the REVM client and checks state diff consistency.
+    /// If the state diffs are inconsistent, a warning or debug message will be logged, but it won't crash.
+    /// The consistency checker propagates the output to the next pipeline item, so it is not a
+    /// blocking process and the overhead should be small.
+    #[config(default_t = false)]
+    pub revm_consistency_checker_enabled: bool,
 }
 
 impl SequencerConfig {
