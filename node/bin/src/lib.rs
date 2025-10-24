@@ -759,12 +759,12 @@ async fn run_en_pipeline(
         )
         .pipe(TreeManager { tree: tree.clone() });
 
-    let pipeline = if config.batch_verification_config.enabled {
+    let pipeline = if config.batch_verification_config.client_enabled {
         pipeline.pipe(BatchVerificationClient::new(
             config.batch_verification_config.signing_key.clone(),
             config.genesis_config.chain_id.unwrap(),
             *node_state_on_startup.l1_state.diamond_proxy.address(),
-            config.batch_verification_config.address,
+            config.batch_verification_config.connect_address,
         ))
     } else {
         pipeline.pipe(NoOpSink::new())

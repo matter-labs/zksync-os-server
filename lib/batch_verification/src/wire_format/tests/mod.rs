@@ -1,6 +1,6 @@
 use crate::{BatchVerificationRequest, BatchVerificationResponse, BatchVerificationResult};
-use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_batch_types::BatchSignature;
+use zksync_os_contract_interface::models::CommitBatchInfo;
 
 fn create_sample_request() -> BatchVerificationRequest {
     use alloy::primitives::{Address, B256};

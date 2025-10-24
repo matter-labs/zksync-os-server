@@ -52,13 +52,13 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        if self.config.enabled {
+        if self.config.server_enabled {
             let (server, response_receiver) = BatchVerificationServer::new();
             let server = Arc::new(server);
             let response_channels = Arc::new(DashMap::new());
 
             let server_for_fut = server.clone();
-            let server_address = self.config.address.clone();
+            let server_address = self.config.listen_address.clone();
             let server_fut = async move { server_for_fut.run_server(server_address).await }
                 .boxed()
                 .map(report_exit("Batch verification server"));
