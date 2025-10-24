@@ -58,8 +58,8 @@ impl Logs {
     /// Unless `disable_default_logs` was set, uses `zksync=info` as a default which is then merged
     /// with user-defined directives. Provided directives can extend/override the default value.
     ///
-    /// The provided default convers all the crates with a name starting with `zksync` (per `tracing`
-    /// [documentation][1]), which is a good enough default for any project.
+    /// The provided default enables `debug` level logging for all the crates with a name starting with `zksync`
+    /// (per `tracing` [documentation][1]), and `info` for everything else, which is a good enough default for any project.
     ///
     /// If `log_directives` are provided via `with_log_directives`, they will be used.
     /// Otherwise, the value will be parsed from the environment variable `RUST_LOG`.
@@ -69,7 +69,7 @@ impl Logs {
         let mut directives = if self.disable_default_logs {
             "".to_string()
         } else {
-            "zksync=info,".to_string()
+            "info,zksync=debug,".to_string()
         };
         if let Some(log_directives) = &self.log_directives {
             directives.push_str(log_directives);
