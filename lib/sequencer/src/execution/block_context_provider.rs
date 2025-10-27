@@ -7,7 +7,6 @@ use reth_primitives::SealedBlock;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
-use zksync_os_gas_adjuster::PubdataPriceProvider;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
@@ -41,7 +40,7 @@ pub struct BlockContextProvider<Mempool> {
     fee_collector_address: Address,
     base_fee_override: Option<u128>,
     pubdata_price_override: Option<u128>,
-    pubdata_price_provider: Arc<dyn PubdataPriceProvider>,
+    pubdata_price_provider: watch::Receiver<Option<u128>>,
     pending_block_context_sender: watch::Sender<Option<BlockContext>>,
 }
 
@@ -61,7 +60,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         fee_collector_address: Address,
         base_fee_override: Option<u128>,
         pubdata_price_override: Option<u128>,
-        pubdata_price_provider: Arc<dyn PubdataPriceProvider>,
+        pubdata_price_provider: watch::Receiver<Option<u128>>,
         pending_block_context_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
         Self {
@@ -119,8 +118,11 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(eip1559_basefee)),
                     native_price: U256::from(NATIVE_PRICE),
                     pubdata_price: U256::from(
-                        self.pubdata_price_override
-                            .unwrap_or(self.pubdata_price_provider.pubdata_price()),
+                        self.pubdata_price_override.unwrap_or(
+                            self.pubdata_price_provider
+                                .borrow()
+                                .expect("Pubdata price must be available"),
+                        ),
                     ),
                     block_number: produce_command.block_number,
                     timestamp,

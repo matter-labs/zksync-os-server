@@ -1,21 +1,18 @@
 //! This module determines the fees to pay in txs containing blocks submitted to the L1.
 
-use crate::provider::EthFeeProvider;
-use alloy::providers::DynProvider;
+use alloy::providers::{DynProvider, Provider};
 use metrics::METRICS;
 use std::time::Duration;
 use std::{
     collections::VecDeque,
     sync::{Arc, RwLock},
 };
+use tokio::sync::watch;
 
 mod metrics;
 mod provider;
 #[cfg(test)]
 mod tests;
-mod traits;
-
-pub use traits::{PanickingPubdataPriceProvider, PubdataPriceProvider};
 
 /// This component keeps track of the median `base_fee` from the last `max_base_fee_samples` blocks.
 ///
@@ -27,7 +24,8 @@ pub struct GasAdjuster {
     blob_base_fee_statistics: GasStatistics<u128>,
 
     config: GasAdjusterConfig,
-    provider: Box<dyn EthFeeProvider>,
+    provider: DynProvider,
+    pubdata_price_sender: watch::Sender<Option<u128>>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,15 +47,18 @@ pub struct GasAdjusterConfig {
 }
 
 impl GasAdjuster {
-    pub async fn new(provider: DynProvider, config: GasAdjusterConfig) -> anyhow::Result<Self> {
-        let provider: Box<dyn EthFeeProvider> = Box::new(provider);
+    pub async fn new(
+        provider: DynProvider,
+        config: GasAdjusterConfig,
+        pubdata_price_sender: watch::Sender<Option<u128>>,
+    ) -> anyhow::Result<Self> {
         // Subtracting 1 from the "latest" block number to prevent errors in case
         // the info about the latest block is not yet present on the node.
         // This sometimes happens on Infura.
         let current_block = provider.get_block_number().await?.saturating_sub(1);
-        let fee_history = provider
-            .base_fee_history(current_block, config.max_base_fee_samples as u64)
-            .await?;
+        let fee_history =
+            Self::base_fee_history(&provider, current_block, config.max_base_fee_samples as u64)
+                .await?;
 
         let base_fee_statistics = GasStatistics::new(
             config.max_base_fee_samples,
@@ -76,6 +77,7 @@ impl GasAdjuster {
             blob_base_fee_statistics,
             config,
             provider,
+            pubdata_price_sender,
         })
     }
 
@@ -91,10 +93,7 @@ impl GasAdjuster {
 
         if current_block > last_processed_block {
             let n_blocks = current_block - last_processed_block;
-            let fee_data = self
-                .provider
-                .base_fee_history(current_block, n_blocks)
-                .await?;
+            let fee_data = Self::base_fee_history(&self.provider, current_block, n_blocks).await?;
 
             // We shouldn't rely on L1 provider to return consistent results, so we check that we have at least one new sample.
             if let Some(current_base_fee_per_gas) = fee_data.last().map(|fee| fee.base_fee_per_gas)
@@ -137,6 +136,9 @@ impl GasAdjuster {
                     .median_blob_base_fee
                     .set(self.blob_base_fee_statistics.median() as u64);
             }
+
+            self.pubdata_price_sender
+                .send_replace(Some(self.pubdata_price_inner()));
         }
         Ok(())
     }
