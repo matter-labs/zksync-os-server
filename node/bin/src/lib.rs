@@ -7,13 +7,12 @@ mod command_source;
 pub mod config;
 mod en_remote_config;
 mod l1_provider;
-mod metadata;
+pub mod metadata;
 mod node_state_on_startup;
 mod priority_tree_steps;
 pub mod prover_api;
 mod prover_input_generator;
 mod replay_transport;
-pub mod sentry;
 mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
@@ -64,6 +63,7 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
+use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
@@ -620,6 +620,12 @@ async fn run_main_node_pipeline(
             sequencer_config: config.sequencer_config.clone().into(),
             tx_acceptance_state_sender,
         })
+        .pipe_opt(
+            config
+                .sequencer_config
+                .revm_consistency_checker_enabled
+                .then(|| RevmConsistencyChecker::new(state.clone())),
+        )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(ProverInputGenerator {
             enable_logging: config.prover_input_generator_config.logging_enabled,
@@ -714,6 +720,12 @@ async fn run_en_pipeline(
             sequencer_config: config.sequencer_config.clone().into(),
             tx_acceptance_state_sender,
         })
+        .pipe_opt(
+            config
+                .sequencer_config
+                .revm_consistency_checker_enabled
+                .then(|| RevmConsistencyChecker::new(state.clone())),
+        )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(NoOpSink::new())
         .spawn(tasks);

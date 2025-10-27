@@ -194,7 +194,7 @@ impl Tester {
             },
             prover_api_config,
             status_server_config,
-            log_config: Default::default(),
+            observability_config: Default::default(),
             gas_adjuster_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
