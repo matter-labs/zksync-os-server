@@ -79,7 +79,8 @@ impl GasAdjuster {
             provider,
             pubdata_price_sender,
         };
-        this.pubdata_price_sender.send_replace(Some(this.pubdata_price_inner()));
+        this.pubdata_price_sender
+            .send_replace(Some(this.pubdata_price_inner()));
 
         Ok(this)
     }
