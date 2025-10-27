@@ -302,10 +302,13 @@ impl BatchVerifier {
                 continue;
             };
 
+            let signer = validated_signature.signer().to_string();
+
             if responses.push(validated_signature).is_err() {
                 tracing::warn!(
                     batch_number = batch_envelope.batch_number(),
                     request_id = request_id,
+                    signer = signer,
                     "Received duplicated signature",
                 );
                 continue;
@@ -314,6 +317,7 @@ impl BatchVerifier {
             tracing::debug!(
                 batch_number = batch_envelope.batch_number(),
                 request_id = request_id,
+                signer = signer,
                 "Validated response {} of {}",
                 responses.len(),
                 self.config.threshold
@@ -379,6 +383,7 @@ impl BatchVerifier {
             tracing::warn!(
                 batch_number = commit_data.batch_number,
                 request_id = request_id,
+                signer = validated_signature.signer().to_string(),
                 "Signature from unknown signer",
             );
             return None;
