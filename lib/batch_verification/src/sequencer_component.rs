@@ -108,7 +108,7 @@ async fn run_batch_response_processor(
             tracing::debug!(request_id, "Received batch verification response");
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Err(e) = sender.send(response).await {
-                tracing::warn!(request_id, ?e, "Failed to route response",);
+                tracing::warn!(request_id, ?e, "Failed to route response");
             }
         } else {
             // debug, because probably we finished processing this batch and this is an extra response
