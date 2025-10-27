@@ -59,24 +59,22 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
 
             let server_for_fut = server.clone();
             let server_address = self.config.listen_address.clone();
-            let server_fut = async move { server_for_fut.run_server(server_address).await }
+            let server_fut = server_for_fut
+                .run_server(server_address)
                 .boxed()
                 .map(report_exit("Batch verification server"));
 
             let response_channels_for_fut = response_channels.clone();
-            let response_processor_fut = async move {
-                run_batch_response_processor(response_receiver, response_channels_for_fut).await
-            }
-            .boxed()
-            .map(report_exit("Batch response processor"));
+            let response_processor_fut =
+                run_batch_response_processor(response_receiver, response_channels_for_fut)
+                    .boxed()
+                    .map(report_exit("Batch response processor"));
 
-            let verifier_fut = async move {
-                BatchVerifier::new(self.config, response_channels, server)
-                    .run(input, output)
-                    .await
-            }
-            .boxed()
-            .map(report_exit("Batch verifier"));
+            let verifier = BatchVerifier::new(self.config, response_channels, server);
+            let verifier_fut = verifier
+                .run(input, output)
+                .boxed()
+                .map(report_exit("Batch verifier"));
 
             select_all(vec![server_fut, response_processor_fut, verifier_fut]).await;
             Ok(())
