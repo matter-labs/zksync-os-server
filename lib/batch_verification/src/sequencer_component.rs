@@ -5,7 +5,7 @@ use alloy::primitives::Address;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::FutureExt;
-use futures::future::join_all;
+use futures::future::select_all;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -78,7 +78,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
             .boxed()
             .map(report_exit("Batch verifier"));
 
-            join_all(vec![server_fut, response_processor_fut, verifier_fut]).await;
+            select_all(vec![server_fut, response_processor_fut, verifier_fut]).await;
             Ok(())
         } else {
             while let Some(batch) = input.recv().await {
