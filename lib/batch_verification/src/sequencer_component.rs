@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
-use zksync_os_batch_types::BatchSignatureSet;
+use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
+use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
@@ -295,42 +296,11 @@ impl BatchVerifier {
                     Err(_) => return Err(BatchVerificationError::Timeout),
                 };
 
-            let signature = match response {
-                BatchVerificationResponse {
-                    result: BatchVerificationResult::Success(signature),
-                    ..
-                } => signature,
-                BatchVerificationResponse {
-                    result: BatchVerificationResult::Refused(reason),
-                    ..
-                } => {
-                    tracing::info!(
-                        batch_number = batch_envelope.batch_number(),
-                        request_id = request_id,
-                        "Verification refused: {}",
-                        reason
-                    );
-                    continue;
-                }
-            };
-
-            let Ok(validated_signature) = signature.verify_signature(&commit_data) else {
-                tracing::warn!(
-                    batch_number = batch_envelope.batch_number(),
-                    request_id = request_id,
-                    "Invalid signature",
-                );
+            let Some(validated_signature) =
+                self.process_response(&commit_data, request_id, response)
+            else {
                 continue;
             };
-
-            if !self.accepted_signers.contains(validated_signature.signer()) {
-                tracing::warn!(
-                    batch_number = batch_envelope.batch_number(),
-                    request_id = request_id,
-                    "Signature from unknown signer",
-                );
-                continue;
-            }
 
             if responses.push(validated_signature).is_err() {
                 tracing::warn!(
@@ -366,5 +336,54 @@ impl BatchVerifier {
         self.response_channels.remove(&request_id);
 
         Ok(responses)
+    }
+
+    /// Processes BatchVerificationResponse, on any error logs and returns None
+    /// - extracts & validates signature
+    /// - checks against list of accepted signers
+    fn process_response(
+        &self,
+        commit_data: &CommitBatchInfo,
+        request_id: u64,
+        response: BatchVerificationResponse,
+    ) -> Option<ValidatedBatchSignature> {
+        let signature = match response {
+            BatchVerificationResponse {
+                result: BatchVerificationResult::Success(signature),
+                ..
+            } => signature,
+            BatchVerificationResponse {
+                result: BatchVerificationResult::Refused(reason),
+                ..
+            } => {
+                tracing::info!(
+                    batch_number = commit_data.batch_number,
+                    request_id = request_id,
+                    "Verification refused: {}",
+                    reason
+                );
+                return None;
+            }
+        };
+
+        let Ok(validated_signature) = signature.verify_signature(&commit_data) else {
+            tracing::warn!(
+                batch_number = commit_data.batch_number,
+                request_id = request_id,
+                "Invalid signature",
+            );
+            return None;
+        };
+
+        if !self.accepted_signers.contains(validated_signature.signer()) {
+            tracing::warn!(
+                batch_number = commit_data.batch_number,
+                request_id = request_id,
+                "Signature from unknown signer",
+            );
+            return None;
+        }
+
+        Some(validated_signature)
     }
 }
