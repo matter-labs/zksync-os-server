@@ -72,13 +72,16 @@ impl GasAdjuster {
             fee_history.iter().map(|fee| fee.base_fee_per_blob_gas),
         );
 
-        Ok(Self {
+        let this = Self {
             base_fee_statistics,
             blob_base_fee_statistics,
             config,
             provider,
             pubdata_price_sender,
-        })
+        };
+        this.pubdata_price_sender.send_replace(Some(this.pubdata_price_inner()));
+
+        Ok(this)
     }
 
     /// Performs an actualization routine for `GasAdjuster`.
