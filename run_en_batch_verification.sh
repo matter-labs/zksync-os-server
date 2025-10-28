@@ -10,6 +10,6 @@ general_rocks_db_path=./db/en \
 general_prometheus_port=3313 \
 rpc_address=0.0.0.0:3051 \
 status_server_address=0.0.0.0:3073 \
-batch_verification_enabled=true \
+batch_verification_client_enabled=true \
 RUST_LOG=info,zksync_os_batch_verification=debug \
 cargo run #--release
