@@ -116,14 +116,11 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
                     match server_message {
                         Some(Ok(message)) => {
                             latency_tracker.enter_state(BatchVerificationClientState::Processing);
-                            // if we got a request to sign batch starting at a block number,
-                            // then we will never get requests for lower block numbers and
-                            // we may remove them from memory
-                            self.block_cache.remove_lower_then(message.first_block_number);
 
                             let batch_number = message.batch_number;
                             let request_id = message.request_id;
                             let verification_result = self.handle_verification_request(message).await;
+
                             latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
                             match verification_result {
                                 Ok(signature) => {
