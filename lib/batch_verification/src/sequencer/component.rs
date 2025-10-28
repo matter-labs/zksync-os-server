@@ -1,5 +1,5 @@
+use super::server::{BatchVerificationRequestError, BatchVerificationServer};
 use crate::config::BatchVerificationConfig;
-use crate::{BatchVerificationRequestError, BatchVerificationServer};
 use crate::{BatchVerificationResponse, BatchVerificationResult};
 use alloy::primitives::Address;
 use async_trait::async_trait;

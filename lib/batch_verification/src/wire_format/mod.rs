@@ -35,12 +35,6 @@ impl BatchVerificationRequest {
 }
 
 impl BatchVerificationResponse {
-    /// Encodes the response using the current wire format version
-    pub fn encode_with_current_version(self) -> Vec<u8> {
-        let wire_format = v1::BatchVerificationResponseWireFormatV1::from(self);
-        bincode::encode_to_vec(wire_format, bincode::config::standard()).unwrap()
-    }
-
     pub fn encode_with_version(self, version: u32) -> Vec<u8> {
         match version {
             1 => {

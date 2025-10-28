@@ -18,7 +18,7 @@ use zksync_os_socket::skip_http_headers;
 /// Accepts connections from batch verification clients. Crafts and sends
 /// BatchVerificationRequests to all clients. Receives responses and forwards
 /// them through the channel to batch_response_processor
-pub struct BatchVerificationServer {
+pub(super) struct BatchVerificationServer {
     verification_request_broadcast: broadcast::Sender<BatchVerificationRequest>,
     response_sender: mpsc::Sender<BatchVerificationResponse>,
 }
