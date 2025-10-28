@@ -383,15 +383,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_sender_config.rollup_pubdata_mode,
             config.l1_sender_config.max_priority_fee_per_gas_gwei,
         );
-        let gas_adjuster = Arc::new(
-            GasAdjuster::new(
-                l1_provider.clone().erased(),
-                gas_adjuster_config,
-                pubdata_price_sender,
-            )
-            .await
-            .unwrap(),
-        );
+        let gas_adjuster = GasAdjuster::new(
+            l1_provider.clone().erased(),
+            gas_adjuster_config,
+            pubdata_price_sender,
+        )
+        .await
+        .unwrap();
         tasks.spawn(gas_adjuster.run().map(report_exit("Gas adjuster server")));
     }
 
