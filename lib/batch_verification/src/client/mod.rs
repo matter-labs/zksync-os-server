@@ -28,6 +28,8 @@ use zksync_os_storage_api::ReadFinality;
 use zksync_os_storage_api::ReplayRecord;
 
 mod block_cache;
+mod metrics;
+
 use block_cache::BlockCache;
 
 /// Client that connects to the main sequencer for batch verification

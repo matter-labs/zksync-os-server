@@ -4,13 +4,13 @@ use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::ReadFinality;
 use zksync_os_storage_api::ReplayRecord;
 
+use super::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
+
 /// Cache of blocks that are to be used for batch verification
 /// Accepts blocks only in ascending order. Old blocks are evicted when not
 /// needed through a call to remove_lower_then.
 ///
 /// This may be optimized by using a ring buffer for data storage instead.
-///
-/// TODO metric for blocks in signing cache
 pub(super) struct BlockCache<Finality> {
     data: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     range: Option<(u64, u64)>,
@@ -44,6 +44,7 @@ impl<Finality: ReadFinality> BlockCache<Finality> {
 
         // evict block for committed batches
         self.remove_lower_then(self.finality.get_finality_status().last_committed_block + 1);
+        // BATCH_VERIFICATION_CLIENT_METRICS.block_cache_size updated in remove_lower_then
         Ok(())
     }
 
@@ -61,5 +62,8 @@ impl<Finality: ReadFinality> BlockCache<Finality> {
                 self.data.remove(&num);
             }
         }
+        BATCH_VERIFICATION_CLIENT_METRICS
+            .block_cache_size
+            .set(self.data.len());
     }
 }

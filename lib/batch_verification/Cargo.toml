@@ -41,3 +41,4 @@ backon.workspace = true
 dashmap.workspace = true
 structdiff.workspace = true
 secrecy.workspace = true
+vise.workspace = true

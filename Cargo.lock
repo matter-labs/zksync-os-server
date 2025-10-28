@@ -11714,6 +11714,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "vise",
  "zk_ee",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
