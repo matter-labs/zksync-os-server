@@ -1,9 +1,11 @@
+use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::Optional};
 use std::{path::PathBuf, time::Duration};
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -30,6 +32,7 @@ pub struct Config {
     pub prover_api_config: ProverApiConfig,
     pub status_server_config: StatusServerConfig,
     pub observability_config: ObservabilityConfig,
+    pub gas_adjuster_config: GasAdjusterConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -157,10 +160,13 @@ pub struct SequencerConfig {
     pub fee_collector_address: Address,
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    pub base_fee_override: Option<u64>,
+    pub base_fee_override: Option<u128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    pub pubdata_price_override: Option<u64>,
+    pub pubdata_price_override: Option<u128>,
+
+    /// Override for native price (in wei). If set, native price will be constant and equal to this value.
+    pub native_price_override: Option<u128>,
 
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
@@ -224,6 +230,12 @@ pub struct RpcConfig {
     pub stale_filter_ttl: Duration,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum RollupPubdataMode {
+    Blobs,
+    Calldata,
+}
+
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -268,6 +280,11 @@ pub struct L1SenderConfig {
     /// the node will eventually halt as produced batches are not processed further.
     #[config(default_t = true)]
     pub enabled: bool,
+
+    /// Rollup pubdata mode - either blobs or calldata.
+    #[config(default_t = RollupPubdataMode::Calldata)]
+    #[config(with = Serde![str])]
+    pub rollup_pubdata_mode: RollupPubdataMode,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -476,6 +493,22 @@ pub struct LogConfig {
     pub use_color: bool,
 }
 
+/// Configuration for gas adjuster.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct GasAdjusterConfig {
+    #[config(default_t = 100)]
+    pub max_base_fee_samples: usize,
+    #[config(default_t = 100)]
+    pub num_samples_for_blob_base_fee_estimate: usize,
+    #[config(default_t = 13 * TimeUnit::Seconds)]
+    pub poll_period: Duration,
+    #[config(default_t = 1.0)]
+    pub l1_gas_pricing_multiplier: f64,
+    #[config(default_t = 1.0)]
+    pub pubdata_pricing_multiplier: f64,
+}
+
 /// Configuration for the opentelemetry stack.
 #[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -583,5 +616,32 @@ impl From<TxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
         Self {
             max_input_bytes: c.max_input_bytes,
         }
+    }
+}
+
+pub fn gas_adjuster_config(
+    c: GasAdjusterConfig,
+    da_input_mode: BatchDaInputMode,
+    rollup_pubdata_mode: RollupPubdataMode,
+    max_priority_fee_per_gas_gwei: u64,
+) -> zksync_os_gas_adjuster::GasAdjusterConfig {
+    let pubdata_mode = match (da_input_mode, rollup_pubdata_mode) {
+        (BatchDaInputMode::Validium, _) => zksync_os_gas_adjuster::PubdataMode::Validium,
+        (BatchDaInputMode::Rollup, RollupPubdataMode::Blobs) => {
+            zksync_os_gas_adjuster::PubdataMode::Blobs
+        }
+        (BatchDaInputMode::Rollup, RollupPubdataMode::Calldata) => {
+            zksync_os_gas_adjuster::PubdataMode::Calldata
+        }
+    };
+    let max_priority_fee_per_gas = max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128);
+    zksync_os_gas_adjuster::GasAdjusterConfig {
+        pubdata_mode,
+        max_base_fee_samples: c.max_base_fee_samples,
+        num_samples_for_blob_base_fee_estimate: c.num_samples_for_blob_base_fee_estimate,
+        max_priority_fee_per_gas,
+        poll_period: c.poll_period,
+        l1_gas_pricing_multiplier: c.l1_gas_pricing_multiplier,
+        pubdata_pricing_multiplier: c.pubdata_pricing_multiplier,
     }
 }

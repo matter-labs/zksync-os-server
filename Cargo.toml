@@ -26,6 +26,7 @@ members = [
     "lib/status",
     "lib/multivm",
     "lib/pipeline",
+    "lib/gas_adjuster",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -59,7 +60,7 @@ sentry = "0.43.0"
 regex = "1.11.3"
 
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
-#zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility", "no_print"] }
+#zk_os_forward_system = { package = "forward_system", path = "../zksync-os/forward_system", features = ["evm-compatibility"] }
 #zk_ee = { package = "zk_ee", path = "../zksync-os/zk_ee" }
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
@@ -185,6 +186,7 @@ zksync_os_status_server = { version = "=0.8.4-non-semver-compat", path = "lib/st
 zksync_os_multivm = { version = "=0.8.4-non-semver-compat", path = "lib/multivm" }
 zksync_os_pipeline = { version = "=0.8.4-non-semver-compat", path = "lib/pipeline" }
 zksync_os_revm_consistency_checker = { version = "=0.8.4-non-semver-compat", path = "lib/revm_consistency_checker" }
+zksync_os_gas_adjuster = { version = "=0.8.4-non-semver-compat", path = "lib/gas_adjuster" }
 
 zksync_os_server = { version = "=0.8.4-non-semver-compat", path = "node/bin" }
 

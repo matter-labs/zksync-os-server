@@ -6,7 +6,7 @@ use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
@@ -38,8 +38,11 @@ pub struct BlockContextProvider<Mempool> {
     node_version: semver::Version,
     genesis: Arc<Genesis>,
     fee_collector_address: Address,
-    base_fee_override: Option<u64>,
-    pubdata_price_override: Option<u64>,
+    base_fee_override: Option<u128>,
+    pubdata_price_override: Option<u128>,
+    native_price_override: Option<u128>,
+    pubdata_price_provider: watch::Receiver<Option<u128>>,
+    pending_block_context_sender: watch::Sender<Option<BlockContext>>,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -56,8 +59,11 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         node_version: semver::Version,
         genesis: Arc<Genesis>,
         fee_collector_address: Address,
-        base_fee_override: Option<u64>,
-        pubdata_price_override: Option<u64>,
+        base_fee_override: Option<u128>,
+        pubdata_price_override: Option<u128>,
+        native_price_override: Option<u128>,
+        pubdata_price_provider: watch::Receiver<Option<u128>>,
+        pending_block_context_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -73,6 +79,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             fee_collector_address,
             base_fee_override,
             pubdata_price_override,
+            native_price_override,
+            pubdata_price_provider,
+            pending_block_context_sender,
         }
     }
 
@@ -104,11 +113,20 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
+
+                const NATIVE_PRICE: u128 = 1_000_000;
+                const NATIVE_PER_GAS: u128 = 100;
+                let eip1559_basefee = NATIVE_PRICE * NATIVE_PER_GAS;
                 let block_context = BlockContext {
-                    eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(1000)),
-                    native_price: U256::from(1),
-                    // todo: make dynamic once zksync-os sets max gas per pubdata >1 for L2 txs
-                    pubdata_price: U256::from(self.pubdata_price_override.unwrap_or(1)),
+                    eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(eip1559_basefee)),
+                    native_price: U256::from(self.native_price_override.unwrap_or(NATIVE_PRICE)),
+                    pubdata_price: U256::from(
+                        self.pubdata_price_override.unwrap_or(
+                            self.pubdata_price_provider
+                                .borrow()
+                                .expect("Pubdata price must be available"),
+                        ),
+                    ),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
@@ -120,6 +138,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     mix_hash: Default::default(),
                     execution_version: LATEST_EXECUTION_VERSION as u32,
                 };
+                self.pending_block_context_sender
+                    .send_replace(Some(block_context));
                 PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(best_txs),

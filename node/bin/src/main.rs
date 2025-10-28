@@ -5,9 +5,10 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    BatcherConfig, Config, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-    MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
-    SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    BatcherConfig, Config, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig,
+    L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RollupPubdataMode, RpcConfig, SequencerConfig, StateBackendConfig,
+    StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::run;
 use zksync_os_server::zkstack_config::ZkStackConfig;
@@ -167,6 +168,9 @@ fn build_configs() -> Config {
     schema
         .insert(&ObservabilityConfig::DESCRIPTION, "observability")
         .expect("Failed to insert observability config");
+    schema
+        .insert(&GasAdjusterConfig::DESCRIPTION, "gas_adjuster")
+        .expect("Failed to insert gas adjuster config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -248,6 +252,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse observability config");
 
+    let gas_adjuster_config = repo
+        .single::<GasAdjusterConfig>()
+        .expect("Failed to load gas adjuster config")
+        .parse()
+        .expect("Failed to parse gas adjuster config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -278,6 +288,13 @@ fn build_configs() -> Config {
         panic!("Operator addresses for commit, prove and execute must be different");
     }
 
+    if matches!(
+        l1_sender_config.rollup_pubdata_mode,
+        RollupPubdataMode::Blobs
+    ) {
+        panic!("Blobs mode is not supported yet");
+    }
+
     Config {
         general_config,
         genesis_config,
@@ -292,5 +309,6 @@ fn build_configs() -> Config {
         prover_api_config,
         status_server_config,
         observability_config,
+        gas_adjuster_config,
     }
 }

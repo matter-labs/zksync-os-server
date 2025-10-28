@@ -19,6 +19,7 @@ impl CallFees {
         call_max_fee_per_gas: Option<u128>,
         call_max_priority_fee_per_gas: Option<u128>,
         block_base_fee: u128,
+        for_estimate_gas: bool,
     ) -> Result<Self, CallFeesError> {
         match (
             call_gas_price,
@@ -26,9 +27,19 @@ impl CallFees {
             call_max_priority_fee_per_gas,
         ) {
             (gas_price, None, None) => {
-                // either legacy transaction or no fee fields are specified
-                // when no fields are specified, set gas price to zero
-                let gas_price = gas_price.unwrap_or_default();
+                let gas_price = match (for_estimate_gas, gas_price) {
+                    (false, _) => {
+                        // either legacy transaction or no fee fields are specified
+                        // when no fields are specified, set gas price to zero
+                        gas_price.unwrap_or_default()
+                    }
+                    // only enforce the fee cap if provided input is not zero
+                    (_, None | Some(0)) => block_base_fee,
+                    (_, Some(gas_price)) if gas_price < block_base_fee => {
+                        return Err(CallFeesError::FeeCapTooLow);
+                    }
+                    (_, Some(gas_price)) => gas_price,
+                };
                 Ok(Self {
                     gas_price,
                     max_priority_fee_per_gas: None,

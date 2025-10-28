@@ -42,6 +42,7 @@ use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::ws_client::RpcServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
+use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -53,6 +54,7 @@ use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_types::TransactionAcceptanceState;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>(
     config: RpcConfig,
     chain_id: u64,
@@ -61,11 +63,17 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     mempool: Mempool,
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
+    pending_block_context: watch::Receiver<Option<BlockContext>>,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
     let mut rpc = RpcModule::new(());
-    let eth_call_handler = EthCallHandler::new(config.clone(), storage.clone(), chain_id);
+    let eth_call_handler = EthCallHandler::new(
+        config.clone(),
+        storage.clone(),
+        chain_id,
+        pending_block_context,
+    );
     rpc.merge(
         EthNamespace::new(
             storage.clone(),

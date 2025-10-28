@@ -11716,6 +11716,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_gas_adjuster"
+version = "0.8.4-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "tokio",
+ "tracing",
+ "vise",
+]
+
+[[package]]
 name = "zksync_os_generate_deposit"
 version = "0.8.4-non-semver-compat"
 dependencies = [
@@ -12135,6 +12147,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
+ "zksync_os_gas_adjuster",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_mempool",
@@ -12183,6 +12196,7 @@ dependencies = [
  "zk_ee",
  "zksync-os-revm",
  "zksync_os_contract_interface",
+ "zksync_os_gas_adjuster",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_l1_sender",

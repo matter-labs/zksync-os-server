@@ -20,7 +20,7 @@ pub mod zkstack_config;
 use crate::batch_sink::{BatchSink, NoOpSink};
 use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
-use crate::config::{Config, ProverApiConfig};
+use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
 use crate::metadata::NODE_VERSION;
@@ -50,6 +50,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
@@ -358,6 +359,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             ))
         };
 
+    let (pending_block_context_sender, pending_block_context_receiver) = watch::channel(None);
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
@@ -367,9 +369,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l2_mempool.clone(),
             genesis_input_source,
             tx_acceptance_state_receiver,
+            pending_block_context_receiver,
         )
         .map(report_exit("JSON-RPC server")),
     );
+
+    tracing::info!("Initializing pubdata price provider");
+    let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
+    if config.sequencer_config.is_main_node() {
+        let gas_adjuster_config = gas_adjuster_config(
+            config.gas_adjuster_config.clone(),
+            l1_state.da_input_mode,
+            config.l1_sender_config.rollup_pubdata_mode,
+            config.l1_sender_config.max_priority_fee_per_gas_gwei,
+        );
+        let gas_adjuster = GasAdjuster::new(
+            l1_provider.clone().erased(),
+            gas_adjuster_config,
+            pubdata_price_sender,
+        )
+        .await
+        .unwrap();
+        tasks.spawn(gas_adjuster.run().map(report_exit("Gas adjuster server")));
+    }
 
     // ========== Start BlockContextProvider and its state ===========
     tracing::info!("Initializing BlockContextProvider");
@@ -400,6 +422,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,
         config.sequencer_config.pubdata_price_override,
+        config.sequencer_config.native_price_override,
+        pubdata_price_receiver,
+        pending_block_context_sender,
     );
 
     // ========== Start Sequencer ===========
