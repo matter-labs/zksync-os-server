@@ -139,8 +139,8 @@ struct BatchVerifier {
 enum BatchVerificationError {
     #[error("Timeout")]
     Timeout,
-    #[error("Not enough signers")]
-    NotEnoughSigners,
+    #[error("Not enough signers: {0} < {1}")]
+    NotEnoughSigners(usize, usize),
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -148,8 +148,8 @@ enum BatchVerificationError {
 impl From<BatchVerificationRequestError> for BatchVerificationError {
     fn from(err: BatchVerificationRequestError) -> Self {
         match err {
-            BatchVerificationRequestError::NotEnoughClients => {
-                BatchVerificationError::NotEnoughSigners
+            BatchVerificationRequestError::NotEnoughClients(clients_count, required_clients) => {
+                BatchVerificationError::NotEnoughSigners(clients_count, required_clients)
             }
             BatchVerificationRequestError::SendError(e) => {
                 BatchVerificationError::Internal(e.to_string())

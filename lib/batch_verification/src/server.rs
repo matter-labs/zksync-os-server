@@ -26,8 +26,8 @@ pub struct BatchVerificationServer {
 #[derive(Debug, thiserror::Error)]
 #[allow(clippy::large_enum_variant)]
 pub enum BatchVerificationRequestError {
-    #[error("Not enough clients connected")]
-    NotEnoughClients,
+    #[error("Not enough clients connected: {0} < {1}")]
+    NotEnoughClients(usize, usize),
     #[error("Failed to send batch verification request: {0}")]
     SendError(#[from] broadcast::error::SendError<BatchVerificationRequest>),
 }
@@ -151,7 +151,10 @@ impl BatchVerificationServer {
         let clients_count = self.verification_request_broadcast.receiver_count();
 
         if clients_count < required_clients {
-            return Err(BatchVerificationRequestError::NotEnoughClients);
+            return Err(BatchVerificationRequestError::NotEnoughClients(
+                clients_count,
+                required_clients,
+            ));
         }
 
         self.verification_request_broadcast.send(request)?;

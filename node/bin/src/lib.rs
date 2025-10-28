@@ -761,6 +761,7 @@ async fn run_en_pipeline(
 
     let pipeline = if config.batch_verification_config.client_enabled {
         pipeline.pipe(BatchVerificationClient::new(
+            finality.clone(),
             config.batch_verification_config.signing_key.clone(),
             config.genesis_config.chain_id.unwrap(),
             *node_state_on_startup.l1_state.diamond_proxy.address(),

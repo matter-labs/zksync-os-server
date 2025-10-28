@@ -25,6 +25,7 @@ use zksync_os_observability::GenericComponentState;
 use zksync_os_observability::StateLabel;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_socket::connect;
+use zksync_os_storage_api::ReadFinality;
 use zksync_os_storage_api::ReplayRecord;
 
 /// Cache of blocks that are to be used for batch verification
@@ -34,16 +35,18 @@ use zksync_os_storage_api::ReplayRecord;
 /// This may be optimized by using a ring buffer for data storage instead.
 ///
 /// TODO metric for blocks in signing cache
-struct BlockCache {
+struct BlockCache<Finality> {
     data: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
     range: Option<(u64, u64)>,
+    finality: Finality,
 }
 
-impl BlockCache {
-    fn new() -> Self {
+impl<Finality: ReadFinality> BlockCache<Finality> {
+    fn new(finality: Finality) -> Self {
         Self {
             data: HashMap::new(),
             range: None,
+            finality,
         }
     }
 
@@ -62,6 +65,9 @@ impl BlockCache {
         } else {
             self.range = Some((block_number, block_number));
         }
+
+        // evict block for committed batches
+        self.remove_lower_then(self.finality.get_finality_status().last_committed_block + 1);
         Ok(())
     }
 
@@ -80,13 +86,12 @@ impl BlockCache {
 }
 
 /// Client that connects to the main sequencer for batch verification
-pub struct BatchVerificationClient {
+pub struct BatchVerificationClient<Finality> {
     chain_id: u64,
     diamond_proxy: Address,
     server_address: String,
     signer: PrivateKeySigner,
-
-    block_cache: BlockCache,
+    block_cache: BlockCache<Finality>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,8 +110,9 @@ type VerificationInput = (
     BlockMerkleTreeData,
 );
 
-impl BatchVerificationClient {
+impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
     pub fn new(
+        finality: Finality,
         private_key: SecretString,
         chain_id: u64,
         diamond_proxy: Address,
@@ -117,7 +123,7 @@ impl BatchVerificationClient {
                 .expect("Invalid batch verification private key"),
             chain_id,
             diamond_proxy,
-            block_cache: BlockCache::new(),
+            block_cache: BlockCache::new(finality),
             server_address,
         }
     }
@@ -296,7 +302,7 @@ impl StateLabel for BatchVerificationClientState {
 }
 
 #[async_trait]
-impl PipelineComponent for BatchVerificationClient {
+impl<Finality: ReadFinality> PipelineComponent for BatchVerificationClient<Finality> {
     type Input = VerificationInput;
     type Output = ();
 
