@@ -165,6 +165,9 @@ pub struct SequencerConfig {
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
     pub pubdata_price_override: Option<u128>,
 
+    /// Override for native price (in wei). If set, native price will be constant and equal to this value.
+    pub native_price_override: Option<u128>,
+
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
     /// `Some(0)` means no new blocks (useful when only RPC/replay/batching functionality is needed),

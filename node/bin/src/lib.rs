@@ -424,6 +424,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,
         config.sequencer_config.pubdata_price_override,
+        config.sequencer_config.native_price_override,
         pubdata_price_receiver,
         pending_block_context_sender,
     );

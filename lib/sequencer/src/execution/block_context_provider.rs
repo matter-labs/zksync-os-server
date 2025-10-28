@@ -40,6 +40,7 @@ pub struct BlockContextProvider<Mempool> {
     fee_collector_address: Address,
     base_fee_override: Option<u128>,
     pubdata_price_override: Option<u128>,
+    native_price_override: Option<u128>,
     pubdata_price_provider: watch::Receiver<Option<u128>>,
     pending_block_context_sender: watch::Sender<Option<BlockContext>>,
 }
@@ -60,6 +61,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         fee_collector_address: Address,
         base_fee_override: Option<u128>,
         pubdata_price_override: Option<u128>,
+        native_price_override: Option<u128>,
         pubdata_price_provider: watch::Receiver<Option<u128>>,
         pending_block_context_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
@@ -77,6 +79,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             fee_collector_address,
             base_fee_override,
             pubdata_price_override,
+            native_price_override,
             pubdata_price_provider,
             pending_block_context_sender,
         }
@@ -116,7 +119,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let eip1559_basefee = NATIVE_PRICE * NATIVE_PER_GAS;
                 let block_context = BlockContext {
                     eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(eip1559_basefee)),
-                    native_price: U256::from(NATIVE_PRICE),
+                    native_price: U256::from(self.native_price_override.unwrap_or(NATIVE_PRICE)),
                     pubdata_price: U256::from(
                         self.pubdata_price_override.unwrap_or(
                             self.pubdata_price_provider
