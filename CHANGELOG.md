@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/matter-labs/zksync-os-server/compare/v0.8.4...v0.9.0) (2025-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* Opentelemetry support + config schema change ([#559](https://github.com/matter-labs/zksync-os-server/issues/559))
+
+### Features
+
+* eth_estimateGas state overrides ([#560](https://github.com/matter-labs/zksync-os-server/issues/560)) ([44a2281](https://github.com/matter-labs/zksync-os-server/commit/44a228151fb814d122b9afb75e88e980176c9902))
+* Opentelemetry support + config schema change ([#559](https://github.com/matter-labs/zksync-os-server/issues/559)) ([592d6bb](https://github.com/matter-labs/zksync-os-server/commit/592d6bb080c561687f6f39a4c18badf27df640cf))
+* pubdata price calculation ([#549](https://github.com/matter-labs/zksync-os-server/issues/549)) ([d1700ba](https://github.com/matter-labs/zksync-os-server/commit/d1700babcb7ac5cf4519a2771941050dc217a870))
+* revm consistency checker ([#525](https://github.com/matter-labs/zksync-os-server/issues/525)) ([2061a01](https://github.com/matter-labs/zksync-os-server/commit/2061a01f2ae09923b00b33f1705d36ea7b62feb5))
+
 ## [0.8.4](https://github.com/matter-labs/zksync-os-server/compare/v0.8.3...v0.8.4) (2025-10-21)
 
 
