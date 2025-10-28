@@ -56,6 +56,7 @@ impl TryFrom<BatchVerificationResponseWireFormatV1> for BatchVerificationRespons
     fn try_from(value: BatchVerificationResponseWireFormatV1) -> Result<Self, Self::Error> {
         let BatchVerificationResponseWireFormatV1 {
             request_id,
+            batch_number,
             result: wire_result,
         } = value;
         let result = match wire_result {
@@ -66,13 +67,21 @@ impl TryFrom<BatchVerificationResponseWireFormatV1> for BatchVerificationRespons
                 BatchVerificationResult::Refused(reason)
             }
         };
-        Ok(Self { request_id, result })
+        Ok(Self {
+            request_id,
+            batch_number,
+            result,
+        })
     }
 }
 
 impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV1 {
     fn from(value: BatchVerificationResponse) -> Self {
-        let BatchVerificationResponse { request_id, result } = value;
+        let BatchVerificationResponse {
+            request_id,
+            batch_number,
+            result,
+        } = value;
         let wire_result = match result {
             BatchVerificationResult::Success(signature) => {
                 BatchVerificationResponseResultWireFormatV1::Success(signature.into_raw())
@@ -83,6 +92,7 @@ impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV1 {
         };
         Self {
             request_id,
+            batch_number,
             result: wire_result,
         }
     }

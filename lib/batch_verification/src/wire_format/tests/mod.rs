@@ -1,4 +1,7 @@
-use crate::{BatchVerificationRequest, BatchVerificationResponse, BatchVerificationResult};
+use crate::{
+    BATCH_VERIFICATION_WIRE_FORMAT_VERSION, BatchVerificationRequest, BatchVerificationResponse,
+    BatchVerificationResult,
+};
 use zksync_os_batch_types::BatchSignature;
 use zksync_os_contract_interface::models::CommitBatchInfo;
 
@@ -30,6 +33,7 @@ fn create_sample_request() -> BatchVerificationRequest {
 fn create_sample_response_success() -> BatchVerificationResponse {
     BatchVerificationResponse {
         request_id: 12345,
+        batch_number: 42,
         result: BatchVerificationResult::Success(
             BatchSignature::from_raw_array(&[42u8; 65]).unwrap(),
         ),
@@ -39,6 +43,7 @@ fn create_sample_response_success() -> BatchVerificationResponse {
 fn create_sample_response_refused() -> BatchVerificationResponse {
     BatchVerificationResponse {
         request_id: 12345,
+        batch_number: 42,
         result: BatchVerificationResult::Refused("Test refusal reason".to_string()),
     }
 }
@@ -58,7 +63,7 @@ fn generate_test_data() {
 
     // Generate response success v1
     let response_success = create_sample_response_success();
-    let encoded = response_success.encode_with_current_version();
+    let encoded = response_success.encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
     fs::write(
         "src/wire_format/tests/encoded_response_success_v1.bin",
         &encoded,
@@ -67,7 +72,7 @@ fn generate_test_data() {
 
     // Generate response refused v1
     let response_refused = create_sample_response_refused();
-    let encoded = response_refused.encode_with_current_version();
+    let encoded = response_refused.encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
     fs::write(
         "src/wire_format/tests/encoded_response_refused_v1.bin",
         &encoded,
@@ -114,7 +119,9 @@ pub fn request_encode_decode() {
 #[test]
 pub fn response_success_encode_decode() {
     let original = create_sample_response_success();
-    let encoded = original.clone().encode_with_current_version();
+    let encoded = original
+        .clone()
+        .encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
     let decoded = BatchVerificationResponse::decode(&encoded, 1).unwrap();
 
     assert_eq!(decoded, original);
@@ -123,7 +130,9 @@ pub fn response_success_encode_decode() {
 #[test]
 pub fn response_refused_encode_decode() {
     let original = create_sample_response_refused();
-    let encoded = original.clone().encode_with_current_version();
+    let encoded = original
+        .clone()
+        .encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
     let decoded = BatchVerificationResponse::decode(&encoded, 1).unwrap();
 
     assert_eq!(decoded, original);

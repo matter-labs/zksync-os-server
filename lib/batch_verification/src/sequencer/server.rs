@@ -116,7 +116,11 @@ impl BatchVerificationServer {
                     match response {
                         Some(Ok(resp)) => {
                             if let Err(e) = response_sender.send(resp).await {
-                                tracing::error!("Failed to forward response from client {}: {}", client_addr, e);
+                                tracing::error!(
+                                    batch_number = e.0.batch_number,
+                                    request_id = e.0.request_id,
+                                    "Failed to forward response from client {}: {}", client_addr, e
+                                );
                             }
                         }
                         Some(Err(e)) => {

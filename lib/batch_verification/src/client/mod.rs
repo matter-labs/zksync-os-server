@@ -125,11 +125,11 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
                             match verification_result {
                                 Ok(signature) => {
                                     tracing::info!(batch_number, request_id, "Approved batch verification request");
-                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Success(signature) }).await?;
+                                    writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Success(signature) }).await?;
                                 },
                                 Err(reason) => {
                                     tracing::info!(batch_number, request_id, "Batch verification failed: {}", reason);
-                                    writer.send(BatchVerificationResponse { request_id, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
+                                    writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }
                         }

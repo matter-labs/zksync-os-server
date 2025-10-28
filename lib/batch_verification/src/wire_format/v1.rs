@@ -27,5 +27,6 @@ pub enum BatchVerificationResponseResultWireFormatV1 {
 #[derive(Encode, Decode)]
 pub struct BatchVerificationResponseWireFormatV1 {
     pub request_id: u64,
+    pub batch_number: u64,
     pub result: BatchVerificationResponseResultWireFormatV1,
 }

@@ -14,6 +14,7 @@ pub enum BatchVerificationResult {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchVerificationResponse {
     pub request_id: u64,
+    pub batch_number: u64,
     pub result: BatchVerificationResult,
 }
 
