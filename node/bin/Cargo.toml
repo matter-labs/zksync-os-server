@@ -31,7 +31,6 @@ zksync_os_pipeline.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
-zksync_os_tracing.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_revm_consistency_checker.workspace = true
 
@@ -45,7 +44,13 @@ full_statement_verifier.workspace = true
 zksync-os-revm.workspace = true
 
 anyhow.workspace = true
-alloy = { workspace = true, default-features = false, features = ["rlp", "eips", "consensus", "k256", "rand"] }
+alloy = { workspace = true, default-features = false, features = [
+    "rlp",
+    "eips",
+    "consensus",
+    "k256",
+    "rand",
+] }
 blake2.workspace = true
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
@@ -74,6 +79,8 @@ axum.workspace = true
 http.workspace = true
 pin-project.workspace = true
 async-trait.workspace = true
-jsonrpsee = { workspace = true, default-features = false, features = ["client"] }
+jsonrpsee = { workspace = true, default-features = false, features = [
+    "client",
+] }
 
 sentry.workspace = true
