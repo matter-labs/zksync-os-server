@@ -73,6 +73,7 @@ where
                 anyhow::bail!("inbound channel closed");
             };
             let block_number = cmd.block_number();
+            let cmd_type = cmd.command_type();
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
@@ -158,7 +159,8 @@ where
 
             // TODO: would updating mempool in parallel with state make sense?
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record);
+                .on_canonical_state_change(&block_output, &replay_record, cmd_type)
+                .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider.remove_txs(purged_txs_hashes);
 

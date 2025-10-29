@@ -25,6 +25,14 @@ pub enum BlockCommand {
     Rebuild(Box<RebuildCommand>),
 }
 
+/// Type of the block command.
+#[derive(Debug, Clone, Copy)]
+pub enum BlockCommandType {
+    Replay,
+    Produce,
+    Rebuild,
+}
+
 /// Command to produce a new block.
 #[derive(Clone, Debug)]
 pub struct ProduceCommand {
@@ -46,6 +54,14 @@ impl BlockCommand {
             BlockCommand::Replay(record) => record.block_context.block_number,
             BlockCommand::Produce(command) => command.block_number,
             BlockCommand::Rebuild(command) => command.replay_record.block_context.block_number,
+        }
+    }
+
+    pub fn command_type(&self) -> BlockCommandType {
+        match self {
+            BlockCommand::Replay(_) => BlockCommandType::Replay,
+            BlockCommand::Produce(_) => BlockCommandType::Produce,
+            BlockCommand::Rebuild(_) => BlockCommandType::Rebuild,
         }
     }
 }
