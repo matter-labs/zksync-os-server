@@ -1,5 +1,7 @@
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use crate::model::blocks::{
+    BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
+};
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
@@ -156,15 +158,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
             }
             BlockCommand::Replay(record) => {
-                for tx in &record.transactions {
-                    match tx.envelope() {
-                        ZkEnvelope::L1(l1_tx) => {
-                            assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
-                        }
-                        ZkEnvelope::L2(_) => {}
-                        ZkEnvelope::Upgrade(_) => {}
-                    }
-                }
                 anyhow::ensure!(
                     self.previous_block_timestamp == record.previous_block_timestamp,
                     "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
@@ -258,16 +251,24 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         self.l2_mempool.remove_transactions(tx_hashes);
     }
 
-    pub fn on_canonical_state_change(
+    pub async fn on_canonical_state_change(
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
+        cmd_type: BlockCommandType,
     ) {
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
                 ZkEnvelope::L1(l1_tx) => {
                     self.next_l1_priority_id = l1_tx.priority_id() + 1;
+                    // consume processed L1 txs for non-produce commands
+                    if matches!(
+                        cmd_type,
+                        BlockCommandType::Rebuild | BlockCommandType::Replay
+                    ) {
+                        assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
+                    }
                 }
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());
