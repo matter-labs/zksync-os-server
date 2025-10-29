@@ -107,7 +107,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 if rejected_signers.contains(&tx.inner.signer()) {
                                     // Currently if a signer has a rejected tx, all their subsequent txs lead to an unprovable block.
                                     // Thus we panic here to restart the node.
-                                    // TODO: remove after it's fixed.
+                                    // TODO(ZKOS-1.2): remove after it's fixed.
                                     panic!(
                                         "Tx from previously rejected signer {:?} was accepted: tx_hash={:?}, block_number={}. Restarting node.",
                                         tx.inner.signer(), tx.hash(), ctx.block_number

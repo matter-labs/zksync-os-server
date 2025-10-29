@@ -269,6 +269,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // Starting from 1 used to work but with the current compacted state implementation it panics.
         // The approach has to be re-evaluated if we want to keep compacted storage impl and what to do in this case.
         // For now just panic early.
+        // TODO(compacted state): re-evaluate the approach.
         panic!(
             "Cannot start: desired_starting_block < state.block_range_available().start() + 1: {} < {}",
             desired_starting_block,
