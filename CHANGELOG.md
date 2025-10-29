@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.1](https://github.com/matter-labs/zksync-os-server/compare/v0.9.0...v0.9.1) (2025-10-29)
+
+
+### Features
+
+* add block rebuild options ([#565](https://github.com/matter-labs/zksync-os-server/issues/565)) ([eab9bdf](https://github.com/matter-labs/zksync-os-server/commit/eab9bdfa7ec205421e55251a2213a406995bc8aa))
+
+
+### Bug Fixes
+
+* consume l1 txs processed in rebuild commands ([#568](https://github.com/matter-labs/zksync-os-server/issues/568)) ([ff74bec](https://github.com/matter-labs/zksync-os-server/commit/ff74bece2252626782d31fd9358ce41ed5289649))
+
 ## [0.9.0](https://github.com/matter-labs/zksync-os-server/compare/v0.8.4...v0.9.0) (2025-10-28)
 
 
