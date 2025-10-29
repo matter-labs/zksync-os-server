@@ -6,6 +6,7 @@ use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
+use std::collections::HashSet;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
@@ -56,6 +57,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     };
     let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx success
 
+    let mut rejected_signers = HashSet::new();
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
     let seal_reason = loop {
@@ -102,6 +104,16 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             })? {
                             Ok(res) => {
+                                if rejected_signers.contains(&tx.inner.signer()) {
+                                    // Currently if a signer has a rejected tx, all their subsequent txs lead to an unprovable block.
+                                    // Thus we panic here to restart the node.
+                                    // TODO: remove after it's fixed.
+                                    panic!(
+                                        "Tx from previously rejected signer {:?} was accepted: tx_hash={:?}, block_number={}. Restarting node.",
+                                        tx.inner.signer(), tx.hash(), ctx.block_number
+                                    );
+                                }
+
                                 EXECUTION_METRICS.executed_transactions.inc();
                                 EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
                                 EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
@@ -133,6 +145,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             }
                             Err(e) => {
+                                rejected_signers.insert(tx.inner.signer());
                                 match (tx.tx_type(), command.invalid_tx_policy) {
                                     (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                         return Err(
@@ -179,7 +192,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     /* ----- got a transaction that cannot be included because of gas --- */
                     Some(_tx) => {
                         tracing::debug!(block = ctx.block_number, "sealing block as next tx cannot be included");
-                        break SealReason::GasLimit
+                        break SealReason::GasLimit;
                     }
                     /* ----- tx stream was exhausted  --------------------------- */
                     None => {
