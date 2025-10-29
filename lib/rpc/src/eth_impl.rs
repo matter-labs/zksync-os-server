@@ -310,6 +310,86 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         let bytecode = get_code(&mut view, &props);
         Ok(Bytes::copy_from_slice(&bytecode))
     }
+
+    fn gas_price_impl(&self) -> EthResult<U256> {
+        // Only base fee is taken into account, suggested priority fee is zero.
+        if let Some(c) = self.eth_call_handler.pending_block_context() {
+            Ok(c.eip1559_basefee)
+        } else {
+            let latest_block_id = BlockId::Number(BlockNumberOrTag::Latest);
+            let Some(resolved_block_number) = self.storage.resolve_block_number(latest_block_id)?
+            else {
+                return Err(EthError::BlockNotFound(latest_block_id));
+            };
+            self.storage
+                .replay_storage()
+                .get_context(resolved_block_number)
+                .map(|c| c.eip1559_basefee)
+                .ok_or(EthError::BlockNotFound(latest_block_id))
+        }
+    }
+
+    fn fee_history_impl(
+        &self,
+        block_count: U64,
+        mut newest_block: BlockNumberOrTag,
+        _reward_percentiles: Option<Vec<f64>>,
+    ) -> EthResult<FeeHistory> {
+        if block_count == 0 {
+            return Ok(FeeHistory::default());
+        }
+        if newest_block.is_pending() {
+            // cap the target block since we don't have fee history for the pending block
+            newest_block = BlockNumberOrTag::Latest;
+        }
+        let Some(end_block) = self.storage.resolve_block_number(newest_block.into())? else {
+            return Err(EthError::BlockNotFound(newest_block.into()));
+        };
+
+        let end_block_plus = end_block + 1;
+        // Ensure that we would not be querying outside of genesis
+        let block_count = end_block_plus.min(block_count.try_into().unwrap());
+        let start_block = end_block_plus - block_count;
+
+        let mut base_fee_per_gas = Vec::with_capacity(block_count as usize + 1);
+        for block in start_block..=end_block {
+            let base_fee = self
+                .storage
+                .replay_storage()
+                .get_context(block)
+                .map(|c| c.eip1559_basefee)
+                .ok_or(EthError::BlockNotFound(BlockId::Number(
+                    BlockNumberOrTag::Number(block),
+                )))?;
+            base_fee_per_gas.push(base_fee.saturating_to());
+        }
+        if let Some(base_fee) = self
+            .storage
+            .replay_storage()
+            .get_context(end_block_plus)
+            .map(|c| c.eip1559_basefee)
+        {
+            base_fee_per_gas.push(base_fee.saturating_to());
+        } else if let Some(c) = self.eth_call_handler.pending_block_context()
+            && c.block_number == end_block_plus
+        {
+            base_fee_per_gas.push(c.eip1559_basefee.saturating_to());
+        } else {
+            // block_count is >= 1 so last must be there.
+            base_fee_per_gas.push(*base_fee_per_gas.last().unwrap());
+        }
+
+        Ok(FeeHistory {
+            base_fee_per_gas,
+            oldest_block: start_block,
+            // Conventional values.
+            gas_used_ratio: vec![0.5; block_count as usize],
+            base_fee_per_blob_gas: vec![],
+            blob_gas_used_ratio: vec![],
+            // TODO: fill reward
+            reward: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -558,15 +638,13 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
         block_number: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        Ok(self
-            .eth_call_handler
+        self.eth_call_handler
             .estimate_gas_impl(request, block_number, state_override)
-            .to_rpc_result()?)
+            .to_rpc_result()
     }
 
     async fn gas_price(&self) -> RpcResult<U256> {
-        // todo(#??): real implementation
-        Ok(U256::from(1000))
+        self.gas_price_impl().to_rpc_result()
     }
 
     async fn get_account(&self, _address: Address, _block: BlockId) -> RpcResult<Option<Account>> {
@@ -575,7 +653,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
     }
 
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
-        // todo(#??): real implementation
         Ok(U256::from(0))
     }
 
@@ -587,19 +664,11 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
     async fn fee_history(
         &self,
         block_count: U64,
-        _newest_block: BlockNumberOrTag,
-        _reward_percentiles: Option<Vec<f64>>,
+        newest_block: BlockNumberOrTag,
+        reward_percentiles: Option<Vec<f64>>,
     ) -> RpcResult<FeeHistory> {
-        // todo(#??): real implementation
-        let block_count: usize = block_count.try_into().unwrap();
-        Ok(FeeHistory {
-            base_fee_per_gas: vec![10000u128; block_count],
-            gas_used_ratio: vec![0.5; block_count],
-            base_fee_per_blob_gas: vec![],
-            blob_gas_used_ratio: vec![],
-            oldest_block: 0,
-            reward: None,
-        })
+        self.fee_history_impl(block_count, newest_block, reward_percentiles)
+            .to_rpc_result()
     }
 
     async fn send_transaction(&self, _request: TransactionRequest) -> RpcResult<B256> {

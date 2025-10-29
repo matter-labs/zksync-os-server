@@ -10,3 +10,4 @@ block_dumps/*
 markers.bench
 
 lcov.info
+setup_compact.key
