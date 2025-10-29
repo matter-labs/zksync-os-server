@@ -136,10 +136,10 @@ fn command_source(
                         .get_replay_record(block_number)
                         .expect("Replay record must exist for rebuild");
                     let make_empty = rebuild_options.blocks_to_empty.contains(&block_number);
-                    BlockCommand::Rebuild(RebuildCommand {
+                    BlockCommand::Rebuild(Box::new(RebuildCommand {
                         replay_record,
                         make_empty,
-                    })
+                    }))
                 });
             (
                 rebuild_options.rebuild_from_block - 1,

@@ -62,10 +62,15 @@ impl FullDiffsStorage {
         self.latest_block.load(Ordering::Relaxed)
     }
 
-    pub fn add_block(&self, block_number: u64, writes: Vec<StorageWrite>) -> anyhow::Result<()> {
+    pub fn add_block(
+        &self,
+        block_number: u64,
+        writes: Vec<StorageWrite>,
+        override_allowed: bool,
+    ) -> anyhow::Result<()> {
         let mut latest_block = self.latest_block();
 
-        if block_number <= latest_block {
+        if override_allowed && block_number <= latest_block {
             tracing::info!(
                 "Rolling back state for block range [{}; {}]",
                 block_number,
@@ -82,11 +87,22 @@ impl FullDiffsStorage {
             self.rocks.write(batch)?;
             latest_block = block_number.saturating_sub(1);
         }
-        // We cannot validate number for genesis block because there is currently no way to distinguish between
+        // We cannot do validation for genesis block because there is currently no way to distinguish between
         // initialized empty storage and initialized storage with just genesis (both have latest block
         // equal to 0).
         // todo: distinguish between empty state and state with just genesis
-        if block_number != 0 {
+        if !override_allowed && block_number != 0 {
+            if block_number <= latest_block {
+                for write in writes {
+                    let expected_value = self.read_at(block_number, write.key).unwrap_or_default();
+                    assert_eq!(
+                        expected_value, write.value,
+                        "historical write discrepancy for key={} at block_number={}",
+                        write.key, block_number
+                    );
+                }
+                return Ok(());
+            }
             assert_eq!(
                 block_number,
                 latest_block + 1,

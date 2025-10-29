@@ -87,7 +87,11 @@ where
                 .await;
                 produced_blocks_count += 1;
             }
-            let replay_record_override_allowed = matches!(cmd, BlockCommand::Rebuild(_));
+            let override_allowed = match &cmd {
+                BlockCommand::Rebuild(_) => true,
+                BlockCommand::Replay(_) if self.sequencer_config.is_external_node() => true,
+                _ => false,
+            };
 
             tracing::info!(
                 block_number,
@@ -122,12 +126,15 @@ where
             tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
-            self.replay
-                .write(replay_record.clone(), replay_record_override_allowed);
+            self.replay.write(replay_record.clone(), override_allowed);
 
-            tracing::debug!(block_number, "Added to replay storage. Adding to state...",);
+            tracing::debug!(block_number, "Added to replay storage. Adding to state...");
             latency_tracker.enter_state(SequencerState::AddingToState);
 
+            // Although, the plan is to always allow overrides for each storage except for replay,
+            // for FullDiffs state backend it requires iterating over each storage write which is costly.
+            // Therefore, we pass the override_allowed flag here. If it's set to true then override happens, otherwise,
+            // changes are validated against existing storage.
             self.state.add_block_result(
                 block_number,
                 block_output.storage_writes.clone(),
@@ -135,6 +142,7 @@ where
                     .published_preimages
                     .iter()
                     .map(|(k, v)| (*k, v)),
+                override_allowed,
             )?;
 
             tracing::debug!(block_number, "Added to state. Adding to repos...");

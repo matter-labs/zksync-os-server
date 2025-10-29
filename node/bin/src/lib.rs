@@ -228,6 +228,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
+    if let Some(block_rebuild) = &config.sequencer_config.block_rebuild {
+        assert!(
+            block_rebuild.from_block > node_startup_state.last_l1_committed_block,
+            "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
+            block_rebuild.from_block,
+            node_startup_state.last_l1_committed_block
+        );
+    }
+
     let desired_starting_block = if let Some(forced_starting_block_number) =
         config.general_config.force_starting_block_number
     {
@@ -243,18 +252,35 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             state.block_range_available().end() + 1,
         ]
         .into_iter()
+        .chain(
+            config
+                .sequencer_config
+                .block_rebuild
+                .as_ref()
+                .map(|c| c.from_block),
+        )
         .min()
         .unwrap()
+        .max(1)
     };
 
     let starting_block = if desired_starting_block < state.block_range_available().start() + 1 {
-        tracing::warn!(
+        // Starting from 1 used to work but with the current compacted state implementation it panics.
+        // The approach has to be re-evaluated if we want to keep compacted storage impl and what to do in this case.
+        // For now just panic early.
+        panic!(
+            "Cannot start: desired_starting_block < state.block_range_available().start() + 1: {} < {}",
             desired_starting_block,
-            config.general_config.force_starting_block_number,
-            min_block_available_in_state = state.block_range_available().start() + 1,
-            "Desired starting block is not available in state. Starting from zero."
+            state.block_range_available().start() + 1
         );
-        1
+
+        // tracing::warn!(
+        //     desired_starting_block,
+        //     config.general_config.force_starting_block_number,
+        //     min_block_available_in_state = state.block_range_available().start() + 1,
+        //     "Desired starting block is not available in state. Starting from zero."
+        // );
+        // 1
     } else {
         desired_starting_block
     };

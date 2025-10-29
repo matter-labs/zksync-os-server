@@ -22,7 +22,7 @@ pub enum BlockCommand {
     /// (Avoid container struct for now)
     Produce(ProduceCommand),
     /// Rebuild an existing block.
-    Rebuild(RebuildCommand),
+    Rebuild(Box<RebuildCommand>),
 }
 
 /// Command to produce a new block.

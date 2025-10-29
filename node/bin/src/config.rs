@@ -3,7 +3,10 @@ use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
-use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::{Optional, Delimited}};
+use smart_config::{
+    DescribeConfig, DeserializeConfig, Serde,
+    de::{Delimited, Optional},
+};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -119,7 +122,7 @@ pub struct StatusServerConfig {
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct RebuildBlocksConfig {
-    pub rebuild_from_block: u64,
+    pub from_block: u64,
     #[config(default, with = Delimited(","))]
     pub blocks_to_empty: Vec<u64>,
 }
@@ -600,7 +603,7 @@ impl From<TxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
 impl From<RebuildBlocksConfig> for RebuildOptions {
     fn from(c: RebuildBlocksConfig) -> Self {
         Self {
-            rebuild_from_block: c.rebuild_from_block,
+            rebuild_from_block: c.from_block,
             blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
         }
     }
