@@ -21,6 +21,8 @@ pub enum BlockCommand {
     /// Second argument - local seal criteria - target block time and max transaction number
     /// (Avoid container struct for now)
     Produce(ProduceCommand),
+    /// Rebuild an existing block.
+    Rebuild(Box<RebuildCommand>),
 }
 
 /// Command to produce a new block.
@@ -31,11 +33,19 @@ pub struct ProduceCommand {
     pub max_transactions_in_block: usize,
 }
 
+/// Command to rebuild existing block.
+#[derive(Clone, Debug)]
+pub struct RebuildCommand {
+    pub replay_record: ReplayRecord,
+    pub make_empty: bool,
+}
+
 impl BlockCommand {
     pub fn block_number(&self) -> u64 {
         match self {
             BlockCommand::Replay(record) => record.block_context.block_number,
             BlockCommand::Produce(command) => command.block_number,
+            BlockCommand::Rebuild(command) => command.replay_record.block_context.block_number,
         }
     }
 }
@@ -45,12 +55,18 @@ impl Display for BlockCommand {
         match self {
             BlockCommand::Replay(record) => write!(
                 f,
-                "Replay block {} ({} txs); strating l1 priority id: {}",
+                "Replay block {} ({} txs); starting l1 priority id: {}",
                 record.block_context.block_number,
                 record.transactions.len(),
                 record.starting_l1_priority_id,
             ),
             BlockCommand::Produce(command) => write!(f, "Produce block: {command:?}"),
+            BlockCommand::Rebuild(command) => write!(
+                f,
+                "Rebuild block {} ({} txs);",
+                command.replay_record.block_context.block_number,
+                command.replay_record.transactions.len(),
+            ),
         }
     }
 }
@@ -89,9 +105,12 @@ pub enum InvalidTxPolicy {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SealPolicy {
-    /// Seal non-empty blocks after deadline or N transactions. Used when building a block
+    /// Seal non-empty blocks after deadline or N transactions. Used when producing a block
     /// (Block Deadline, Block Size)
     Decide(Duration, usize),
-    /// Seal when all txs from tx source are executed. Used when replaying a block (ReplayLog / Replica / EN)
-    UntilExhausted,
+    /// Seal when all txs from tx source are executed.
+    /// `allowed_to_finish_early` indicates whether it's expected for block to be sealed earlier for different reason.
+    /// - `Replay` maps to `UntilExhausted { allowed_to_finish_early: false }`
+    /// - `Rebuild` maps to `UntilExhausted { allowed_to_finish_early: true }`
+    UntilExhausted { allowed_to_finish_early: bool },
 }

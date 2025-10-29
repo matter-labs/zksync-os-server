@@ -34,4 +34,8 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
+
+    pub fn is_external_node(&self) -> bool {
+        !self.is_main_node()
+    }
 }

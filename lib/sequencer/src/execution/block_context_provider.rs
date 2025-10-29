@@ -179,13 +179,73 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 );
                 PreparedBlockCommand {
                     block_context: record.block_context,
-                    seal_policy: SealPolicy::UntilExhausted,
+                    seal_policy: SealPolicy::UntilExhausted {
+                        allowed_to_finish_early: false,
+                    },
                     invalid_tx_policy: InvalidTxPolicy::Abort,
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     node_version: record.node_version,
                     expected_block_output_hash: Some(record.block_output_hash),
+                    previous_block_timestamp: self.previous_block_timestamp,
+                }
+            }
+            BlockCommand::Rebuild(rebuild) => {
+                let block_context = BlockContext {
+                    eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
+                    native_price: rebuild.replay_record.block_context.native_price,
+                    pubdata_price: rebuild.replay_record.block_context.pubdata_price,
+                    block_number: rebuild.replay_record.block_context.block_number,
+                    timestamp: rebuild.replay_record.block_context.timestamp,
+                    chain_id: self.chain_id,
+                    coinbase: self.fee_collector_address,
+                    block_hashes: self.block_hashes_for_next_block,
+                    gas_limit: self.gas_limit,
+                    pubdata_limit: self.pubdata_limit,
+                    // todo: initialize as source of randomness, i.e. the value of prevRandao
+                    mix_hash: Default::default(),
+                    execution_version: LATEST_EXECUTION_VERSION as u32,
+                };
+                let txs = if rebuild.make_empty {
+                    Vec::new()
+                } else {
+                    let first_l1_tx = rebuild
+                        .replay_record
+                        .transactions
+                        .iter()
+                        .find(|tx| matches!(tx.envelope(), ZkEnvelope::L1(_)));
+                    // It's possible that we haven't processed some L1 transaction from previous blocks when rebuilding.
+                    // In that case we shouldn't consider next L1 txs when rebuilding.
+                    let filter_l1_txs =
+                        if let Some(ZkEnvelope::L1(l1_tx)) = first_l1_tx.map(|tx| tx.envelope()) {
+                            l1_tx.priority_id() != self.next_l1_priority_id
+                        } else {
+                            false
+                        };
+                    if filter_l1_txs {
+                        rebuild
+                            .replay_record
+                            .transactions
+                            .into_iter()
+                            .filter(|tx| !matches!(tx.envelope(), ZkEnvelope::L1(_)))
+                            .collect()
+                    } else {
+                        rebuild.replay_record.transactions
+                    }
+                };
+
+                PreparedBlockCommand {
+                    block_context,
+                    tx_source: Box::pin(ReplayTxStream::new(txs)),
+                    seal_policy: SealPolicy::UntilExhausted {
+                        allowed_to_finish_early: true,
+                    },
+                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
+                    metrics_label: "rebuild",
+                    starting_l1_priority_id: self.next_l1_priority_id,
+                    node_version: self.node_version.clone(),
+                    expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                 }
             }

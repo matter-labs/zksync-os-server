@@ -119,9 +119,7 @@ impl Stream for ReplayTxStream {
 }
 
 impl TxStream for ReplayTxStream {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
-        panic!("Unexpected `mark_invalid` call on `ReplayTxStream`");
-    }
+    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {}
 }
 
 impl ReplayTxStream {

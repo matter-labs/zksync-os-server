@@ -132,7 +132,7 @@ impl RepositoryInMemory {
         let total_latency = total_latency_observer.observe();
         REPOSITORIES_METRICS
             .insert_block_per_tx
-            .observe(total_latency / (tx_count as u32));
+            .observe(total_latency / (tx_count.max(1) as u32));
 
         REPOSITORIES_METRICS
             .in_memory_txs_count

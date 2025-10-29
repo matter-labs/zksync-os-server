@@ -6,6 +6,7 @@ use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
+use std::collections::HashSet;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
@@ -52,10 +53,11 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match command.seal_policy {
         SealPolicy::Decide(d, _) => Some(d),
-        SealPolicy::UntilExhausted => None,
+        SealPolicy::UntilExhausted { .. } => None,
     };
     let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx success
 
+    let mut rejected_signers = HashSet::new();
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
     let seal_reason = loop {
@@ -102,6 +104,16 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             })? {
                             Ok(res) => {
+                                if rejected_signers.contains(&tx.inner.signer()) {
+                                    // Currently if a signer has a rejected tx, all their subsequent txs lead to an unprovable block.
+                                    // Thus we panic here to restart the node.
+                                    // TODO(ZKOS-1.2): remove after it's fixed.
+                                    panic!(
+                                        "Tx from previously rejected signer {:?} was accepted: tx_hash={:?}, block_number={}. Restarting node.",
+                                        tx.inner.signer(), tx.hash(), ctx.block_number
+                                    );
+                                }
+
                                 EXECUTION_METRICS.executed_transactions.inc();
                                 EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
                                 EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
@@ -133,6 +145,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             }
                             Err(e) => {
+                                rejected_signers.insert(tx.inner.signer());
                                 match (tx.tx_type(), command.invalid_tx_policy) {
                                     (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                         return Err(
@@ -177,63 +190,51 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                         }
                     }
                     /* ----- got a transaction that cannot be included because of gas --- */
-                    Some(tx) => {
-                        if matches!(command.seal_policy, SealPolicy::UntilExhausted) {
-                            let error = format!(
-                                "tx {} cannot be included in block {}: cumulative gas {} exceeds block gas limit {}",
-                                tx.hash(),
-                                ctx.block_number,
-                                cumulative_gas_used + tx.inner.gas_limit(),
-                                ctx.gas_limit
-                            );
-                            let partial_seal_block_result = runner.seal_block().await;
-                            tracing::error!(
-                                ?partial_seal_block_result,
-                                tx_hash = %tx.hash(),
-                                block_number = ctx.block_number,
-                                cumulative_gas_used = cumulative_gas_used + tx.inner.gas_limit(),
-                                gas_limit = ctx.gas_limit,
-                                "Transaction cannot be included in block: cumulative gas exceeds block gas limit"
-                            );
-                            return Err(
-                                BlockDump {
-                                    ctx,
-                                    txs: all_processed_txs.clone(),
-                                    error,
-                                }
-                            )
-                        }
-
+                    Some(_tx) => {
                         tracing::debug!(block = ctx.block_number, "sealing block as next tx cannot be included");
-                        break SealReason::GasLimit
+                        break SealReason::GasLimit;
                     }
-                    /* ----- tx stream exhausted  --------------------------- */
+                    /* ----- tx stream was exhausted  --------------------------- */
                     None => {
-                        if executed_txs.is_empty() && matches!(command.seal_policy, SealPolicy::UntilExhausted)
-                        {
-                            // Replay path requires at least one tx.
-
-                            // todo: maybe put this check to `ReplayRecord` instead - and just assert here? Or not even assert.
-                            return Err(
-                                BlockDump {
-                                    ctx,
-                                    txs: all_processed_txs.clone(),
-                                    error: format!("empty replay for block {}", ctx.block_number),
-                                }
-                            )
-                        }
-
                         tracing::debug!(
                             block = ctx.block_number,
                             txs = executed_txs.len(),
                             "stream exhausted → sealing"
                         );
-                        break SealReason::Replay;
+                        break SealReason::TxStreamExhausted;
                     }
                 }
             }
         }
     };
+
+    // seal reason validation
+    match command.seal_policy {
+        SealPolicy::Decide(_, _) => {
+            if seal_reason == SealReason::TxStreamExhausted {
+                return Err(BlockDump {
+                    ctx,
+                    txs: all_processed_txs.clone(),
+                    error: format!("tx stream was unexpectedly exhausted {}", ctx.block_number),
+                });
+            }
+        }
+        SealPolicy::UntilExhausted {
+            allowed_to_finish_early,
+        } => {
+            if !allowed_to_finish_early && seal_reason != SealReason::TxStreamExhausted {
+                return Err(BlockDump {
+                    ctx,
+                    txs: all_processed_txs.clone(),
+                    error: format!(
+                        "block was expected to be sealed due to stream exhaustion, but sealed due to {:?} instead, block {}",
+                        seal_reason, ctx.block_number
+                    ),
+                });
+            }
+        }
+    }
+
     latency_tracker.enter_state(SequencerState::Sealing);
 
     /* ---------- seal & return ------------------------------------- */
@@ -321,7 +322,7 @@ enum TxRejectionMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "seal_reason", rename_all = "snake_case")]
 pub enum SealReason {
-    Replay,
+    TxStreamExhausted,
     Timeout,
     TxCountLimit,
     // Tx's gas limit + cumulative block gas > block gas limit - no execution attempt

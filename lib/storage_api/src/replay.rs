@@ -59,11 +59,15 @@ pub trait ReadReplay: Send + Sync + 'static {
 
 /// Extension methods for [`ReadReplay`].
 pub trait ReadReplayExt: ReadReplay {
-    /// Streams all replay records with block_number ≥ `start`, in ascending block order. Finishes
-    /// after reaching the latest stored record. Used to replay all blocks when recovering state.
-    fn stream_from(&self, start: u64) -> BoxStream<ReplayRecord> {
+    /// Streams replay records with block_number in range [`start`, `end`], in ascending block order. Finishes
+    /// after reaching the record for block `end`. Used to replay blocks when recovering state.
+    fn stream(&self, start: u64, end: u64) -> BoxStream<ReplayRecord> {
         let latest = self.latest_record();
-        let stream = futures::stream::iter(start..=latest).filter_map(move |block_num| {
+        assert!(
+            latest >= end,
+            "Requested stream end {end} exceeds latest record {latest}"
+        );
+        let stream = futures::stream::iter(start..=end).filter_map(move |block_num| {
             let record = self.get_replay_record(block_num);
             match record {
                 Some(record) => futures::future::ready(Some(record)),
@@ -118,25 +122,25 @@ pub trait ReadReplayExt: ReadReplay {
 
 impl<T: ReadReplay> ReadReplayExt for T {}
 
-/// A write-capable counterpart of [`ReadReplay`] that allows to append new records to the storage.
+/// A write-capable counterpart of [`ReadReplay`] that allows to write new records to the storage.
 ///
-/// This trait is meant to be solely-owned by sequencer and to append replay records synchronously one
+/// This trait is meant to be solely-owned by sequencer and to write replay records synchronously one
 /// by one. Thus, thread-safety is optional.
 ///
-/// Implementation MUST guarantee that [`append`](Self::append) is the only way to mutate state
-/// inside storage. Trait's consumer MAY depend on state being immutable while they do not call `append`.
+/// Implementation MUST guarantee that [`write`](Self::write) is the only way to mutate state
+/// inside storage. Trait's consumer MAY depend on state being immutable while they do not call `write`.
 pub trait WriteReplay: ReadReplay {
-    /// Appends a new record to replay storage. Returns `true` when a new `RelayRecord` was appended
-    /// - `false` otherwise.
+    /// Writes a new record to replay storage. Returns `true` when `RelayRecord` was written
+    /// - `false` otherwise. If `override_allowed` is `true`, allows overwriting existing records.
     ///
     /// This method:
     /// * MAY be thread-safe
-    /// * MUST return `false` when inserting a record with an existing block number, storage must
-    ///   remain unchanged
+    /// * MUST return `false` when inserting a record with an existing block number with `override_allowed` set to `false`,
+    ///   storage must remain unchanged
     /// * MUST panic if the record is not next after the latest record (as returned by [`latest_record`](Self::latest_record))
     /// * MUST return `true` when the record was successfully added to storage, at which point
     ///   all [`ReadReplay`] methods should reflect its existence appropriately
     /// * MUST be atomic and always leave storage in a valid state (that satisfies all requirements
     ///   here and in [`ReadReplay`]) regardless of the method's outcome (including panic)
-    fn append(&self, record: ReplayRecord) -> bool;
+    fn write(&self, record: ReplayRecord, override_allowed: bool) -> bool;
 }

@@ -53,7 +53,7 @@ impl FullDiffsState {
                 .chain(force_deploy_preimages.iter())
                 .map(|(k, v)| (*k, v));
 
-            this.add_block_result(0, storage_logs, preimages)?
+            this.add_block_result(0, storage_logs, preimages, false)?
         }
 
         Ok(this)
@@ -103,11 +103,13 @@ impl WriteState for FullDiffsState {
         block_number: u64,
         storage_diffs: Vec<StorageWrite>,
         new_preimages: J,
+        override_allowed: bool,
     ) -> anyhow::Result<()>
     where
         J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
     {
-        self.storage.add_block(block_number, storage_diffs)?;
+        self.storage
+            .add_block(block_number, storage_diffs, override_allowed)?;
         self.preimages.add(new_preimages)?;
         Ok(())
     }

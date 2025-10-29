@@ -48,6 +48,7 @@ pub trait WriteState: Send + Sync + 'static {
         block_number: u64,
         storage_diffs: Vec<StorageWrite>,
         new_preimages: J,
+        override_allowed: bool,
     ) -> anyhow::Result<()>
     where
         J: IntoIterator<Item = (B256, &'a Vec<u8>)>;
