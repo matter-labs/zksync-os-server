@@ -1,5 +1,6 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
+use crate::js_tracer;
 use crate::result::RevertError;
 use crate::rpc_storage::ReadRpcStorage;
 use crate::sandbox::{call_trace_simulate, execute};
@@ -11,6 +12,7 @@ use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
+use serde_json::Value as JsonValue;
 use zk_os_api::helpers::{get_balance, get_nonce};
 use zksync_os_interface::types::ExecutionOutput;
 use zksync_os_interface::{
@@ -21,6 +23,7 @@ use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{
     RepositoryError, StateError, state_override_view::OverriddenStateView,
 };
+use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType,
@@ -279,6 +282,54 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
         .map(GethTrace::CallTracer)
         .map_err(|err| EthCallError::ForwardSubsystemError(anyhow::anyhow!(err)))
+    }
+
+    pub fn call_js_tracer_impl(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        js_cfg: JsonValue,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> Result<JsonValue, EthCallError> {
+        let execution_env = self.prepare_execution_env(request, block, block_overrides)?;
+        let storage_view = self
+            .storage
+            .state_view_at(execution_env.block_context.block_number)?;
+
+        match state_overrides {
+            Some(overrides) => {
+                let view = OverriddenStateView::new(storage_view, overrides);
+                let mut tracer = js_tracer::JsTracer::new(view.clone(), js_cfg)
+                    .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
+
+                zksync_os_multivm::simulate_tx(
+                    execution_env.transaction.encode(),
+                    execution_env.block_context,
+                    view.clone(),
+                    view,
+                    &mut tracer,
+                )
+                .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
+                .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
+                Ok(tracer.results.pop().unwrap_or(JsonValue::Null))
+            }
+            None => {
+                let mut tracer = js_tracer::JsTracer::new(storage_view.clone(), js_cfg)
+                    .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
+
+                zksync_os_multivm::simulate_tx(
+                    execution_env.transaction.encode(),
+                    execution_env.block_context,
+                    storage_view.clone(),
+                    storage_view,
+                    &mut tracer,
+                )
+                .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
+                .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
+                Ok(tracer.results.pop().unwrap_or(JsonValue::Null))
+            }
+        }
     }
 
     pub fn estimate_gas_impl(

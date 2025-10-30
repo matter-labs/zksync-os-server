@@ -32,6 +32,7 @@ futures.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
 ruint.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -40,3 +41,10 @@ vise.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 hyper.workspace = true
+
+# JS engine for custom tracers
+boa_engine = { version = "0.21.0" }
+boa_gc = { version = "0.21.0" }
+
+[features]
+# no feature flags; JS tracer is on by default
