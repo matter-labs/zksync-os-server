@@ -4,6 +4,9 @@ use crate::metrics::REPOSITORIES_METRICS;
 use alloy::primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce};
 use std::ops::Div;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::broadcast;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
@@ -25,6 +28,7 @@ pub struct RepositoryManager {
     db: RepositoryDb,
     max_blocks_in_memory: u64,
     block_sender: broadcast::Sender<BlockNotification>,
+    db_ready_to_process_blocks: Arc<AtomicBool>,
 }
 
 impl RepositoryManager {
@@ -42,12 +46,20 @@ impl RepositoryManager {
             db,
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
+            db_ready_to_process_blocks: Arc::new(AtomicBool::new(false)),
         }
     }
 
     // fixme: as this loop is not tied to state compacting, it can fall behind and result in
     //        unrecoverable state on restart
     pub async fn run_persist_loop(&self) {
+        loop {
+            if self.db_ready_to_process_blocks.load(Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
         loop {
             let db_block_number = self.db.get_latest_block();
             self.in_memory
@@ -65,7 +77,7 @@ impl RepositoryManager {
             let persist_latency = persist_latency_observer.observe();
             REPOSITORIES_METRICS
                 .persist_block_per_tx
-                .observe(persist_latency.div(txs.len() as u32));
+                .observe(persist_latency.div(txs.len().max(1) as u32));
 
             self.in_memory
                 .remove_block_and_transactions(block_number, &block.body.transactions);
@@ -170,7 +182,21 @@ impl ReadRepository for RepositoryManager {
 }
 
 impl WriteRepository for RepositoryManager {
-    async fn populate(&self, block_output: BlockOutput, transactions: Vec<ZkTransaction>) {
+    async fn populate(
+        &self,
+        block_output: BlockOutput,
+        transactions: Vec<ZkTransaction>,
+    ) -> RepositoryResult<()> {
+        if !self.db_ready_to_process_blocks.load(Ordering::Relaxed) {
+            if block_output.header.number > 0 {
+                self.db.rollback(block_output.header.number - 1)?;
+            }
+
+            self.db_ready_to_process_blocks
+                .store(true, Ordering::Relaxed);
+            tracing::info!("Repo DB is ready to process blocks");
+        }
+
         let should_be_persisted_up_to = self
             .in_memory
             .get_latest_block()
@@ -190,6 +216,7 @@ impl WriteRepository for RepositoryManager {
         };
         // Ignore error if there are no subscribed receivers
         let _ = self.block_sender.send(notification);
+        Ok(())
     }
 }
 

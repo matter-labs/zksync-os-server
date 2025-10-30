@@ -61,7 +61,7 @@ pub trait WriteRepository: ReadRepository {
         &self,
         block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
-    ) -> impl Future<Output = ()> + Send;
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
 }
 
 /// Repository result type.

@@ -186,6 +186,62 @@ impl RepositoryDb {
             tx_hash.as_slice(),
         );
     }
+
+    pub fn rollback(&self, last_block_to_keep: u64) -> RepositoryResult<()> {
+        let latest_block_number = self
+            .db
+            .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())?
+            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
+            .expect("latest block number must be present in DB");
+        if latest_block_number > last_block_to_keep {
+            tracing::info!(
+                "Rolling back repository DB blocks [{}; {}]",
+                last_block_to_keep + 1,
+                latest_block_number
+            );
+            let mut batch = self.db.new_write_batch();
+            let last_block_to_keep_bytes = last_block_to_keep.to_be_bytes();
+            let block_number_key = RepositoryCF::block_number_key();
+            batch.put_cf(
+                RepositoryCF::Meta,
+                block_number_key,
+                &last_block_to_keep_bytes,
+            );
+
+            for block_number in (last_block_to_keep + 1)..=latest_block_number {
+                let old_repo_block = self
+                    .get_block_by_number(block_number)?
+                    .expect("block to rollback must be present in DB");
+                let block_number_bytes = block_number.to_be_bytes();
+                batch.delete_cf(RepositoryCF::BlockNumberToHash, &block_number_bytes);
+                batch.delete_cf(RepositoryCF::BlockData, &old_repo_block.hash().0);
+
+                for tx_hash in &old_repo_block.body.transactions {
+                    batch.delete_cf(RepositoryCF::Tx, &tx_hash.0);
+                    batch.delete_cf(RepositoryCF::TxReceipt, &tx_hash.0);
+                    batch.delete_cf(RepositoryCF::TxMeta, &tx_hash.0);
+
+                    let tx = self
+                        .get_transaction(*tx_hash)?
+                        .expect("tx to rollback must be present in DB");
+                    let initiator = tx.signer();
+                    let nonce = tx.inner.nonce();
+                    let mut initiator_and_nonce_key = Vec::with_capacity(20 + 8);
+                    initiator_and_nonce_key.extend_from_slice(initiator.as_slice());
+                    initiator_and_nonce_key.extend_from_slice(&nonce.to_be_bytes());
+                    batch.delete_cf(
+                        RepositoryCF::InitiatorAndNonceToHash,
+                        &initiator_and_nonce_key,
+                    );
+                }
+            }
+
+            self.db.write(batch)?;
+            self.latest_block_number.send_replace(last_block_to_keep);
+        }
+
+        Ok(())
+    }
 }
 
 impl ReadRepository for RepositoryDb {

@@ -73,6 +73,7 @@ where
                 anyhow::bail!("inbound channel closed");
             };
             let block_number = cmd.block_number();
+            let cmd_type = cmd.command_type();
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
@@ -87,6 +88,11 @@ where
                 .await;
                 produced_blocks_count += 1;
             }
+            let override_allowed = match &cmd {
+                BlockCommand::Rebuild(_) => true,
+                BlockCommand::Replay(_) if self.sequencer_config.is_external_node() => true,
+                _ => false,
+            };
 
             tracing::info!(
                 block_number,
@@ -121,11 +127,15 @@ where
             tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
-            self.replay.append(replay_record.clone());
+            self.replay.write(replay_record.clone(), override_allowed);
 
-            tracing::debug!(block_number, "Added to replay storage. Adding to state...",);
+            tracing::debug!(block_number, "Added to replay storage. Adding to state...");
             latency_tracker.enter_state(SequencerState::AddingToState);
 
+            // Although, the plan is to always allow overrides for each storage except for replay,
+            // for FullDiffs state backend it requires iterating over each storage write which is costly.
+            // Therefore, we pass the override_allowed flag here. If it's set to true then override happens, otherwise,
+            // changes are validated against existing storage.
             self.state.add_block_result(
                 block_number,
                 block_output.storage_writes.clone(),
@@ -133,6 +143,7 @@ where
                     .published_preimages
                     .iter()
                     .map(|(k, v)| (*k, v)),
+                override_allowed,
             )?;
 
             tracing::debug!(block_number, "Added to state. Adding to repos...");
@@ -141,14 +152,15 @@ where
             // todo: do not call if api is not enabled.
             self.repositories
                 .populate(block_output.clone(), replay_record.transactions.clone())
-                .await;
+                .await?;
 
             tracing::debug!(block_number, "Added to repos. Updating mempools...",);
             latency_tracker.enter_state(SequencerState::UpdatingMempool);
 
             // TODO: would updating mempool in parallel with state make sense?
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record);
+                .on_canonical_state_change(&block_output, &replay_record, cmd_type)
+                .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider.remove_txs(purged_txs_hashes);
 

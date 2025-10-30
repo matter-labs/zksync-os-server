@@ -1,12 +1,14 @@
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
+use crate::model::blocks::{
+    BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
+};
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
@@ -38,8 +40,11 @@ pub struct BlockContextProvider<Mempool> {
     node_version: semver::Version,
     genesis: Arc<Genesis>,
     fee_collector_address: Address,
-    base_fee_override: Option<u64>,
-    pubdata_price_override: Option<u64>,
+    base_fee_override: Option<u128>,
+    pubdata_price_override: Option<u128>,
+    native_price_override: Option<u128>,
+    pubdata_price_provider: watch::Receiver<Option<u128>>,
+    pending_block_context_sender: watch::Sender<Option<BlockContext>>,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -56,8 +61,11 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         node_version: semver::Version,
         genesis: Arc<Genesis>,
         fee_collector_address: Address,
-        base_fee_override: Option<u64>,
-        pubdata_price_override: Option<u64>,
+        base_fee_override: Option<u128>,
+        pubdata_price_override: Option<u128>,
+        native_price_override: Option<u128>,
+        pubdata_price_provider: watch::Receiver<Option<u128>>,
+        pending_block_context_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -73,6 +81,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             fee_collector_address,
             base_fee_override,
             pubdata_price_override,
+            native_price_override,
+            pubdata_price_provider,
+            pending_block_context_sender,
         }
     }
 
@@ -104,11 +115,20 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
+
+                const NATIVE_PRICE: u128 = 1_000_000;
+                const NATIVE_PER_GAS: u128 = 100;
+                let eip1559_basefee = NATIVE_PRICE * NATIVE_PER_GAS;
                 let block_context = BlockContext {
-                    eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(1000)),
-                    native_price: U256::from(1),
-                    // todo: make dynamic once zksync-os sets max gas per pubdata >1 for L2 txs
-                    pubdata_price: U256::from(self.pubdata_price_override.unwrap_or(1)),
+                    eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(eip1559_basefee)),
+                    native_price: U256::from(self.native_price_override.unwrap_or(NATIVE_PRICE)),
+                    pubdata_price: U256::from(
+                        self.pubdata_price_override.unwrap_or(
+                            self.pubdata_price_provider
+                                .borrow()
+                                .expect("Pubdata price must be available"),
+                        ),
+                    ),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
@@ -120,6 +140,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     mix_hash: Default::default(),
                     execution_version: LATEST_EXECUTION_VERSION as u32,
                 };
+                self.pending_block_context_sender
+                    .send_replace(Some(block_context));
                 PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(best_txs),
@@ -136,15 +158,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
             }
             BlockCommand::Replay(record) => {
-                for tx in &record.transactions {
-                    match tx.envelope() {
-                        ZkEnvelope::L1(l1_tx) => {
-                            assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
-                        }
-                        ZkEnvelope::L2(_) => {}
-                        ZkEnvelope::Upgrade(_) => {}
-                    }
-                }
                 anyhow::ensure!(
                     self.previous_block_timestamp == record.previous_block_timestamp,
                     "inconsistent previous block timestamp: {} in component state, {} in resolved ReplayRecord",
@@ -159,13 +172,73 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 );
                 PreparedBlockCommand {
                     block_context: record.block_context,
-                    seal_policy: SealPolicy::UntilExhausted,
+                    seal_policy: SealPolicy::UntilExhausted {
+                        allowed_to_finish_early: false,
+                    },
                     invalid_tx_policy: InvalidTxPolicy::Abort,
                     tx_source: Box::pin(ReplayTxStream::new(record.transactions)),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     node_version: record.node_version,
                     expected_block_output_hash: Some(record.block_output_hash),
+                    previous_block_timestamp: self.previous_block_timestamp,
+                }
+            }
+            BlockCommand::Rebuild(rebuild) => {
+                let block_context = BlockContext {
+                    eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
+                    native_price: rebuild.replay_record.block_context.native_price,
+                    pubdata_price: rebuild.replay_record.block_context.pubdata_price,
+                    block_number: rebuild.replay_record.block_context.block_number,
+                    timestamp: rebuild.replay_record.block_context.timestamp,
+                    chain_id: self.chain_id,
+                    coinbase: self.fee_collector_address,
+                    block_hashes: self.block_hashes_for_next_block,
+                    gas_limit: self.gas_limit,
+                    pubdata_limit: self.pubdata_limit,
+                    // todo: initialize as source of randomness, i.e. the value of prevRandao
+                    mix_hash: Default::default(),
+                    execution_version: LATEST_EXECUTION_VERSION as u32,
+                };
+                let txs = if rebuild.make_empty {
+                    Vec::new()
+                } else {
+                    let first_l1_tx = rebuild
+                        .replay_record
+                        .transactions
+                        .iter()
+                        .find(|tx| matches!(tx.envelope(), ZkEnvelope::L1(_)));
+                    // It's possible that we haven't processed some L1 transaction from previous blocks when rebuilding.
+                    // In that case we shouldn't consider next L1 txs when rebuilding.
+                    let filter_l1_txs =
+                        if let Some(ZkEnvelope::L1(l1_tx)) = first_l1_tx.map(|tx| tx.envelope()) {
+                            l1_tx.priority_id() != self.next_l1_priority_id
+                        } else {
+                            false
+                        };
+                    if filter_l1_txs {
+                        rebuild
+                            .replay_record
+                            .transactions
+                            .into_iter()
+                            .filter(|tx| !matches!(tx.envelope(), ZkEnvelope::L1(_)))
+                            .collect()
+                    } else {
+                        rebuild.replay_record.transactions
+                    }
+                };
+
+                PreparedBlockCommand {
+                    block_context,
+                    tx_source: Box::pin(ReplayTxStream::new(txs)),
+                    seal_policy: SealPolicy::UntilExhausted {
+                        allowed_to_finish_early: true,
+                    },
+                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue,
+                    metrics_label: "rebuild",
+                    starting_l1_priority_id: self.next_l1_priority_id,
+                    node_version: self.node_version.clone(),
+                    expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                 }
             }
@@ -178,16 +251,24 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         self.l2_mempool.remove_transactions(tx_hashes);
     }
 
-    pub fn on_canonical_state_change(
+    pub async fn on_canonical_state_change(
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
+        cmd_type: BlockCommandType,
     ) {
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
                 ZkEnvelope::L1(l1_tx) => {
                     self.next_l1_priority_id = l1_tx.priority_id() + 1;
+                    // consume processed L1 txs for non-produce commands
+                    if matches!(
+                        cmd_type,
+                        BlockCommandType::Rebuild | BlockCommandType::Replay
+                    ) {
+                        assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
+                    }
                 }
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());

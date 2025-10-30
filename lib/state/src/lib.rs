@@ -136,6 +136,8 @@ impl WriteState for StateHandle {
         block_number: u64,
         storage_diffs: Vec<StorageWrite>,
         new_preimages: J,
+        // In-memory diffs are never expected to be overridden so this is ignored
+        _override_allowed: bool,
     ) -> anyhow::Result<()>
     where
         J: IntoIterator<Item = (B256, &'a Vec<u8>)>,

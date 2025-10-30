@@ -81,7 +81,7 @@ impl BlockReplayStorage {
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
             );
-            this.append_replay_unchecked(ReplayRecord {
+            this.write_replay_unchecked(ReplayRecord {
                 block_context: *genesis_context,
                 starting_l1_priority_id: 0,
                 transactions: vec![],
@@ -93,7 +93,7 @@ impl BlockReplayStorage {
         this
     }
 
-    fn append_replay_unchecked(&self, record: ReplayRecord) {
+    fn write_replay_unchecked(&self, record: ReplayRecord) {
         // Prepare record
         let block_num = record.block_context.block_number.to_be_bytes();
         let context_value =
@@ -110,11 +110,16 @@ impl BlockReplayStorage {
 
         // Batch both writes: replay entry and latest pointer
         let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
-        batch.put_cf(
-            BlockReplayColumnFamily::Latest,
-            Self::LATEST_KEY,
-            &block_num,
-        );
+        if self
+            .latest_record_checked()
+            .is_none_or(|l| l < record.block_context.block_number)
+        {
+            batch.put_cf(
+                BlockReplayColumnFamily::Latest,
+                Self::LATEST_KEY,
+                &block_num,
+            );
+        }
         batch.put_cf(BlockReplayColumnFamily::Context, &block_num, &context_value);
         batch.put_cf(
             BlockReplayColumnFamily::StartingL1SerialId,
@@ -245,10 +250,10 @@ impl ReadReplay for BlockReplayStorage {
 }
 
 impl WriteReplay for BlockReplayStorage {
-    fn append(&self, record: ReplayRecord) -> bool {
+    fn write(&self, record: ReplayRecord, override_allowed: bool) -> bool {
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let current_latest_record = self.latest_record();
-        if record.block_context.block_number <= current_latest_record {
+        if record.block_context.block_number <= current_latest_record && !override_allowed {
             // todo: consider asserting that the passed `ReplayRecord` matches the one currently stored
             tracing::debug!(
                 block_number = record.block_context.block_number,
@@ -262,7 +267,15 @@ impl WriteReplay for BlockReplayStorage {
                 current_latest_record + 1
             );
         }
-        self.append_replay_unchecked(record);
+
+        if record.block_context.block_number <= current_latest_record {
+            tracing::info!(
+                "Overriding existing block replay record {}",
+                record.block_context.block_number
+            );
+        }
+
+        self.write_replay_unchecked(record);
         latency_observer.observe();
         true
     }

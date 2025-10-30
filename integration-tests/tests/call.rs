@@ -78,11 +78,20 @@ async fn call_fail() -> anyhow::Result<()> {
     tester
         .l2_provider
         .call(TransactionRequest {
-            max_fee_per_gas: Some(1001),
-            max_priority_fee_per_gas: Some(1002),
+            max_fee_per_gas: Some(1_000_000_001),
+            max_priority_fee_per_gas: Some(1_000_000_002),
             ..Default::default()
         })
         .expect_to_fail("`maxPriorityFeePerGas` higher than `maxFeePerGas`")
+        .await;
+    tester
+        .l2_provider
+        .call(TransactionRequest {
+            max_fee_per_gas: Some(1),
+            max_priority_fee_per_gas: Some(1),
+            ..Default::default()
+        })
+        .expect_to_fail("`maxFeePerGas` less than `block.baseFee`")
         .await;
     tester
         .l2_provider
@@ -97,7 +106,7 @@ async fn call_fail() -> anyhow::Result<()> {
     tester
         .l2_provider
         .call(TransactionRequest {
-            max_fee_per_gas: Some(1001),
+            max_fee_per_gas: Some(1_000_000_001),
             ..Default::default()
         })
         .expect_to_fail("missing `maxPriorityFeePerGas` field for EIP-1559 transaction")

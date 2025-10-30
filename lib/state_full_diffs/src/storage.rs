@@ -62,13 +62,36 @@ impl FullDiffsStorage {
         self.latest_block.load(Ordering::Relaxed)
     }
 
-    pub fn add_block(&self, block_number: u64, writes: Vec<StorageWrite>) -> anyhow::Result<()> {
-        let latest_block = self.latest_block();
-        // We always persist genesis data because there is currently no way to distinguish between
+    pub fn add_block(
+        &self,
+        block_number: u64,
+        writes: Vec<StorageWrite>,
+        override_allowed: bool,
+    ) -> anyhow::Result<()> {
+        let mut latest_block = self.latest_block();
+
+        if override_allowed && block_number <= latest_block {
+            tracing::info!(
+                "Rolling back state for block range [{}; {}]",
+                block_number,
+                latest_block
+            );
+            let mut batch = self.rocks.new_write_batch();
+            // Iterate through all keys and delete those with block_number >= the given block_number
+            for (k, _v) in self.rocks.prefix_iterator_cf(StorageCF::Data, &[]) {
+                let key_block_number = u64::from_be_bytes(k[32..40].try_into()?);
+                if key_block_number >= block_number {
+                    batch.delete_cf(StorageCF::Data, &k);
+                }
+            }
+            self.rocks.write(batch)?;
+            latest_block = block_number.saturating_sub(1);
+        }
+        // We cannot do validation for genesis block because there is currently no way to distinguish between
         // initialized empty storage and initialized storage with just genesis (both have latest block
         // equal to 0).
         // todo: distinguish between empty state and state with just genesis
-        if block_number != 0 {
+        if !override_allowed && block_number != 0 {
             if block_number <= latest_block {
                 for write in writes {
                     let expected_value = self.read_at(block_number, write.key).unwrap_or_default();
