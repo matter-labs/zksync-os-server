@@ -502,7 +502,7 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
     let mut opts = GethDebugTracingCallOptions::default();
     opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(tracer_code.to_string()));
     call_request.max_priority_fee_per_gas = Some(1);
-    call_request.max_fee_per_gas = Some(20000);
+    call_request.max_fee_per_gas = Some(u128::MAX);
     call_request.set_from(tester.l2_wallet.default_signer().address());
 
     let trace = tester
