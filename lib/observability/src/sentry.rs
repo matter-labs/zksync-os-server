@@ -56,9 +56,13 @@ impl Sentry {
 
     pub fn install(self) -> ClientInitGuard {
         // Initialize the Sentry.
+
         let options = sentry::ClientOptions {
             release: self.node_version.map(Cow::from),
-            environment: self.environment.map(Cow::from),
+            environment: self
+                .environment
+                .or_else(|| std::env::var("CLUSTER_NAME").ok())
+                .map(Cow::from),
             attach_stacktrace: true,
             traces_sample_rate: 1.0,
             before_send: Some(Arc::new(|mut event: Event<'static>| {
