@@ -2,8 +2,8 @@ name: Eth spec tests
 
 # Run tests every day or by manual request
 on:
-  schedule:
-    - cron: '0 */3 * * *' # every 3 hours
+#  schedule:
+#    - cron: '0 */3 * * *' # every 3 hours
   workflow_dispatch:
 
 # Set default permissions
