@@ -45,6 +45,3 @@ hyper.workspace = true
 # JS engine for custom tracers
 boa_engine = { version = "0.21.0" }
 boa_gc = { version = "0.21.0" }
-
-[features]
-# no feature flags; JS tracer is on by default
