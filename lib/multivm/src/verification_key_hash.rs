@@ -10,16 +10,16 @@ impl Display for VerificationKeyHash {
 }
 
 /// verification key hash generated from zksync-os v0.0.26, zksync-airbender v0.5.0 and zkos-wrapper v0.5.0
-pub const V3_VERIFICATION_KEY: VerificationKeyHash =
-    VerificationKeyHash("0x6a4509801ec284b8921c63dc6aaba668a0d71382d87ae4095ffc2235154e9fa3");
+const V3_VK_HASH: &str = "0x6a4509801ec284b8921c63dc6aaba668a0d71382d87ae4095ffc2235154e9fa3";
+pub const V3_VERIFICATION_KEY: VerificationKeyHash = VerificationKeyHash(V3_VK_HASH);
 
 impl TryFrom<&str> for VerificationKeyHash {
     type Error = anyhow::Error;
 
     fn try_from(vk_hash: &str) -> anyhow::Result<Self> {
         match vk_hash {
-            vk if vk == V3_VERIFICATION_KEY.0 => Ok(V3_VERIFICATION_KEY),
-            val => Err(anyhow::anyhow!("unknown verification key hash:: {val}")),
+            V3_VK_HASH => Ok(V3_VERIFICATION_KEY),
+            val => Err(anyhow::anyhow!("unknown verification key hash: {val}")),
         }
     }
 }
