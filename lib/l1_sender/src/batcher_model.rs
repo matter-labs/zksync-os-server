@@ -7,6 +7,8 @@ use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_multivm::ExecutionVersion;
+use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -93,6 +95,16 @@ impl<E> BatchEnvelope<E> {
             data,
             latency_tracker: self.latency_tracker,
         }
+    }
+
+    /// Get Verification Key Hash associated with this batch's execution version.
+    pub fn verification_key_hash(&self) -> anyhow::Result<VerificationKeyHash> {
+        let execution_version: ExecutionVersion = self
+            .batch
+            .execution_version
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Unsupported execution version"))?;
+        Ok(execution_version.vk_hash())
     }
 }
 

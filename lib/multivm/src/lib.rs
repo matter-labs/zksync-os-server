@@ -13,6 +13,9 @@ use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
 
 pub mod apps;
+pub mod verification_key_hash;
+
+use crate::verification_key_hash::{V3_VERIFICATION_KEY, VerificationKeyHash};
 
 #[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[repr(u32)]
@@ -20,6 +23,28 @@ pub enum ExecutionVersion {
     V1 = 1,
     V2 = 2,
     V3 = 3,
+}
+
+impl ExecutionVersion {
+    pub fn vk_hash(&self) -> VerificationKeyHash {
+        match self {
+            ExecutionVersion::V1 | ExecutionVersion::V2 => {
+                unimplemented!("key unavailable for versions earlier than V3")
+            }
+            ExecutionVersion::V3 => V3_VERIFICATION_KEY,
+        }
+    }
+}
+
+impl TryFrom<VerificationKeyHash> for ExecutionVersion {
+    type Error = anyhow::Error;
+
+    fn try_from(value: VerificationKeyHash) -> anyhow::Result<Self> {
+        match value {
+            V3_VERIFICATION_KEY => Ok(ExecutionVersion::V3),
+            _ => Err(anyhow::anyhow!("unknown verification key hash")),
+        }
+    }
 }
 
 pub const LATEST_EXECUTION_VERSION: ExecutionVersion = ExecutionVersion::V3;
