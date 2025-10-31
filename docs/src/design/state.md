@@ -47,7 +47,7 @@ We track two related things:
 
 ### Stored fields in AccountProperties
 - bytecode_hash (Bytes32):
-    blake2 hash of [observable bytecode | padding | artifacts].
+    blake2 hash of `[observable bytecode | padding | artifacts]`.
 - unpadded_code_len (u32):
     Length (in bytes) of the original observable bytecode, before any internal padding or artifacts.
 - artifacts_len (u32):
