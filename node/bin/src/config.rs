@@ -518,8 +518,6 @@ pub struct GasAdjusterConfig {
     #[config(default_t = 13 * TimeUnit::Seconds)]
     pub poll_period: Duration,
     #[config(default_t = 1.0)]
-    pub l1_gas_pricing_multiplier: f64,
-    #[config(default_t = 1.0)]
     pub pubdata_pricing_multiplier: f64,
 }
 
@@ -664,7 +662,6 @@ pub fn gas_adjuster_config(
         num_samples_for_blob_base_fee_estimate: c.num_samples_for_blob_base_fee_estimate,
         max_priority_fee_per_gas,
         poll_period: c.poll_period,
-        l1_gas_pricing_multiplier: c.l1_gas_pricing_multiplier,
         pubdata_pricing_multiplier: c.pubdata_pricing_multiplier,
     }
 }
