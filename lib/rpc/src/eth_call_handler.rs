@@ -308,7 +308,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .storage
             .state_view_at(execution_env.block_context.block_number)?;
 
-        match state_overrides {
+        let mut tracer_output = match state_overrides {
             Some(overrides) => {
                 let view = OverriddenStateView::new(storage_view, overrides);
                 let mut tracer = js_tracer::JsTracer::new(view.clone(), js_cfg)
@@ -323,7 +323,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
-                Ok(tracer.results.pop().unwrap_or(JsonValue::Null))
+
+                tracer
             }
             None => {
                 let mut tracer = js_tracer::JsTracer::new(storage_view.clone(), js_cfg)
@@ -338,9 +339,16 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
-                Ok(tracer.results.pop().unwrap_or(JsonValue::Null))
+
+                tracer
             }
+        };
+
+        if let Some(err) = tracer_output.take_error() {
+            return Err(EthCallError::CallTracerError(err));
         }
+
+        Ok(tracer_output.results.pop().unwrap_or(JsonValue::Null))
     }
 
     pub fn estimate_gas_impl(
@@ -698,4 +706,8 @@ pub enum EthCallError {
     Repository(#[from] RepositoryError),
     #[error(transparent)]
     State(#[from] StateError),
+
+    /// Error occurred during debug tracing
+    #[error("Tracer error: {0:?}")]
+    CallTracerError(anyhow::Error),
 }

@@ -12617,6 +12617,7 @@ dependencies = [
  "boa_engine",
  "boa_gc",
  "dashmap",
+ "evm_interpreter",
  "futures",
  "hyper",
  "jsonrpsee",
