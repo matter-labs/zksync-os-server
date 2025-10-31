@@ -104,7 +104,11 @@ impl<E> BatchEnvelope<E> {
             .execution_version
             .try_into()
             .map_err(|_| anyhow::anyhow!("Unsupported execution version"))?;
-        Ok(execution_version.vk_hash())
+        execution_version.vk_hash().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No verification key hash available for execution version {execution_version:?}"
+            )
+        })
     }
 }
 

@@ -26,12 +26,13 @@ pub enum ExecutionVersion {
 }
 
 impl ExecutionVersion {
-    pub fn vk_hash(&self) -> VerificationKeyHash {
+    pub fn vk_hash(&self) -> Option<VerificationKeyHash> {
         match self {
             ExecutionVersion::V1 | ExecutionVersion::V2 => {
-                unimplemented!("key unavailable for versions earlier than V3")
+                // key unavailabel for versions earlier than V3
+                None
             }
-            ExecutionVersion::V3 => V3_VERIFICATION_KEY,
+            ExecutionVersion::V3 => Some(V3_VERIFICATION_KEY),
         }
     }
 }
