@@ -34,12 +34,20 @@ enum CreateType {
     Create2,
 }
 
+struct StepCtx {
+    opcode: u8,
+    pc: u64,
+    gas_before: u64,
+    depth: u64,
+}
+
 #[allow(clippy::enum_variant_names)]
 enum HostMethod {
     GetBalance,
     GetNonce,
     GetCode,
     GetState,
+    Exists,
 }
 
 impl HostMethod {
@@ -49,6 +57,7 @@ impl HostMethod {
             "getNonce" => Some(Self::GetNonce),
             "getCode" => Some(Self::GetCode),
             "getState" => Some(Self::GetState),
+            "exists" => Some(Self::Exists),
             _ => None,
         }
     }
@@ -65,6 +74,11 @@ impl HostMethod {
 ///   - getNonce(address): returns the nonce as hex string
 ///   - getCode(address): returns code at address
 ///   - getState(address, slot): returns storage value at slot
+///   - exists(address): returns true if the address exists in the state or overlays
+///
+/// Known divergences from geth tracer interface:
+/// - `stack` is not provided in step/fault logs
+///
 pub struct JsTracer {
     // JS runtime
     ctx: BoaContext,
@@ -78,6 +92,7 @@ pub struct JsTracer {
     // Depth tracking and per-tx result
     current_depth: u64,
     pub results: Vec<JsonValue>,
+    pending_step: Option<StepCtx>,
     pending_create_type: Option<CreateType>,
     error: Option<anyhow::Error>,
 }
@@ -98,8 +113,10 @@ impl JsTracer {
             storage_overlay: Rc::clone(&storage_overlay),
             code_overlay: Rc::clone(&code_overlay),
         };
+
         install_host_bindings(&mut ctx, host_env)?;
         install_db_wrapper(&mut ctx)?;
+        install_step_helpers(&mut ctx)?;
 
         Ok(Self {
             ctx,
@@ -108,19 +125,114 @@ impl JsTracer {
             code_overlay,
             current_depth: 0,
             results: Vec::new(),
+            pending_step: None,
             pending_create_type: None,
             error: None,
         })
     }
 
     /// `call_method` invokes a method on the JS tracer object with the given argument.
-    fn call_method(&mut self, method: &str, arg: &JsonValue) -> anyhow::Result<()> {
-        let arg_json = serde_json::to_string(arg).unwrap_or("null".to_string());
+    fn call_method(&mut self, method: &str, arg: &JsonValue, with_db: bool) -> anyhow::Result<()> {
+        if !self.method_exists(method)? {
+            return Ok(());
+        }
 
-        // To support the optionality of tracer methods, we check if the method exists before calling it.
-        let snippet = format!(
-            "(function(){{ if (typeof tracer === 'object' && typeof tracer.{method} === 'function') tracer.{method}({arg_json}) }})()"
-        );
+        let mut arg_json = serde_json::to_string(arg).unwrap_or("null".to_string());
+        if with_db {
+            arg_json = format!("{arg_json}, db");
+        }
+        let snippet = format!("(function(){{ tracer.{method}({arg_json}) }})()");
+
+        let _ = self
+            .ctx
+            .eval(Source::from_bytes(snippet.as_bytes()))
+            .map_err(|e| anyhow::anyhow!(format!("JS tracer method {method} failed: {e:?}")))?;
+
+        Ok(())
+    }
+
+    fn method_exists(&mut self, method: &str) -> anyhow::Result<bool> {
+        Ok(self.ctx.eval(Source::from_bytes(
+            format!(
+                "(function(){{ return typeof tracer === 'object' && typeof tracer.{method} === 'function' }})()"
+            ).as_bytes()
+        ))
+            .map_err(|e| anyhow::anyhow!(format!("JS tracer method existence check failed: {e:?}")))?
+            .to_boolean())
+    }
+
+    fn call_step_or_fault(&mut self, method: &str, raw_log: &JsonValue) -> anyhow::Result<()> {
+        if !self.method_exists(method)? {
+            return Ok(());
+        }
+
+        let raw_log_input = serde_json::to_string(raw_log).map_err(|e| {
+            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
+        })?;
+
+        let has_error = raw_log
+            .as_object()
+            .map(|o| o.contains_key("error"))
+            .unwrap_or(false);
+
+        let snippet = if has_error {
+            format!(
+                "(function(){{\n\
+                let raw = {raw_log_input};\n\
+                let log = {{ getError(){{ return raw.error; }}, getDepth(){{ return raw.depth; }} }};\n\
+                tracer.{method}(log, db);\n\
+            }})()"
+            )
+        } else {
+            format!(
+                "(function(){{\n\
+                let raw = {raw_log_input};\n\
+                let op = {{
+                    toString(){{ return raw.op.name; }},
+                    toNumber(){{ return raw.op.code; }},
+                    isPush(){{ return raw.op.isPush; }}
+                }};\n\
+                let memory = {{
+                    __buffer: hexToBytes(raw.memory),
+                    slice(start, stop){{
+                        const from = start >>> 0;
+                        const to = stop === undefined ? this.__buffer.length : stop >>> 0;
+                        return this.__buffer.slice(from, to);
+                    }},
+                    getUint(offset){{
+                        const from = offset >>> 0;
+                        const end = from + 32;
+                        const out = new Uint8Array(32);
+                        const available = this.__buffer.slice(from, end);
+                        out.set(available, 0);
+                        return out;
+                    }},
+                    length(){{
+                        return this.__buffer.length;
+                    }}
+                }};\n\
+                let contract = {{
+                    __input: hexToBytes(raw.contract.input),
+                    getCaller(){{ return raw.contract.caller; }},
+                    getAddress(){{ return raw.contract.address; }},
+                    getValue(){{ return raw.contract.value; }},
+                    getInput(){{ return this.__input.slice(); }}
+                }};\n\
+                let log = {{
+                    op: op,
+                    memory: memory,
+                    contract: contract,
+                    getPC(){{ return raw.pc; }},
+                    getGas(){{ return raw.gas; }},
+                    getCost(){{ return raw.cost }},
+                    getDepth(){{ return raw.depth; }},
+                    getRefund(){{ return raw.refund; }},
+                    getError(){{ return raw.error; }}
+                }};\n\
+                tracer.{method}(log, db);\n\
+            }})()"
+            )
+        };
 
         let _ = self
             .ctx
@@ -131,14 +243,21 @@ impl JsTracer {
     }
 
     fn invoke_method(&mut self, method: &str, arg: &JsonValue) {
-        if let Err(err) = self.call_method(method, arg) {
-            self.record_error(err);
+        if let Err(err) = match method {
+            "step" | "fault" => self.call_step_or_fault(method, arg),
+            "setup" | "enter" | "exit" | "write" => self.call_method(method, arg, false),
+            "result" => self.call_method(method, arg, true),
+            _ => Err(anyhow::anyhow!(format!(
+                "unknown JS tracer method: {method}"
+            ))),
+        } {
+            self.record_error(method, err);
         }
     }
 
-    fn record_error(&mut self, err: anyhow::Error) {
+    fn record_error(&mut self, method: &str, err: anyhow::Error) {
         if self.error.is_none() {
-            tracing::debug!(?err, "JS tracer execution halted due to error");
+            tracing::debug!(?err, ?method, "JS tracer execution halted due to error");
             self.error = Some(err);
         }
     }
@@ -149,13 +268,13 @@ impl JsTracer {
 
     /// `call_result` is called at the end of the transaction to get the final result from the tracer.
     fn call_result(&mut self) -> anyhow::Result<JsonValue> {
-        let snippet = "(function(){ return JSON.stringify(tracer.result()); })()";
-        let v = self
+        let snippet = "(function(){ return JSON.stringify(tracer.result({}, db)); })()"; // TODO: pass ctx to result
+        let value = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
             .map_err(|e| anyhow::anyhow!(format!("JS tracer result() failed: {e:?}")))?;
 
-        let s = v
+        let s = value
             .to_string(&mut self.ctx)
             .map_err(|e| anyhow::anyhow!(format!("JS value to string error: {e:?}")))?;
         let out = s.to_std_string_escaped();
@@ -187,6 +306,45 @@ impl JsTracer {
         }
 
         typ
+    }
+
+    fn prepare_log_input(
+        &mut self,
+        step_ctx: StepCtx,
+        frame_state: &impl EvmFrameInterface,
+        error: Option<String>,
+    ) -> serde_json::Value {
+        let gas_after = frame_state.resources().ergs / ERGS_PER_GAS;
+        let cost = step_ctx.gas_before.saturating_sub(gas_after);
+
+        let memory_bytes = Bytes::copy_from_slice(frame_state.heap());
+        let contract_input = Bytes::copy_from_slice(frame_state.calldata());
+        let contract_value = format!("{:#x}", frame_state.call_value());
+
+        let opcode_name = zk_os_evm_interpreter::opcodes::OPCODE_JUMPMAP[step_ctx.opcode as usize]
+            .unwrap_or("Invalid opcode");
+        let is_push = opcode_name.starts_with("PUSH");
+
+        serde_json::json!({
+            "op": {
+                "name": opcode_name,
+                "code": step_ctx.opcode,
+                "isPush": is_push,
+            },
+            "memory": memory_bytes,
+            "contract": {
+                "caller": frame_state.caller(),
+                "address": frame_state.address(),
+                "value": contract_value,
+                "input": contract_input,
+            },
+            "pc": step_ctx.pc,
+            "gas": step_ctx.gas_before,
+            "cost": cost,
+            "depth": step_ctx.depth,
+            "refund": frame_state.refund_counter(),
+            "error": error,
+        })
     }
 }
 
@@ -250,14 +408,7 @@ impl EvmTracer for JsTracer {
         }
     }
 
-    fn on_storage_read(&mut self, _is_transient: bool, address: Address, key: B256, value: B256) {
-        let obj = serde_json::json!({
-            "address": address,
-            "key": key,
-            "value": value,
-        });
-        self.invoke_method("read", &obj);
-    }
+    fn on_storage_read(&mut self, _: bool, _: Address, _: B256, _: B256) {}
 
     fn on_storage_write(&mut self, _is_transient: bool, address: Address, key: B256, value: B256) {
         self.storage_overlay
@@ -269,6 +420,7 @@ impl EvmTracer for JsTracer {
             "value": value,
         });
 
+        // this method is an extension beyond geth tracer interface, convenient for state change tracking
         self.invoke_method("write", &obj);
     }
 
@@ -288,37 +440,20 @@ impl EvmTracer for JsTracer {
             };
             let vec = slice.to_vec();
             self.code_overlay.borrow_mut().insert(address, vec.clone());
-            let obj = serde_json::json!({
-                "address": address,
-                "code": Bytes::from(vec),
-            });
-            self.invoke_method("code", &obj);
         } else {
             self.code_overlay.borrow_mut().remove(&address);
-            let obj = serde_json::json!({
-                "address": address,
-                "code": JsonValue::Null,
-            });
-            self.invoke_method("code", &obj);
         }
     }
 
-    fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
-        let obj = serde_json::json!({
-            "address": address,
-            "topics": topics,
-            "data": Bytes::copy_from_slice(data),
-        });
-        self.invoke_method("log", &obj);
-    }
+    fn on_event(&mut self, _: Address, _: Vec<B256>, _: &[u8]) {}
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
         self.current_depth = 0;
+        self.pending_step = None;
         self.pending_create_type = None;
 
-        // Call optional start(config)
         let config = self.tracer_config.clone();
-        self.invoke_method("start", &config);
+        self.invoke_method("setup", &config);
     }
 
     fn finish_tx(&mut self) {
@@ -326,60 +461,72 @@ impl EvmTracer for JsTracer {
             return;
         }
 
+        self.pending_step = None;
+
         match self.call_result() {
             Ok(val) => self.results.push(val),
-            Err(err) => self.record_error(err),
+            Err(err) => self.record_error("result", err),
         }
     }
 
     fn before_evm_interpreter_execution_step(
         &mut self,
         opcode: u8,
-        _frame_state: impl EvmFrameInterface,
+        frame_state: impl EvmFrameInterface,
     ) {
-        let obj = serde_json::json!({
-            "op": zk_os_evm_interpreter::opcodes::OPCODE_JUMPMAP[opcode as usize].unwrap_or("Invalid opcode"),
-            "depth": self.current_depth,
+        let gas_before = frame_state.resources().ergs / ERGS_PER_GAS;
+        let pc = frame_state.instruction_pointer() as u64;
+
+        self.pending_step = Some(StepCtx {
+            opcode,
+            pc,
+            gas_before,
+            depth: self.current_depth,
         });
-        self.invoke_method("step", &obj);
     }
 
     fn after_evm_interpreter_execution_step(
         &mut self,
-        _opcode: u8,
-        _frame_state: impl EvmFrameInterface,
+        opcode: u8,
+        frame_state: impl EvmFrameInterface,
     ) {
+        let pending = self.pending_step.take().unwrap_or_else(|| StepCtx {
+            opcode,
+            pc: frame_state.instruction_pointer() as u64,
+            gas_before: frame_state.resources().ergs / ERGS_PER_GAS,
+            depth: self.current_depth,
+        });
+
+        let log = self.prepare_log_input(pending, &frame_state, None);
+        self.invoke_method("step", &log);
     }
 
-    fn on_opcode_error(&mut self, error: &EvmError, _frame_state: impl EvmFrameInterface) {
-        let obj = serde_json::json!({
-            "error": fmt_error_msg(error),
-            "depth": self.current_depth,
-        });
-        self.invoke_method("fault", &obj);
+    fn on_opcode_error(&mut self, error: &EvmError, frame_state: impl EvmFrameInterface) {
+        let message = fmt_error_msg(error);
+        let log = if let Some(pending) = self.pending_step.take() {
+            self.prepare_log_input(pending, &frame_state, Some(message.clone()))
+        } else {
+            tracing::error!("Received opcode error without pending step context");
+            serde_json::json!({
+                "error": message,
+                "depth": self.current_depth,
+            })
+        };
+
+        self.invoke_method("fault", &log);
     }
 
     fn on_call_error(&mut self, error: &EvmError) {
+        self.pending_step = None;
         let obj = serde_json::json!({
             "error": fmt_error_msg(error),
             "depth": self.current_depth,
         });
+
         self.invoke_method("fault", &obj);
     }
 
-    fn on_selfdestruct(
-        &mut self,
-        beneficiary: Address,
-        token_value: U256,
-        frame_state: impl EvmFrameInterface,
-    ) {
-        let obj = serde_json::json!({
-            "address": frame_state.address(),
-            "beneficiary": beneficiary,
-            "balance": token_value,
-        });
-        self.invoke_method("selfdestruct", &obj);
-    }
+    fn on_selfdestruct(&mut self, _: Address, _: U256, _: impl EvmFrameInterface) {}
 
     fn on_create_request(&mut self, is_create2: bool) {
         self.pending_create_type = Some(if is_create2 {
@@ -485,12 +632,48 @@ fn install_db_wrapper(ctx: &mut BoaContext) -> anyhow::Result<()> {
             getBalance: function(a){ return __hostCall("getBalance", JSON.stringify({address: a})); },
             getNonce: function(a){ return __hostCall("getNonce", JSON.stringify({address: a})); },
             getCode: function(a){ return __hostCall("getCode", JSON.stringify({address: a})); },
-            getState: function(a,s){ return __hostCall("getState", JSON.stringify({address: a, slot: s})); }
+            getState: function(a,s){ return __hostCall("getState", JSON.stringify({address: a, slot: s})); },
+            exists: function(a){ return __hostCall("exists", JSON.stringify({address: a})) === 'true'; }
         };
     "#;
 
     ctx.eval(Source::from_bytes(js_db_wrapper.as_bytes()))
         .map_err(|e| anyhow::anyhow!(format!("install db wrapper failed: {e:?}")))?;
+
+    Ok(())
+}
+
+fn install_step_helpers(ctx: &mut BoaContext) -> anyhow::Result<()> {
+    let helpers = r#"
+            function normalizeHex(value){
+                if (typeof value !== 'string') {
+                    return '0x';
+                }
+                if (value === '' || value === '0x' || value === '0X') {
+                    return '0x';
+                }
+                if (value.startsWith('0x') || value.startsWith('0X')) {
+                    return '0x' + value.slice(2).toLowerCase();
+                }
+                return '0x' + value.toLowerCase();
+            }
+
+            function hexToBytes(value){
+                const hex = normalizeHex(value).slice(2);
+                if (hex.length === 0) {
+                    return new Uint8Array(0);
+                }
+                const padded = hex.length % 2 === 0 ? hex : '0' + hex;
+                const out = new Uint8Array(padded.length / 2);
+                for (let i = 0; i < padded.length; i += 2) {
+                    out[i >> 1] = parseInt(padded.slice(i, i + 2), 16);
+                }
+                return out;
+            }
+    "#;
+
+    ctx.eval(Source::from_bytes(helpers.as_bytes()))
+        .map_err(|e| anyhow::anyhow!(format!("install step helpers failed: {e:?}")))?;
 
     Ok(())
 }
@@ -505,6 +688,7 @@ fn dispatch_host_call<V: ViewState + 'static>(
         HostMethod::GetNonce => host_get_nonce(env, payload),
         HostMethod::GetCode => host_get_code(env, payload),
         HostMethod::GetState => host_get_state(env, payload),
+        HostMethod::Exists => host_exists(env, payload),
     }
 }
 
@@ -610,6 +794,37 @@ fn host_get_state<V: ViewState + 'static>(
         .unwrap_or_default();
 
     Ok(format!("0x{}", alloy::primitives::hex::encode(value.0)))
+}
+
+fn host_exists<V: ViewState + 'static>(
+    env: &HostEnvironment<V>,
+    payload: &JsonValue,
+) -> anyhow::Result<String> {
+    let addr = payload
+        .get("address")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    let Some(address) = parse_address(addr) else {
+        return Ok("false".to_string());
+    };
+
+    if env.code_overlay.borrow().contains_key(&address) {
+        return Ok("true".to_string());
+    }
+
+    if env
+        .storage_overlay
+        .borrow()
+        .keys()
+        .any(|(addr_ref, _)| *addr_ref == address)
+    {
+        return Ok("true".to_string());
+    }
+
+    let exists = env.state_view.borrow_mut().get_account(address).is_some();
+
+    Ok(exists.to_string())
 }
 
 fn gas_used_from_resources(resources: EvmResources) -> U256 {

@@ -435,7 +435,7 @@ async fn debug_trace_call_js_tracer() -> anyhow::Result<()> {
 
     let tracer_code = r#"
         {
-            "tracer": "{data: [], fault: function(log) {}, step: function(log) {}, enter: function (frame) {this.data.push(frame.to); }, result: function() { return this.data; }}"
+            "tracer": "{data: [], fault: function(log) {}, step: function(log) {}, enter: function (frame) {this.data.push(frame.to); }, result: function(ctx, db) { return this.data; }}"
         }
     "#;
 
@@ -450,7 +450,6 @@ async fn debug_trace_call_js_tracer() -> anyhow::Result<()> {
         .debug_trace_call(call_request, BlockId::latest(), opts)
         .await?;
 
-    println!("trace: {trace:?}");
     let addresses = match trace {
         GethTrace::JS(value) => value
             .as_array()
@@ -495,7 +494,7 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
 
     let tracer_code = r#"
         {
-            "tracer": "{data: [], write: function (log) { this.data.push([log.address, log.key, log.value]); }, result: function() { let [address, key, value] = this.data[this.data.length-1]; return [db.getState(address, key), value]; }}"
+            "tracer": "{data: [], write: function (log) { this.data.push([log.address, log.key, log.value]); }, result: function(ctx, db) { let [address, key, value] = this.data[this.data.length-1]; return [db.getState(address, key), value]; }}"
         }
     "#;
 
@@ -510,7 +509,6 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
         .debug_trace_call(call_request, BlockId::latest(), opts)
         .await?;
 
-    println!("trace: {trace:?}");
     let values = match trace {
         GethTrace::JS(value) => value
             .as_array()
