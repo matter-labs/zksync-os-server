@@ -1,3 +1,8 @@
+//! Prover server module for handling proof generation requests.
+//!
+//! This module provides an HTTP server that manages proof generation jobs
+//! and proof storage. It supports both legacy (to be deprecated end of Q4 2025)
+//! and v1 (adds support for VKs and VK filtering) API routes for prover job management.
 mod legacy;
 mod v1;
 
@@ -13,6 +18,7 @@ use crate::prover_api::{
 use axum::{Router, extract::DefaultBodyLimit};
 use tokio::net::TcpListener;
 
+/// Application state shared across all request handlers.
 #[derive(Clone)]
 pub(in crate::prover_api::prover_server) struct AppState {
     fri_job_manager: Arc<FriJobManager>,
@@ -20,6 +26,8 @@ pub(in crate::prover_api::prover_server) struct AppState {
     proof_storage: ProofStorage,
 }
 
+/// Entry point for prover API server.
+/// Starts an HTTP server listening on the specified bind address.
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,

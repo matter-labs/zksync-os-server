@@ -20,9 +20,7 @@ use crate::prover_api::{
     },
 };
 
-pub(in crate::prover_api::prover_server::legacy) async fn pick_fri_job(
-    State(state): State<AppState>,
-) -> Response {
+pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state
@@ -41,7 +39,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn pick_fri_job(
     }
 }
 
-pub(in crate::prover_api::prover_server::legacy) async fn submit_fri_proof(
+pub(super) async fn submit_fri_proof(
     Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
     Json(payload): Json<FriProofPayload>,
@@ -82,9 +80,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn submit_fri_proof(
     }
 }
 
-pub(in crate::prover_api::prover_server::legacy) async fn pick_snark_job(
-    State(state): State<AppState>,
-) -> Response {
+pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
     match state.snark_job_manager.pick_real_job(None).await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
@@ -123,7 +119,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn pick_snark_job(
     }
 }
 
-pub(in crate::prover_api::prover_server::legacy) async fn submit_snark_proof(
+pub(super) async fn submit_snark_proof(
     Query(_query): Query<ProverQuery>,
     State(state): State<AppState>,
     Json(payload): Json<SnarkProofPayload>,
@@ -150,7 +146,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn submit_snark_proof(
     }
 }
 
-pub(in crate::prover_api::prover_server::legacy) async fn peek_batch_data(
+pub(super) async fn peek_batch_data(
     Path(batch_number): Path<u64>,
     State(state): State<AppState>,
 ) -> Response {
@@ -167,7 +163,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn peek_batch_data(
     }
 }
 
-pub(in crate::prover_api::prover_server::legacy) async fn peek_fri_proofs(
+pub(super) async fn peek_fri_proofs(
     Path((from_batch_number, to_batch_number)): Path<(u64, u64)>,
     State(state): State<AppState>,
 ) -> Response {
@@ -231,9 +227,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn peek_fri_proofs(
     .into_response()
 }
 
-pub(in crate::prover_api::prover_server::legacy) async fn status(
-    State(state): State<AppState>,
-) -> Response {
+pub(super) async fn status(State(state): State<AppState>) -> Response {
     let status: Vec<JobStateLegacy> = state
         .fri_job_manager
         .status()
@@ -245,7 +239,7 @@ pub(in crate::prover_api::prover_server::legacy) async fn status(
 
 /// Get detailed information about a failed FRI proof for debugging.
 /// Returns the most recent failed proof for the given batch number.
-pub(in crate::prover_api::prover_server::legacy) async fn get_failed_fri_proof(
+pub(super) async fn get_failed_fri_proof(
     Path(batch_number): Path<u64>,
     State(state): State<AppState>,
 ) -> Response {
