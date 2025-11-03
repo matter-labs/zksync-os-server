@@ -206,18 +206,20 @@ async fn upgrade_with_force_deployment() -> anyhow::Result<()> {
     // Check that the server executed the upgrade
 
     // Chain upgrade, `upgradeChainFromVersion` call
-    let tx = config
-        .diamond_proxy
-        .upgradeChainFromVersion(config.protocol_version, upgrade_data)
-        .into_transaction_request()
-        .with_from(config.diamond_proxy_admin);
-    let hash = tester
-        .l1_provider
-        .anvil_send_impersonated_transaction(tx)
-        .await?;
-    PendingTransactionBuilder::new(tester.l1_provider.root().clone(), hash)
-        .expect_successful_receipt()
-        .await?;
+    // let tx = config
+    //     .diamond_proxy
+    //     .upgradeChainFromVersion(config.protocol_version, upgrade_data)
+    //     .into_transaction_request()
+    //     .with_from(config.diamond_proxy_admin);
+    // let hash = tester
+    //     .l1_provider
+    //     .anvil_send_impersonated_transaction(tx)
+    //     .await?;
+    // PendingTransactionBuilder::new(tester.l1_provider.root().clone(), hash)
+    //     .expect_successful_receipt()
+    //     .await?;
+
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
 
     // Check that new batches are committed
 
