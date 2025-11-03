@@ -98,6 +98,7 @@ impl<E> BatchEnvelope<E> {
     }
 
     /// Get Verification Key Hash associated with this batch's execution version.
+    /// NOTE: The key is the one attached to the batch, not proof. The proof's version will be deprecated in follow-up versions.
     pub fn verification_key_hash(&self) -> anyhow::Result<VerificationKeyHash> {
         let execution_version: ExecutionVersion = self
             .batch
