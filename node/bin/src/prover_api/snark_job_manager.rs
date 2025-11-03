@@ -78,7 +78,7 @@ impl SnarkJobManager {
         }
     }
 
-    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `real_fri_proof`)
+    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
     pub async fn pick_real_job(
         &self,
         supported_vks: Option<Vec<VerificationKeyHash>>,
@@ -94,6 +94,7 @@ impl SnarkJobManager {
                 if envelope.data.is_fake() {
                     None
                 } else {
+                    // filter by supported verification keys, if any
                     let vk_hash = envelope
                         .verification_key_hash()
                         .expect("verification key must be valid for batch");
@@ -113,7 +114,7 @@ impl SnarkJobManager {
             return Ok(None);
         }
 
-        // Get proofs that were created for the same execution version.
+        // Get proofs that were created for the same execution version (AKA VKs).
         let first_vk_hash = batches_with_real_proofs[0].1;
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
@@ -132,6 +133,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
+        // TODO: migrate to VerificationKeyHash, once legacy is deprecated
         vk_hash: Option<VerificationKeyHash>,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
