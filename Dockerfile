@@ -48,11 +48,11 @@ COPY --from=builder /app/target/release/zksync-os-server /usr/local/bin/
 COPY --from=builder /app/genesis/genesis.json /app/genesis/
 
 USER app
-WORKDIR /
+WORKDIR /app
 
 EXPOSE 3050 3124 3312 3053
 VOLUME ["/db"]
 
-ENTRYPOINT ["/usr/bin/tini","--","zksync-os-server"]
+ENTRYPOINT ["/usr/bin/tini", "--", "zksync-os-server"]
 
 LABEL org.opencontainers.image.title="zksync-os-server"
