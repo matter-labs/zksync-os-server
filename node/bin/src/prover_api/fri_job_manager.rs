@@ -59,6 +59,7 @@ pub struct FailedFriProof {
     pub last_block_timestamp: u64,
     pub expected_hash_u32s: [u32; 8],
     pub proof_final_register_values: [u32; 16],
+    // TODO: migrate to String, once legacy is deprecated
     pub vk_hash: Option<String>,
     pub proof_bytes: Bytes,
 }
@@ -66,21 +67,23 @@ pub struct FailedFriProof {
 #[derive(Debug, Serialize)]
 pub struct JobState {
     pub batch_number: u64,
+    // TODO: migrate to String, once legacy is deprecated
     pub vk_hash: Option<String>,
     pub assigned_seconds_ago: u64,
 }
 
+// TODO: remove, once legacy is deprecated
 #[derive(Debug, Serialize)]
 pub struct JobStateLegacy {
     pub batch_number: u64,
     pub assigned_seconds_ago: u64,
 }
 
-impl Into<JobStateLegacy> for JobState {
-    fn into(self) -> JobStateLegacy {
+impl From<JobState> for JobStateLegacy {
+    fn from(state: JobState) -> JobStateLegacy {
         JobStateLegacy {
-            batch_number: self.batch_number,
-            assigned_seconds_ago: self.assigned_seconds_ago,
+            batch_number: state.batch_number,
+            assigned_seconds_ago: state.assigned_seconds_ago,
         }
     }
 }
@@ -151,9 +154,15 @@ impl FriJobManager {
     ///
     /// `min_inbound_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
+    ///
+    /// If `supported_vks` is provided, only batches whose verification key hash
+    /// is in the list will be picked. Others will be skipped.
+    ///
+    /// `supported_vks` is used to filter out jobs that the provers cannot handle.
     pub fn pick_next_job(
         &self,
         min_inbound_age: Duration,
+        // TODO: migrate to Vec<String>, once legacy is deprecated
         supported_vks: Option<Vec<VerificationKeyHash>>,
     ) -> Option<(u64, VerificationKeyHash, ProverInput)> {
         // 1) Prefer a timed-out reassignment
@@ -181,7 +190,7 @@ impl FriJobManager {
             return None;
         }
 
-        // 2) Otherwise, consume one item from inbound - if it meets the age gate.
+        // 2) Otherwise, consume one item from inbound - if it meets the age/vk gates.
         // take a lock on the inbound channel - only one thread can receive messages at a time
         if let Ok(mut rx) = self.inbound.try_lock() {
             let old_enough = rx.peek_with(|env| {
@@ -241,6 +250,7 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
+        // TODO: migrate to VerificationKeyHash, once legacy is deprecated
         vk_hash: Option<VerificationKeyHash>,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
