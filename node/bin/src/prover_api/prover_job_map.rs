@@ -42,8 +42,8 @@ impl ProverJobMap {
         self.jobs.insert(job_id, job_entry);
     }
 
-    /// Picks the **smallest** batch number whose job has timed out, if any.
-    /// Returns `None` if no job has timed‑out.
+    /// Picks the **smallest** batch number which matches supported_vks and whose job has timed out, if any.
+    /// Returns `None` if there's no job with matching VKs or no job has timed‑out.
     ///
     /// Thread safety:
     ///   Races are possible if multiple threads call this at the same time.
