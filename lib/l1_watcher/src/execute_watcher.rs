@@ -56,7 +56,8 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1ExecuteWatcher<Finality
             batch_storage,
         };
         let l1_watcher = L1Watcher::new(
-            zk_chain,
+            zk_chain.provider().clone(),
+            *zk_chain.address(),
             // We start from last L1 block as it may contain more executed batches apart from the last
             // one.
             last_l1_block,

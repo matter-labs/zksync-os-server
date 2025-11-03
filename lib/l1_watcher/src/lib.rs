@@ -12,5 +12,8 @@ pub use commit_watcher::L1CommitWatcher;
 mod execute_watcher;
 pub use execute_watcher::L1ExecuteWatcher;
 
+mod upgrade_tx_watcher;
+pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
+
 pub mod util;
 mod watcher;
