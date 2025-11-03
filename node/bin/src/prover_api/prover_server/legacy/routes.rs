@@ -5,7 +5,10 @@ use axum::{
 
 use crate::prover_api::prover_server::{
     AppState,
-    legacy::handlers::{get_failed_fri_proof, peek_batch_data, peek_fri_proofs, pick_fri_job, pick_snark_job, status, submit_fri_proof, submit_snark_proof},
+    legacy::handlers::{
+        get_failed_fri_proof, peek_batch_data, peek_fri_proofs, pick_fri_job, pick_snark_job,
+        status, submit_fri_proof, submit_snark_proof,
+    },
 };
 
 pub(in crate::prover_api::prover_server) fn legacy_routes() -> Router<AppState> {

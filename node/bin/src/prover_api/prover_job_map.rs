@@ -139,7 +139,11 @@ impl ProverJobMap {
             .iter()
             .map(|r| JobState {
                 batch_number: r.batch_envelope.batch_number(),
-                vk_hash: r.batch_envelope.verification_key_hash().ok().map(|vkh| vkh.to_string()),
+                vk_hash: r
+                    .batch_envelope
+                    .verification_key_hash()
+                    .ok()
+                    .map(|vkh| vkh.to_string()),
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
             .sorted_by_key(|e| e.batch_number)
