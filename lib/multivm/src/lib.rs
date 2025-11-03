@@ -25,11 +25,13 @@ pub enum ExecutionVersion {
     V3 = 3,
 }
 
+// Verification Key Hash and Execution Version have a 1-to-1 mapping starting from V3 onwards.
+// We could backport for V1 and V2 if needed in the future, but it's very unlikely.
 impl ExecutionVersion {
     pub fn vk_hash(&self) -> Option<VerificationKeyHash> {
         match self {
             ExecutionVersion::V1 | ExecutionVersion::V2 => {
-                // key unavailabel for versions earlier than V3
+                // key unavailable for versions earlier than V3
                 None
             }
             ExecutionVersion::V3 => Some(V3_VERIFICATION_KEY),
@@ -37,13 +39,15 @@ impl ExecutionVersion {
     }
 }
 
+// Verification Key Hash and Execution Version have a 1-to-1 mapping starting from V3 onwards.
+// We could backport for V1 and V2 if needed in the future, but it's very unlikely.
 impl TryFrom<VerificationKeyHash> for ExecutionVersion {
     type Error = anyhow::Error;
 
-    fn try_from(value: VerificationKeyHash) -> anyhow::Result<Self> {
-        match value {
+    fn try_from(vk: VerificationKeyHash) -> anyhow::Result<Self> {
+        match vk {
             V3_VERIFICATION_KEY => Ok(ExecutionVersion::V3),
-            _ => Err(anyhow::anyhow!("unknown verification key hash")),
+            _ => Err(anyhow::anyhow!("unknown verification key hash {vk:?}")),
         }
     }
 }
