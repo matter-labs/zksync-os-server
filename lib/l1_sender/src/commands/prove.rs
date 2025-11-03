@@ -138,7 +138,9 @@ impl ProofCommand {
             // v2 and up are available under their respective execution version.
             Some(2) => 2,
             Some(3) => 3,
-            Some(execution_version) => panic!("unsupported verification key: {execution_version}"),
+            Some(execution_version) => panic!(
+                "unsupported execution version: {execution_version}; there's no verifier defined for it"
+            ),
         };
 
         // todo: remove tostring
