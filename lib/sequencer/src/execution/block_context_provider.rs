@@ -16,7 +16,7 @@ use zksync_os_mempool::{
 };
 use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, ZkEnvelope};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -38,6 +38,9 @@ pub struct BlockContextProvider<Mempool> {
     gas_limit: u64,
     pubdata_limit: u64,
     node_version: semver::Version,
+    /// Protocol version to be used for the next produced block.
+    /// Can change in runtime in case of upgrades.
+    protocol_version: ProtocolSemanticVersion,
     genesis: Arc<Genesis>,
     fee_collector_address: Address,
     base_fee_override: Option<u128>,
@@ -59,6 +62,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         gas_limit: u64,
         pubdata_limit: u64,
         node_version: semver::Version,
+        protocol_version: ProtocolSemanticVersion,
         genesis: Arc<Genesis>,
         fee_collector_address: Address,
         base_fee_override: Option<u128>,
@@ -77,6 +81,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             gas_limit,
             pubdata_limit,
             node_version,
+            protocol_version,
             genesis,
             fee_collector_address,
             base_fee_override,
@@ -94,7 +99,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 let upgrade_tx = if produce_command.block_number == 1 {
-                    Some(self.genesis.genesis_upgrade_tx().await.tx)
+                    let genesis_upgrade = self.genesis.genesis_upgrade_tx().await;
+                    self.protocol_version = genesis_upgrade.protocol_version;
+                    Some(genesis_upgrade.tx)
                 } else {
                     None
                 };
@@ -153,6 +160,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     metrics_label: "produce",
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
+                    protocol_version: self.protocol_version.clone(),
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                 }
@@ -180,6 +188,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     node_version: record.node_version,
+                    protocol_version: record.protocol_version,
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
                 }
@@ -238,6 +247,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     metrics_label: "rebuild",
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
+                    protocol_version: rebuild.replay_record.protocol_version,
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                 }

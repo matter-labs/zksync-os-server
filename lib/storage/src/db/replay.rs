@@ -9,6 +9,7 @@ use zksync_os_interface::types::BlockContext;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
+use zksync_os_types::ProtocolSemanticVersion;
 
 /// A write-ahead log storing [`ReplayRecord`]s.
 ///
@@ -38,6 +39,7 @@ pub enum BlockReplayColumnFamily {
     StartingL1SerialId,
     Txs,
     NodeVersion,
+    ProtocolVersion,
     BlockOutputHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
@@ -50,6 +52,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::StartingL1SerialId,
         BlockReplayColumnFamily::Txs,
         BlockReplayColumnFamily::NodeVersion,
+        BlockReplayColumnFamily::ProtocolVersion,
         BlockReplayColumnFamily::BlockOutputHash,
         BlockReplayColumnFamily::Latest,
     ];
@@ -60,6 +63,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::StartingL1SerialId => "last_processed_l1_tx_id",
             BlockReplayColumnFamily::Txs => "txs",
             BlockReplayColumnFamily::NodeVersion => "node_version",
+            BlockReplayColumnFamily::ProtocolVersion => "protocol_version",
             BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
             BlockReplayColumnFamily::Latest => "latest",
         }
@@ -70,7 +74,12 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub async fn new(db_path: &Path, genesis: &Genesis, node_version: semver::Version) -> Self {
+    pub async fn new(
+        db_path: &Path,
+        genesis: &Genesis,
+        node_version: semver::Version,
+        genesis_protocol_version: ProtocolSemanticVersion,
+    ) -> Self {
         let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
             .expect("Failed to open BlockReplayStorage")
             .with_sync_writes();
@@ -87,6 +96,7 @@ impl BlockReplayStorage {
                 transactions: vec![],
                 previous_block_timestamp: 0,
                 node_version,
+                protocol_version: genesis_protocol_version,
                 block_output_hash: B256::ZERO,
             })
         }
@@ -211,6 +221,36 @@ impl ReadReplay for BlockReplayStorage {
             .get_cf(BlockReplayColumnFamily::NodeVersion, &key)
             .expect("Failed to read from NodeVersion CF")
             .expect("NodeVersion must be written atomically with Context");
+
+        let protocol_version = if let Some(version) = self
+            .db
+            .get_cf(BlockReplayColumnFamily::ProtocolVersion, &key)
+            .expect("Failed to read from ProtocolVersion CF")
+        {
+            String::from_utf8(version)
+                .expect("Failed to deserialize protocol version")
+                .parse()
+                .expect("Failed to parse protocol version")
+        } else {
+            // TODO: temporary sanity check. This code is written when this CF is just introduced, so
+            // on some live nodes storage may not have this CF populated for historical blocks.
+            // Check if protocol version if available for genesis block -> it if is, then missing key
+            // is a bug and we should panic; if not, we can assume all historical blocks are missing it and
+            // default to latest version.
+            let genesis_block = 0u64.to_be_bytes();
+            let genesis_protocol_version = self
+                .db
+                .get_cf(BlockReplayColumnFamily::ProtocolVersion, &genesis_block)
+                .expect("Failed to read from ProtocolVersion CF for genesis block");
+            if genesis_protocol_version.is_some() {
+                panic!(
+                    "ProtocolVersion missing for block {block_number} despite being present for genesis block"
+                );
+            }
+
+            ProtocolSemanticVersion::latest()
+        };
+
         let block_output_hash = self
             .db
             .get_cf(BlockReplayColumnFamily::BlockOutputHash, &key)
@@ -238,6 +278,7 @@ impl ReadReplay for BlockReplayStorage {
                 .expect("Failed to deserialize node version")
                 .parse()
                 .expect("Failed to parse node version"),
+            protocol_version,
             block_output_hash: B256::from_slice(&block_output_hash),
         })
     }

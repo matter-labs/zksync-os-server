@@ -19,3 +19,4 @@ pub use transaction::{
 };
 
 mod protocol;
+pub use protocol::ProtocolSemanticVersion;

@@ -2,7 +2,9 @@ use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_interface::types::BlockContext;
-use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{
+    L1TxSerialId, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
+};
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
 #[rlp(trailing)]
@@ -38,6 +40,8 @@ pub struct ReplayRecord {
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
     pub node_version: semver::Version,
+    /// Version of the protocol that was used to create this replay record.
+    pub protocol_version: ProtocolSemanticVersion,
     /// Hash of the block output.
     pub block_output_hash: B256,
 }
@@ -49,6 +53,7 @@ impl ReplayRecord {
         transactions: Vec<ZkTransaction>,
         previous_block_timestamp: u64,
         node_version: semver::Version,
+        protocol_version: ProtocolSemanticVersion,
         block_output_hash: B256,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
@@ -68,6 +73,7 @@ impl ReplayRecord {
             transactions,
             previous_block_timestamp,
             node_version,
+            protocol_version,
             block_output_hash,
         }
     }

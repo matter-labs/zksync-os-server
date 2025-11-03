@@ -75,7 +75,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteReplay,
     WriteRepository, WriteState,
 };
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
+use zksync_os_types::{NotAcceptingReason, ProtocolSemanticVersion, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -173,6 +173,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let genesis = Genesis::new(genesis_input_source.clone(), l1_state.diamond_proxy.clone());
 
+    // TODO (this PR -- if you see this line, please comment on it): we should fetch genesis protocol version from the source.
+    // Genesis protocol version is available in the upgrade tx, but for ENs we can't expect to scan the whole history for it.
+    // So we need to add this version to the genesis file (I guess?) and expose it via RPC
+    let genesis_protocol_version = ProtocolSemanticVersion::latest(); // TODO: use actual version.
+
     tracing::info!("Initializing BlockReplayStorage");
 
     let block_replay_storage = BlockReplayStorage::new(
@@ -182,6 +187,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .join(BLOCK_REPLAY_WAL_DB_NAME),
         &genesis,
         node_version.clone(),
+        genesis_protocol_version.clone(),
     )
     .await;
 
@@ -432,6 +438,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
+    let current_protocol_version = first_replay_record
+        .as_ref()
+        .map(|record| record.protocol_version.clone())
+        .unwrap_or(genesis_protocol_version);
+
     let genesis = Arc::new(genesis);
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
@@ -445,6 +456,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
+        current_protocol_version,
         genesis.clone(),
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,

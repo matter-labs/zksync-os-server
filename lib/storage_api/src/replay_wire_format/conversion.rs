@@ -5,7 +5,7 @@ use crate::replay_wire_format::v3::ReplayWireFormatV3;
 use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::Address;
 use zksync_os_interface::types::{BlockContext, BlockHashes};
-use zksync_os_types::ZkEnvelope;
+use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope};
 
 impl From<ReplayWireFormatV1> for ReplayRecord {
     fn from(value: ReplayWireFormatV1) -> Self {
@@ -51,6 +51,7 @@ impl From<ReplayWireFormatV1> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
+            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
         }
     }
@@ -101,6 +102,7 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
+            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
         }
     }
@@ -149,6 +151,7 @@ impl From<ReplayWireFormatV3> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
+            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
         }
     }
@@ -163,6 +166,7 @@ impl From<ReplayRecord> for ReplayWireFormatV3 {
             previous_block_timestamp,
             node_version,
             block_output_hash,
+            ..
         } = value;
         let BlockContext {
             chain_id,

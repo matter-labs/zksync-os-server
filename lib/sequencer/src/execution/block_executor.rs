@@ -304,6 +304,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             executed_txs,
             command.previous_block_timestamp,
             command.node_version,
+            command.protocol_version,
             block_hash_output,
         ),
         purged_txs,
