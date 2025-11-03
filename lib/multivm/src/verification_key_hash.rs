@@ -1,4 +1,7 @@
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    str::FromStr,
+};
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct VerificationKeyHash(&'static str);
@@ -13,22 +16,13 @@ impl Display for VerificationKeyHash {
 const V3_VK_HASH: &str = "0x6a4509801ec284b8921c63dc6aaba668a0d71382d87ae4095ffc2235154e9fa3";
 pub const V3_VERIFICATION_KEY: VerificationKeyHash = VerificationKeyHash(V3_VK_HASH);
 
-impl TryFrom<&str> for VerificationKeyHash {
-    type Error = anyhow::Error;
+impl FromStr for VerificationKeyHash {
+    type Err = anyhow::Error;
 
-    fn try_from(vk_hash: &str) -> anyhow::Result<Self> {
+    fn from_str(vk_hash: &str) -> anyhow::Result<Self> {
         match vk_hash {
             V3_VK_HASH => Ok(V3_VERIFICATION_KEY),
             val => Err(anyhow::anyhow!("unknown verification key hash: {val}")),
         }
-    }
-}
-
-impl TryFrom<String> for VerificationKeyHash {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> anyhow::Result<Self> {
-        // Just forwarding to the &str implementation
-        VerificationKeyHash::try_from(value.as_str())
     }
 }

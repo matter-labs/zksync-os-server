@@ -28,7 +28,7 @@ pub(in crate::prover_api::prover_server::v1) async fn pick_fri_job(
     let supported_vks: Vec<VerificationKeyHash> = match payload
         .supported_vks
         .into_iter()
-        .map(TryInto::try_into)
+        .map(|vk| vk.parse())
         .collect::<Result<_, _>>()
     {
         Ok(vks) => vks,
@@ -70,7 +70,7 @@ pub(in crate::prover_api::prover_server::v1) async fn submit_fri_proof(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
     let prover_id = query.id.as_deref().unwrap_or("unknown_prover");
-    let vk_hash = payload.vk_hash.try_into().map_err(|e| {
+    let vk_hash = payload.vk_hash.parse().map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             format!("Failed to get verification key: {e}"),
@@ -114,7 +114,7 @@ pub(in crate::prover_api::prover_server::v1) async fn pick_snark_job(
     let supported_vks: Vec<VerificationKeyHash> = match payload
         .supported_vks
         .into_iter()
-        .map(TryInto::try_into)
+        .map(|vk| vk.parse())
         .collect::<Result<_, _>>()
     {
         Ok(vks) => vks,
@@ -179,7 +179,7 @@ pub(in crate::prover_api::prover_server::v1) async fn submit_snark_proof(
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
-    let vk_hash = payload.vk_hash.try_into().map_err(|e| {
+    let vk_hash = payload.vk_hash.parse().map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             format!("Failed to get verification key: {e}"),
