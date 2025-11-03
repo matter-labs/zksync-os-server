@@ -110,6 +110,27 @@ alloy::sol! {
     #[sol(rpc)]
     interface IChainTypeManager {
         address public validatorTimelockPostV29;
+
+        enum Action {
+            Add,
+            Replace,
+            Remove
+        }
+
+        struct FacetCut {
+            address facet;
+            Action action;
+            bool isFreezable;
+            bytes4[] selectors;
+        }
+
+        struct DiamondCutData {
+            FacetCut[] facetCuts;
+            address initAddress;
+            bytes initCalldata;
+        }
+
+        event NewProtocolVersion(uint256 indexed oldProtocolVersion, uint256 indexed newProtocolVersion);
     }
 
     // `IZKChain.sol`
@@ -121,6 +142,7 @@ alloy::sol! {
         function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
+        function getAdmin() external view returns (address);
     }
 
     // Taken from `IExecutor.sol`
@@ -193,6 +215,11 @@ alloy::sol! {
             uint256 indexed _protocolVersion,
             bytes[] _factoryDeps
         );
+    }
+
+    // `IChainAdmin.sol`
+    interface IChainAdmin {
+        event UpdateUpgradeTimestamp(uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
 }
 
@@ -406,5 +433,10 @@ impl<P: Provider> ZkChain<P> {
             .await?;
 
         Ok(!code.0.is_empty())
+    }
+
+    /// Returns the current admin of the chain.
+    pub async fn get_admin(&self) -> alloy::contract::Result<Address> {
+        self.instance.getAdmin().call().await
     }
 }
