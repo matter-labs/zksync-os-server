@@ -3,7 +3,6 @@ use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
-use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 
 #[derive(Debug)]
 pub struct AssignedJobEntry {
@@ -77,10 +76,7 @@ impl ProverJobMap {
             entry.assigned_at = now;
             return Some((
                 entry.batch_envelope.batch_number(),
-                entry
-                    .batch_envelope
-                    .batch_metadata_verification_key_hash()
-                    .expect("verification key must exist for batch"),
+                entry.batch_envelope.batch_metadata_verification_key_hash(),
                 entry.batch_envelope.data.clone(),
             ));
         }
@@ -96,13 +92,10 @@ impl ProverJobMap {
     }
 
     /// If a job is present for given batch_number, returns prover_input
-    pub fn get_batch_data(&self, batch_number: u64) -> Option<(VerificationKeyHash, ProverInput)> {
+    pub fn get_batch_data(&self, batch_number: u64) -> Option<(&'static str, ProverInput)> {
         self.jobs.get(&batch_number).map(|entry| {
             (
-                entry
-                    .batch_envelope
-                    .batch_metadata_verification_key_hash()
-                    .expect("verification key must exist for batch"),
+                entry.batch_envelope.batch_metadata_verification_key_hash(),
                 entry.batch_envelope.data.clone(),
             )
         })
@@ -124,9 +117,8 @@ impl ProverJobMap {
                 batch_number: r.batch_envelope.batch_number(),
                 vk_hash: r
                     .batch_envelope
-                    .verification_key_hash()
-                    .ok()
-                    .map(|vkh| vkh.to_string()),
+                    .batch_metadata_verification_key_hash()
+                    .to_string(),
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
             .sorted_by_key(|e| e.batch_number)

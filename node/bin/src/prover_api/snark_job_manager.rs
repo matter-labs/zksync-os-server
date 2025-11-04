@@ -6,7 +6,6 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, RealSnarkProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_multivm::ExecutionVersion;
-use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -124,7 +123,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
-        execution_version: ExecutionVersion,
+        execution_version: Option<ExecutionVersion>,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut receiver = self.committed_batch_receiver.lock().await;
@@ -187,12 +186,26 @@ impl SnarkJobManager {
         // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
         //
         // This should never happen, but we double-check to guarantee it's the case
-        let server_vk = consumed_batches_proven[0].batch_metadata_verification_key_hash();
-        let prover_vk = execution_version.vk_hash();
-        anyhow::ensure!(
-            server_vk == prover_vk,
-            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
-        );
+        //
+        // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
+        if execution_version.is_some() {
+            let server_vk = consumed_batches_proven[0].batch_metadata_verification_key_hash();
+            let prover_vk = execution_version.unwrap().vk_hash();
+            anyhow::ensure!(
+                server_vk == prover_vk,
+                "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
+            );
+        }
+
+        // get verification key, if available, otherwise fallback
+        let execution_version = if let Some(execution_version) = execution_version {
+            execution_version as u32
+        } else {
+            consumed_batches_proven[0]
+                .data
+                .proving_execution_version()
+                .unwrap_or(2)
+        };
 
         drop(receiver);
 

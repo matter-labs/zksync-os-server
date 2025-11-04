@@ -16,7 +16,7 @@ use crate::prover_api::{
         AppState,
         v1::models::{
             BatchDataPayload, FailedProofResponse, FriProofPayload, NextSnarkProverJobPayload,
-            PickJobPayload, ProverQuery, SnarkProofPayload,
+            ProverQuery, SnarkProofPayload,
         },
     },
 };
@@ -56,7 +56,7 @@ pub(super) async fn submit_fri_proof(
     })?;
     match state
         .fri_job_manager
-        .submit_proof(payload.block_number, proof_bytes.into(), execution_version, &prover_id)
+        .submit_proof(payload.block_number, proof_bytes.into(), Some(execution_version), &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
@@ -148,7 +148,7 @@ pub(super) async fn submit_snark_proof(
         .submit_proof(
             payload.block_number_from,
             payload.block_number_to,
-            execution_version,
+            Some(execution_version),
             proof_bytes,
         )
         .await
@@ -195,27 +195,7 @@ pub(super) async fn peek_snark_job(
     for batch_number in from_batch_number..=to_batch_number {
         match state.proof_storage.get_batch_with_proof(batch_number).await {
             Ok(Some(env)) => {
-                vk_hash = match env.verification_key_hash() {
-                    Ok(vk) => {
-                        let new_vk_hash = vk.to_string();
-                        if vk_hash != new_vk_hash {
-                            tracing::warn!(
-                                "Mismatched VK hashes in requested range: previous block had {}, current block {} has {}",
-                                vk_hash,
-                                batch_number,
-                                new_vk_hash,
-                            );
-                        }
-                        vk.to_string()
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "There's no VK available for proof at batch {} - error whilst getting VK hash: {e:?}",
-                            batch_number
-                        );
-                        String::new()
-                    }
-                };
+                vk_hash = env.batch_metadata_verification_key_hash().to_string();
                 match env.data {
                     FriProof::Real(real) => {
                         fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))

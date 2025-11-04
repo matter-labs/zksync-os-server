@@ -23,10 +23,7 @@ use crate::prover_api::{
 pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
-    match state
-        .fri_job_manager
-        .pick_next_job(Duration::from_secs(0), None)
-    {
+    match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
         Some((block, _vk_hash, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
@@ -55,6 +52,8 @@ pub(super) async fn submit_fri_proof(
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
+        Err(SubmitError::VerificationKeyHashMismatch(_, _)) => 
+            panic!("Should never happen, as provers don't provide execution_version"),
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
             proof_final_register_values,
@@ -77,7 +76,7 @@ pub(super) async fn submit_fri_proof(
 }
 
 pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
-    match state.snark_job_manager.pick_real_job(None).await {
+    match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
             let from = batches.first().unwrap().0;

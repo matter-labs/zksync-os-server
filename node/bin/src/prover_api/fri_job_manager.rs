@@ -28,7 +28,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
-use zksync_os_multivm::ExecutionVersion;
+use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -66,8 +66,7 @@ pub struct FailedFriProof {
 #[derive(Debug, Serialize)]
 pub struct JobState {
     pub batch_number: u64,
-    // TODO: migrate to String, once legacy is deprecated
-    pub vk_hash: Option<String>,
+    pub vk_hash: String,
     pub assigned_seconds_ago: u64,
 }
 
@@ -129,7 +128,7 @@ impl FriJobManager {
     }
 
     /// Peek a batch data for a given batch number
-    pub fn peek_batch_data(&self, batch_number: u64) -> Option<(VerificationKeyHash, ProverInput)> {
+    pub fn peek_batch_data(&self, batch_number: u64) -> Option<(&str, ProverInput)> {
         match self.assigned_jobs.get_batch_data(batch_number) {
             Some((vk_hash, prover_input)) => {
                 tracing::info!("Batch data is peeked for batch number {batch_number}");
@@ -227,7 +226,8 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
-        execution_version: ExecutionVersion,
+        // TODO: migrate to ExecutionVersion, once legacy is deprecated
+        execution_version: Option<ExecutionVersion>,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -240,11 +240,17 @@ impl FriJobManager {
         // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
         //
         // This should never happen, but we double-check to guarantee it's the case
-        if batch_metadata.verification_key_hash() != execution_version.vk_hash() {
-            return Err(SubmitError::VerificationKeyHashMismatch(
-                batch_metadata.verification_key_hash().to_string(),
-                execution_version.vk_hash().to_string(),
-            ));
+        //
+        // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
+        if execution_version.is_some() {
+            let server_vk = batch_metadata.verification_key_hash();
+            let prover_vk = execution_version.unwrap().vk_hash();
+            if server_vk != prover_vk {
+                return Err(SubmitError::VerificationKeyHashMismatch(
+                    server_vk.to_string(),
+                    prover_vk.to_string(),
+                ));
+            }
         }
 
         // Deserialize and verify using metadata from the batch.
@@ -324,10 +330,17 @@ impl FriJobManager {
         };
         tracing::info!(batch_number, "Real proof accepted");
 
+        // get execution version, if available, otherwise fallback
+        let execution_version = if let Some(execution_version) = execution_version {
+            execution_version as u32
+        } else {
+            proving_run_execution_version(batch_metadata.execution_version) as u32
+        };
+
         // Prepare the envelope and send it downstream.
         let proof = RealFriProof::V2 {
             proof: proof_bytes,
-            proving_execution_version: execution_version as u32,
+            proving_execution_version: execution_version,
         };
         let envelope = removed_job
             .batch_envelope
