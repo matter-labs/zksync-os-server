@@ -242,9 +242,9 @@ impl FriJobManager {
         // This should never happen, but we double-check to guarantee it's the case
         //
         // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
-        if execution_version.is_some() {
+        if let Some(exec_version) = execution_version {
             let server_vk = batch_metadata.verification_key_hash();
-            let prover_vk = execution_version.unwrap().vk_hash();
+            let prover_vk = exec_version.vk_hash();
             if server_vk != prover_vk {
                 return Err(SubmitError::VerificationKeyHashMismatch(
                     server_vk.to_string(),

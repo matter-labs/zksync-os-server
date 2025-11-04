@@ -188,9 +188,9 @@ impl SnarkJobManager {
         // This should never happen, but we double-check to guarantee it's the case
         //
         // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
-        if execution_version.is_some() {
+        if let Some(exec_version) = execution_version {
             let server_vk = consumed_batches_proven[0].batch_metadata_verification_key_hash();
-            let prover_vk = execution_version.unwrap().vk_hash();
+            let prover_vk = exec_version.vk_hash();
             anyhow::ensure!(
                 server_vk == prover_vk,
                 "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
