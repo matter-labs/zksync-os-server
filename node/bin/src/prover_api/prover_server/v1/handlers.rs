@@ -35,7 +35,7 @@ pub(super) async fn pick_fri_job(
         Some((fri_job, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
-                block_number: fri_job.batch_number,
+                batch_number: fri_job.batch_number,
                 vk_hash: fri_job.vk_hash,
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
@@ -67,7 +67,7 @@ pub(super) async fn submit_fri_proof(
     })?;
     match state
         .fri_job_manager
-        .submit_proof(payload.block_number, proof_bytes.into(), Some(execution_version), &prover_id)
+        .submit_proof(payload.batch_number, proof_bytes.into(), Some(execution_version), &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
@@ -132,8 +132,8 @@ pub(super) async fn pick_snark_job(
                 .collect();
 
             Json(NextSnarkProverJobPayload {
-                block_number_from: from,
-                block_number_to: to,
+                from_batch_number: from,
+                to_batch_number: to,
                 vk_hash,
                 fri_proofs,
             })
@@ -168,8 +168,8 @@ pub(super) async fn submit_snark_proof(
     match state
         .snark_job_manager
         .submit_proof(
-            payload.block_number_from,
-            payload.block_number_to,
+            payload.from_batch_number,
+            payload.to_batch_number,
             Some(execution_version),
             proof_bytes,
         )
@@ -191,7 +191,7 @@ pub(super) async fn peek_fri_job(
         Some((vk_hash, prover_input)) => {
             let bytes: Vec<u8> = prover_input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
-                block_number: batch_number,
+                batch_number,
                 vk_hash: vk_hash.to_string(),
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
@@ -260,8 +260,8 @@ pub(super) async fn peek_snark_job(
         }
     }
     Json(NextSnarkProverJobPayload {
-        block_number_from: from_batch_number,
-        block_number_to: to_batch_number,
+        from_batch_number,
+        to_batch_number,
         vk_hash,
         fri_proofs,
     })
@@ -283,7 +283,7 @@ pub(super) async fn get_failed_fri_proof(
         Ok(Some(failed_proof)) => {
             let response = FailedProofResponse {
                 batch_number: failed_proof.batch_number,
-                last_block_timestamp: failed_proof.last_block_timestamp,
+                last_batch_timestamp: failed_proof.last_block_timestamp,
                 expected_hash_u32s: failed_proof.expected_hash_u32s,
                 proof_final_register_values: failed_proof.proof_final_register_values,
                 vk_hash: failed_proof.vk_hash.unwrap_or_default(),
