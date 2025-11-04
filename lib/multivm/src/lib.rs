@@ -26,9 +26,9 @@ impl ExecutionVersion {
     // NOTE: V1 and V2 have a slight chance of being off as they've been backfilled.
     // If you find a divergence in what you expect and the actual value, most likely a bug.
 
-    /// verification key hash generated from zksync-os v0.0.20, zksync-airbender v0.4.4 and zkos-wrapper v0.4.3
+    /// verification key hash generated from zksync-os v0.0.21, zksync-airbender v0.4.4 and zkos-wrapper v0.4.3
     const V1_VK_HASH: &'static str =
-        "0x259ded4b0e02de2d25d489f6c3485edb2d647e8b77a096f859499897c243e6bf";
+        "0x80a72fbdf9d6ab299fb5dfc2bcc807cfc7be38c9cfb0bc9b1ce6f9510fb110ea";
     /// verification key hash generated from zksync-os v0.0.25, zksync-airbender v0.4.5 and zkos-wrapper v0.4.6
     const V2_VK_HASH: &'static str =
         "0x83d49897775e6c1f1d7247ec228e18158e8e3accda545c604de4c44eee1a9845";

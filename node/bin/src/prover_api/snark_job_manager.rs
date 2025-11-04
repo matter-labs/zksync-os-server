@@ -81,12 +81,11 @@ impl SnarkJobManager {
     // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
     pub async fn pick_real_job(
         &self,
-        supported_vks: Option<Vec<VerificationKeyHash>>,
-    ) -> anyhow::Result<Option<Vec<(u64, VerificationKeyHash, FriProof)>>> {
+    ) -> anyhow::Result<Option<Vec<(u64, &'static str, FriProof)>>> {
         self.consume_fake_proves_from_head(None).await?;
         // note that here we don't consume the messages from channel -
         // the job will be picked, but there is no guarantee it will be completed
-        let batches_with_real_proofs: Vec<(u64, VerificationKeyHash, FriProof)> = self
+        let batches_with_real_proofs: Vec<(u64, &'static str, FriProof)> = self
             .committed_batch_receiver
             .lock()
             .await
@@ -94,27 +93,18 @@ impl SnarkJobManager {
                 if envelope.data.is_fake() {
                     None
                 } else {
-                    // filter by supported verification keys, if any
-                    let vk_hash = envelope
-                        .verification_key_hash()
-                        .expect("verification key must be valid for batch");
-                    if let Some(supported_vks) = &supported_vks
-                        && !supported_vks.contains(&vk_hash)
-                    {
-                        tracing::warn!(
-                            "Skipping batch {} due to unsupported VK hash {vk_hash:?}",
-                            envelope.batch_number()
-                        );
-                        return None;
-                    }
-                    Some((envelope.batch_number(), vk_hash, envelope.data.clone()))
+                    Some((
+                        envelope.batch_number(),
+                        envelope.batch_metadata_verification_key_hash(),
+                        envelope.data.clone(),
+                    ))
                 }
             });
         if batches_with_real_proofs.is_empty() {
             return Ok(None);
         }
 
-        // Get proofs that were created for the same execution version (AKA VKs).
+        // Get proofs that were created for the same execution version/VK.
         let first_vk_hash = batches_with_real_proofs[0].1;
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
@@ -122,9 +112,10 @@ impl SnarkJobManager {
             .collect();
 
         tracing::info!(
-            "real SNARK proof for batches {}-{} is picked by a prover",
+            "real SNARK proof for batches {}-{} with vk {} is picked by a prover",
             batches_with_real_proofs.first().unwrap().0,
             batches_with_real_proofs.last().unwrap().0,
+            first_vk_hash,
         );
         Ok(Some(batches_with_real_proofs))
     }
@@ -133,8 +124,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
-        // TODO: migrate to VerificationKeyHash, once legacy is deprecated
-        vk_hash: Option<VerificationKeyHash>,
+        execution_version: ExecutionVersion,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut receiver = self.committed_batch_receiver.lock().await;
@@ -193,6 +183,17 @@ impl SnarkJobManager {
             "Fatal error: inconsistency in PeekableReceiver"
         );
 
+        // Prover should generate the proof with VK received from server. These must always match.
+        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
+        //
+        // This should never happen, but we double-check to guarantee it's the case
+        let server_vk = consumed_batches_proven[0].batch_metadata_verification_key_hash();
+        let prover_vk = execution_version.vk_hash();
+        anyhow::ensure!(
+            server_vk == prover_vk,
+            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
+        );
+
         drop(receiver);
 
         tracing::info!("real SNARK proof for batches {batch_from}-{batch_to} is accepted",);
@@ -201,24 +202,12 @@ impl SnarkJobManager {
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
-        // get verification key, if available, otherwise fallback
-        let execution_version = if let Some(vk_hash) = vk_hash {
-            let execution_version: ExecutionVersion = vk_hash
-                .try_into()
-                .expect("verification key must be valid for batch as it is checked above");
-            execution_version as u32
-        } else {
-            consumed_batches_proven[0]
-                .data
-                .proving_execution_version()
-                .unwrap_or(2)
-        };
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
-                proving_execution_version: execution_version,
+                proving_execution_version: execution_version as u32,
             }),
         ))
         .await?;

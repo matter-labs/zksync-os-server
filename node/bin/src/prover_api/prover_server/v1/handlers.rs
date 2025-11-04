@@ -88,31 +88,8 @@ pub(super) async fn submit_fri_proof(
     }
 }
 
-pub(super) async fn pick_snark_job(
-    State(state): State<AppState>,
-    Json(payload): Json<PickJobPayload>,
-) -> Response {
-    let supported_vks: Vec<VerificationKeyHash> = match payload
-        .supported_vks
-        .into_iter()
-        .map(|vk| vk.parse())
-        .collect::<Result<_, _>>()
-    {
-        Ok(vks) => vks,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Failed to get verification key: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    match state
-        .snark_job_manager
-        .pick_real_job(Some(supported_vks))
-        .await
-    {
+pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
+    match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
             let from = batches.first().unwrap().0;
@@ -160,10 +137,10 @@ pub(super) async fn submit_snark_proof(
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
-    let vk_hash = payload.vk_hash.parse().map_err(|e| {
+    let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("Failed to get verification key: {e}"),
+            format!("no Execution Version matches the provided verification key: {e}"),
         )
     })?;
     match state
@@ -171,7 +148,7 @@ pub(super) async fn submit_snark_proof(
         .submit_proof(
             payload.block_number_from,
             payload.block_number_to,
-            Some(vk_hash),
+            execution_version,
             proof_bytes,
         )
         .await

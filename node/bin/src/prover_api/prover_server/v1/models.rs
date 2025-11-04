@@ -1,10 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
-pub(super) struct PickJobPayload {
-    pub supported_vks: Vec<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct BatchDataPayload {
     pub block_number: u64,
