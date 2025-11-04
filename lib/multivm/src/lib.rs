@@ -13,9 +13,6 @@ use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
 
 pub mod apps;
-pub mod verification_key_hash;
-
-use crate::verification_key_hash::{V3_VERIFICATION_KEY, VerificationKeyHash};
 
 #[derive(Debug, Clone, Copy, TryFromPrimitive)]
 #[repr(u32)]
@@ -25,29 +22,36 @@ pub enum ExecutionVersion {
     V3 = 3,
 }
 
-// Verification Key Hash and Execution Version have a 1-to-1 mapping starting from V3 onwards.
-// We could backport for V1 and V2 if needed in the future, but it's very unlikely.
 impl ExecutionVersion {
-    pub fn vk_hash(&self) -> Option<VerificationKeyHash> {
+    // NOTE: V1 and V2 have a slight chance of being off as they've been backfilled.
+    // If you find a divergence in what you expect and the actual value, most likely a bug.
+
+    /// verification key hash generated from zksync-os v0.0.20, zksync-airbender v0.4.4 and zkos-wrapper v0.4.3
+    const V1_VK_HASH: &'static str =
+        "0x259ded4b0e02de2d25d489f6c3485edb2d647e8b77a096f859499897c243e6bf";
+    /// verification key hash generated from zksync-os v0.0.25, zksync-airbender v0.4.5 and zkos-wrapper v0.4.6
+    const V2_VK_HASH: &'static str =
+        "0x83d49897775e6c1f1d7247ec228e18158e8e3accda545c604de4c44eee1a9845";
+    /// verification key hash generated from zksync-os v0.0.26, zksync-airbender v0.5.0 and zkos-wrapper v0.5.0
+    const V3_VK_HASH: &'static str =
+        "0x6a4509801ec284b8921c63dc6aaba668a0d71382d87ae4095ffc2235154e9fa3";
+
+    /// Get the verification key hash associated with this execution version.
+    pub fn vk_hash(&self) -> &'static str {
         match self {
-            ExecutionVersion::V1 | ExecutionVersion::V2 => {
-                // key unavailable for versions earlier than V3
-                None
-            }
-            ExecutionVersion::V3 => Some(V3_VERIFICATION_KEY),
+            ExecutionVersion::V1 => Self::V1_VK_HASH,
+            ExecutionVersion::V2 => Self::V2_VK_HASH,
+            ExecutionVersion::V3 => Self::V3_VK_HASH,
         }
     }
-}
 
-// Verification Key Hash and Execution Version have a 1-to-1 mapping starting from V3 onwards.
-// We could backport for V1 and V2 if needed in the future, but it's very unlikely.
-impl TryFrom<VerificationKeyHash> for ExecutionVersion {
-    type Error = anyhow::Error;
-
-    fn try_from(vk: VerificationKeyHash) -> anyhow::Result<Self> {
-        match vk {
-            V3_VERIFICATION_KEY => Ok(ExecutionVersion::V3),
-            _ => Err(anyhow::anyhow!("unknown verification key hash {vk:?}")),
+    /// Try to get ExecutionVersion from verification key hash.
+    pub fn try_from_vk_hash(vk_hash: &str) -> anyhow::Result<Self> {
+        match vk_hash {
+            Self::V1_VK_HASH => Ok(ExecutionVersion::V1),
+            Self::V2_VK_HASH => Ok(ExecutionVersion::V2),
+            Self::V3_VK_HASH => Ok(ExecutionVersion::V3),
+            val => Err(anyhow::anyhow!("unknown verification key hash: {val}")),
         }
     }
 }
