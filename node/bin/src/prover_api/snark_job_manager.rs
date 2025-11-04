@@ -220,7 +220,7 @@ impl SnarkJobManager {
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
-                proving_execution_version: execution_version as u32,
+                proving_execution_version: execution_version,
             }),
         ))
         .await?;
