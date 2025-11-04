@@ -108,12 +108,6 @@ impl<E> BatchEnvelope<E> {
             latency_tracker: self.latency_tracker,
         }
     }
-
-    /// Get Verification Key Hash associated with this batch's execution version.
-    /// NOTE: The key is the one attached to the batch, not proof. The proof's version will be deprecated in follow-up versions.
-    pub fn batch_metadata_verification_key_hash(&self) -> &'static str {
-        self.batch.verification_key_hash()
-    }
 }
 
 pub type ProverInput = Vec<u32>;

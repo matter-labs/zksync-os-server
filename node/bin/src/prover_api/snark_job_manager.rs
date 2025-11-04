@@ -94,7 +94,7 @@ impl SnarkJobManager {
                 } else {
                     Some((
                         envelope.batch_number(),
-                        envelope.batch_metadata_verification_key_hash(),
+                        envelope.batch.verification_key_hash(),
                         envelope.data.clone(),
                     ))
                 }
@@ -189,7 +189,7 @@ impl SnarkJobManager {
         //
         // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
         if let Some(exec_version) = execution_version {
-            let server_vk = consumed_batches_proven[0].batch_metadata_verification_key_hash();
+            let server_vk = consumed_batches_proven[0].batch.verification_key_hash();
             let prover_vk = exec_version.vk_hash();
             anyhow::ensure!(
                 server_vk == prover_vk,

@@ -76,7 +76,7 @@ impl ProverJobMap {
             entry.assigned_at = now;
             return Some((
                 entry.batch_envelope.batch_number(),
-                entry.batch_envelope.batch_metadata_verification_key_hash(),
+                entry.batch_envelope.batch.verification_key_hash(),
                 entry.batch_envelope.data.clone(),
             ));
         }
@@ -95,7 +95,7 @@ impl ProverJobMap {
     pub fn get_batch_data(&self, batch_number: u64) -> Option<(&'static str, ProverInput)> {
         self.jobs.get(&batch_number).map(|entry| {
             (
-                entry.batch_envelope.batch_metadata_verification_key_hash(),
+                entry.batch_envelope.batch.verification_key_hash(),
                 entry.batch_envelope.data.clone(),
             )
         })
@@ -115,10 +115,7 @@ impl ProverJobMap {
             .iter()
             .map(|r| JobState {
                 batch_number: r.batch_envelope.batch_number(),
-                vk_hash: r
-                    .batch_envelope
-                    .batch_metadata_verification_key_hash()
-                    .to_string(),
+                vk_hash: r.batch_envelope.batch.verification_key_hash().to_string(),
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
             .sorted_by_key(|e| e.batch_number)

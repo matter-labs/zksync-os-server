@@ -200,7 +200,7 @@ impl FriJobManager {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let batch_number = env.batch_number();
                     let prover_input = env.data.clone();
-                    let vk_hash = env.batch_metadata_verification_key_hash();
+                    let vk_hash = env.batch.verification_key_hash();
                     tracing::info!(
                         batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),
