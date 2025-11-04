@@ -46,8 +46,8 @@ impl FakeFriProversPool {
             let handle = tokio::spawn(async move {
                 loop {
                     // Only take inbound items whose age >= min_age.
-                    match jm.pick_next_job(min_age) {
-                        Some((batch_number, _prover_input)) => {
+                    match jm.pick_next_job(min_age, None) {
+                        Some((batch_number, _vk_hash, _prover_input)) => {
                             // Emulate proving work.
                             let start = Instant::now();
                             sleep(compute_time).await;

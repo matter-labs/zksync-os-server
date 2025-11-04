@@ -5,6 +5,8 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, RealSnarkProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_multivm::ExecutionVersion;
+use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -76,12 +78,15 @@ impl SnarkJobManager {
         }
     }
 
-    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `real_fri_proof`)
-    pub async fn pick_real_job(&self) -> anyhow::Result<Option<Vec<(u64, FriProof)>>> {
+    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
+    pub async fn pick_real_job(
+        &self,
+        supported_vks: Option<Vec<VerificationKeyHash>>,
+    ) -> anyhow::Result<Option<Vec<(u64, VerificationKeyHash, FriProof)>>> {
         self.consume_fake_proves_from_head(None).await?;
         // note that here we don't consume the messages from channel -
         // the job will be picked, but there is no guarantee it will be completed
-        let batches_with_real_proofs: Vec<(u64, FriProof)> = self
+        let batches_with_real_proofs: Vec<(u64, VerificationKeyHash, FriProof)> = self
             .committed_batch_receiver
             .lock()
             .await
@@ -89,7 +94,20 @@ impl SnarkJobManager {
                 if envelope.data.is_fake() {
                     None
                 } else {
-                    Some((envelope.batch_number(), envelope.data.clone()))
+                    // filter by supported verification keys, if any
+                    let vk_hash = envelope
+                        .verification_key_hash()
+                        .expect("verification key must be valid for batch");
+                    if let Some(supported_vks) = &supported_vks
+                        && !supported_vks.contains(&vk_hash)
+                    {
+                        tracing::warn!(
+                            "Skipping batch {} due to unsupported VK hash {vk_hash:?}",
+                            envelope.batch_number()
+                        );
+                        return None;
+                    }
+                    Some((envelope.batch_number(), vk_hash, envelope.data.clone()))
                 }
             });
         if batches_with_real_proofs.is_empty() {
@@ -97,10 +115,10 @@ impl SnarkJobManager {
         }
 
         // Get proofs that were created for the same execution version (AKA VKs).
-        let proving_execution_version = batches_with_real_proofs[0].1.proving_execution_version();
+        let first_vk_hash = batches_with_real_proofs[0].1;
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, proof)| proof.proving_execution_version() == proving_execution_version)
+            .take_while(|(_, vk_hash, _)| vk_hash == &first_vk_hash)
             .collect();
 
         tracing::info!(
@@ -115,6 +133,8 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
+        // TODO: migrate to VerificationKeyHash, once legacy is deprecated
+        vk_hash: Option<VerificationKeyHash>,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut receiver = self.committed_batch_receiver.lock().await;
@@ -182,10 +202,17 @@ impl SnarkJobManager {
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
         // get verification key, if available, otherwise fallback
-        let execution_version = consumed_batches_proven[0]
-            .data
-            .proving_execution_version()
-            .unwrap_or(2);
+        let execution_version = if let Some(vk_hash) = vk_hash {
+            let execution_version: ExecutionVersion = vk_hash
+                .try_into()
+                .expect("verification key must be valid for batch as it is checked above");
+            execution_version as u32
+        } else {
+            consumed_batches_proven[0]
+                .data
+                .proving_execution_version()
+                .unwrap_or(2)
+        };
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,

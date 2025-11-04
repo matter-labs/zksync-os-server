@@ -28,7 +28,8 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
-use zksync_os_multivm::proving_run_execution_version;
+use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
+use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -58,6 +59,8 @@ pub struct FailedFriProof {
     pub last_block_timestamp: u64,
     pub expected_hash_u32s: [u32; 8],
     pub proof_final_register_values: [u32; 16],
+    // TODO: migrate to String, once legacy is deprecated
+    pub vk_hash: Option<String>,
     pub proof_bytes: Bytes,
 }
 
@@ -65,8 +68,24 @@ pub struct FailedFriProof {
 pub struct JobState {
     pub batch_number: u64,
     // TODO: migrate to String, once legacy is deprecated
-    // pub vk_hash: Option<String>,
+    pub vk_hash: Option<String>,
     pub assigned_seconds_ago: u64,
+}
+
+// TODO: remove, once legacy is deprecated
+#[derive(Debug, Serialize)]
+pub struct JobStateLegacy {
+    pub batch_number: u64,
+    pub assigned_seconds_ago: u64,
+}
+
+impl From<JobState> for JobStateLegacy {
+    fn from(state: JobState) -> JobStateLegacy {
+        JobStateLegacy {
+            batch_number: state.batch_number,
+            assigned_seconds_ago: state.assigned_seconds_ago,
+        }
+    }
 }
 
 /// Thread-safe queue for FRI prover work.
@@ -111,11 +130,11 @@ impl FriJobManager {
     }
 
     /// Peek a batch data for a given batch number
-    pub fn peek_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
+    pub fn peek_batch_data(&self, batch_number: u64) -> Option<(VerificationKeyHash, ProverInput)> {
         match self.assigned_jobs.get_batch_data(batch_number) {
-            Some(prover_input) => {
+            Some((vk_hash, prover_input)) => {
                 tracing::info!("Batch data is peeked for batch number {batch_number}");
-                Some(prover_input)
+                Some((vk_hash, prover_input))
             }
             None => {
                 tracing::debug!(
@@ -135,20 +154,28 @@ impl FriJobManager {
     ///
     /// `min_inbound_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
+    ///
+    /// If `supported_vks` is provided, only batches whose verification key hash
+    /// is in the list will be picked. Others will be skipped.
+    ///
+    /// `supported_vks` is used to filter out jobs that the provers cannot handle.
     pub fn pick_next_job(
         &self,
         min_inbound_age: Duration,
         // TODO: migrate to Vec<String>, once legacy is deprecated
-    ) -> Option<(u64, ProverInput)> {
+        supported_vks: Option<Vec<VerificationKeyHash>>,
+    ) -> Option<(u64, VerificationKeyHash, ProverInput)> {
         // 1) Prefer a timed-out reassignment
-        if let Some((batch_number, prover_input)) = self.assigned_jobs.pick_timed_out_job() {
+        if let Some((batch_number, vk_hash, prover_input)) =
+            self.assigned_jobs.pick_timed_out_job(&supported_vks)
+        {
             tracing::info!(
                 batch_number,
                 assigned_jobs_count = self.assigned_jobs.len(),
                 ?min_inbound_age,
                 "Assigned a timed out job"
             );
-            return Some((batch_number, prover_input));
+            return Some((batch_number, vk_hash, prover_input));
         }
 
         if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
@@ -170,6 +197,19 @@ impl FriJobManager {
                 if env.latency_tracker.current_stage_age() < min_inbound_age {
                     return false;
                 }
+                let vk_hash = env
+                    .verification_key_hash()
+                    .expect("verification key must exist for batch");
+                // if I have keys & they don't contain this vk, skip
+                if let Some(vks) = &supported_vks
+                    && !vks.contains(&vk_hash)
+                {
+                    tracing::warn!(
+                        "Skipping inbound batch {} due to unsupported VK hash {vk_hash:?}",
+                        env.batch_number()
+                    );
+                    return false;
+                }
                 true
             });
             if old_enough != Some(true) {
@@ -182,6 +222,9 @@ impl FriJobManager {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let batch_number = env.batch_number();
                     let prover_input = env.data.clone();
+                    let vk_hash = env
+                        .verification_key_hash()
+                        .expect("verification key must exist for batch");
                     tracing::info!(
                         batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),
@@ -189,7 +232,7 @@ impl FriJobManager {
                         "Assigned a new job from inbound channel"
                     );
                     self.assigned_jobs.insert(env);
-                    Some((batch_number, prover_input))
+                    Some((batch_number, vk_hash, prover_input))
                 }
                 Err(_) => None,
             }
@@ -207,6 +250,8 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
+        // TODO: migrate to VerificationKeyHash, once legacy is deprecated
+        vk_hash: Option<VerificationKeyHash>,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -239,12 +284,15 @@ impl FriJobManager {
                 "Proof verification failed",
             );
 
+            let vk_hash = vk_hash.map(|vkh| vkh.to_string());
+
             // Persist the failed proof with some information about the batch for debugging
             let failed_proof = FailedFriProof {
                 batch_number,
                 last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
                 expected_hash_u32s,
                 proof_final_register_values,
+                vk_hash,
                 proof_bytes,
             };
 
@@ -290,8 +338,16 @@ impl FriJobManager {
             return Ok(());
         };
         tracing::info!(batch_number, "Real proof accepted");
-        let execution_version =
-            proving_run_execution_version(batch_metadata.execution_version) as u32;
+
+        // get verification key, if available, otherwise fallback
+        let execution_version = if let Some(vk_hash) = vk_hash {
+            let execution_version: ExecutionVersion = vk_hash
+                .try_into()
+                .expect("verification key must be valid for batch as it is checked above");
+            execution_version as u32
+        } else {
+            proving_run_execution_version(batch_metadata.execution_version) as u32
+        };
 
         // Prepare the envelope and send it downstream.
         let proof = RealFriProof::V2 {
