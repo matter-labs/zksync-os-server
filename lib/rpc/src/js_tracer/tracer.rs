@@ -1,14 +1,15 @@
-use alloy::primitives::{Address, B256, Bytes, U256};
-use boa_engine::object::FunctionObjectBuilder;
-use boa_engine::{
-    Context as BoaContext, JsArgs, JsError, JsString, JsValue, NativeFunction, Source, js_string,
+use crate::js_tracer::types::TxContext;
+use crate::js_tracer::{
+    host::init_host_env_in_boa_context,
+    types::{CreateType, StepCtx},
+    utils::{extract_js_source_and_config, gas_used_from_resources},
 };
-use boa_gc::{Finalize, Trace};
-use ruint::aliases::B160;
-use serde_json::{Map, Value as JsonValue};
+use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
+use alloy::hex::ToHexExt;
+use alloy::primitives::{Address, B256, Bytes, U256};
+use boa_engine::{Context as BoaContext, Source};
+use serde_json::Value as JsonValue;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
-use zk_ee::common_structs::derive_flat_storage_key;
-use zk_os_api::helpers::get_code;
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
@@ -16,58 +17,20 @@ use zksync_os_interface::tracing::{
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
-use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
-
-#[derive(Trace, Finalize)]
-struct HostEnvironment<V: ViewState + 'static> {
-    #[unsafe_ignore_trace]
-    state_view: RefCell<V>,
-    #[unsafe_ignore_trace]
-    storage_overlay: Rc<RefCell<HashMap<(Address, B256), B256>>>,
-    #[unsafe_ignore_trace]
-    code_overlay: Rc<RefCell<HashMap<Address, Vec<u8>>>>,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum CreateType {
-    Create,
-    Create2,
-}
-
-struct StepCtx {
-    opcode: u8,
-    pc: u64,
-    gas_before: u64,
-    depth: u64,
-}
-
-#[allow(clippy::enum_variant_names)]
-enum HostMethod {
-    GetBalance,
-    GetNonce,
-    GetCode,
-    GetState,
-    Exists,
-}
-
-impl HostMethod {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "getBalance" => Some(Self::GetBalance),
-            "getNonce" => Some(Self::GetNonce),
-            "getCode" => Some(Self::GetCode),
-            "getState" => Some(Self::GetState),
-            "exists" => Some(Self::Exists),
-            _ => None,
-        }
-    }
-}
-
 /// JS tracer implementation
 /// Holds a Boa JS runtime and calls user-provided JS tracer methods when the hooks of zksync-os
 /// EVM tracer interface are invoked.
 /// Since zksync-os interfaces don't provide state access - we use the state before the execution of
-/// each transaction, and maintain overlays for storage and code modifications done during the tx.
+/// each transaction and maintain overlays for storage and code modifications done during the tx.
+///
+/// Tracer methods supported:
+/// - setup(config): called once at the beginning of the transaction with the tracer config
+/// - enter(frame): called on entering a new execution frame
+/// - exit(result): called on exiting an execution frame
+/// - step(log, db): called after each EVM opcode execution step
+/// - fault(log, db): called on EVM opcode error
+/// - result(ctx, db): called at the end of the transaction to get the final result
+/// - write(modification): called on each storage write (extension beyond geth tracer)
 ///
 /// The JS tracer can use the `db` object to query the state via the following interface:
 ///   - getBalance(address): returns balance of an address
@@ -78,6 +41,7 @@ impl HostMethod {
 ///
 /// Known divergences from geth tracer interface:
 /// - `stack` is not provided in step/fault logs
+/// - `ctx.gasPrice ` is not provided in result()
 ///
 pub struct JsTracer {
     // JS runtime
@@ -91,9 +55,13 @@ pub struct JsTracer {
 
     // Depth tracking and per-tx result
     current_depth: u64,
-    pub results: Vec<JsonValue>,
+    pub(crate) results: Vec<JsonValue>,
     pending_step: Option<StepCtx>,
     pending_create_type: Option<CreateType>,
+
+    frame_stack: Vec<TxContext>,
+    last_finished_frame: Option<TxContext>,
+
     error: Option<anyhow::Error>,
 }
 
@@ -102,21 +70,17 @@ impl JsTracer {
         let (tracer_source, tracer_config) = extract_js_source_and_config(js_cfg)?;
 
         let mut ctx = BoaContext::default();
-        bootstrap_tracer(&mut ctx, &tracer_source)?;
 
-        // Prepare shared state for DB methods
         let storage_overlay = Rc::new(RefCell::new(HashMap::<(Address, B256), B256>::new()));
         let code_overlay = Rc::new(RefCell::new(HashMap::new()));
 
-        let host_env = HostEnvironment {
-            state_view: RefCell::new(state_view.clone()),
-            storage_overlay: Rc::clone(&storage_overlay),
-            code_overlay: Rc::clone(&code_overlay),
-        };
-
-        install_host_bindings(&mut ctx, host_env)?;
-        install_db_wrapper(&mut ctx)?;
-        install_step_helpers(&mut ctx)?;
+        init_host_env_in_boa_context(
+            &mut ctx,
+            &tracer_source,
+            RefCell::new(state_view.clone()),
+            Rc::clone(&storage_overlay),
+            Rc::clone(&code_overlay),
+        )?;
 
         Ok(Self {
             ctx,
@@ -128,6 +92,8 @@ impl JsTracer {
             pending_step: None,
             pending_create_type: None,
             error: None,
+            frame_stack: Vec::new(),
+            last_finished_frame: None,
         })
     }
 
@@ -159,6 +125,67 @@ impl JsTracer {
         ))
             .map_err(|e| anyhow::anyhow!(format!("JS tracer method existence check failed: {e:?}")))?
             .to_boolean())
+    }
+
+    fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
+        if !self.method_exists("enter")? {
+            return Ok(());
+        }
+
+        let raw_frame_input = serde_json::to_string(call_frame).map_err(|e| {
+            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
+        })?;
+
+        let snippet = format!(
+            "(function(){{\n\
+                let raw = {raw_frame_input};\n\
+                let frame = {{\n\
+                    getType(){{ return raw.type; }},\n\
+                    getFrom(){{ return raw.from; }},\n\
+                    getTo(){{ return raw.to; }},\n\
+                    getInput(){{ return hexToBytes(raw.input); }},\n\
+                    getGas(){{ return raw.gas; }},\n\
+                    getValue(){{ return raw.value; }},\n\
+                }};\n\
+                tracer.enter(frame);\n\
+            }})()"
+        );
+
+        let _ = self
+            .ctx
+            .eval(Source::from_bytes(snippet.as_bytes()))
+            .map_err(|e| anyhow::anyhow!(format!("JS tracer method enter failed: {e:?}")))?;
+
+        Ok(())
+    }
+
+    fn call_exit(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
+        if !self.method_exists("exit")? {
+            return Ok(());
+        }
+
+        let raw_frame_input = serde_json::to_string(call_frame).map_err(|e| {
+            anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
+        })?;
+
+        let snippet = format!(
+            "(function(){{\n\
+                let raw = {raw_frame_input};\n\
+                let frame = {{\n\
+                    getGasUsed(){{ return raw.gasUsed; }},\n\
+                    getOutput(){{ return raw.output ? hexToBytes(raw.output) : null; }},\n\
+                    getError(){{ return raw.error; }},\n\
+                }};\n\
+                tracer.exit(frame);\n\
+            }})()"
+        );
+
+        let _ = self
+            .ctx
+            .eval(Source::from_bytes(snippet.as_bytes()))
+            .map_err(|e| anyhow::anyhow!(format!("JS tracer method exit failed: {e:?}")))?;
+
+        Ok(())
     }
 
     fn call_step_or_fault(&mut self, method: &str, raw_log: &JsonValue) -> anyhow::Result<()> {
@@ -245,7 +272,9 @@ impl JsTracer {
     fn invoke_method(&mut self, method: &str, arg: &JsonValue) {
         if let Err(err) = match method {
             "step" | "fault" => self.call_step_or_fault(method, arg),
-            "setup" | "enter" | "exit" | "write" => self.call_method(method, arg, false),
+            "setup" | "write" => self.call_method(method, arg, false),
+            "enter" => self.call_enter(arg),
+            "exit" => self.call_exit(arg),
             "result" => self.call_method(method, arg, true),
             _ => Err(anyhow::anyhow!(format!(
                 "unknown JS tracer method: {method}"
@@ -267,19 +296,35 @@ impl JsTracer {
     }
 
     /// `call_result` is called at the end of the transaction to get the final result from the tracer.
-    fn call_result(&mut self) -> anyhow::Result<JsonValue> {
-        let snippet = "(function(){ return JSON.stringify(tracer.result({}, db)); })()"; // TODO: pass ctx to result
+    fn call_result(&mut self, ctx: &TxContext) -> anyhow::Result<JsonValue> {
+        let ctx = serde_json::json!({
+            "type": ctx.typ,
+            "from": ctx.from,
+            "to": ctx.to,
+            "input": ctx.input,
+            "gas": ctx.gas,
+            "value": match ctx.value {
+                v if v == U256::ZERO => JsonValue::Null,
+                v => serde_json::to_value(v).unwrap_or(JsonValue::Null),
+            },
+            "gasUsed": ctx.gas_used,
+            "output": ctx.output,
+            "error": ctx.error,
+        });
+
+        let snippet =
+            format!("(function(){{ return JSON.stringify(tracer.result({ctx}, db)); }})()");
         let value = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
             .map_err(|e| anyhow::anyhow!(format!("JS tracer result() failed: {e:?}")))?;
 
-        let s = value
+        let out = value
             .to_string(&mut self.ctx)
-            .map_err(|e| anyhow::anyhow!(format!("JS value to string error: {e:?}")))?;
-        let out = s.to_std_string_escaped();
-        let parsed = serde_json::from_str::<JsonValue>(&out).unwrap_or(JsonValue::Null);
-        Ok(parsed)
+            .map_err(|e| anyhow::anyhow!(format!("JS value to string error: {e:?}")))?
+            .to_std_string_escaped();
+
+        Ok(serde_json::from_str::<JsonValue>(&out).unwrap_or(JsonValue::Null))
     }
 
     fn consume_call_type(&mut self, modifier: CallModifier) -> String {
@@ -363,17 +408,33 @@ impl EvmTracer for JsTracer {
 
         let call_type = self.consume_call_type(request.modifier());
         let gas = U256::from(request.resources().ergs / ERGS_PER_GAS);
+        let input = Bytes::copy_from_slice(request.input());
+        let frame_ctx = TxContext {
+            typ: call_type.clone(),
+            from: request.caller(),
+            to: request.callee(),
+            input: input.clone(),
+            gas,
+            value: match request.modifier() {
+                CallModifier::Static => U256::ZERO,
+                _ => request.nominal_token_value(),
+            },
+            gas_used: None,
+            output: None,
+            error: None,
+        };
+        self.frame_stack.push(frame_ctx);
+
         let obj = serde_json::json!({
             "type": call_type,
             "from": request.caller(),
             "to": request.callee(),
+            "input": input.encode_hex(),
             "gas": gas,
             "value": match request.modifier() {
                 CallModifier::Static => JsonValue::Null,
                 _ => serde_json::to_value(request.nominal_token_value()).unwrap_or(JsonValue::Null),
             },
-            "input": Bytes::copy_from_slice(request.input()),
-            "depth": self.current_depth,
         });
 
         self.invoke_method("enter", &obj);
@@ -395,17 +456,26 @@ impl EvmTracer for JsTracer {
             },
             None => (U256::ZERO, None, None),
         };
-        let obj = serde_json::json!({
-            "gasUsed": gas_used,
-            "output": output,
-            "revertReason": revert_reason,
-            "error": JsonValue::Null,
-        });
-        self.invoke_method("exit", &obj);
+
+        if let Some(ctx) = &mut self.frame_stack.pop() {
+            ctx.gas_used = Some(gas_used);
+            ctx.output = output.clone();
+            ctx.error = revert_reason.clone();
+            self.last_finished_frame = Some(ctx.clone());
+        } else {
+            tracing::error!("Execution frame completed but no frame context found");
+        }
 
         if self.current_depth > 0 {
             self.current_depth -= 1;
         }
+
+        let obj = serde_json::json!({
+            "gasUsed": gas_used,
+            "output": output.map(|o| o.encode_hex()),
+            "error": revert_reason
+        });
+        self.invoke_method("exit", &obj);
     }
 
     fn on_storage_read(&mut self, _: bool, _: Address, _: B256, _: B256) {}
@@ -461,9 +531,21 @@ impl EvmTracer for JsTracer {
             return;
         }
 
+        let ctx = match self.last_finished_frame.clone() {
+            Some(frame) => frame,
+            None => {
+                tracing::error!("No finished frame found at transaction end");
+                self.record_error(
+                    "result",
+                    anyhow::anyhow!("No finished frame found at transaction end"),
+                );
+
+                return;
+            }
+        };
         self.pending_step = None;
 
-        match self.call_result() {
+        match self.call_result(&ctx) {
             Ok(val) => self.results.push(val),
             Err(err) => self.record_error("result", err),
         }
@@ -562,335 +644,4 @@ pub fn trace_block<V: ViewState + 'static>(
     }
 
     Ok(tracer.results)
-}
-
-fn bootstrap_tracer(ctx: &mut BoaContext, tracer_source: &str) -> anyhow::Result<()> {
-    let bootstrap = format!(
-        "var tracer=(function(){{\n
-             tracer={tracer_source};\n
-             if (typeof tracer === 'object' && tracer) return tracer;\n
-             if (typeof exports === 'object' && exports) {{\n
-                 var candidate = exports.tracer || exports.default || exports;\n
-                 if (typeof candidate === 'object' && candidate) return candidate;\n
-             }}\n
-             return undefined;}})();",
-    );
-
-    ctx.eval(Source::from_bytes(bootstrap.as_bytes()))
-        .map_err(|e| anyhow::anyhow!(format!("JS tracer bootstrap error: {e:?}")))?;
-
-    Ok(())
-}
-
-fn install_host_bindings<V: ViewState + 'static>(
-    ctx: &mut BoaContext,
-    env: HostEnvironment<V>,
-) -> anyhow::Result<()> {
-    let host = FunctionObjectBuilder::new(
-        ctx.realm(),
-        NativeFunction::from_copy_closure_with_captures(
-            |_this, args, env, ctx| {
-                let method_name = args
-                    .get_or_undefined(0)
-                    .to_string(ctx)?
-                    .to_std_string_escaped();
-
-                let payload_raw = args
-                    .get_or_undefined(1)
-                    .to_string(ctx)?
-                    .to_std_string_escaped();
-
-                let payload: JsonValue = serde_json::from_str(&payload_raw)
-                    .map_err(|err| anyhow_error_to_js_error(anyhow::anyhow!(err)))?;
-
-                let Some(method) = HostMethod::parse(&method_name) else {
-                    return Ok(JsValue::from(js_string!("null")));
-                };
-
-                let response =
-                    dispatch_host_call(env, method, &payload).map_err(anyhow_error_to_js_error)?;
-
-                Ok(JsValue::from(js_string!(response)))
-            },
-            env,
-        ),
-    )
-    .name(js_string!("__hostCall"))
-    .length(2)
-    .build();
-
-    ctx.global_object()
-        .set(js_string!("__hostCall"), host, false, ctx)
-        .map_err(|e| anyhow::anyhow!(format!("install __hostCall failed: {e:?}")))?;
-
-    Ok(())
-}
-
-fn install_db_wrapper(ctx: &mut BoaContext) -> anyhow::Result<()> {
-    let js_db_wrapper = r#"
-        var db = {
-            getBalance: function(a){ return __hostCall("getBalance", JSON.stringify({address: a})); },
-            getNonce: function(a){ return __hostCall("getNonce", JSON.stringify({address: a})); },
-            getCode: function(a){ return __hostCall("getCode", JSON.stringify({address: a})); },
-            getState: function(a,s){ return __hostCall("getState", JSON.stringify({address: a, slot: s})); },
-            exists: function(a){ return __hostCall("exists", JSON.stringify({address: a})) === 'true'; }
-        };
-    "#;
-
-    ctx.eval(Source::from_bytes(js_db_wrapper.as_bytes()))
-        .map_err(|e| anyhow::anyhow!(format!("install db wrapper failed: {e:?}")))?;
-
-    Ok(())
-}
-
-fn install_step_helpers(ctx: &mut BoaContext) -> anyhow::Result<()> {
-    let helpers = r#"
-            function normalizeHex(value){
-                if (typeof value !== 'string') {
-                    return '0x';
-                }
-                if (value === '' || value === '0x' || value === '0X') {
-                    return '0x';
-                }
-                if (value.startsWith('0x') || value.startsWith('0X')) {
-                    return '0x' + value.slice(2).toLowerCase();
-                }
-                return '0x' + value.toLowerCase();
-            }
-
-            function hexToBytes(value){
-                const hex = normalizeHex(value).slice(2);
-                if (hex.length === 0) {
-                    return new Uint8Array(0);
-                }
-                const padded = hex.length % 2 === 0 ? hex : '0' + hex;
-                const out = new Uint8Array(padded.length / 2);
-                for (let i = 0; i < padded.length; i += 2) {
-                    out[i >> 1] = parseInt(padded.slice(i, i + 2), 16);
-                }
-                return out;
-            }
-    "#;
-
-    ctx.eval(Source::from_bytes(helpers.as_bytes()))
-        .map_err(|e| anyhow::anyhow!(format!("install step helpers failed: {e:?}")))?;
-
-    Ok(())
-}
-
-fn dispatch_host_call<V: ViewState + 'static>(
-    env: &HostEnvironment<V>,
-    method: HostMethod,
-    payload: &JsonValue,
-) -> anyhow::Result<String> {
-    match method {
-        HostMethod::GetBalance => host_get_balance(env, payload),
-        HostMethod::GetNonce => host_get_nonce(env, payload),
-        HostMethod::GetCode => host_get_code(env, payload),
-        HostMethod::GetState => host_get_state(env, payload),
-        HostMethod::Exists => host_exists(env, payload),
-    }
-}
-
-fn host_get_balance<V: ViewState + 'static>(
-    env: &HostEnvironment<V>,
-    payload: &JsonValue,
-) -> anyhow::Result<String> {
-    let addr = payload
-        .get("address")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
-    let Some(address) = parse_address(addr) else {
-        return Ok("0x0".to_string());
-    };
-
-    let balance = env
-        .state_view
-        .borrow_mut()
-        .get_account(address)
-        .ok_or(anyhow::anyhow!("Account {address:?} not found in a state"))?
-        .balance;
-
-    Ok(format_hex_u256(balance))
-}
-
-fn host_get_nonce<V: ViewState + 'static>(
-    env: &HostEnvironment<V>,
-    payload: &JsonValue,
-) -> anyhow::Result<String> {
-    let addr = payload
-        .get("address")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
-    let Some(address) = parse_address(addr) else {
-        return Ok("0x0".to_string());
-    };
-
-    let nonce = env
-        .state_view
-        .borrow_mut()
-        .account_nonce(address)
-        .ok_or(anyhow::anyhow!("Account {address:?} not found in a state"))?;
-
-    Ok(format!("0x{nonce:x}"))
-}
-
-fn host_get_code<V: ViewState + 'static>(
-    env: &HostEnvironment<V>,
-    payload: &JsonValue,
-) -> anyhow::Result<String> {
-    let addr = payload
-        .get("address")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
-    let Some(address) = parse_address(addr) else {
-        return Ok("0x".to_string());
-    };
-
-    if let Some(code) = env.code_overlay.borrow().get(&address) {
-        return Ok(format!("0x{}", alloy::primitives::hex::encode(code)));
-    }
-
-    let code = {
-        let mut state_view = env.state_view.borrow_mut();
-        let props = state_view
-            .get_account(address)
-            .ok_or(anyhow::anyhow!("Account {address:?} not found in a state"))?;
-        get_code(&mut *state_view, &props)
-    };
-
-    Ok(format!("0x{}", alloy::primitives::hex::encode(code)))
-}
-
-fn host_get_state<V: ViewState + 'static>(
-    env: &HostEnvironment<V>,
-    payload: &JsonValue,
-) -> anyhow::Result<String> {
-    let addr = payload
-        .get("address")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("address is not supplied in getState"))?;
-    let slot = payload
-        .get("slot")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("slot is not supplied in getState"))?;
-
-    let (Some(address), Some(key)) = (parse_address(addr), parse_b256(slot)) else {
-        return Ok("0x0".to_string());
-    };
-
-    if let Some(value) = env.storage_overlay.borrow().get(&(address, key)) {
-        return Ok(format!("0x{}", alloy::primitives::hex::encode(value.0)));
-    }
-
-    let flat = derive_flat_storage_key(&B160::from_be_bytes(address.into_array()), &(key.0.into()));
-    let value = env
-        .state_view
-        .borrow_mut()
-        .read(B256::from(flat.as_u8_array()))
-        .unwrap_or_default();
-
-    Ok(format!("0x{}", alloy::primitives::hex::encode(value.0)))
-}
-
-fn host_exists<V: ViewState + 'static>(
-    env: &HostEnvironment<V>,
-    payload: &JsonValue,
-) -> anyhow::Result<String> {
-    let addr = payload
-        .get("address")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
-    let Some(address) = parse_address(addr) else {
-        return Ok("false".to_string());
-    };
-
-    if env.code_overlay.borrow().contains_key(&address) {
-        return Ok("true".to_string());
-    }
-
-    if env
-        .storage_overlay
-        .borrow()
-        .keys()
-        .any(|(addr_ref, _)| *addr_ref == address)
-    {
-        return Ok("true".to_string());
-    }
-
-    let exists = env.state_view.borrow_mut().get_account(address).is_some();
-
-    Ok(exists.to_string())
-}
-
-fn gas_used_from_resources(resources: EvmResources) -> U256 {
-    U256::from(resources.ergs / ERGS_PER_GAS)
-}
-
-fn extract_js_source_and_config(js_cfg: JsonValue) -> anyhow::Result<(String, JsonValue)> {
-    let tracer_val = js_cfg
-        .as_object()
-        .unwrap_or(&Map::new())
-        .get("tracer")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-
-    let source = match tracer_val {
-        JsonValue::String(s) => s,
-        JsonValue::Object(map) => map
-            .get("code")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        _ => String::new(),
-    };
-
-    if source.is_empty() {
-        return Err(anyhow::anyhow!(
-            "JS tracer source not provided in 'tracer' field"
-        ));
-    }
-    let config = js_cfg
-        .get("config")
-        .cloned()
-        .or_else(|| js_cfg.get("tracerConfig").cloned())
-        .unwrap_or(JsonValue::Null);
-
-    Ok((source, config))
-}
-
-fn parse_address(s: &str) -> Option<Address> {
-    let s = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = alloy::primitives::hex::decode(s).ok()?;
-    if bytes.len() != 20 {
-        return None;
-    }
-
-    Some(Address::from_slice(&bytes))
-}
-
-fn parse_b256(s: &str) -> Option<B256> {
-    let s = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = alloy::primitives::hex::decode(s).ok()?;
-    if bytes.len() != 32 {
-        return None;
-    }
-
-    Some(B256::from_slice(&bytes))
-}
-
-fn format_hex_u256(v: U256) -> String {
-    if v == U256::ZERO {
-        return "0x0".to_string();
-    }
-
-    format!("0x{v:x}")
-}
-
-fn anyhow_error_to_js_error(e: anyhow::Error) -> JsError {
-    JsError::from_opaque(JsValue::from(JsString::from(e.to_string())))
 }

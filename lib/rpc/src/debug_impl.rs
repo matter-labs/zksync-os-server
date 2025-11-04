@@ -96,7 +96,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 let js_tracer_config: JsonValue =
                     serde_json::from_str(&js).unwrap_or(JsonValue::Null);
 
-                match crate::js_tracer::trace_block(
+                match crate::js_tracer::tracer::trace_block(
                     txs,
                     block_context,
                     prev_state_view,
