@@ -3,7 +3,7 @@ use crate::js_tracer::{
     types::{
         CodeOverlay, CreateType, OverlayEntry, StepCtx, StorageOverlay, TracerMethod, TxContext,
     },
-    utils::{extract_js_source_and_config, gas_used_from_resources},
+    utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
 use alloy::hex::ToHexExt;
@@ -116,7 +116,7 @@ impl JsTracer {
         if with_db {
             arg_json = format!("{arg_json}, db");
         }
-        let snippet = format!("(function(){{ tracer.{method_name}({arg_json}) }})()");
+        let snippet = wrap_js_invocation(format!("tracer.{method_name}({arg_json});"));
 
         let _ = self
             .ctx
@@ -216,24 +216,24 @@ impl JsTracer {
         })?;
 
         let method_name = TracerMethod::Enter.as_str();
-        let snippet = format!(
-            "(function(){{\n\
-                let raw = {raw_frame_input};\n\
-                let frame = {{\n\
-                    getType(){{ return raw.type; }},\n\
-                    getFrom(){{ return raw.from; }},\n\
-                    getTo(){{ return raw.to; }},\n\
-                    getInput(){{ return hexToBytes(raw.input); }},\n\
-                    getGas(){{ return raw.gas; }},\n\
-                    getValue(){{ return raw.value; }},\n\
-                }};\n\
-                tracer.{method_name}(frame);\n\
-            }})()"
+        let body = format!(
+            r#"
+                let raw = {raw_frame_input};
+                let frame = {{
+                    getType() {{ return raw.type; }},
+                    getFrom() {{ return raw.from; }},
+                    getTo() {{ return raw.to; }},
+                    getInput() {{ return hexToBytes(raw.input); }},
+                    getGas() {{ return raw.gas; }},
+                    getValue() {{ return raw.value; }},
+                }};
+                tracer.{method_name}(frame);
+            "#
         );
 
         let _ = self
             .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
+            .eval(Source::from_bytes(wrap_js_invocation(body).as_bytes()))
             .map_err(|e| {
                 anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
             })?;
@@ -251,21 +251,21 @@ impl JsTracer {
         })?;
 
         let method_name = TracerMethod::Exit.as_str();
-        let snippet = format!(
-            "(function(){{\n\
-                let raw = {raw_frame_input};\n\
-                let frame = {{\n\
-                    getGasUsed(){{ return raw.gasUsed; }},\n\
-                    getOutput(){{ return raw.output ? hexToBytes(raw.output) : null; }},\n\
-                    getError(){{ return raw.error; }},\n\
-                }};\n\
-                tracer.{method_name}(frame);\n\
-            }})()"
+        let body = format!(
+            r#"
+                let raw = {raw_frame_input};
+                let frame = {{
+                    getGasUsed() {{ return raw.gasUsed; }},
+                    getOutput() {{ return raw.output ? hexToBytes(raw.output) : null; }},
+                    getError() {{ return raw.error; }},
+                }};
+                tracer.{method_name}(frame);
+            "#
         );
 
         let _ = self
             .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
+            .eval(Source::from_bytes(wrap_js_invocation(body).as_bytes()))
             .map_err(|e| {
                 anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
             })?;
@@ -294,66 +294,69 @@ impl JsTracer {
 
         let snippet = if has_error {
             format!(
-                r#"(function(){{
-                let raw = {raw_log_input};
-                let log = {{ getError(){{ return raw.error; }}, getDepth(){{ return raw.depth; }} }};
-                tracer.{method_name}(log, db);
-            }})()"#
+                r#"
+                    let raw = {raw_log_input};
+                    let log = {{
+                        getError() {{ return raw.error; }},
+                        getDepth() {{ return raw.depth; }},
+                    }};
+                    tracer.{method_name}(log, db);
+                "#
             )
         } else {
             format!(
-                r#"(function(){{
-                let raw = {raw_log_input};
-                let op = {{
-                    toString(){{ return raw.op.name; }},
-                    toNumber(){{ return raw.op.code; }},
-                    isPush(){{ return raw.op.isPush; }}
-                }};
-                let memory = {{
-                    __buffer: hexToBytes(raw.memory),
-                    slice(start, stop){{
-                        const from = start >>> 0;
-                        const to = stop === undefined ? this.__buffer.length : stop >>> 0;
-                        return this.__buffer.slice(from, to);
-                    }},
-                    getUint(offset){{
-                        const from = offset >>> 0;
-                        const end = from + 32;
-                        const out = new Uint8Array(32);
-                        const available = this.__buffer.slice(from, end);
-                        out.set(available, 0);
-                        return out;
-                    }},
-                    length(){{
-                        return this.__buffer.length;
-                    }}
-                }};
-                let contract = {{
-                    __input: hexToBytes(raw.contract.input),
-                    getCaller(){{ return raw.contract.caller; }},
-                    getAddress(){{ return raw.contract.address; }},
-                    getValue(){{ return raw.contract.value; }},
-                    getInput(){{ return this.__input.slice(); }}
-                }};
-                let log = {{
-                    op: op,
-                    memory: memory,
-                    contract: contract,
-                    getPC(){{ return raw.pc; }},
-                    getGas(){{ return raw.gas; }},
-                    getCost(){{ return raw.cost }},
-                    getDepth(){{ return raw.depth; }},
-                    getRefund(){{ return raw.refund; }},
-                    getError(){{ return raw.error; }}
-                }};
-                tracer.{method_name}(log, db);
-            }})()"#
+                r#"
+                    let raw = {raw_log_input};
+                    let op = {{
+                        toString() {{ return raw.op.name; }},
+                        toNumber() {{ return raw.op.code; }},
+                        isPush() {{ return raw.op.isPush; }},
+                    }};
+                    let memory = {{
+                        __buffer: hexToBytes(raw.memory),
+                        slice(start, stop) {{
+                            const from = start >>> 0;
+                            const to = stop === undefined ? this.__buffer.length : stop >>> 0;
+                            return this.__buffer.slice(from, to);
+                        }},
+                        getUint(offset) {{
+                            const from = offset >>> 0;
+                            const end = from + 32;
+                            const out = new Uint8Array(32);
+                            const available = this.__buffer.slice(from, end);
+                            out.set(available, 0);
+                            return out;
+                        }},
+                        length() {{
+                            return this.__buffer.length;
+                        }},
+                    }};
+                    let contract = {{
+                        __input: hexToBytes(raw.contract.input),
+                        getCaller() {{ return raw.contract.caller; }},
+                        getAddress() {{ return raw.contract.address; }},
+                        getValue() {{ return raw.contract.value; }},
+                        getInput() {{ return this.__input.slice(); }},
+                    }};
+                    let log = {{
+                        op,
+                        memory,
+                        contract,
+                        getPC() {{ return raw.pc; }},
+                        getGas() {{ return raw.gas; }},
+                        getCost() {{ return raw.cost }},
+                        getDepth() {{ return raw.depth; }},
+                        getRefund() {{ return raw.refund; }},
+                        getError() {{ return raw.error; }},
+                    }};
+                    tracer.{method_name}(log, db);
+                "#
             )
         };
 
         let _ = self
             .ctx
-            .eval(Source::from_bytes(snippet.as_bytes()))
+            .eval(Source::from_bytes(wrap_js_invocation(snippet).as_bytes()))
             .map_err(|e| {
                 anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
             })?;
@@ -407,8 +410,9 @@ impl JsTracer {
         });
 
         let method_name = TracerMethod::Result.as_str();
-        let snippet =
-            format!("(function(){{ return JSON.stringify(tracer.{method_name}({ctx}, db)); }})()");
+        let snippet = wrap_js_invocation(format!(
+            "return JSON.stringify(tracer.{method_name}({ctx}, db));"
+        ));
         let value = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
