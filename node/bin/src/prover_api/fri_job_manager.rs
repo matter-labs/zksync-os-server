@@ -184,12 +184,8 @@ impl FriJobManager {
         // 2) Otherwise, consume one item from inbound - if it meets the age gate.
         // take a lock on the inbound channel - only one thread can receive messages at a time
         if let Ok(mut rx) = self.inbound.try_lock() {
-            let old_enough = rx.peek_with(|env| {
-                if env.latency_tracker.current_stage_age() < min_inbound_age {
-                    return false;
-                }
-                true
-            });
+            let old_enough =
+                rx.peek_with(|env| env.latency_tracker.current_stage_age() >= min_inbound_age);
             if old_enough != Some(true) {
                 // no element in Inbound or it's not old enough
                 return None;
