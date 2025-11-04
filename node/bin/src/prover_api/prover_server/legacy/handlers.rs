@@ -24,10 +24,10 @@ pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
-        Some((block, _vk_hash, input)) => {
+        Some((fri_job, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
-                block_number: block,
+                block_number: fri_job.batch_number,
                 prover_input: general_purpose::STANDARD.encode(&bytes),
             })
             .into_response()

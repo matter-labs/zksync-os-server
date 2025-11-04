@@ -64,9 +64,14 @@ pub struct FailedFriProof {
 }
 
 #[derive(Debug, Serialize)]
-pub struct JobState {
+pub struct FriJob {
     pub batch_number: u64,
     pub vk_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JobState {
+    pub fri_job: FriJob,
     pub assigned_seconds_ago: u64,
 }
 
@@ -80,7 +85,7 @@ pub struct JobStateLegacy {
 impl From<JobState> for JobStateLegacy {
     fn from(state: JobState) -> JobStateLegacy {
         JobStateLegacy {
-            batch_number: state.batch_number,
+            batch_number: state.fri_job.batch_number,
             assigned_seconds_ago: state.assigned_seconds_ago,
         }
     }
@@ -152,21 +157,17 @@ impl FriJobManager {
     ///
     /// `min_inbound_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
-    pub fn pick_next_job(
-        &self,
-        min_inbound_age: Duration,
-    ) -> Option<(u64, &'static str, ProverInput)> {
+    pub fn pick_next_job(&self, min_inbound_age: Duration) -> Option<(FriJob, ProverInput)> {
         // 1) Prefer a timed-out reassignment
-        if let Some((batch_number, vk_hash, prover_input)) = self.assigned_jobs.pick_timed_out_job()
-        {
+        if let Some((fri_job, prover_input)) = self.assigned_jobs.pick_timed_out_job() {
             tracing::info!(
-                batch_number,
-                vk_hash,
+                fri_job.batch_number,
+                fri_job.vk_hash,
                 assigned_jobs_count = self.assigned_jobs.len(),
                 ?min_inbound_age,
                 "Assigned a timed out job"
             );
-            return Some((batch_number, vk_hash, prover_input));
+            return Some((fri_job, prover_input));
         }
 
         if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
@@ -194,17 +195,19 @@ impl FriJobManager {
             match rx.try_recv() {
                 Ok(env) => {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
-                    let batch_number = env.batch_number();
                     let prover_input = env.data.clone();
-                    let vk_hash = env.batch.verification_key_hash();
+                    let fri_job = FriJob {
+                        batch_number: env.batch_number(),
+                        vk_hash: env.batch.verification_key_hash().to_string(),
+                    };
                     tracing::info!(
-                        batch_number,
+                        fri_job.batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),
                         ?min_inbound_age,
                         "Assigned a new job from inbound channel"
                     );
                     self.assigned_jobs.insert(env);
-                    Some((batch_number, vk_hash, prover_input))
+                    Some((fri_job, prover_input))
                 }
                 Err(_) => None,
             }
