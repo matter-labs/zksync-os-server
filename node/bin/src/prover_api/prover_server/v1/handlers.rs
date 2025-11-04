@@ -8,7 +8,6 @@ use axum::{
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use zksync_os_l1_sender::batcher_model::FriProof;
-use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 
 use crate::prover_api::{
     fri_job_manager::SubmitError,
@@ -16,37 +15,15 @@ use crate::prover_api::{
         AppState,
         v1::models::{
             BatchDataPayload, FailedProofResponse, FriProofPayload, NextSnarkProverJobPayload,
-            PickJobPayload, ProverQuery, SnarkProofPayload,
+            PickJobPayload, SnarkProofPayload,
         },
     },
 };
 
-pub(super) async fn pick_fri_job(
-    State(state): State<AppState>,
-    Json(payload): Json<PickJobPayload>,
-) -> Response {
-    let supported_vks: Vec<VerificationKeyHash> = match payload
-        .supported_vks
-        .into_iter()
-        .map(|vk| vk.parse())
-        .collect::<Result<_, _>>()
-    {
-        Ok(vks) => vks,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Failed to get verification key: {e}"),
-            )
-                .into_response();
-        }
-    };
-
+pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
-    match state
-        .fri_job_manager
-        .pick_next_job(Duration::from_secs(0), Some(supported_vks))
-    {
+    match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
         Some((block, vk_hash, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {

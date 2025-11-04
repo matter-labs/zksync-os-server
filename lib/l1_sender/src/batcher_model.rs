@@ -98,13 +98,13 @@ impl<E> BatchEnvelope<E> {
 
     /// Get Verification Key Hash associated with this batch's execution version.
     /// NOTE: The key is the one attached to the batch, not proof. The proof's version will be deprecated in follow-up versions.
-    pub fn batch_metadata_verification_key_hash(&self) -> anyhow::Result<&'static str> {
-        let execution_version: ExecutionVersion = self
-            .batch
-            .execution_version
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Unsupported execution version"))?;
-        Ok(execution_version.vk_hash())
+    /// NOTE2: Panics if the execution version is unsupported, which *should* never happen in practice.
+    /// We could propagate an error here, but then we need to change APIs everywhere.
+    /// Given it is unlikely to happen in practice, we opt for simplicity.
+    pub fn batch_metadata_verification_key_hash(&self) -> &'static str {
+        ExecutionVersion::try_from(self.batch.execution_version)
+            .expect("Unsupported execution version")
+            .vk_hash()
     }
 }
 

@@ -154,23 +154,16 @@ impl FriJobManager {
     ///
     /// `min_inbound_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
-    ///
-    /// If `supported_vks` is provided, only batches whose verification key hash
-    /// is in the list will be picked. Others will be skipped.
-    ///
-    /// `supported_vks` is used to filter out jobs that the provers cannot handle.
     pub fn pick_next_job(
         &self,
         min_inbound_age: Duration,
-        // TODO: migrate to Vec<String>, once legacy is deprecated
-        supported_vks: Option<Vec<VerificationKeyHash>>,
-    ) -> Option<(u64, VerificationKeyHash, ProverInput)> {
+    ) -> Option<(u64, &'static str, ProverInput)> {
         // 1) Prefer a timed-out reassignment
-        if let Some((batch_number, vk_hash, prover_input)) =
-            self.assigned_jobs.pick_timed_out_job(&supported_vks)
+        if let Some((batch_number, vk_hash, prover_input)) = self.assigned_jobs.pick_timed_out_job()
         {
             tracing::info!(
                 batch_number,
+                vk_hash,
                 assigned_jobs_count = self.assigned_jobs.len(),
                 ?min_inbound_age,
                 "Assigned a timed out job"
@@ -190,24 +183,11 @@ impl FriJobManager {
             return None;
         }
 
-        // 2) Otherwise, consume one item from inbound - if it meets the age/vk gates.
+        // 2) Otherwise, consume one item from inbound - if it meets the age gate.
         // take a lock on the inbound channel - only one thread can receive messages at a time
         if let Ok(mut rx) = self.inbound.try_lock() {
             let old_enough = rx.peek_with(|env| {
                 if env.latency_tracker.current_stage_age() < min_inbound_age {
-                    return false;
-                }
-                let vk_hash = env
-                    .verification_key_hash()
-                    .expect("verification key must exist for batch");
-                // if I have keys & they don't contain this vk, skip
-                if let Some(vks) = &supported_vks
-                    && !vks.contains(&vk_hash)
-                {
-                    tracing::warn!(
-                        "Skipping inbound batch {} due to unsupported VK hash {vk_hash:?}",
-                        env.batch_number()
-                    );
                     return false;
                 }
                 true
@@ -222,9 +202,7 @@ impl FriJobManager {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let batch_number = env.batch_number();
                     let prover_input = env.data.clone();
-                    let vk_hash = env
-                        .verification_key_hash()
-                        .expect("verification key must exist for batch");
+                    let vk_hash = env.batch_metadata_verification_key_hash();
                     tracing::info!(
                         batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),

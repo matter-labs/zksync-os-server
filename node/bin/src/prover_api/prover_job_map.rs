@@ -42,17 +42,14 @@ impl ProverJobMap {
         self.jobs.insert(job_id, job_entry);
     }
 
-    /// Picks the **smallest** batch number which matches supported_vks and whose job has timed out, if any.
+    /// Picks the **smallest** batch number whose job has timed out, if any.
     /// Returns `None` if there's no job with matching VKs or no job has timed‑out.
     ///
     /// Thread safety:
     ///   Races are possible if multiple threads call this at the same time.
     ///   Some calls may return `None` even if others observe a timed‑out job.
     ///   This is acceptable; callers will simply poll again.
-    pub fn pick_timed_out_job(
-        &self,
-        supported_vks: &Option<Vec<VerificationKeyHash>>,
-    ) -> Option<(u64, VerificationKeyHash, ProverInput)> {
+    pub fn pick_timed_out_job(&self) -> Option<(u64, &'static str, ProverInput)> {
         let now = Instant::now();
 
         // Single scan to locate the minimal eligible key.
@@ -61,20 +58,6 @@ impl ProverJobMap {
             .iter()
             .filter_map(|entry| {
                 if now.duration_since(entry.assigned_at) > self.assignment_timeout {
-                    // Filter by supported_vks if provided
-                    let vk_hash = entry
-                        .batch_envelope
-                        .verification_key_hash()
-                        .expect("verification key must exist for batch");
-                    if let Some(vks) = supported_vks
-                        && !vks.contains(&vk_hash)
-                    {
-                        tracing::warn!(
-                            "Skipping timed-out batch {} due to unsupported VK hash {vk_hash:?}",
-                            entry.batch_envelope.batch_number()
-                        );
-                        return None;
-                    }
                     Some(*entry.key())
                 } else {
                     None
@@ -96,7 +79,7 @@ impl ProverJobMap {
                 entry.batch_envelope.batch_number(),
                 entry
                     .batch_envelope
-                    .verification_key_hash()
+                    .batch_metadata_verification_key_hash()
                     .expect("verification key must exist for batch"),
                 entry.batch_envelope.data.clone(),
             ));
@@ -118,7 +101,7 @@ impl ProverJobMap {
             (
                 entry
                     .batch_envelope
-                    .verification_key_hash()
+                    .batch_metadata_verification_key_hash()
                     .expect("verification key must exist for batch"),
                 entry.batch_envelope.data.clone(),
             )
