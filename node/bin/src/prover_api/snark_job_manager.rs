@@ -11,6 +11,8 @@ use zksync_os_observability::{
 };
 use zksync_os_pipeline::PeekableReceiver;
 
+use crate::prover_api::fri_job_manager::FriJob;
+
 /// Job manager for SNARK proving.
 ///
 /// Doesn't support multiple provers yet (they'd get the same job)
@@ -78,13 +80,11 @@ impl SnarkJobManager {
     }
 
     // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
-    pub async fn pick_real_job(
-        &self,
-    ) -> anyhow::Result<Option<Vec<(u64, &'static str, FriProof)>>> {
+    pub async fn pick_real_job(&self) -> anyhow::Result<Option<Vec<(FriJob, FriProof)>>> {
         self.consume_fake_proves_from_head(None).await?;
         // note that here we don't consume the messages from channel -
         // the job will be picked, but there is no guarantee it will be completed
-        let batches_with_real_proofs: Vec<(u64, &'static str, FriProof)> = self
+        let batches_with_real_proofs: Vec<(FriJob, FriProof)> = self
             .committed_batch_receiver
             .lock()
             .await
@@ -92,9 +92,18 @@ impl SnarkJobManager {
                 if envelope.data.is_fake() {
                     None
                 } else {
+                    let proving_execution_version = ExecutionVersion::try_from(
+                        envelope
+                            .data
+                            .proving_execution_version()
+                            .expect("proving execution version must be present on proof"),
+                    )
+                    .expect("execution version must exist as it was set by server");
                     Some((
-                        envelope.batch_number(),
-                        envelope.batch.verification_key_hash(),
+                        FriJob {
+                            batch_number: envelope.batch_number(),
+                            vk_hash: proving_execution_version.vk_hash().to_string(),
+                        },
                         envelope.data.clone(),
                     ))
                 }
@@ -104,16 +113,16 @@ impl SnarkJobManager {
         }
 
         // Get proofs that were created for the same execution version/VK.
-        let first_vk_hash = batches_with_real_proofs[0].1;
+        let first_vk_hash = batches_with_real_proofs[0].0.vk_hash.clone();
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, vk_hash, _)| vk_hash == &first_vk_hash)
+            .take_while(|(fri_job, _)| fri_job.vk_hash == first_vk_hash)
             .collect();
 
         tracing::info!(
             "real SNARK proof for batches {}-{} with vk {} is picked by a prover",
-            batches_with_real_proofs.first().unwrap().0,
-            batches_with_real_proofs.last().unwrap().0,
+            batches_with_real_proofs.first().unwrap().0.batch_number,
+            batches_with_real_proofs.last().unwrap().0.batch_number,
             first_vk_hash,
         );
         Ok(Some(batches_with_real_proofs))

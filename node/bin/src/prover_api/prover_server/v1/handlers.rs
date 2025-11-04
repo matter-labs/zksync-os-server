@@ -62,7 +62,7 @@ pub(super) async fn submit_fri_proof(
     let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("no Execution Version matches the provided verification key: {e}"),
+            format!("no Execution Version matches the provided Verification Key: {e}"),
         )
     })?;
     match state
@@ -71,13 +71,16 @@ pub(super) async fn submit_fri_proof(
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::VerificationKeyHashMismatch(server_vk, prover_vk)) => Err((
+        Err(SubmitError::ExecutionVersionMismatch(server_execution_version, prover_execution_version)) => {
+            Err((
             StatusCode::BAD_REQUEST,
             format!(
-                "verification key hash mismatch: server has {server_vk}, prover used {prover_vk}"
+                "execution error mismatch: server has {server_execution_version:?} (vk = {}), prover used {prover_execution_version:?} (vk = {})",
+                server_execution_version.vk_hash(),
+                prover_execution_version.vk_hash()
             )
             .to_string(),
-        )),
+        ))},
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
             proof_final_register_values,
@@ -110,19 +113,19 @@ pub(super) async fn pick_snark_job(
     match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
-            let from = batches.first().unwrap().0;
-            let to = batches.last().unwrap().0;
-            let vk_hash = batches.first().unwrap().1.to_string();
+            let from = batches.first().unwrap().0.batch_number;
+            let to = batches.last().unwrap().0.batch_number;
+            let vk_hash = batches.first().unwrap().0.vk_hash.clone();
 
             let fri_proofs = batches
                 .into_iter()
-                .filter_map(|(batch_number, _, proof)| match proof {
+                .filter_map(|(fri_job, proof)| match proof {
                     FriProof::Real(real) => Some(general_purpose::STANDARD.encode(real.proof())),
                     FriProof::Fake => {
                         // Should never happen; defensive guard
                         tracing::error!(
                             "SNARK pick returned fake FRI at batch {} (range {}-{})",
-                            batch_number,
+                            fri_job.batch_number,
                             from,
                             to
                         );

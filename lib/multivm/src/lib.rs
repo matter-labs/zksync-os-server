@@ -14,7 +14,7 @@ use zksync_os_interface::types::{BlockOutput, TxOutput};
 
 pub mod apps;
 
-#[derive(Debug, Clone, Copy, TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
 pub enum ExecutionVersion {
     V1 = 1,
@@ -122,6 +122,13 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     }
 }
 
+/// Method to decide what execution version/VK should the prover use.
+///
+/// Generally speaking, we could have a single execution version, the one used by the server.
+/// There's an edge case where we have a circuit bug and it would require us to prove a batch
+/// with a different execution version than the one it was generated/sealed.
+/// For such cases, we have this mapping defined here, that will allow us to release patch versions that will say:
+/// "oh, you executed with v3? np, prove with v4 as v3 proving is bugged".
 pub fn proving_run_execution_version(forward_run_execution_version: u32) -> ExecutionVersion {
     let forward_run_execution_version: ExecutionVersion = forward_run_execution_version
         .try_into()

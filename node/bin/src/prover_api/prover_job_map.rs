@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
+use zksync_os_multivm::proving_run_execution_version;
 
 #[derive(Debug)]
 pub struct AssignedJobEntry {
@@ -74,14 +75,12 @@ impl ProverJobMap {
             );
             // Refresh assignment time to avoid immediate re-pick.
             entry.assigned_at = now;
+            let proving_execution_version =
+                proving_run_execution_version(entry.batch_envelope.batch.execution_version);
             return Some((
                 FriJob {
                     batch_number: entry.batch_envelope.batch_number(),
-                    vk_hash: entry
-                        .batch_envelope
-                        .batch
-                        .verification_key_hash()
-                        .to_string(),
+                    vk_hash: proving_execution_version.vk_hash().to_string(),
                 },
                 entry.batch_envelope.data.clone(),
             ));

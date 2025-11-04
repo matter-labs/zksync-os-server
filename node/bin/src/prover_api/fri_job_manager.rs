@@ -45,8 +45,9 @@ pub enum SubmitError {
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
     DeserializationFailed(bincode::error::DecodeError),
-    #[error("verification key hash mismatch - server has {0}, got from prover {1}")]
-    VerificationKeyHashMismatch(String, String),
+    // server execution version, prover execution version
+    #[error("execution error mismatch - server expects {0:?}, but got {1:?} from prover")]
+    ExecutionVersionMismatch(ExecutionVersion, ExecutionVersion),
     #[error("internal error: {0}")]
     Other(String),
 }
@@ -196,9 +197,11 @@ impl FriJobManager {
                 Ok(env) => {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let prover_input = env.data.clone();
+                    let proving_execution_version =
+                        proving_run_execution_version(env.batch.execution_version);
                     let fri_job = FriJob {
                         batch_number: env.batch_number(),
-                        vk_hash: env.batch.verification_key_hash().to_string(),
+                        vk_hash: proving_execution_version.vk_hash().to_string(),
                     };
                     tracing::info!(
                         fri_job.batch_number,
@@ -238,16 +241,18 @@ impl FriJobManager {
         // Prover should generate the proof with VK received from server. These must always match.
         // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
         //
-        // This should never happen, but we double-check to guarantee it's the case
+        // This should never happen, but we double-check to guarantee it's the case.
         //
-        // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
+        // NOTE: We don't check the actual values, but the value that server believes the prove should use.
+        // NOTE2: Checking only if prover provided VK version - legacy clients will not provide it
         if let Some(exec_version) = execution_version {
-            let server_vk = batch_metadata.verification_key_hash();
-            let prover_vk = exec_version.vk_hash();
-            if server_vk != prover_vk {
-                return Err(SubmitError::VerificationKeyHashMismatch(
-                    server_vk.to_string(),
-                    prover_vk.to_string(),
+            // should never panic
+            let server_execution_version =
+                proving_run_execution_version(batch_metadata.execution_version);
+            if server_execution_version != exec_version {
+                return Err(SubmitError::ExecutionVersionMismatch(
+                    server_execution_version,
+                    exec_version,
                 ));
             }
         }
@@ -329,9 +334,9 @@ impl FriJobManager {
         };
         tracing::info!(batch_number, "Real proof accepted");
 
-        // get execution version, if available, otherwise fallback
+        // get execution version from prover, if available, otherwise fallback
         let execution_version = if let Some(execution_version) = execution_version {
-            execution_version as u32
+            proving_run_execution_version(execution_version as u32) as u32
         } else {
             proving_run_execution_version(batch_metadata.execution_version) as u32
         };

@@ -52,7 +52,7 @@ pub(super) async fn submit_fri_proof(
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::VerificationKeyHashMismatch(_, _)) =>
+        Err(SubmitError::ExecutionVersionMismatch(_, _)) =>
             panic!("Should never happen, as provers don't provide execution_version"),
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
@@ -79,18 +79,18 @@ pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
     match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
-            let from = batches.first().unwrap().0;
-            let to = batches.last().unwrap().0;
+            let from = batches.first().unwrap().0.batch_number;
+            let to = batches.last().unwrap().0.batch_number;
 
             let fri_proofs = batches
                 .into_iter()
-                .filter_map(|(batch_number, _, proof)| match proof {
+                .filter_map(|(fri_job, proof)| match proof {
                     FriProof::Real(real) => Some(general_purpose::STANDARD.encode(real.proof())),
                     FriProof::Fake => {
                         // Should never happen; defensive guard
                         tracing::error!(
                             "SNARK pick returned fake FRI at batch {} (range {}-{})",
-                            batch_number,
+                            fri_job.batch_number,
                             from,
                             to
                         );
