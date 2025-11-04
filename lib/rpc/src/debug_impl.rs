@@ -115,7 +115,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                     }
                 }
             }
-            _ => unreachable!("checked above"),
+            other => Err(DebugError::UnsupportedTracer(other)),
         }
     }
 

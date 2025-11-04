@@ -1,7 +1,8 @@
-use crate::js_tracer::types::TxContext;
 use crate::js_tracer::{
     host::init_host_env_in_boa_context,
-    types::{CreateType, StepCtx},
+    types::{
+        CodeOverlay, CreateType, OverlayEntry, StepCtx, StorageOverlay, TracerMethod, TxContext,
+    },
     utils::{extract_js_source_and_config, gas_used_from_resources},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
@@ -9,7 +10,7 @@ use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
 use serde_json::Value as JsonValue;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::hash_map::Entry, rc::Rc};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
@@ -50,8 +51,8 @@ pub struct JsTracer {
     tracer_config: JsonValue,
 
     // Overlays for storage and code modifications
-    pub storage_overlay: Rc<RefCell<HashMap<(Address, B256), B256>>>,
-    pub code_overlay: Rc<RefCell<HashMap<Address, Vec<u8>>>>,
+    pub storage_overlay: Rc<RefCell<StorageOverlay>>,
+    pub code_overlay: Rc<RefCell<CodeOverlay>>,
 
     // Depth tracking and per-tx result
     current_depth: u64,
@@ -61,6 +62,7 @@ pub struct JsTracer {
 
     frame_stack: Vec<TxContext>,
     last_finished_frame: Option<TxContext>,
+    tx_failed: bool,
 
     error: Option<anyhow::Error>,
 }
@@ -71,8 +73,8 @@ impl JsTracer {
 
         let mut ctx = BoaContext::default();
 
-        let storage_overlay = Rc::new(RefCell::new(HashMap::<(Address, B256), B256>::new()));
-        let code_overlay = Rc::new(RefCell::new(HashMap::new()));
+        let storage_overlay = Rc::new(RefCell::new(StorageOverlay::new()));
+        let code_overlay = Rc::new(RefCell::new(CodeOverlay::new()));
 
         init_host_env_in_boa_context(
             &mut ctx,
@@ -94,41 +96,118 @@ impl JsTracer {
             error: None,
             frame_stack: Vec::new(),
             last_finished_frame: None,
+            tx_failed: false,
         })
     }
 
     /// `call_method` invokes a method on the JS tracer object with the given argument.
-    fn call_method(&mut self, method: &str, arg: &JsonValue, with_db: bool) -> anyhow::Result<()> {
+    fn call_method(
+        &mut self,
+        method: TracerMethod,
+        arg: &JsonValue,
+        with_db: bool,
+    ) -> anyhow::Result<()> {
         if !self.method_exists(method)? {
             return Ok(());
         }
 
+        let method_name = method.as_str();
         let mut arg_json = serde_json::to_string(arg).unwrap_or("null".to_string());
         if with_db {
             arg_json = format!("{arg_json}, db");
         }
-        let snippet = format!("(function(){{ tracer.{method}({arg_json}) }})()");
+        let snippet = format!("(function(){{ tracer.{method_name}({arg_json}) }})()");
 
         let _ = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| anyhow::anyhow!(format!("JS tracer method {method} failed: {e:?}")))?;
+            .map_err(|e| {
+                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
+            })?;
 
         Ok(())
     }
 
-    fn method_exists(&mut self, method: &str) -> anyhow::Result<bool> {
-        Ok(self.ctx.eval(Source::from_bytes(
-            format!(
-                "(function(){{ return typeof tracer === 'object' && typeof tracer.{method} === 'function' }})()"
-            ).as_bytes()
-        ))
-            .map_err(|e| anyhow::anyhow!(format!("JS tracer method existence check failed: {e:?}")))?
+    fn method_exists(&mut self, method: TracerMethod) -> anyhow::Result<bool> {
+        let method_name = method.as_str();
+        Ok(self
+            .ctx
+            .eval(Source::from_bytes(
+                format!(
+                    "(function(){{ return typeof tracer === 'object' && typeof tracer.{method_name} === 'function' }})()"
+                )
+                .as_bytes(),
+            ))
+            .map_err(|e| {
+                anyhow::anyhow!(format!(
+                    "JS tracer method existence check failed: {e:?}"
+                ))
+            })?
             .to_boolean())
     }
 
+    fn commit_overlays(&mut self) {
+        {
+            let mut storage_overlay = self.storage_overlay.borrow_mut();
+            storage_overlay.retain(|_, entry| {
+                if !entry.committed {
+                    entry.committed = true;
+                    entry.previous = None;
+                }
+                true
+            });
+        }
+
+        {
+            let mut code_overlay = self.code_overlay.borrow_mut();
+            code_overlay.retain(|_, entry| {
+                if !entry.committed {
+                    entry.committed = true;
+                    entry.previous = None;
+                }
+                true
+            });
+        }
+    }
+
+    fn rollback_overlays(&mut self) {
+        {
+            let mut storage_overlay = self.storage_overlay.borrow_mut();
+            storage_overlay.retain(|_, entry| {
+                if entry.committed {
+                    return true;
+                }
+
+                if let Some(prev) = entry.previous.take() {
+                    entry.value = prev;
+                    entry.committed = true;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+
+        {
+            let mut code_overlay = self.code_overlay.borrow_mut();
+            code_overlay.retain(|_, entry| {
+                if entry.committed {
+                    return true;
+                }
+
+                if let Some(prev) = entry.previous.take() {
+                    entry.value = prev;
+                    entry.committed = true;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+    }
+
     fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
-        if !self.method_exists("enter")? {
+        if !self.method_exists(TracerMethod::Enter)? {
             return Ok(());
         }
 
@@ -136,6 +215,7 @@ impl JsTracer {
             anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
         })?;
 
+        let method_name = TracerMethod::Enter.as_str();
         let snippet = format!(
             "(function(){{\n\
                 let raw = {raw_frame_input};\n\
@@ -147,20 +227,22 @@ impl JsTracer {
                     getGas(){{ return raw.gas; }},\n\
                     getValue(){{ return raw.value; }},\n\
                 }};\n\
-                tracer.enter(frame);\n\
+                tracer.{method_name}(frame);\n\
             }})()"
         );
 
         let _ = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| anyhow::anyhow!(format!("JS tracer method enter failed: {e:?}")))?;
+            .map_err(|e| {
+                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
+            })?;
 
         Ok(())
     }
 
     fn call_exit(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
-        if !self.method_exists("exit")? {
+        if !self.method_exists(TracerMethod::Exit)? {
             return Ok(());
         }
 
@@ -168,6 +250,7 @@ impl JsTracer {
             anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
         })?;
 
+        let method_name = TracerMethod::Exit.as_str();
         let snippet = format!(
             "(function(){{\n\
                 let raw = {raw_frame_input};\n\
@@ -176,19 +259,25 @@ impl JsTracer {
                     getOutput(){{ return raw.output ? hexToBytes(raw.output) : null; }},\n\
                     getError(){{ return raw.error; }},\n\
                 }};\n\
-                tracer.exit(frame);\n\
+                tracer.{method_name}(frame);\n\
             }})()"
         );
 
         let _ = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| anyhow::anyhow!(format!("JS tracer method exit failed: {e:?}")))?;
+            .map_err(|e| {
+                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
+            })?;
 
         Ok(())
     }
 
-    fn call_step_or_fault(&mut self, method: &str, raw_log: &JsonValue) -> anyhow::Result<()> {
+    fn call_step_or_fault(
+        &mut self,
+        method: TracerMethod,
+        raw_log: &JsonValue,
+    ) -> anyhow::Result<()> {
         if !self.method_exists(method)? {
             return Ok(());
         }
@@ -196,6 +285,7 @@ impl JsTracer {
         let raw_log_input = serde_json::to_string(raw_log).map_err(|e| {
             anyhow::anyhow!(format!("JS tracer log input serialization failed: {e:?}"))
         })?;
+        let method_name = method.as_str();
 
         let has_error = raw_log
             .as_object()
@@ -204,21 +294,21 @@ impl JsTracer {
 
         let snippet = if has_error {
             format!(
-                "(function(){{\n\
-                let raw = {raw_log_input};\n\
-                let log = {{ getError(){{ return raw.error; }}, getDepth(){{ return raw.depth; }} }};\n\
-                tracer.{method}(log, db);\n\
-            }})()"
+                r#"(function(){{
+                let raw = {raw_log_input};
+                let log = {{ getError(){{ return raw.error; }}, getDepth(){{ return raw.depth; }} }};
+                tracer.{method_name}(log, db);
+            }})()"#
             )
         } else {
             format!(
-                "(function(){{\n\
-                let raw = {raw_log_input};\n\
+                r#"(function(){{
+                let raw = {raw_log_input};
                 let op = {{
                     toString(){{ return raw.op.name; }},
                     toNumber(){{ return raw.op.code; }},
                     isPush(){{ return raw.op.isPush; }}
-                }};\n\
+                }};
                 let memory = {{
                     __buffer: hexToBytes(raw.memory),
                     slice(start, stop){{
@@ -237,14 +327,14 @@ impl JsTracer {
                     length(){{
                         return this.__buffer.length;
                     }}
-                }};\n\
+                }};
                 let contract = {{
                     __input: hexToBytes(raw.contract.input),
                     getCaller(){{ return raw.contract.caller; }},
                     getAddress(){{ return raw.contract.address; }},
                     getValue(){{ return raw.contract.value; }},
                     getInput(){{ return this.__input.slice(); }}
-                }};\n\
+                }};
                 let log = {{
                     op: op,
                     memory: memory,
@@ -255,38 +345,42 @@ impl JsTracer {
                     getDepth(){{ return raw.depth; }},
                     getRefund(){{ return raw.refund; }},
                     getError(){{ return raw.error; }}
-                }};\n\
-                tracer.{method}(log, db);\n\
-            }})()"
+                }};
+                tracer.{method_name}(log, db);
+            }})()"#
             )
         };
 
         let _ = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| anyhow::anyhow!(format!("JS tracer method {method} failed: {e:?}")))?;
+            .map_err(|e| {
+                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
+            })?;
 
         Ok(())
     }
 
-    fn invoke_method(&mut self, method: &str, arg: &JsonValue) {
+    fn invoke_method(&mut self, method: TracerMethod, arg: &JsonValue) {
         if let Err(err) = match method {
-            "step" | "fault" => self.call_step_or_fault(method, arg),
-            "setup" | "write" => self.call_method(method, arg, false),
-            "enter" => self.call_enter(arg),
-            "exit" => self.call_exit(arg),
-            "result" => self.call_method(method, arg, true),
-            _ => Err(anyhow::anyhow!(format!(
-                "unknown JS tracer method: {method}"
-            ))),
+            TracerMethod::Step | TracerMethod::Fault => self.call_step_or_fault(method, arg),
+            TracerMethod::Setup | TracerMethod::Write => self.call_method(method, arg, false),
+            TracerMethod::Enter => self.call_enter(arg),
+            TracerMethod::Exit => self.call_exit(arg),
+            TracerMethod::Result => self.call_method(method, arg, true),
         } {
             self.record_error(method, err);
         }
     }
 
-    fn record_error(&mut self, method: &str, err: anyhow::Error) {
+    fn record_error(&mut self, method: TracerMethod, err: anyhow::Error) {
         if self.error.is_none() {
-            tracing::debug!(?err, ?method, "JS tracer execution halted due to error");
+            let method_name = method.as_str();
+            tracing::debug!(
+                ?err,
+                method = method_name,
+                "JS tracer execution halted due to error"
+            );
             self.error = Some(err);
         }
     }
@@ -312,12 +406,15 @@ impl JsTracer {
             "error": ctx.error,
         });
 
+        let method_name = TracerMethod::Result.as_str();
         let snippet =
-            format!("(function(){{ return JSON.stringify(tracer.result({ctx}, db)); }})()");
+            format!("(function(){{ return JSON.stringify(tracer.{method_name}({ctx}, db)); }})()");
         let value = self
             .ctx
             .eval(Source::from_bytes(snippet.as_bytes()))
-            .map_err(|e| anyhow::anyhow!(format!("JS tracer result() failed: {e:?}")))?;
+            .map_err(|e| {
+                anyhow::anyhow!(format!("JS tracer method {method_name} failed: {e:?}"))
+            })?;
 
         let out = value
             .to_string(&mut self.ctx)
@@ -437,19 +534,19 @@ impl EvmTracer for JsTracer {
             },
         });
 
-        self.invoke_method("enter", &obj);
+        self.invoke_method(TracerMethod::Enter, &obj);
     }
 
     fn after_execution_frame_completed(&mut self, result: Option<(EvmResources, CallResult)>) {
-        let (gas_used, output, revert_reason) = match result {
+        let (gas_used, output, revert_reason) = match &result {
             Some((resources, res)) => match res {
                 CallResult::Successful { returndata } => (
-                    gas_used_from_resources(resources),
+                    gas_used_from_resources(resources.clone()),
                     Some(Bytes::copy_from_slice(returndata)),
                     None,
                 ),
                 CallResult::Failed { returndata } => (
-                    gas_used_from_resources(resources),
+                    gas_used_from_resources(resources.clone()),
                     Some(Bytes::copy_from_slice(returndata)),
                     maybe_revert_reason(returndata),
                 ),
@@ -457,11 +554,18 @@ impl EvmTracer for JsTracer {
             None => (U256::ZERO, None, None),
         };
 
-        if let Some(ctx) = &mut self.frame_stack.pop() {
+        if let Some(mut ctx) = self.frame_stack.pop() {
             ctx.gas_used = Some(gas_used);
             ctx.output = output.clone();
             ctx.error = revert_reason.clone();
-            self.last_finished_frame = Some(ctx.clone());
+
+            if self.frame_stack.is_empty()
+                && matches!(result, Some((_, CallResult::Failed { .. })) | None)
+            {
+                self.tx_failed = true;
+            }
+
+            self.last_finished_frame = Some(ctx);
         } else {
             tracing::error!("Execution frame completed but no frame context found");
         }
@@ -475,15 +579,26 @@ impl EvmTracer for JsTracer {
             "output": output.map(|o| o.encode_hex()),
             "error": revert_reason
         });
-        self.invoke_method("exit", &obj);
+        self.invoke_method(TracerMethod::Exit, &obj);
     }
 
     fn on_storage_read(&mut self, _: bool, _: Address, _: B256, _: B256) {}
 
     fn on_storage_write(&mut self, _is_transient: bool, address: Address, key: B256, value: B256) {
-        self.storage_overlay
-            .borrow_mut()
-            .insert((address, key), value);
+        {
+            let mut overlay = self.storage_overlay.borrow_mut();
+            match overlay.entry((address, key)) {
+                Entry::Occupied(mut entry) => {
+                    let slot = entry.get_mut();
+                    slot.previous = Some(slot.value);
+                    slot.value = value;
+                    slot.committed = false;
+                }
+                Entry::Vacant(vacant) => {
+                    vacant.insert(OverlayEntry::new_pending(value));
+                }
+            }
+        }
         let obj = serde_json::json!({
             "address": address,
             "key": key,
@@ -491,7 +606,7 @@ impl EvmTracer for JsTracer {
         });
 
         // this method is an extension beyond geth tracer interface, convenient for state change tracking
-        self.invoke_method("write", &obj);
+        self.invoke_method(TracerMethod::Write, &obj);
     }
 
     fn on_bytecode_change(
@@ -501,33 +616,52 @@ impl EvmTracer for JsTracer {
         _new_internal_bytecode_hash: B256,
         new_observable_bytecode_length: u32,
     ) {
-        if let Some(code) = new_raw_bytecode {
+        let new_value = new_raw_bytecode.map(|code| {
             let len = new_observable_bytecode_length as usize;
             let slice = if code.len() >= len {
                 &code[..len]
             } else {
                 code
             };
-            let vec = slice.to_vec();
-            self.code_overlay.borrow_mut().insert(address, vec.clone());
-        } else {
-            self.code_overlay.borrow_mut().remove(&address);
+            slice.to_vec()
+        });
+
+        {
+            let mut overlay = self.code_overlay.borrow_mut();
+            match overlay.entry(address) {
+                Entry::Occupied(mut entry) => {
+                    let record = entry.get_mut();
+                    if record.committed && record.previous.is_none() {
+                        record.previous = Some(record.value.clone());
+                    }
+                    record.value = new_value.clone();
+                    record.committed = false;
+                }
+                Entry::Vacant(vacant) => {
+                    vacant.insert(OverlayEntry::new_pending(new_value));
+                }
+            }
         }
     }
 
     fn on_event(&mut self, _: Address, _: Vec<B256>, _: &[u8]) {}
 
     fn begin_tx(&mut self, _calldata: &[u8]) {
+        self.tx_failed = false;
         self.current_depth = 0;
         self.pending_step = None;
         self.pending_create_type = None;
+        self.last_finished_frame = None;
 
         let config = self.tracer_config.clone();
-        self.invoke_method("setup", &config);
+        self.invoke_method(TracerMethod::Setup, &config);
     }
 
     fn finish_tx(&mut self) {
         if self.error.is_some() {
+            self.rollback_overlays();
+            self.tx_failed = false;
+            self.last_finished_frame = None;
             return;
         }
 
@@ -536,19 +670,36 @@ impl EvmTracer for JsTracer {
             None => {
                 tracing::error!("No finished frame found at transaction end");
                 self.record_error(
-                    "result",
+                    TracerMethod::Result,
                     anyhow::anyhow!("No finished frame found at transaction end"),
                 );
+                self.rollback_overlays();
+                self.tx_failed = false;
+                self.last_finished_frame = None;
 
                 return;
             }
         };
         self.pending_step = None;
 
+        let mut tx_failed = self.tx_failed || ctx.error.is_some();
+
         match self.call_result(&ctx) {
             Ok(val) => self.results.push(val),
-            Err(err) => self.record_error("result", err),
+            Err(err) => {
+                tx_failed = true;
+                self.record_error(TracerMethod::Result, err);
+            }
         }
+
+        if tx_failed {
+            self.rollback_overlays();
+        } else {
+            self.commit_overlays();
+        }
+
+        self.tx_failed = false;
+        self.last_finished_frame = None;
     }
 
     fn before_evm_interpreter_execution_step(
@@ -580,7 +731,7 @@ impl EvmTracer for JsTracer {
         });
 
         let log = self.prepare_log_input(pending, &frame_state, None);
-        self.invoke_method("step", &log);
+        self.invoke_method(TracerMethod::Step, &log);
     }
 
     fn on_opcode_error(&mut self, error: &EvmError, frame_state: impl EvmFrameInterface) {
@@ -595,17 +746,18 @@ impl EvmTracer for JsTracer {
             })
         };
 
-        self.invoke_method("fault", &log);
+        self.invoke_method(TracerMethod::Fault, &log);
     }
 
     fn on_call_error(&mut self, error: &EvmError) {
         self.pending_step = None;
+        self.tx_failed = true;
         let obj = serde_json::json!({
             "error": fmt_error_msg(error),
             "depth": self.current_depth,
         });
 
-        self.invoke_method("fault", &obj);
+        self.invoke_method(TracerMethod::Fault, &obj);
     }
 
     fn on_selfdestruct(&mut self, _: Address, _: U256, _: impl EvmFrameInterface) {}

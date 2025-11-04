@@ -1,6 +1,7 @@
 use crate::js_tracer;
+use crate::js_tracer::types::{CodeOverlay, StorageOverlay};
 use crate::js_tracer::utils::{format_hex_u256, parse_address, parse_b256};
-use alloy::primitives::{Address, B256};
+use alloy::primitives::B256;
 use boa_engine::object::FunctionObjectBuilder;
 use boa_engine::{
     Context as BoaContext, Context, JsArgs, JsValue, NativeFunction, Source, js_string,
@@ -9,7 +10,7 @@ use boa_gc::{Finalize, Trace};
 use js_tracer::utils::anyhow_error_to_js_error;
 use ruint::aliases::B160;
 use serde_json::Value as JsonValue;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::get_code;
 use zksync_os_storage_api::ViewState;
@@ -19,9 +20,9 @@ struct HostEnvironment<V: ViewState + 'static> {
     #[unsafe_ignore_trace]
     state_view: RefCell<V>,
     #[unsafe_ignore_trace]
-    storage_overlay: Rc<RefCell<HashMap<(Address, B256), B256>>>,
+    storage_overlay: Rc<RefCell<StorageOverlay>>,
     #[unsafe_ignore_trace]
-    code_overlay: Rc<RefCell<HashMap<Address, Vec<u8>>>>,
+    code_overlay: Rc<RefCell<CodeOverlay>>,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -50,8 +51,8 @@ pub(crate) fn init_host_env_in_boa_context(
     ctx: &mut Context,
     tracer_source: &str,
     state_view: RefCell<impl ViewState + 'static>,
-    storage_overlay: Rc<RefCell<HashMap<(Address, B256), B256>>>,
-    code_overlay: Rc<RefCell<HashMap<Address, Vec<u8>>>>,
+    storage_overlay: Rc<RefCell<StorageOverlay>>,
+    code_overlay: Rc<RefCell<CodeOverlay>>,
 ) -> anyhow::Result<()> {
     bootstrap_tracer(ctx, tracer_source)?;
 
@@ -255,8 +256,12 @@ fn host_get_code<V: ViewState + 'static>(
         return Ok("0x".to_string());
     };
 
-    if let Some(code) = env.code_overlay.borrow().get(&address) {
-        return Ok(format!("0x{}", alloy::primitives::hex::encode(code)));
+    if let Some(entry) = env.code_overlay.borrow().get(&address) {
+        return if let Some(code) = &entry.value {
+            Ok(format!("0x{}", alloy::primitives::hex::encode(code)))
+        } else {
+            Ok("0x".to_string())
+        };
     }
 
     let code = {
@@ -287,8 +292,11 @@ fn host_get_state<V: ViewState + 'static>(
         return Ok("0x0".to_string());
     };
 
-    if let Some(value) = env.storage_overlay.borrow().get(&(address, key)) {
-        return Ok(format!("0x{}", alloy::primitives::hex::encode(value.0)));
+    if let Some(entry) = env.storage_overlay.borrow().get(&(address, key)) {
+        return Ok(format!(
+            "0x{}",
+            alloy::primitives::hex::encode(entry.value.0)
+        ));
     }
 
     let flat = derive_flat_storage_key(&B160::from_be_bytes(address.into_array()), &(key.0.into()));
@@ -314,8 +322,8 @@ fn host_exists<V: ViewState + 'static>(
         return Ok("false".to_string());
     };
 
-    if env.code_overlay.borrow().contains_key(&address) {
-        return Ok("true".to_string());
+    if let Some(entry) = env.code_overlay.borrow().get(&address) {
+        return Ok(entry.value.is_some().to_string());
     }
 
     if env
