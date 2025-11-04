@@ -3,7 +3,6 @@ use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
-use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 
 #[derive(Debug)]
 pub struct AssignedJobEntry {
@@ -42,17 +41,14 @@ impl ProverJobMap {
         self.jobs.insert(job_id, job_entry);
     }
 
-    /// Picks the **smallest** batch number which matches supported_vks and whose job has timed out, if any.
+    /// Picks the **smallest** batch number whose job has timed out, if any.
     /// Returns `None` if there's no job with matching VKs or no job has timed‑out.
     ///
     /// Thread safety:
     ///   Races are possible if multiple threads call this at the same time.
     ///   Some calls may return `None` even if others observe a timed‑out job.
     ///   This is acceptable; callers will simply poll again.
-    pub fn pick_timed_out_job(
-        &self,
-        supported_vks: &Option<Vec<VerificationKeyHash>>,
-    ) -> Option<(u64, VerificationKeyHash, ProverInput)> {
+    pub fn pick_timed_out_job(&self) -> Option<(u64, ProverInput)> {
         let now = Instant::now();
 
         // Single scan to locate the minimal eligible key.
@@ -61,20 +57,6 @@ impl ProverJobMap {
             .iter()
             .filter_map(|entry| {
                 if now.duration_since(entry.assigned_at) > self.assignment_timeout {
-                    // Filter by supported_vks if provided
-                    let vk_hash = entry
-                        .batch_envelope
-                        .verification_key_hash()
-                        .expect("verification key must exist for batch");
-                    if let Some(vks) = supported_vks
-                        && !vks.contains(&vk_hash)
-                    {
-                        tracing::warn!(
-                            "Skipping timed-out batch {} due to unsupported VK hash {vk_hash:?}",
-                            entry.batch_envelope.batch_number()
-                        );
-                        return None;
-                    }
                     Some(*entry.key())
                 } else {
                     None
@@ -94,10 +76,6 @@ impl ProverJobMap {
             entry.assigned_at = now;
             return Some((
                 entry.batch_envelope.batch_number(),
-                entry
-                    .batch_envelope
-                    .verification_key_hash()
-                    .expect("verification key must exist for batch"),
                 entry.batch_envelope.data.clone(),
             ));
         }
@@ -113,16 +91,10 @@ impl ProverJobMap {
     }
 
     /// If a job is present for given batch_number, returns prover_input
-    pub fn get_batch_data(&self, batch_number: u64) -> Option<(VerificationKeyHash, ProverInput)> {
-        self.jobs.get(&batch_number).map(|entry| {
-            (
-                entry
-                    .batch_envelope
-                    .verification_key_hash()
-                    .expect("verification key must exist for batch"),
-                entry.batch_envelope.data.clone(),
-            )
-        })
+    pub fn get_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
+        self.jobs
+            .get(&batch_number)
+            .map(|entry| entry.batch_envelope.data.clone())
     }
 
     /// Removes and returns the assigned job entry, if present.
@@ -139,11 +111,6 @@ impl ProverJobMap {
             .iter()
             .map(|r| JobState {
                 batch_number: r.batch_envelope.batch_number(),
-                vk_hash: r
-                    .batch_envelope
-                    .verification_key_hash()
-                    .ok()
-                    .map(|vkh| vkh.to_string()),
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
             .sorted_by_key(|e| e.batch_number)

@@ -1,19 +1,18 @@
 //! Prover server module for handling proof generation requests.
 //!
 //! This module provides an HTTP server that manages proof generation jobs
-//! and proof storage. It supports both legacy (to be deprecated end of Q4 2025)
-//! and v1 (adds support for VKs and VK filtering) API routes for prover job management.
-mod legacy;
-mod v1;
+//! and proof storage.
+mod handlers;
+mod models;
+mod routes;
 
 use std::{net::SocketAddr, sync::Arc};
 
 use crate::prover_api::{
-    fri_job_manager::FriJobManager,
-    proof_storage::ProofStorage,
-    prover_server::{legacy::legacy_routes, v1::v1_routes},
-    snark_job_manager::SnarkJobManager,
+    fri_job_manager::FriJobManager, proof_storage::ProofStorage, snark_job_manager::SnarkJobManager,
 };
+
+use routes::api_routes;
 
 use axum::{Router, extract::DefaultBodyLimit};
 use tokio::net::TcpListener;
@@ -41,8 +40,7 @@ pub async fn run(
     };
 
     let app = Router::new()
-        .nest("/prover-jobs", legacy_routes())
-        .nest("/prover-jobs/v1", v1_routes())
+        .nest("/prover-jobs", api_routes())
         .with_state(app_state)
         // Set the request body limit to 10MiB
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024));

@@ -5,13 +5,13 @@ use axum::{
 
 use crate::prover_api::prover_server::{
     AppState,
-    v1::handlers::{
-        get_failed_fri_proof, peek_fri_job, peek_snark_job, pick_fri_job, pick_snark_job, status,
-        submit_fri_proof, submit_snark_proof,
+    handlers::{
+        get_failed_fri_proof, peek_batch_data, peek_fri_proofs, pick_fri_job, pick_snark_job,
+        status, submit_fri_proof, submit_snark_proof,
     },
 };
 
-pub(in crate::prover_api::prover_server) fn v1_routes() -> Router<AppState> {
+pub(super) fn api_routes() -> Router<AppState> {
     Router::new()
         // server <-> prover routes
         .route("/FRI/pick", post(pick_fri_job))
@@ -19,8 +19,8 @@ pub(in crate::prover_api::prover_server) fn v1_routes() -> Router<AppState> {
         .route("/SNARK/pick", post(pick_snark_job))
         .route("/SNARK/submit", post(submit_snark_proof))
         // debugging routes
-        .route("/FRI/{id}/peek", get(peek_fri_job))
+        .route("/FRI/{id}/peek", get(peek_batch_data))
         .route("/FRI/{id}/failed", get(get_failed_fri_proof))
-        .route("/SNARK/{from}/{to}/peek", get(peek_snark_job))
+        .route("/SNARK/{from}/{to}/peek", get(peek_fri_proofs))
         .route("/status/", get(status))
 }
