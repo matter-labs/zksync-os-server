@@ -8,7 +8,6 @@ use std::time::SystemTime;
 use time::UtcDateTime;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_multivm::ExecutionVersion;
-use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -99,17 +98,13 @@ impl<E> BatchEnvelope<E> {
 
     /// Get Verification Key Hash associated with this batch's execution version.
     /// NOTE: The key is the one attached to the batch, not proof. The proof's version will be deprecated in follow-up versions.
-    pub fn verification_key_hash(&self) -> anyhow::Result<VerificationKeyHash> {
+    pub fn batch_metadata_verification_key_hash(&self) -> anyhow::Result<&'static str> {
         let execution_version: ExecutionVersion = self
             .batch
             .execution_version
             .try_into()
             .map_err(|_| anyhow::anyhow!("Unsupported execution version"))?;
-        execution_version.vk_hash().ok_or_else(|| {
-            anyhow::anyhow!(
-                "No verification key hash available for execution version {execution_version:?}"
-            )
-        })
+        Ok(execution_version.vk_hash())
     }
 }
 
