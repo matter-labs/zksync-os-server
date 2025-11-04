@@ -12,6 +12,11 @@ pub(super) struct BatchDataPayload {
     pub prover_input: String, // base64‑encoded little‑endian u32 array
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct ProverQuery {
+    pub id: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct FriProofPayload {
     pub block_number: u64,

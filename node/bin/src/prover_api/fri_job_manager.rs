@@ -28,8 +28,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput, RealFriProof};
-use zksync_os_multivm::verification_key_hash::VerificationKeyHash;
-use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
+use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
@@ -37,8 +36,6 @@ use zksync_os_pipeline::PeekableReceiver;
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
-    #[error("proof did not pass verification")]
-    VerificationFailed,
     #[error("FRI proof verification error")]
     FriProofVerificationError {
         expected_hash_u32s: [u32; 8],
@@ -48,6 +45,8 @@ pub enum SubmitError {
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
     DeserializationFailed(bincode::error::DecodeError),
+    #[error("verification key hash mismatch - server has {0}, got from prover {1}")]
+    VerificationKeyHashMismatch(String, String),
     #[error("internal error: {0}")]
     Other(String),
 }
@@ -228,8 +227,7 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
-        // TODO: migrate to VerificationKeyHash, once legacy is deprecated
-        vk_hash: Option<VerificationKeyHash>,
+        execution_version: ExecutionVersion,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -237,6 +235,17 @@ impl FriJobManager {
             Some(e) => e,
             None => return Err(SubmitError::UnknownJob(batch_number)),
         };
+
+        // Prover should generate the proof with VK received from server. These must always match.
+        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
+        //
+        // This should never happen, but we double-check to guarantee it's the case
+        if batch_metadata.verification_key_hash() != execution_version.vk_hash() {
+            return Err(SubmitError::VerificationKeyHashMismatch(
+                batch_metadata.verification_key_hash().to_string(),
+                execution_version.vk_hash().to_string(),
+            ));
+        }
 
         // Deserialize and verify using metadata from the batch.
         let program_proof =
@@ -262,15 +271,13 @@ impl FriJobManager {
                 "Proof verification failed",
             );
 
-            let vk_hash = vk_hash.map(|vkh| vkh.to_string());
-
             // Persist the failed proof with some information about the batch for debugging
             let failed_proof = FailedFriProof {
                 batch_number,
                 last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
                 expected_hash_u32s,
                 proof_final_register_values,
-                vk_hash,
+                vk_hash: Some(batch_metadata.verification_key_hash().to_string()),
                 proof_bytes,
             };
 
@@ -317,20 +324,10 @@ impl FriJobManager {
         };
         tracing::info!(batch_number, "Real proof accepted");
 
-        // get verification key, if available, otherwise fallback
-        let execution_version = if let Some(vk_hash) = vk_hash {
-            let execution_version: ExecutionVersion = vk_hash
-                .try_into()
-                .expect("verification key must be valid for batch as it is checked above");
-            execution_version as u32
-        } else {
-            proving_run_execution_version(batch_metadata.execution_version) as u32
-        };
-
         // Prepare the envelope and send it downstream.
         let proof = RealFriProof::V2 {
             proof: proof_bytes,
-            proving_execution_version: execution_version,
+            proving_execution_version: execution_version as u32,
         };
         let envelope = removed_job
             .batch_envelope

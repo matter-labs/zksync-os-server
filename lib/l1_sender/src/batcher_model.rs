@@ -34,6 +34,19 @@ pub struct BatchMetadata {
     pub execution_version: u32,
 }
 
+impl BatchMetadata {
+    /// Gets batch metadata verification key hash.
+    ///
+    /// NOTE: Panics if the execution version is unsupported, which *should* never happen in practice.
+    /// We could propagate an error here, but then we need to change APIs everywhere.
+    /// Given it is unlikely to happen in practice, we opt for simplicity.
+    pub fn verification_key_hash(&self) -> &'static str {
+        ExecutionVersion::try_from(self.execution_version)
+            .expect("Unsupported execution version")
+            .vk_hash()
+    }
+}
+
 fn default_execution_version() -> u32 {
     1
 }
@@ -98,13 +111,8 @@ impl<E> BatchEnvelope<E> {
 
     /// Get Verification Key Hash associated with this batch's execution version.
     /// NOTE: The key is the one attached to the batch, not proof. The proof's version will be deprecated in follow-up versions.
-    /// NOTE2: Panics if the execution version is unsupported, which *should* never happen in practice.
-    /// We could propagate an error here, but then we need to change APIs everywhere.
-    /// Given it is unlikely to happen in practice, we opt for simplicity.
     pub fn batch_metadata_verification_key_hash(&self) -> &'static str {
-        ExecutionVersion::try_from(self.batch.execution_version)
-            .expect("Unsupported execution version")
-            .vk_hash()
+        self.batch.verification_key_hash()
     }
 }
 

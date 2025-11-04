@@ -8,6 +8,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use zksync_os_l1_sender::batcher_model::FriProof;
+use zksync_os_multivm::ExecutionVersion;
 
 use crate::prover_api::{
     fri_job_manager::SubmitError,
@@ -15,7 +16,7 @@ use crate::prover_api::{
         AppState,
         v1::models::{
             BatchDataPayload, FailedProofResponse, FriProofPayload, NextSnarkProverJobPayload,
-            PickJobPayload, SnarkProofPayload,
+            PickJobPayload, ProverQuery, SnarkProofPayload,
         },
     },
 };
@@ -46,19 +47,26 @@ pub(super) async fn submit_fri_proof(
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
-    let prover_id = query.id.as_deref().unwrap_or("unknown_prover");
-    let vk_hash = payload.vk_hash.parse().map_err(|e| {
+    let prover_id = query.id;
+    let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("Failed to get verification key: {e}"),
+            format!("no Execution Version matches the provided verification key: {e}"),
         )
     })?;
     match state
         .fri_job_manager
-        .submit_proof(payload.block_number, proof_bytes.into(), Some(vk_hash), prover_id)
+        .submit_proof(payload.block_number, proof_bytes.into(), execution_version, &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
+        Err(SubmitError::VerificationKeyHashMismatch(server_vk, prover_vk)) => Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "verification key hash mismatch: server has {server_vk}, prover used {prover_vk}"
+            )
+            .to_string(),
+        )),
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
             proof_final_register_values,
@@ -68,10 +76,6 @@ pub(super) async fn submit_fri_proof(
                 "FRI proof verification failed. Expected: {expected_hash_u32s:?}, Got: {proof_final_register_values:?}"
             )
             .to_string(),
-        )),
-        Err(SubmitError::VerificationFailed) => Err((
-            StatusCode::BAD_REQUEST,
-            "proof verification failed".to_string(),
         )),
         Err(SubmitError::UnknownJob(_)) => Err((StatusCode::NOT_FOUND, "unknown block".into())),
         Err(SubmitError::DeserializationFailed(err)) => {

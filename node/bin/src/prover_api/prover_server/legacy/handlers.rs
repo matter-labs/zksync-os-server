@@ -65,10 +65,6 @@ pub(super) async fn submit_fri_proof(
             )
             .to_string(),
         )),
-        Err(SubmitError::VerificationFailed) => Err((
-            StatusCode::BAD_REQUEST,
-            "proof verification failed".to_string(),
-        )),
         Err(SubmitError::UnknownJob(_)) => Err((StatusCode::NOT_FOUND, "unknown block".into())),
         Err(SubmitError::DeserializationFailed(err)) => {
             Err((StatusCode::BAD_REQUEST, err.to_string()))
