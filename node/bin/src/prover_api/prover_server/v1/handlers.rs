@@ -21,7 +21,14 @@ use crate::prover_api::{
     },
 };
 
-pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
+pub(super) async fn pick_fri_job(
+    Query(query): Query<ProverQuery>,
+    State(state): State<AppState>,
+) -> Response {
+    tracing::debug!(
+        "Received FRI job pick request from prover with ID: {}",
+        query.id
+    );
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
@@ -43,6 +50,10 @@ pub(super) async fn submit_fri_proof(
     State(state): State<AppState>,
     Json(payload): Json<FriProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    tracing::debug!(
+        "Received submit FRI proof request from prover with ID: {}",
+        query.id
+    );
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
@@ -88,7 +99,14 @@ pub(super) async fn submit_fri_proof(
     }
 }
 
-pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
+pub(super) async fn pick_snark_job(
+    Query(query): Query<ProverQuery>,
+    State(state): State<AppState>,
+) -> Response {
+    tracing::debug!(
+        "Received SNARK job pick request from prover with ID: {}",
+        query.id
+    );
     match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
@@ -130,10 +148,14 @@ pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
 }
 
 pub(super) async fn submit_snark_proof(
-    Query(_query): Query<ProverQuery>,
+    Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
     Json(payload): Json<SnarkProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    tracing::debug!(
+        "Received submit SNARK proof request from prover with ID: {}",
+        query.id
+    );
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
@@ -195,7 +217,7 @@ pub(super) async fn peek_snark_job(
     for batch_number in from_batch_number..=to_batch_number {
         match state.proof_storage.get_batch_with_proof(batch_number).await {
             Ok(Some(env)) => {
-                vk_hash = env.batch_metadata_verification_key_hash().to_string();
+                vk_hash = env.batch.verification_key_hash().to_string();
                 match env.data {
                     FriProof::Real(real) => {
                         fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))
