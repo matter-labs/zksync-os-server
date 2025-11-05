@@ -364,12 +364,6 @@ pub struct ProverInputGeneratorConfig {
     #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
 
-    /// Normally, the Prover input generator skips the blocks that are already FRI proved and committed to L1.
-    /// When this option is enabled, it will reprocess all the blocks replayed by the node on startup.
-    /// The number of blocks to replay on startup is configurable via `min_blocks_to_replay`.
-    #[config(default_t = false)]
-    pub force_process_old_blocks: bool,
-
     /// Path to the directory where RiscV binaries are unpacked (server_app.bin, app_data.bin, etc)
     #[config(default_t = "./db/app_bins".into())]
     pub app_bin_unpack_path: PathBuf,

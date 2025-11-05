@@ -75,7 +75,7 @@ impl PipelineComponent for SnarkProvingPipelineStep {
                     if batch.batch_number() > self.last_proved_batch_number {
                         let _ = self.batches_for_prove_sender.send(batch).await;
                     } else {
-                        let _ =  output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
+                        let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
                     }
                 }
             } => anyhow::bail!("SNARK proving input stream ended unexpectedly"),

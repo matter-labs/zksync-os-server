@@ -10,7 +10,7 @@ pub mod prove;
 
 /// Batches that are already committed/proved may also go through the pipeline.
 /// For such batches, a Passthrough variant is generated.
-/// For batches that are not yet committed/proved, a SendToL1 variant is used.
+/// For batches that have to be processed on L1, a SendToL1 variant is used.
 pub enum L1SenderCommand<Command: SendToL1> {
     SendToL1(Command),
     Passthrough(Box<BatchEnvelope<FriProof>>),

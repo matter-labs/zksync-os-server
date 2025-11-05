@@ -105,7 +105,7 @@ impl PipelineComponent for Batcher {
                 batch_metadata = ?batch_envelope.batch,
                 block_count = batch_envelope.batch.last_block_number - batch_envelope.batch.first_block_number + 1,
                 new_state_commitment = ?batch_envelope.batch.batch_info.new_state_commitment,
-                "Batch {} ", if should_recreate { "recreated" } else { "created" }
+                "Batch {}", if should_recreate { "recreated" } else { "created" }
             );
 
             tracing::debug!(

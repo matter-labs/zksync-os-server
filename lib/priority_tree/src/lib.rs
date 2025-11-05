@@ -134,6 +134,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                 Some(r) => {
                     // todo(#160): we enforce executing one batch at a time for now as we don't have
                     //             aggregation seal criteria yet.
+                    //             Addressing this includes reworking L1SenderCommand::Passthrough logic -
+                    //             Aggregation is only possible AFTER the last_executed_batch_on_init.
                     let envelope = take_n(r, 1).await?.pop().unwrap();
                     if envelope.batch_number() <= self.last_executed_batch_on_init {
                         tracing::info!(
