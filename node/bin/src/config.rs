@@ -125,7 +125,9 @@ pub struct StatusServerConfig {
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct RebuildBlocksConfig {
+    /// Number of the block to start rebuilding from.
     pub from_block: u64,
+    /// List of blocks to empty (i.e., remove all transactions from).
     #[config(default, with = Delimited(","))]
     pub blocks_to_empty: Vec<u64>,
 }
@@ -198,6 +200,7 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
 
+    /// Block rebuild options.
     #[config(nest)]
     pub block_rebuild: Option<RebuildBlocksConfig>,
 }
