@@ -317,8 +317,10 @@ impl FriJobManager {
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
 
         PROVER_METRICS.prove_time[&(ProverStage::Fri, ProverType::Real, label)].observe(prove_time);
-        PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Real, label)]
-            .observe(prove_time / batch_metadata.tx_count as u32);
+        if batch_metadata.tx_count > 0 {
+            PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Real, label)]
+                .observe(prove_time / batch_metadata.tx_count as u32);
+        }
 
         // We want to ensure we can send the result downstream before we remove the job
         let permit = self.try_reserve_permit_downstream()?;

@@ -29,6 +29,7 @@ pub struct BatchMetadata {
     pub batch_info: BatchInfo,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    // note: can equal to zero
     pub tx_count: usize,
     #[serde(default = "default_execution_version")]
     pub execution_version: u32,
