@@ -76,6 +76,23 @@ impl<Output: Send + 'static> Pipeline<Output> {
         }
     }
 
+    /// Conditional add one component or the other. Both components need to have same item types.
+    pub fn pipe_if<CTrue, CFalse>(
+        self,
+        condition: bool,
+        c_true: CTrue,
+        c_false: CFalse,
+    ) -> Pipeline<CTrue::Output>
+    where
+        CTrue: PipelineComponent<Input = Output>,
+        CFalse: PipelineComponent<Input = Output, Output = CTrue::Output>,
+    {
+        match condition {
+            true => self.pipe(c_true),
+            false => self.pipe(c_false),
+        }
+    }
+
     /// Add a transformer component to the pipeline with prepended messages
     ///
     /// This is useful when you need to reschedule messages at the start of the pipeline.
