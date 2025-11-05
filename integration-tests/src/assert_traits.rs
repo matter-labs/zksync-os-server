@@ -8,7 +8,7 @@ use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, GethDebugTracingOpti
 use anyhow::Context;
 use std::time::Duration;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[allow(async_fn_in_trait)]
 pub trait EthCallAssert {

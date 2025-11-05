@@ -37,7 +37,6 @@ pub struct GasAdjusterConfig {
     pub num_samples_for_blob_base_fee_estimate: usize,
     pub max_priority_fee_per_gas: u128,
     pub poll_period: Duration,
-    pub l1_gas_pricing_multiplier: f64,
     pub pubdata_pricing_multiplier: f64,
 }
 
@@ -163,21 +162,16 @@ impl GasAdjuster {
 
     pub fn gas_price(&self) -> u128 {
         let median = self.base_fee_statistics.median();
-        let effective_gas_price = median + self.config.max_priority_fee_per_gas;
-
-        (self.config.l1_gas_pricing_multiplier * effective_gas_price as f64) as u128
+        median + self.config.max_priority_fee_per_gas
     }
 
     pub fn pubdata_price(&self) -> u128 {
-        match self.config.pubdata_mode {
+        let price = match self.config.pubdata_mode {
             PubdataMode::Blobs => {
                 const BLOB_GAS_PER_BYTE: u128 = 1; // `BYTES_PER_BLOB` = `GAS_PER_BLOB` = 2 ^ 17.
 
                 let blob_base_fee_median = self.blob_base_fee_statistics.median();
-                let calculated_price = (blob_base_fee_median * BLOB_GAS_PER_BYTE) as f64
-                    * self.config.pubdata_pricing_multiplier;
-
-                calculated_price as u128
+                blob_base_fee_median * BLOB_GAS_PER_BYTE
             }
             PubdataMode::Calldata => {
                 /// The amount of gas we need to pay for each non-zero pubdata byte.
@@ -187,7 +181,9 @@ impl GasAdjuster {
                 self.gas_price().saturating_mul(L1_GAS_PER_PUBDATA_BYTE)
             }
             PubdataMode::Validium => 0,
-        }
+        };
+
+        (self.config.pubdata_pricing_multiplier * price as f64) as u128
     }
 
     /// Collects the base fee history for the specified block range.
