@@ -370,7 +370,7 @@ impl BatchVerifier {
             }
         };
 
-        let Ok(validated_signature) = signature.verify_signature(&commit_data) else {
+        let Ok(validated_signature) = signature.verify_signature(commit_data) else {
             tracing::warn!(
                 batch_number = commit_data.batch_number,
                 request_id = request_id,
