@@ -10,6 +10,9 @@ pub use transaction::L2PooledTransaction;
 mod config;
 pub use config::TxValidatorConfig;
 
+mod l1_txs_receiver;
+pub use l1_txs_receiver::L1TxsChannel;
+
 mod metrics;
 mod reth_state;
 

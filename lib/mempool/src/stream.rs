@@ -1,5 +1,5 @@
-use crate::L2TransactionPool;
 use crate::transaction::L2PooledTransaction;
+use crate::{L1TxsChannel, L2TransactionPool};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::{Stream, StreamExt};
@@ -10,14 +10,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use zksync_os_types::{L1PriorityEnvelope, L1UpgradeEnvelope, L2Envelope, ZkTransaction};
+use zksync_os_types::{L1UpgradeEnvelope, L2Envelope, ZkTransaction};
 
 pub trait TxStream: Stream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
 }
 
 pub struct BestTransactionsStream<'a> {
-    l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
+    l1_transactions: &'a mut L1TxsChannel,
     upgrade_tx: Option<L1UpgradeEnvelope>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
@@ -29,7 +29,7 @@ pub struct BestTransactionsStream<'a> {
 /// Convenience method to stream best L2 transactions
 pub fn best_transactions<'a>(
     l2_mempool: &impl L2TransactionPool,
-    l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
+    l1_transactions: &'a mut L1TxsChannel,
     upgrade_tx: Option<L1UpgradeEnvelope>,
 ) -> BestTransactionsStream<'a> {
     let pending_transactions_listener =
@@ -58,7 +58,7 @@ impl Stream for BestTransactionsStream<'_> {
                 return Poll::Ready(Some(ZkTransaction::from(upgrade_tx)));
             }
 
-            match this.l1_transactions.poll_recv(cx) {
+            match this.l1_transactions.poll_recv_and_keep(cx) {
                 Poll::Ready(Some(tx)) => return Poll::Ready(Some(tx.into())),
                 Poll::Pending => {}
                 Poll::Ready(None) => todo!("channel closed"),

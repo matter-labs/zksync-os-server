@@ -1,7 +1,5 @@
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::model::blocks::{
-    BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
-};
+use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
@@ -12,7 +10,8 @@ use tokio::sync::{mpsc, watch};
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
+    CanonicalStateUpdate, L1TxsChannel, L2TransactionPool, PoolUpdateKind, ReplayTxStream,
+    best_transactions,
 };
 use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_storage_api::ReplayRecord;
@@ -30,7 +29,7 @@ use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
-    l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
+    l1_transactions: L1TxsChannel,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -69,7 +68,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     ) -> Self {
         Self {
             next_l1_priority_id,
-            l1_transactions,
+            l1_transactions: L1TxsChannel::new(l1_transactions),
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -257,20 +256,13 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
-        cmd_type: BlockCommandType,
     ) {
         let mut l2_transactions = Vec::new();
+        let mut l1_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
                 ZkEnvelope::L1(l1_tx) => {
-                    self.next_l1_priority_id = l1_tx.priority_id() + 1;
-                    // consume processed L1 txs for non-produce commands
-                    if matches!(
-                        cmd_type,
-                        BlockCommandType::Rebuild | BlockCommandType::Replay
-                    ) {
-                        assert_eq!(&self.l1_transactions.recv().await.unwrap(), l1_tx);
-                    }
+                    l1_transactions.push(l1_tx);
                 }
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());
@@ -278,6 +270,16 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 ZkEnvelope::Upgrade(_) => {}
             }
         }
+        let drained_l1_txs = self
+            .l1_transactions
+            .drain_and_reset(l1_transactions.len())
+            .await;
+        for (i, l1_tx) in l1_transactions.iter().enumerate() {
+            assert_eq!(l1_tx.priority_id(), self.next_l1_priority_id + i as u64);
+            assert_eq!(l1_tx, &&drained_l1_txs[i]);
+        }
+        self.next_l1_priority_id += l1_transactions.len() as u64;
+
         EXECUTION_METRICS
             .next_l1_priority_id
             .set(self.next_l1_priority_id);

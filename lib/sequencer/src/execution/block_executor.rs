@@ -134,14 +134,34 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             }
                             Err(e) => {
                                 match (tx.tx_type(), command.invalid_tx_policy) {
-                                    (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
+                                    // Upgrade tx always goes first, so any `e` is unexpected
+                                    (ZkTxType::Upgrade, _) => {
                                         return Err(
                                             BlockDump {
                                                 ctx,
                                                 txs: all_processed_txs.clone(),
-                                                error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
+                                                error: format!("invalid upgrade tx: {e:?} ({})", tx.hash()),
                                             }
                                         )
+                                    }
+                                    // For L1 txs only sealing is allowed
+                                    (ZkTxType::L1, InvalidTxPolicy::RejectAndContinue) => {
+                                        let rejection_method = rejection_method(&e);
+                                        match rejection_method {
+                                            TxRejectionMethod::SealBlock(reason) => {
+                                                tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
+                                                break reason;
+                                            }
+                                            _ => {
+                                                return Err(
+                                                    BlockDump {
+                                                        ctx,
+                                                        txs: all_processed_txs.clone(),
+                                                        error: format!("invalid l1 tx: {e:?} ({})", tx.hash()),
+                                                    }
+                                                )
+                                            }
+                                        }
                                     }
                                     (ZkTxType::L2(_), InvalidTxPolicy::RejectAndContinue) => {
                                         let rejection_method = rejection_method(&e);
@@ -163,14 +183,14 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                             }
                                         }
                                     }
-                                    (ZkTxType::L2(_), InvalidTxPolicy::Abort) => {
-                                            return Err(
-                                                BlockDump {
-                                                    ctx,
-                                                    txs: all_processed_txs.clone(),
-                                                    error: format!("invalid l2 tx: {e:?} ({})", tx.hash()),
-                                                }
-                                            )
+                                    (ZkTxType::L1 | ZkTxType::L2(_), InvalidTxPolicy::Abort) => {
+                                        return Err(
+                                            BlockDump {
+                                                ctx,
+                                                txs: all_processed_txs.clone(),
+                                                error: format!("got invalid tx with `Abort` policy: {e:?} ({})", tx.hash()),
+                                            }
+                                        )
                                     }
                                 }
                             }
