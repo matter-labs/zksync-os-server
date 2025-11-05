@@ -125,7 +125,13 @@ pub struct StatusServerConfig {
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct RebuildBlocksConfig {
+    /// Number of the block to start rebuilding from.
+    /// All blocks starting from this number will be replayed - but unlike normal replay,
+    /// we'll not assert that the result will match the original ReplayRecord (block).
+    /// That is, a block may close earlier (with less transactions),
+    /// have different hash, have some transactions rejected etc
     pub from_block: u64,
+    /// List of blocks to empty (i.e., remove all transactions from).
     #[config(default, with = Delimited(","))]
     pub blocks_to_empty: Vec<u64>,
 }
@@ -198,6 +204,7 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
 
+    /// Block rebuild options.
     #[config(nest)]
     pub block_rebuild: Option<RebuildBlocksConfig>,
 }
@@ -518,8 +525,6 @@ pub struct GasAdjusterConfig {
     #[config(default_t = 13 * TimeUnit::Seconds)]
     pub poll_period: Duration,
     #[config(default_t = 1.0)]
-    pub l1_gas_pricing_multiplier: f64,
-    #[config(default_t = 1.0)]
     pub pubdata_pricing_multiplier: f64,
 }
 
@@ -664,7 +669,6 @@ pub fn gas_adjuster_config(
         num_samples_for_blob_base_fee_estimate: c.num_samples_for_blob_base_fee_estimate,
         max_priority_fee_per_gas,
         poll_period: c.poll_period,
-        l1_gas_pricing_multiplier: c.l1_gas_pricing_multiplier,
         pubdata_pricing_multiplier: c.pubdata_pricing_multiplier,
     }
 }

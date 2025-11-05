@@ -1,8 +1,9 @@
-use crate::prover_api::fri_job_manager::JobState;
+use crate::prover_api::fri_job_manager::{FriJob, JobState};
 use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
+use zksync_os_multivm::proving_run_execution_version;
 
 #[derive(Debug)]
 pub struct AssignedJobEntry {
@@ -48,7 +49,7 @@ impl ProverJobMap {
     ///   Races are possible if multiple threads call this at the same time.
     ///   Some calls may return `None` even if others observe a timed‑out job.
     ///   This is acceptable; callers will simply poll again.
-    pub fn pick_timed_out_job(&self) -> Option<(u64, ProverInput)> {
+    pub fn pick_timed_out_job(&self) -> Option<(FriJob, ProverInput)> {
         let now = Instant::now();
 
         // Single scan to locate the minimal eligible key.
@@ -74,8 +75,13 @@ impl ProverJobMap {
             );
             // Refresh assignment time to avoid immediate re-pick.
             entry.assigned_at = now;
+            let proving_execution_version =
+                proving_run_execution_version(entry.batch_envelope.batch.execution_version);
             return Some((
-                entry.batch_envelope.batch_number(),
+                FriJob {
+                    batch_number: entry.batch_envelope.batch_number(),
+                    vk_hash: proving_execution_version.vk_hash().to_string(),
+                },
                 entry.batch_envelope.data.clone(),
             ));
         }
@@ -91,10 +97,13 @@ impl ProverJobMap {
     }
 
     /// If a job is present for given batch_number, returns prover_input
-    pub fn get_batch_data(&self, batch_number: u64) -> Option<ProverInput> {
-        self.jobs
-            .get(&batch_number)
-            .map(|entry| entry.batch_envelope.data.clone())
+    pub fn get_batch_data(&self, batch_number: u64) -> Option<(&'static str, ProverInput)> {
+        self.jobs.get(&batch_number).map(|entry| {
+            (
+                entry.batch_envelope.batch.verification_key_hash(),
+                entry.batch_envelope.data.clone(),
+            )
+        })
     }
 
     /// Removes and returns the assigned job entry, if present.
@@ -110,10 +119,13 @@ impl ProverJobMap {
         self.jobs
             .iter()
             .map(|r| JobState {
-                batch_number: r.batch_envelope.batch_number(),
+                fri_job: FriJob {
+                    batch_number: r.batch_envelope.batch_number(),
+                    vk_hash: r.batch_envelope.batch.verification_key_hash().to_string(),
+                },
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
-            .sorted_by_key(|e| e.batch_number)
+            .sorted_by_key(|e| e.fri_job.batch_number)
             .collect()
     }
 
