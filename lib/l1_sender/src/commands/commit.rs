@@ -1,6 +1,6 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{BatchEnvelope, FriProof};
-use crate::commands::L1SenderCommand;
+use crate::commands::SendToL1;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
@@ -22,7 +22,7 @@ impl CommitCommand {
     }
 }
 
-impl L1SenderCommand for CommitCommand {
+impl SendToL1 for CommitCommand {
     const NAME: &'static str = "commit";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;

@@ -60,7 +60,7 @@ pub struct GeneralConfig {
     /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
     /// For FullDiffs backend:
     ///     On EN: can be any historical block number;
-    ///     On Main Node: any historical block number up to the last l1 committed one.
+    ///     On Main Node: any historical block number up to the last l1 executed one.
     #[config(default_t = None)]
     pub force_starting_block_number: Option<u64>,
 

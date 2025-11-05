@@ -21,7 +21,6 @@ use zksync_os_types::ZksyncOsEncode;
 pub struct ProverInputGenerator<ReadState> {
     pub enable_logging: bool,
     pub maximum_in_flight_blocks: usize,
-    pub first_block_to_process: u64,
     pub app_bin_base_path: PathBuf,
     pub read_state: ReadState,
 }
@@ -48,26 +47,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             GenericComponentState::ProcessingOrWaitingRecv,
         );
 
-        let first_block_to_process = self.first_block_to_process;
         let read_state = self.read_state;
         let enable_logging = self.enable_logging;
         let app_bin_base_path = self.app_bin_base_path;
         let maximum_in_flight_blocks = self.maximum_in_flight_blocks;
 
         ReceiverStream::new(input.into_inner())
-            // skip the blocks that were already committed
-            .filter(|(_, replay_record, _)| {
-                let block_number = replay_record.block_context.block_number;
-                let should_process = block_number >= first_block_to_process;
-                if !should_process {
-                    tracing::debug!(
-                        "Skipping block {} as it's below the first block to process {}",
-                        block_number,
-                        first_block_to_process
-                    );
-                }
-                futures::future::ready(should_process)
-            })
             // generate prover input. Use up to `maximum_in_flight_blocks` threads
             .map(|(block_output, replay_record, tree)| {
                 let block_number = replay_record.block_context.block_number;

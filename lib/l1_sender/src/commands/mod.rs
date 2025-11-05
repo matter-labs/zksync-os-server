@@ -8,7 +8,15 @@ pub mod commit;
 pub mod execute;
 pub mod prove;
 
-pub trait L1SenderCommand:
+/// Batches that are already committed/proved may also go through the pipeline.
+/// For such batches, a Passthrough variant is generated.
+/// For batches that are not yet committed/proved, a SendToL1 variant is used.
+pub enum L1SenderCommand<Command: SendToL1> {
+    SendToL1(Command),
+    Passthrough(Box<BatchEnvelope<FriProof>>),
+}
+
+pub trait SendToL1:
     Into<Vec<BatchEnvelope<FriProof>>>
     + AsRef<[BatchEnvelope<FriProof>]>
     + AsMut<[BatchEnvelope<FriProof>]>
