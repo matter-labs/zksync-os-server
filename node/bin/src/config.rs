@@ -126,6 +126,10 @@ pub struct StatusServerConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct RebuildBlocksConfig {
     /// Number of the block to start rebuilding from.
+    /// All blocks starting from this number will be replayed - but unlike normal replay, 
+    /// we'll not assert that the result will match the original ReplayRecord (block).
+    /// That is, a block may close earlier (with less transactions), 
+    /// have different hash, have some transactions rejected etc
     pub from_block: u64,
     /// List of blocks to empty (i.e., remove all transactions from).
     #[config(default, with = Delimited(","))]
