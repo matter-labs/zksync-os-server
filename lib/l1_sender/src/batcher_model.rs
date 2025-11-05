@@ -7,6 +7,7 @@ use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -31,6 +32,19 @@ pub struct BatchMetadata {
     pub tx_count: usize,
     #[serde(default = "default_execution_version")]
     pub execution_version: u32,
+}
+
+impl BatchMetadata {
+    /// Gets batch metadata verification key hash.
+    ///
+    /// NOTE: Panics if the execution version is unsupported, which *should* never happen in practice.
+    /// We could propagate an error here, but then we need to change APIs everywhere.
+    /// Given it is unlikely to happen in practice, we opt for simplicity.
+    pub fn verification_key_hash(&self) -> &'static str {
+        ExecutionVersion::try_from(self.execution_version)
+            .expect("Unsupported execution version")
+            .vk_hash()
+    }
 }
 
 fn default_execution_version() -> u32 {

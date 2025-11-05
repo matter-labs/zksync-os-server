@@ -5,10 +5,13 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, RealSnarkProof, SnarkProof};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
+use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
 use zksync_os_pipeline::PeekableReceiver;
+
+use crate::prover_api::fri_job_manager::FriJob;
 
 /// Job manager for SNARK proving.
 ///
@@ -76,12 +79,12 @@ impl SnarkJobManager {
         }
     }
 
-    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `real_fri_proof`)
-    pub async fn pick_real_job(&self) -> anyhow::Result<Option<Vec<(u64, FriProof)>>> {
+    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
+    pub async fn pick_real_job(&self) -> anyhow::Result<Option<Vec<(FriJob, FriProof)>>> {
         self.consume_fake_proves_from_head(None).await?;
         // note that here we don't consume the messages from channel -
         // the job will be picked, but there is no guarantee it will be completed
-        let batches_with_real_proofs: Vec<(u64, FriProof)> = self
+        let batches_with_real_proofs: Vec<(FriJob, FriProof)> = self
             .committed_batch_receiver
             .lock()
             .await
@@ -89,27 +92,38 @@ impl SnarkJobManager {
                 if envelope.data.is_fake() {
                     None
                 } else {
-                    Some((envelope.batch_number(), envelope.data.clone()))
+                    let proving_execution_version = ExecutionVersion::try_from(
+                        envelope
+                            .data
+                            .proving_execution_version()
+                            .expect("proving execution version must be present on proof"),
+                    )
+                    .expect("execution version must exist as it was set by server");
+                    Some((
+                        FriJob {
+                            batch_number: envelope.batch_number(),
+                            vk_hash: proving_execution_version.vk_hash().to_string(),
+                        },
+                        envelope.data.clone(),
+                    ))
                 }
             });
         if batches_with_real_proofs.is_empty() {
             return Ok(None);
         }
 
-        // Get proofs that were created for the same execution version.
-        let first_version = batches_with_real_proofs[0]
-            .1
-            .proving_execution_version()
-            .unwrap_or(2); // if version is missing, assume it's 2
+        // Get proofs that were created for the same execution version/VK.
+        let first_vk_hash = batches_with_real_proofs[0].0.vk_hash.clone();
         let batches_with_real_proofs: Vec<_> = batches_with_real_proofs
             .into_iter()
-            .take_while(|(_, p)| p.proving_execution_version().unwrap_or(2) == first_version)
+            .take_while(|(fri_job, _)| fri_job.vk_hash == first_vk_hash)
             .collect();
 
         tracing::info!(
-            "real SNARK proof for batches {}-{} is picked by a prover",
-            batches_with_real_proofs.first().unwrap().0,
-            batches_with_real_proofs.last().unwrap().0,
+            "real SNARK proof for batches {}-{} with vk {} is picked by a prover",
+            batches_with_real_proofs.first().unwrap().0.batch_number,
+            batches_with_real_proofs.last().unwrap().0.batch_number,
+            first_vk_hash,
         );
         Ok(Some(batches_with_real_proofs))
     }
@@ -118,6 +132,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
+        execution_version: Option<ExecutionVersion>,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut receiver = self.committed_batch_receiver.lock().await;
@@ -176,6 +191,31 @@ impl SnarkJobManager {
             "Fatal error: inconsistency in PeekableReceiver"
         );
 
+        // Prover should generate the proof with VK received from server. These must always match.
+        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
+        //
+        // This should never happen, but we double-check to guarantee it's the case
+        //
+        // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
+        if let Some(exec_version) = execution_version {
+            let server_vk = consumed_batches_proven[0].batch.verification_key_hash();
+            let prover_vk = exec_version.vk_hash();
+            anyhow::ensure!(
+                server_vk == prover_vk,
+                "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
+            );
+        }
+
+        // get verification key, if available, otherwise fallback
+        let execution_version = if let Some(execution_version) = execution_version {
+            execution_version as u32
+        } else {
+            consumed_batches_proven[0]
+                .data
+                .proving_execution_version()
+                .unwrap_or(2)
+        };
+
         drop(receiver);
 
         tracing::info!("real SNARK proof for batches {batch_from}-{batch_to} is accepted",);
@@ -184,16 +224,12 @@ impl SnarkJobManager {
             .into_iter()
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
-        let proving_execution_version = consumed_batches_proven[0]
-            .data
-            .proving_execution_version()
-            .unwrap_or(2);
 
         self.send_downstream(ProofCommand::new(
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
-                proving_execution_version,
+                proving_execution_version: execution_version,
             }),
         ))
         .await?;
