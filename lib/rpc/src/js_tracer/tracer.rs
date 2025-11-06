@@ -10,7 +10,9 @@ use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
 use serde_json::Value as JsonValue;
-use std::{cell::RefCell, collections::hash_map::Entry, rc::Rc};
+use std::collections::HashMap;
+use std::ops::Not;
+use std::{cell::RefCell, collections::hash_map::Entry, hash::Hash, rc::Rc};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
@@ -68,7 +70,7 @@ pub struct JsTracer {
 }
 
 impl JsTracer {
-    pub fn new(state_view: impl ViewState + 'static, js_cfg: JsonValue) -> anyhow::Result<Self> {
+    pub fn new(state_view: impl ViewState + 'static, js_cfg: String) -> anyhow::Result<Self> {
         let (tracer_source, tracer_config) = extract_js_source_and_config(js_cfg)?;
 
         let mut ctx = BoaContext::default();
@@ -136,7 +138,7 @@ impl JsTracer {
                 format!(
                     "(function(){{ return typeof tracer === 'object' && typeof tracer.{method_name} === 'function' }})()"
                 )
-                .as_bytes(),
+                    .as_bytes(),
             ))
             .map_err(|e| {
                 anyhow::anyhow!(format!(
@@ -147,63 +149,45 @@ impl JsTracer {
     }
 
     fn commit_overlays(&mut self) {
-        {
-            let mut storage_overlay = self.storage_overlay.borrow_mut();
-            storage_overlay.retain(|_, entry| {
-                if !entry.committed {
-                    entry.committed = true;
-                    entry.previous = None;
-                }
-                true
-            });
-        }
-
-        {
-            let mut code_overlay = self.code_overlay.borrow_mut();
-            code_overlay.retain(|_, entry| {
-                if !entry.committed {
-                    entry.committed = true;
-                    entry.previous = None;
-                }
-                true
-            });
-        }
+        Self::commit_overlay_map(&mut self.storage_overlay.borrow_mut());
+        Self::commit_overlay_map(&mut self.code_overlay.borrow_mut());
     }
 
     fn rollback_overlays(&mut self) {
-        {
-            let mut storage_overlay = self.storage_overlay.borrow_mut();
-            storage_overlay.retain(|_, entry| {
-                if entry.committed {
-                    return true;
-                }
+        Self::rollback_overlay_map(&mut self.storage_overlay.borrow_mut());
+        Self::rollback_overlay_map(&mut self.code_overlay.borrow_mut());
+    }
 
-                if let Some(prev) = entry.previous.take() {
-                    entry.value = prev;
-                    entry.committed = true;
-                    true
-                } else {
-                    false
-                }
-            });
-        }
+    fn commit_overlay_map<K, V>(map: &mut HashMap<K, OverlayEntry<V>>)
+    where
+        K: Eq + Hash,
+    {
+        map.retain(|_, entry| {
+            if !entry.committed {
+                entry.committed = true;
+                entry.previous = None;
+            }
+            true
+        });
+    }
 
-        {
-            let mut code_overlay = self.code_overlay.borrow_mut();
-            code_overlay.retain(|_, entry| {
-                if entry.committed {
-                    return true;
-                }
+    fn rollback_overlay_map<K, V>(map: &mut HashMap<K, OverlayEntry<V>>)
+    where
+        K: Eq + Hash,
+    {
+        map.retain(|_, entry| {
+            if entry.committed {
+                return true;
+            }
 
-                if let Some(prev) = entry.previous.take() {
-                    entry.value = prev;
-                    entry.committed = true;
-                    true
-                } else {
-                    false
-                }
-            });
-        }
+            if let Some(prev) = entry.previous.take() {
+                entry.value = prev;
+                entry.committed = true;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
@@ -289,8 +273,10 @@ impl JsTracer {
 
         let has_error = raw_log
             .as_object()
-            .map(|o| o.contains_key("error"))
-            .unwrap_or(false);
+            .and_then(|obj| obj.get("error"))
+            .unwrap_or(&JsonValue::Null)
+            .is_null()
+            .not();
 
         let snippet = if has_error {
             format!(
@@ -779,7 +765,7 @@ pub fn trace_block<V: ViewState + 'static>(
     txs: Vec<ZkTransaction>,
     block_context: zksync_os_interface::types::BlockContext,
     state_view: V,
-    js_tracer_config: JsonValue,
+    js_tracer_config: String,
 ) -> anyhow::Result<Vec<JsonValue>> {
     let mut tracer = JsTracer::new(state_view.clone(), js_tracer_config)?;
 

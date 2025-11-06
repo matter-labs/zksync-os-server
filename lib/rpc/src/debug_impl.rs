@@ -11,7 +11,6 @@ use alloy::rpc::types::trace::geth::{
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use serde_json::Value as JsonValue;
 use std::ops::Range;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_storage_api::{RepositoryError, StateError};
@@ -93,15 +92,8 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 }
             }
             GethDebugTracerType::JsTracer(js) => {
-                let js_tracer_config: JsonValue =
-                    serde_json::from_str(&js).unwrap_or(JsonValue::Null);
-
-                match crate::js_tracer::tracer::trace_block(
-                    txs,
-                    block_context,
-                    prev_state_view,
-                    js_tracer_config,
-                ) {
+                match crate::js_tracer::tracer::trace_block(txs, block_context, prev_state_view, js)
+                {
                     Ok(outputs) => Ok(outputs
                         .into_iter()
                         .zip(&block.body.transactions)
@@ -182,9 +174,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                     block_overrides.map(Box::new),
                 )?)
             }
-            (GethDebugTracerType::JsTracer(js), state_overrides, block_overrides) => {
-                let js_cfg: JsonValue = serde_json::from_str(&js).unwrap_or(JsonValue::Null);
-
+            (GethDebugTracerType::JsTracer(js_cfg), state_overrides, block_overrides) => {
                 let value = self.eth_call_handler.call_js_tracer_impl(
                     request,
                     block_id,

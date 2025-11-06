@@ -299,7 +299,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block: Option<BlockId>,
-        js_cfg: JsonValue,
+        js_cfg: String,
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<JsonValue, EthCallError> {

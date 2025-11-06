@@ -9,6 +9,7 @@ use alloy::rpc::types::trace::geth::{
     GethDebugTracingOptions, GethTrace,
 };
 use alloy::sol_types::{Revert, SolCall, SolError};
+use serde_json::json;
 use std::collections::HashMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
@@ -433,11 +434,16 @@ async fn debug_trace_call_js_tracer() -> anyhow::Result<()> {
         .calculate(calculate_value)
         .into_transaction_request();
 
-    let tracer_code = r#"
+    let js_str = r#"
         {
-            "tracer": "{data: [], fault: function(log) {}, step: function(log) {}, enter: function (frame) {this.data.push(frame.getTo()); }, result: function(ctx, db) { return this.data; }}"
-        }
-    "#;
+           data: [],
+           fault: function(log) {},
+           step: function(log) {},
+           enter: function (frame) {this.data.push(frame.getTo()); },
+           result: function(ctx, db) { return this.data; }
+        }"#;
+
+    let tracer_code = json!({ "tracer": js_str }).to_string();
 
     let mut opts = GethDebugTracingCallOptions::default();
     opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(tracer_code.to_string()));
@@ -492,11 +498,14 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
         .calculate(calculate_value)
         .into_transaction_request();
 
-    let tracer_code = r#"
+    let js_str = r#"
         {
-            "tracer": "{data: [], write: function (log) { this.data.push([log.address, log.key, log.value]); }, result: function(ctx, db) { let [address, key, value] = this.data[this.data.length-1]; return [db.getState(address, key), value]; }}"
-        }
-    "#;
+            data: [],
+            write: function (log) { this.data.push([log.address, log.key, log.value]); },
+            result: function(ctx, db) { let [address, key, value] = this.data[this.data.length-1]; return [db.getState(address, key), value]; }
+        }"#;
+
+    let tracer_code = json!({ "tracer": js_str }).to_string();
 
     let mut opts = GethDebugTracingCallOptions::default();
     opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(tracer_code.to_string()));

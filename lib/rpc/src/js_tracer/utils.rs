@@ -2,31 +2,29 @@ use crate::sandbox::ERGS_PER_GAS;
 use alloy::primitives::{Address, B256, U256};
 use boa_engine::{JsError, JsString, JsValue};
 use jsonrpsee::core::JsonValue;
-use serde_json::Map;
 use zksync_os_interface::tracing::EvmResources;
 
 pub(crate) fn gas_used_from_resources(resources: EvmResources) -> U256 {
     U256::from(resources.ergs / ERGS_PER_GAS)
 }
 
-pub(crate) fn extract_js_source_and_config(
-    js_cfg: JsonValue,
-) -> anyhow::Result<(String, JsonValue)> {
-    let tracer_val = js_cfg
-        .as_object()
-        .unwrap_or(&Map::new())
-        .get("tracer")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-
-    let source = match tracer_val {
-        JsonValue::String(s) => s,
-        JsonValue::Object(map) => map
-            .get("code")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        _ => String::new(),
+pub(crate) fn extract_js_source_and_config(js_cfg: String) -> anyhow::Result<(String, JsonValue)> {
+    let (source, config) = if let Ok(cfg) = serde_json::from_str::<JsonValue>(&js_cfg) {
+        match cfg {
+            JsonValue::Object(map) => (
+                map.get("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                map.get("config")
+                    .map(|v| v.to_owned())
+                    .unwrap_or(JsonValue::Null),
+            ),
+            _ => (String::new(), JsonValue::Null),
+        }
+    } else {
+        // this means the config only contains raw JS code as a string
+        (js_cfg, JsonValue::Null)
     };
 
     if source.is_empty() {
@@ -34,11 +32,6 @@ pub(crate) fn extract_js_source_and_config(
             "JS tracer source not provided in 'tracer' field"
         ));
     }
-    let config = js_cfg
-        .get("config")
-        .cloned()
-        .or_else(|| js_cfg.get("tracerConfig").cloned())
-        .unwrap_or(JsonValue::Null);
 
     Ok((source, config))
 }
