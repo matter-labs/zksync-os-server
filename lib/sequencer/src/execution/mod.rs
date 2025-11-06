@@ -169,6 +169,9 @@ where
                 "Block processed in sequencer! Sending downstream..."
             );
             EXECUTION_METRICS.block_number[&"execute"].set(block_number);
+            EXECUTION_METRICS
+                .last_execution_version
+                .set(replay_record.block_context.execution_version as u64);
 
             latency_tracker.enter_state(SequencerState::WaitingSend);
             if output
