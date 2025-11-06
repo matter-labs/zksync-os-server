@@ -35,7 +35,7 @@ resolver = "3"
 default-members = ["node/bin"]
 
 [workspace.package]
-version = "0.9.2-non-semver-compat"
+version = "0.10.0-non-semver-compat"
 edition = "2024"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"
@@ -175,36 +175,36 @@ reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "vb-initial-version" }
 
 # "Local" dependencies
-zksync_os_contract_interface = { version = "=0.9.2-non-semver-compat", path = "lib/contract_interface" }
-zksync_os_crypto = { version = "=0.9.2-non-semver-compat", path = "lib/crypto" }
-zksync_os_l1_sender = { version = "=0.9.2-non-semver-compat", path = "lib/l1_sender" }
-zksync_os_l1_watcher = { version = "=0.9.2-non-semver-compat", path = "lib/l1_watcher" }
-zksync_os_mempool = { version = "=0.9.2-non-semver-compat", path = "lib/mempool" }
-zksync_os_mini_merkle_tree = { version = "=0.9.2-non-semver-compat", path = "lib/mini_merkle_tree" }
-zksync_os_merkle_tree = { version = "=0.9.2-non-semver-compat", path = "lib/merkle_tree" }
-zksync_os_priority_tree = { version = "=0.9.2-non-semver-compat", path = "lib/priority_tree" }
-zksync_os_observability = { version = "=0.9.2-non-semver-compat", path = "lib/observability" }
-zksync_os_rocksdb = { version = "=0.9.2-non-semver-compat", path = "lib/rocksdb" }
-zksync_os_rpc = { version = "=0.9.2-non-semver-compat", path = "lib/rpc" }
-zksync_os_rpc_api = { version = "=0.9.2-non-semver-compat", path = "lib/rpc_api" }
-zksync_os_sequencer = { version = "=0.9.2-non-semver-compat", path = "lib/sequencer" }
-zksync_os_state = { version = "=0.9.2-non-semver-compat", path = "lib/state" }
-zksync_os_state_full_diffs = { version = "=0.9.2-non-semver-compat", path = "lib/state_full_diffs" }
-zksync_os_storage = { version = "=0.9.2-non-semver-compat", path = "lib/storage" }
-zksync_os_storage_api = { version = "=0.9.2-non-semver-compat", path = "lib/storage_api" }
-zksync_os_types = { version = "=0.9.2-non-semver-compat", path = "lib/types" }
-zksync_os_genesis = { version = "=0.9.2-non-semver-compat", path = "lib/genesis" }
-zksync_os_object_store = { version = "=0.9.2-non-semver-compat", path = "lib/object_store" }
-zksync_os_status_server = { version = "=0.9.2-non-semver-compat", path = "lib/status" }
-zksync_os_multivm = { version = "=0.9.2-non-semver-compat", path = "lib/multivm" }
-zksync_os_pipeline = { version = "=0.9.2-non-semver-compat", path = "lib/pipeline" }
-zksync_os_revm_consistency_checker = { version = "=0.9.2-non-semver-compat", path = "lib/revm_consistency_checker" }
-zksync_os_gas_adjuster = { version = "=0.9.2-non-semver-compat", path = "lib/gas_adjuster" }
-zksync_os_batch_verification = { version = "=0.9.2-non-semver-compat", path = "lib/batch_verification" }
-zksync_os_batch_types = { version = "=0.9.2-non-semver-compat", path = "lib/batch_types" }
-zksync_os_socket = { version = "=0.9.2-non-semver-compat", path = "lib/socket" }
+zksync_os_contract_interface = { version = "=0.10.0-non-semver-compat", path = "lib/contract_interface" }
+zksync_os_crypto = { version = "=0.10.0-non-semver-compat", path = "lib/crypto" }
+zksync_os_l1_sender = { version = "=0.10.0-non-semver-compat", path = "lib/l1_sender" }
+zksync_os_l1_watcher = { version = "=0.10.0-non-semver-compat", path = "lib/l1_watcher" }
+zksync_os_mempool = { version = "=0.10.0-non-semver-compat", path = "lib/mempool" }
+zksync_os_mini_merkle_tree = { version = "=0.10.0-non-semver-compat", path = "lib/mini_merkle_tree" }
+zksync_os_merkle_tree = { version = "=0.10.0-non-semver-compat", path = "lib/merkle_tree" }
+zksync_os_priority_tree = { version = "=0.10.0-non-semver-compat", path = "lib/priority_tree" }
+zksync_os_observability = { version = "=0.10.0-non-semver-compat", path = "lib/observability" }
+zksync_os_rocksdb = { version = "=0.10.0-non-semver-compat", path = "lib/rocksdb" }
+zksync_os_rpc = { version = "=0.10.0-non-semver-compat", path = "lib/rpc" }
+zksync_os_rpc_api = { version = "=0.10.0-non-semver-compat", path = "lib/rpc_api" }
+zksync_os_sequencer = { version = "=0.10.0-non-semver-compat", path = "lib/sequencer" }
+zksync_os_state = { version = "=0.10.0-non-semver-compat", path = "lib/state" }
+zksync_os_state_full_diffs = { version = "=0.10.0-non-semver-compat", path = "lib/state_full_diffs" }
+zksync_os_storage = { version = "=0.10.0-non-semver-compat", path = "lib/storage" }
+zksync_os_storage_api = { version = "=0.10.0-non-semver-compat", path = "lib/storage_api" }
+zksync_os_types = { version = "=0.10.0-non-semver-compat", path = "lib/types" }
+zksync_os_genesis = { version = "=0.10.0-non-semver-compat", path = "lib/genesis" }
+zksync_os_object_store = { version = "=0.10.0-non-semver-compat", path = "lib/object_store" }
+zksync_os_status_server = { version = "=0.10.0-non-semver-compat", path = "lib/status" }
+zksync_os_multivm = { version = "=0.10.0-non-semver-compat", path = "lib/multivm" }
+zksync_os_pipeline = { version = "=0.10.0-non-semver-compat", path = "lib/pipeline" }
+zksync_os_revm_consistency_checker = { version = "=0.10.0-non-semver-compat", path = "lib/revm_consistency_checker" }
+zksync_os_gas_adjuster = { version = "=0.10.0-non-semver-compat", path = "lib/gas_adjuster" }
+zksync_os_batch_verification = { version = "=0.10.0-non-semver-compat", path = "lib/batch_verification" }
+zksync_os_batch_types = { version = "=0.10.0-non-semver-compat", path = "lib/batch_types" }
+zksync_os_socket = { version = "=0.10.0-non-semver-compat", path = "lib/socket" }
 
-zksync_os_server = { version = "=0.9.2-non-semver-compat", path = "node/bin" }
+zksync_os_server = { version = "=0.10.0-non-semver-compat", path = "node/bin" }
 
 #[patch.crates-io]
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
