@@ -1,5 +1,5 @@
 use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::L1SenderCommand;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
@@ -9,12 +9,12 @@ use zksync_os_contract_interface::models::BatchDaInputMode;
 
 #[derive(Debug)]
 pub struct CommitCommand {
-    input: BatchEnvelope<FriProof>,
+    input: SignedBatchEnvelope<FriProof>,
     da_input_mode: BatchDaInputMode,
 }
 
 impl CommitCommand {
-    pub fn new(input: BatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode) -> Self {
+    pub fn new(input: SignedBatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode) -> Self {
         Self {
             input,
             da_input_mode,
@@ -36,19 +36,19 @@ impl L1SenderCommand for CommitCommand {
     }
 }
 
-impl AsRef<[BatchEnvelope<FriProof>]> for CommitCommand {
-    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+impl AsRef<[SignedBatchEnvelope<FriProof>]> for CommitCommand {
+    fn as_ref(&self) -> &[SignedBatchEnvelope<FriProof>] {
         std::slice::from_ref(&self.input)
     }
 }
 
-impl AsMut<[BatchEnvelope<FriProof>]> for CommitCommand {
-    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+impl AsMut<[SignedBatchEnvelope<FriProof>]> for CommitCommand {
+    fn as_mut(&mut self) -> &mut [SignedBatchEnvelope<FriProof>] {
         std::slice::from_mut(&mut self.input)
     }
 }
 
-impl From<CommitCommand> for Vec<BatchEnvelope<FriProof>> {
+impl From<CommitCommand> for Vec<SignedBatchEnvelope<FriProof>> {
     fn from(value: CommitCommand) -> Self {
         vec![value.input]
     }

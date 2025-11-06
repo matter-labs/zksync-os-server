@@ -9565,6 +9565,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "structdiff"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ded2e61f645b60f23f1ee69c122a77ba68dd187abb751c67ad2387bcb773f0b"
+dependencies = [
+ "structdiff-derive",
+]
+
+[[package]]
+name = "structdiff-derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cec3cf082379c048a963041e18a8e741a4e0a1afb14b825bd4bd771366b9a6e"
+
+[[package]]
 name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11667,6 +11682,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_batch_types"
+version = "0.9.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "serde",
+ "thiserror 2.0.12",
+ "zksync_os_contract_interface",
+ "zksync_os_merkle_tree",
+]
+
+[[package]]
+name = "zksync_os_batch_verification"
+version = "0.9.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "backon",
+ "basic_system",
+ "bincode 2.0.1",
+ "dashmap",
+ "forward_system",
+ "futures",
+ "secrecy",
+ "semver 1.0.26",
+ "serde",
+ "structdiff",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "vise",
+ "zk_ee",
+ "zksync_os_batch_types",
+ "zksync_os_contract_interface",
+ "zksync_os_interface",
+ "zksync_os_l1_sender",
+ "zksync_os_merkle_tree",
+ "zksync_os_observability",
+ "zksync_os_pipeline",
+ "zksync_os_socket",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_contract_interface"
 version = "0.9.1-non-semver-compat"
 dependencies = [
@@ -11674,6 +11736,7 @@ dependencies = [
  "anyhow",
  "backon",
  "serde",
+ "structdiff",
  "tracing",
  "vise",
 ]
@@ -11819,6 +11882,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee",
+ "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
@@ -12196,6 +12260,8 @@ dependencies = [
  "vise",
  "zk_ee",
  "zksync-os-revm",
+ "zksync_os_batch_types",
+ "zksync_os_batch_verification",
  "zksync_os_contract_interface",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
@@ -12214,6 +12280,7 @@ dependencies = [
  "zksync_os_rpc",
  "zksync_os_rpc_api",
  "zksync_os_sequencer",
+ "zksync_os_socket",
  "zksync_os_state",
  "zksync_os_state_full_diffs",
  "zksync_os_status_server",
@@ -12241,6 +12308,16 @@ dependencies = [
  "vise-exporter",
  "zkos-wrapper",
  "zksync_sequencer_proof_client",
+]
+
+[[package]]
+name = "zksync_os_socket"
+version = "0.9.1-non-semver-compat"
+dependencies = [
+ "anyhow",
+ "backon",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof, ProverInput};
+use zksync_os_l1_sender::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Pipeline step that waits for batches to be FRI proved.
@@ -19,8 +19,8 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// - HTTP server (provers call pick_next_job, submit_proof, etc.)
 /// - Fake provers pool
 pub struct FriProvingPipelineStep {
-    batches_for_prove_sender: mpsc::Sender<BatchEnvelope<ProverInput>>,
-    batches_with_proof_receiver: mpsc::Receiver<BatchEnvelope<FriProof>>,
+    batches_for_prove_sender: mpsc::Sender<SignedBatchEnvelope<ProverInput>>,
+    batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
 }
 
 impl FriProvingPipelineStep {
@@ -33,10 +33,10 @@ impl FriProvingPipelineStep {
         // Capacity: 1 - we don't want to add additional buffers here -
         // they are defined uniformly in `OUTPUT_BUFFER_SIZE` const of pipeline steps.
         let (batches_for_prove_sender, batches_for_prove_receiver) =
-            mpsc::channel::<BatchEnvelope<ProverInput>>(1);
+            mpsc::channel::<SignedBatchEnvelope<ProverInput>>(1);
 
         let (batches_with_proof_sender, batches_with_proof_receiver) =
-            mpsc::channel::<BatchEnvelope<FriProof>>(1);
+            mpsc::channel::<SignedBatchEnvelope<FriProof>>(1);
 
         let fri_job_manager = Arc::new(FriJobManager::new(
             batches_for_prove_receiver,
@@ -57,8 +57,8 @@ impl FriProvingPipelineStep {
 
 #[async_trait]
 impl PipelineComponent for FriProvingPipelineStep {
-    type Input = BatchEnvelope<ProverInput>;
-    type Output = BatchEnvelope<FriProof>;
+    type Input = SignedBatchEnvelope<ProverInput>;
+    type Output = SignedBatchEnvelope<FriProof>;
 
     const NAME: &'static str = "fri_proving";
     const OUTPUT_BUFFER_SIZE: usize = 5;

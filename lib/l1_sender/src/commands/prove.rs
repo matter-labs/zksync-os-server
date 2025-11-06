@@ -1,5 +1,5 @@
 use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{BatchEnvelope, FriProof, SnarkProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
 use crate::commands::L1SenderCommand;
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
@@ -15,12 +15,12 @@ const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
 
 #[derive(Debug)]
 pub struct ProofCommand {
-    batches: Vec<BatchEnvelope<FriProof>>,
+    batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,
 }
 
 impl ProofCommand {
-    pub fn new(batches: Vec<BatchEnvelope<FriProof>>, proof: SnarkProof) -> Self {
+    pub fn new(batches: Vec<SignedBatchEnvelope<FriProof>>, proof: SnarkProof) -> Self {
         Self { batches, proof }
     }
 }
@@ -40,19 +40,19 @@ impl L1SenderCommand for ProofCommand {
     }
 }
 
-impl AsRef<[BatchEnvelope<FriProof>]> for ProofCommand {
-    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+impl AsRef<[SignedBatchEnvelope<FriProof>]> for ProofCommand {
+    fn as_ref(&self) -> &[SignedBatchEnvelope<FriProof>] {
         self.batches.as_slice()
     }
 }
 
-impl AsMut<[BatchEnvelope<FriProof>]> for ProofCommand {
-    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+impl AsMut<[SignedBatchEnvelope<FriProof>]> for ProofCommand {
+    fn as_mut(&mut self) -> &mut [SignedBatchEnvelope<FriProof>] {
         self.batches.as_mut_slice()
     }
 }
 
-impl From<ProofCommand> for Vec<BatchEnvelope<FriProof>> {
+impl From<ProofCommand> for Vec<SignedBatchEnvelope<FriProof>> {
     fn from(value: ProofCommand) -> Self {
         value.batches
     }
