@@ -378,10 +378,6 @@ pub struct ProverInputGeneratorConfig {
     /// The number of blocks to replay on startup is configurable via `min_blocks_to_replay`.
     #[config(default_t = false)]
     pub force_process_old_blocks: bool,
-
-    /// Path to the directory where RiscV binaries are unpacked (server_app.bin, app_data.bin, etc)
-    #[config(default_t = "./db/app_bins".into())]
-    pub app_bin_unpack_path: PathBuf,
 }
 
 /// Only used on the Main Node.
