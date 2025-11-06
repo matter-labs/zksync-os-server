@@ -371,10 +371,6 @@ pub struct ProverInputGeneratorConfig {
     /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
     #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
-
-    /// Path to the directory where RiscV binaries are unpacked (server_app.bin, app_data.bin, etc)
-    #[config(default_t = "./db/app_bins".into())]
-    pub app_bin_unpack_path: PathBuf,
 }
 
 /// Only used on the Main Node.

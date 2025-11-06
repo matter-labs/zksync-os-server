@@ -591,10 +591,7 @@ async fn run_main_node_pipeline(
             maximum_in_flight_blocks: config
                 .prover_input_generator_config
                 .maximum_in_flight_blocks,
-            app_bin_base_path: config
-                .prover_input_generator_config
-                .app_bin_unpack_path
-                .clone(),
+            app_bin_base_path: config.general_config.rocks_db_path.join("app_bins").clone(),
             read_state: state.clone(),
         })
         .pipe(Batcher {
