@@ -601,7 +601,7 @@ async fn run_main_node_pipeline(
             startup_config: BatcherStartupConfig {
                 prev_batch_info: batcher_prev_batch_info,
                 last_committed_block: node_state_on_startup.last_l1_committed_block,
-                last_persisted_block: node_state_on_startup.repositories_persisted_block,
+                last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
             chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
@@ -834,7 +834,7 @@ fn run_fake_fri_provers(
 /// Determines the batch for node to start from.
 /// This batch is guaranteed to be already committed on L1.
 ///
-/// If no batches are committed to L1 yet, returns None.
+/// Panics if no batches are committed to L1 yet.
 async fn determine_starting_batch(
     config: &Config,
     node_startup_state: &NodeStateOnStartup,

@@ -14,8 +14,8 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// * Fixes the order (by filling in the `buffer` field);
 /// * Saves to the `proof_storage`
 /// * Sends downstream:
-///    * For already committed batches: `L1SenderCommandOrPassthrough::Passthrough`
-///    * For batches that are not yet committed: `L1SenderCommandOrPassthrough::SendToL1`
+///    * For already committed batches: `L1SenderCommand::Passthrough`
+///    * For batches that are not yet committed: `L1SenderCommand::SendToL1`
 ///
 pub struct GaplessCommitter {
     pub next_expected_batch_number: u64,

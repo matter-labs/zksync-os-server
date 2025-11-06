@@ -218,7 +218,7 @@ async fn process_prepending_passthrough_commands<Input: SendToL1>(
                         );
                         latency_tracker.enter_state(L1SenderState::WaitingSend);
                         outbound
-                            .send((*batch).with_stage(Input::MINED_STAGE))
+                            .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
                             .await?;
                     }
                 }

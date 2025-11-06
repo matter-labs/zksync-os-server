@@ -59,8 +59,7 @@ pub struct GeneralConfig {
     pub min_blocks_to_replay: usize,
 
     /// Force a block number to start replaying from.
-    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
-    /// For FullDiffs backend:
+    /// Only FullDiffs backend is supported:
     ///     On EN: can be any historical block number;
     ///     On Main Node: any historical block number up to the last l1 executed one.
     #[config(default_t = None)]

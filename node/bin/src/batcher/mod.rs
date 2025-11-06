@@ -314,7 +314,7 @@ impl Batcher {
         anyhow::ensure!(
             rebuilt_stored_batch_info.hash() == stored_stored_batch_info.hash(),
             "Rebuilt batch info does not match stored batch info for batch {}. \
-             Rebuilt hash: {:?}, Stored hash: {:?}",
+             Rebuilt info: {:?}, Stored info: {:?}",
             batch_number,
             rebuilt_stored_batch_info,
             stored_stored_batch_info

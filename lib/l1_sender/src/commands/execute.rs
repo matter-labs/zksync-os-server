@@ -31,6 +31,8 @@ impl SendToL1 for ExecuteCommand {
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
 
+    const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1Passthrough;
+
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::executeBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.batch_info.chain_address,

@@ -29,6 +29,7 @@ impl SendToL1 for ProofCommand {
     const NAME: &'static str = "prove";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
+    const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
 
     fn solidity_call(&self) -> impl SolCall {
         proveBatchesSharedBridgeCall::new((
