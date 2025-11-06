@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
         rich_wallet.address(),
         U256::zero(),
         if args.estimate_gas { GasMode::EstimateOnce }
-        else                 { GasMode::Fixed(U256::from(60_000)) },
+        else                 { GasMode::Fixed(U256::from(120_000)) },
     ).await?;
 
     // ----------  NEW: pass the RPC URL for batch-sending ----------
