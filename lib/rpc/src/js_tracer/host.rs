@@ -1,7 +1,7 @@
 use crate::js_tracer;
 use crate::js_tracer::types::{BalanceOverlay, CodeOverlay, StorageOverlay};
 use crate::js_tracer::utils::{format_hex_u256, parse_address, parse_b256};
-use alloy::primitives::{Address, B256, I256, U256};
+use alloy::primitives::{Address, B256, U256};
 use boa_engine::object::FunctionObjectBuilder;
 use boa_engine::{
     Context as BoaContext, Context, JsArgs, JsValue, NativeFunction, Source, js_string,
@@ -215,7 +215,7 @@ fn host_get_balance<V: ViewState + 'static>(
         return Ok("0x0".to_string());
     };
 
-    let balance_value = resolve_balance(env, address);
+    let balance_value = resolve_balance(env, address)?;
 
     Ok(format_hex_u256(balance_value))
 }
@@ -325,7 +325,7 @@ fn host_exists<V: ViewState + 'static>(
         return Ok(entry.value.is_some().to_string());
     }
 
-    if resolve_balance(env, address) > U256::ZERO {
+    if resolve_balance(env, address)? > U256::ZERO {
         return Ok("true".to_string());
     }
 
@@ -343,27 +343,41 @@ fn host_exists<V: ViewState + 'static>(
     Ok(exists.to_string())
 }
 
-fn resolve_balance<V: ViewState + 'static>(env: &HostEnvironment<V>, address: Address) -> U256 {
+fn resolve_balance<V: ViewState + 'static>(
+    env: &HostEnvironment<V>,
+    address: Address,
+) -> anyhow::Result<U256> {
     let delta = {
         let balance_overlay = env.balance_overlay.borrow();
-        balance_overlay.get(&address).map(|entry| entry.value)
+        balance_overlay
+            .get(&address)
+            .map(|entry| entry.value.clone())
     };
 
-    let mut balance = I256::from(
-        env.state_view
-            .borrow_mut()
-            .get_account(address)
-            .map(|props| props.balance)
-            .unwrap_or_default(),
-    );
+    let mut balance = env
+        .state_view
+        .borrow_mut()
+        .get_account(address)
+        .map(|props| props.balance)
+        .unwrap_or_default();
 
     if let Some(delta) = delta {
-        balance = balance.checked_add(delta).unwrap_or(I256::ZERO);
+        let (with_add, overflow) = balance.overflowing_add(delta.added);
+        if overflow {
+            anyhow::bail!("balance overflow when applying balance delta for account {address:?}");
+        }
+
+        balance = with_add;
+        if delta.removed != U256::ZERO {
+            let (with_sub, overflow) = balance.overflowing_sub(delta.removed);
+            if overflow {
+                anyhow::bail!(
+                    "balance underflow when applying balance delta for account {address:?}"
+                );
+            }
+            balance = with_sub;
+        }
     }
 
-    if balance < I256::ZERO {
-        U256::ZERO
-    } else {
-        U256::from(balance)
-    }
+    Ok(balance)
 }

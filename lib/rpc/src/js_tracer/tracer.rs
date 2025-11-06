@@ -1,18 +1,18 @@
 use crate::js_tracer::{
     host::init_host_env_in_boa_context,
     types::{
-        BalanceOverlay, CodeOverlay, CreateType, OverlayEntry, StepCtx, StorageOverlay,
-        TracerMethod, TxContext,
+        BalanceDelta, BalanceOverlay, CodeOverlay, CreateType, OverlayEntry, StepCtx,
+        StorageOverlay, TracerMethod, TxContext,
     },
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
 use alloy::hex::ToHexExt;
-use alloy::primitives::{Address, B256, Bytes, I256, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::ops::{Neg, Not};
+use std::ops::Not;
 use std::{cell::RefCell, collections::hash_map::Entry, hash::Hash, rc::Rc};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
@@ -486,36 +486,42 @@ impl JsTracer {
         })
     }
 
-    fn apply_balance_delta(&mut self, address: Address, delta: I256) {
-        if delta == I256::ZERO {
-            return;
+    fn apply_balance_delta(
+        &mut self,
+        address: Address,
+        credit: U256,
+        debit: U256,
+    ) -> anyhow::Result<()> {
+        if credit == U256::ZERO && debit == U256::ZERO {
+            return Ok(());
         }
 
         let mut overlay = self.balance_overlay.borrow_mut();
         match overlay.entry(address) {
             Entry::Occupied(mut occupied) => {
-                let mut remove_entry = false;
-                {
-                    let entry = occupied.get_mut();
-                    if entry.committed && entry.previous.is_none() {
-                        entry.previous = Some(entry.value);
-                    }
-                    entry.value += delta;
-                    entry.committed = false;
-
-                    if entry.value.is_zero() && entry.previous.is_none() {
-                        remove_entry = true;
-                    }
+                let entry = occupied.get_mut();
+                if entry.committed && entry.previous.is_none() {
+                    entry.previous = Some(entry.value.clone());
                 }
+                entry.value.credit(credit)?;
+                entry.value.debit(debit)?;
+                entry.committed = false;
 
-                if remove_entry {
+                if entry.value.is_empty() && entry.previous.is_none() {
                     occupied.remove_entry();
                 }
             }
             Entry::Vacant(vacant) => {
-                vacant.insert(OverlayEntry::new_pending(delta));
+                let mut delta = BalanceDelta::default();
+                delta.credit(credit)?;
+                delta.debit(debit)?;
+                if !delta.is_empty() {
+                    vacant.insert(OverlayEntry::new_pending(delta));
+                }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -534,9 +540,15 @@ impl EvmTracer for JsTracer {
 
         let call_value = request.nominal_token_value();
         if call_value != U256::ZERO {
-            let value_i256 = I256::from(call_value);
-            self.apply_balance_delta(request.caller(), value_i256.neg());
-            self.apply_balance_delta(request.callee(), value_i256);
+            if let Err(err) = self.apply_balance_delta(request.caller(), U256::ZERO, call_value) {
+                tracing::error!("Caller balance change failed on call enter: {:?}", err);
+                self.record_error(TracerMethod::Enter, err);
+            }
+
+            if let Err(err) = self.apply_balance_delta(request.callee(), call_value, U256::ZERO) {
+                tracing::error!("Callee balance change failed on call enter: {:?}", err);
+                self.record_error(TracerMethod::Enter, err);
+            }
         }
 
         let call_type = self.consume_call_type(request.modifier());
@@ -796,7 +808,26 @@ impl EvmTracer for JsTracer {
         self.invoke_method(TracerMethod::Fault, &obj);
     }
 
-    fn on_selfdestruct(&mut self, _: Address, _: U256, _: impl EvmFrameInterface) {}
+    fn on_selfdestruct(
+        &mut self,
+        beneficiary: Address,
+        token_value: U256,
+        frame_state: impl EvmFrameInterface,
+    ) {
+        if token_value == U256::ZERO {
+            return;
+        }
+
+        if let Err(err) = self.apply_balance_delta(frame_state.address(), U256::ZERO, token_value) {
+            tracing::error!("Caller balance change failed on call enter: {:?}", err);
+            self.record_error(TracerMethod::Enter, err);
+        }
+
+        if let Err(err) = self.apply_balance_delta(beneficiary, token_value, U256::ZERO) {
+            tracing::error!("Callee balance change failed on call enter: {:?}", err);
+            self.record_error(TracerMethod::Enter, err);
+        }
+    }
 
     fn on_create_request(&mut self, is_create2: bool) {
         self.pending_create_type = Some(if is_create2 {

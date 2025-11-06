@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, Bytes, I256, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug)]
@@ -51,7 +51,49 @@ impl<V> OverlayEntry<V> {
 
 pub type StorageOverlay = HashMap<(Address, B256), OverlayEntry<B256>>;
 pub type CodeOverlay = HashMap<Address, OverlayEntry<Option<Vec<u8>>>>;
-pub type BalanceOverlay = HashMap<Address, OverlayEntry<I256>>;
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BalanceDelta {
+    pub added: U256,
+    pub removed: U256,
+}
+
+impl BalanceDelta {
+    pub fn credit(&mut self, amount: U256) -> anyhow::Result<()> {
+        if amount == U256::ZERO {
+            return Ok(());
+        }
+
+        let (new_total, overflow) = self.added.overflowing_add(amount);
+        if overflow {
+            anyhow::bail!("Balance credit overflow");
+        }
+
+        self.added = new_total;
+
+        Ok(())
+    }
+
+    pub fn debit(&mut self, amount: U256) -> anyhow::Result<()> {
+        if amount == U256::ZERO {
+            return Ok(());
+        }
+
+        let (new_total, overflow) = self.removed.overflowing_add(amount);
+        if overflow {
+            anyhow::bail!("Balance debit overflow");
+        }
+
+        self.removed = new_total;
+
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.added == U256::ZERO && self.removed == U256::ZERO
+    }
+}
+
+pub type BalanceOverlay = HashMap<Address, OverlayEntry<BalanceDelta>>;
 
 pub(crate) struct StepCtx {
     pub opcode: u8,
