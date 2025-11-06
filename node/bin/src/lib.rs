@@ -49,11 +49,12 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
@@ -675,6 +676,9 @@ async fn run_main_node_pipeline(
             batcher_config: config.batcher_config.clone(),
             prev_batch_info: last_committed_batch_info,
         })
+        .pipe(BatchVerificationPipelineStep::new(
+            config.batch_verification_config.into(),
+        ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
             next_expected: node_state_on_startup.l1_state.last_committed_batch + 1,
@@ -754,7 +758,17 @@ async fn run_en_pipeline(
                 .then(|| RevmConsistencyChecker::new(state.clone())),
         )
         .pipe(TreeManager { tree: tree.clone() })
-        .pipe(NoOpSink::new())
+        .pipe_if(
+            config.batch_verification_config.client_enabled,
+            BatchVerificationClient::new(
+                finality.clone(),
+                config.batch_verification_config.signing_key.clone(),
+                config.genesis_config.chain_id.unwrap(),
+                *node_state_on_startup.l1_state.diamond_proxy.address(),
+                config.batch_verification_config.connect_address,
+            ),
+            NoOpSink::new(),
+        )
         .spawn(tasks);
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
@@ -802,7 +816,7 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
 async fn get_committed_not_proven_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-) -> anyhow::Result<Vec<BatchEnvelope<FriProof>>> {
+) -> anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>> {
     let mut batch_to_prove = l1_state.last_proved_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_prove <= l1_state.last_committed_batch {
@@ -819,7 +833,7 @@ async fn get_committed_not_proven_batches(
 async fn get_proven_not_executed_batches(
     l1_state: &L1State,
     proof_storage: &ProofStorage,
-) -> Result<Vec<BatchEnvelope<FriProof>>> {
+) -> Result<Vec<SignedBatchEnvelope<FriProof>>> {
     let mut batch_to_execute = l1_state.last_executed_batch + 1;
     let mut batches_to_reschedule = Vec::new();
     while batch_to_execute <= l1_state.last_proved_batch {

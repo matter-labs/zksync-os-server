@@ -2,7 +2,7 @@ use super::snark_job_manager::SnarkJobManager;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
@@ -18,7 +18,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// - HTTP server (provers call pick_next_job, submit_proof, etc.)
 /// - Fake provers pool
 pub struct SnarkProvingPipelineStep {
-    batches_for_prove_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+    batches_for_prove_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     proof_commands_receiver: mpsc::Receiver<ProofCommand>,
 }
 
@@ -29,7 +29,7 @@ impl SnarkProvingPipelineStep {
         //            to group multiple batches (FRI proofs) to a single SNARK
         //            (on `pick_snark_job` request, it consumes messages from the inbound channel up until `max_fris_per_snark`)
         let (batches_for_prove_sender, batches_for_prove_receiver) =
-            mpsc::channel::<BatchEnvelope<FriProof>>(max_fris_per_snark);
+            mpsc::channel::<SignedBatchEnvelope<FriProof>>(max_fris_per_snark);
 
         let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(1);
 
@@ -50,7 +50,7 @@ impl SnarkProvingPipelineStep {
 
 #[async_trait]
 impl PipelineComponent for SnarkProvingPipelineStep {
-    type Input = BatchEnvelope<FriProof>;
+    type Input = SignedBatchEnvelope<FriProof>;
     type Output = ProofCommand;
 
     const NAME: &'static str = "snark_proving";

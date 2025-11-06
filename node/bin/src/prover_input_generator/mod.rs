@@ -1,4 +1,3 @@
-use crate::tree_manager::BlockMerkleTreeData;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
@@ -8,6 +7,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
