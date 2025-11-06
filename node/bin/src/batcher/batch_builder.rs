@@ -2,8 +2,11 @@ use alloy::primitives::Address;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
+use zksync_os_l1_sender::batcher_model::{
+    BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
+};
 use zksync_os_l1_sender::commitment::BatchInfo;
+
 use zksync_os_storage_api::ReplayRecord;
 
 /// Takes a vector of blocks and produces a batch envelope.
@@ -19,7 +22,7 @@ pub(crate) fn seal_batch(
     batch_number: u64,
     chain_id: u64,
     chain_address: Address,
-) -> anyhow::Result<BatchEnvelope<ProverInput>> {
+) -> anyhow::Result<BatchForSigning<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let execution_version = blocks.first().unwrap().1.block_context.execution_version;
@@ -51,7 +54,7 @@ pub(crate) fn seal_batch(
             )
             .collect();
 
-    let batch_envelope: BatchEnvelope<ProverInput> = BatchEnvelope::new(
+    let batch_envelope = BatchEnvelope::new(
         BatchMetadata {
             previous_stored_batch_info: prev_batch_info,
             batch_info,

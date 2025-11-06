@@ -196,6 +196,7 @@ impl Tester {
             status_server_config,
             observability_config: Default::default(),
             gas_adjuster_config: Default::default(),
+            batch_verification_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;

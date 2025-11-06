@@ -9,6 +9,7 @@ use smart_config::{
     de::{Delimited, Optional},
 };
 use std::{path::PathBuf, time::Duration};
+use zksync_os_batch_verification;
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -37,6 +38,7 @@ pub struct Config {
     pub status_server_config: StatusServerConfig,
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
+    pub batch_verification_config: BatchVerificationConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -547,6 +549,43 @@ pub struct OtlpConfig {
     pub logging_endpoint: Option<String>,
 }
 
+/// Configuration for batch verification client and server
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BatchVerificationConfig {
+    /// [server] If we are collecting batch verification signatures
+    #[config(default_t = false)]
+    pub server_enabled: bool,
+    /// [server] Batch verification server address to listen on.
+    #[config(default_t = "0.0.0.0:3072".into())]
+    pub listen_address: String,
+    /// [en] If we are signing batches
+    #[config(default_t = false)]
+    pub client_enabled: bool,
+    /// [en] Batch verification server address to connect to.
+    #[config(default_t = "127.0.0.1:3072".into())]
+    pub connect_address: String,
+    /// [server] Threshold (number of needed signatures)
+    #[config(default_t = 1)]
+    pub threshold: usize,
+    /// [server] Accepted signer pubkeys
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()])]
+    pub accepted_signers: Vec<String>,
+    /// [server] Iteration timeout
+    #[config(default_t = Duration::from_secs(5))]
+    pub request_timeout: Duration,
+    /// [server] Retry delay between attempts
+    #[config(default_t = Duration::from_secs(1))]
+    pub retry_delay: Duration,
+    /// [server] Total timeout
+    #[config(default_t = Duration::from_secs(300))]
+    pub total_timeout: Duration,
+    /// [en] Signing key
+    // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
+    #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
+    pub signing_key: SecretString,
+}
+
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     fn from(c: RpcConfig) -> Self {
         Self {
@@ -643,6 +682,23 @@ impl From<RebuildBlocksConfig> for RebuildOptions {
         Self {
             rebuild_from_block: c.from_block,
             blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
+        }
+    }
+}
+
+impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerificationConfig {
+    fn from(c: BatchVerificationConfig) -> Self {
+        Self {
+            server_enabled: c.server_enabled,
+            listen_address: c.listen_address,
+            client_enabled: c.client_enabled,
+            connect_address: c.connect_address,
+            threshold: c.threshold,
+            accepted_signers: c.accepted_signers,
+            request_timeout: c.request_timeout,
+            retry_delay: c.retry_delay,
+            total_timeout: c.total_timeout,
+            signing_key: c.signing_key,
         }
     }
 }

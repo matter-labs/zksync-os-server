@@ -1,5 +1,5 @@
 use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use alloy::sol_types::SolCall;
 use itertools::Itertools;
 use std::fmt::Display;
@@ -9,9 +9,9 @@ pub mod execute;
 pub mod prove;
 
 pub trait L1SenderCommand:
-    Into<Vec<BatchEnvelope<FriProof>>>
-    + AsRef<[BatchEnvelope<FriProof>]>
-    + AsMut<[BatchEnvelope<FriProof>]>
+    Into<Vec<SignedBatchEnvelope<FriProof>>>
+    + AsRef<[SignedBatchEnvelope<FriProof>]>
+    + AsMut<[SignedBatchEnvelope<FriProof>]>
     + Display
 {
     const NAME: &'static str;

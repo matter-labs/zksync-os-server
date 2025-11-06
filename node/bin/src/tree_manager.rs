@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
+use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::{
@@ -14,10 +15,6 @@ use zksync_os_merkle_tree::{
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
-pub struct BlockMerkleTreeData {
-    pub block_start: MerkleTreeVersion,
-    pub block_end: MerkleTreeVersion,
-}
 
 #[derive(Debug)]
 pub(crate) struct TreeManager {

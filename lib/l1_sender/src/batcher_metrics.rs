@@ -9,6 +9,8 @@ use vise::{Counter, EncodeLabelValue};
 #[metrics(label = "stage", rename_all = "snake_case")]
 pub enum BatchExecutionStage {
     BatchSealed,
+    SigningStarted,
+    BatchSigned,
     ProverInputStarted,
     FriProverPicked,
     FriProvedReal,

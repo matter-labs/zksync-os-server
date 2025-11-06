@@ -1,5 +1,5 @@
 use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::L1SenderCommand;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
@@ -9,13 +9,13 @@ use zksync_os_contract_interface::{IExecutor, InteropRoot};
 
 #[derive(Debug)]
 pub struct ExecuteCommand {
-    batches: Vec<BatchEnvelope<FriProof>>,
+    batches: Vec<SignedBatchEnvelope<FriProof>>,
     priority_ops: Vec<PriorityOpsBatchInfo>,
 }
 
 impl ExecuteCommand {
     pub fn new(
-        batches: Vec<BatchEnvelope<FriProof>>,
+        batches: Vec<SignedBatchEnvelope<FriProof>>,
         priority_ops: Vec<PriorityOpsBatchInfo>,
     ) -> Self {
         assert_eq!(batches.len(), priority_ops.len());
@@ -41,19 +41,19 @@ impl L1SenderCommand for ExecuteCommand {
     }
 }
 
-impl AsRef<[BatchEnvelope<FriProof>]> for ExecuteCommand {
-    fn as_ref(&self) -> &[BatchEnvelope<FriProof>] {
+impl AsRef<[SignedBatchEnvelope<FriProof>]> for ExecuteCommand {
+    fn as_ref(&self) -> &[SignedBatchEnvelope<FriProof>] {
         self.batches.as_slice()
     }
 }
 
-impl AsMut<[BatchEnvelope<FriProof>]> for ExecuteCommand {
-    fn as_mut(&mut self) -> &mut [BatchEnvelope<FriProof>] {
+impl AsMut<[SignedBatchEnvelope<FriProof>]> for ExecuteCommand {
+    fn as_mut(&mut self) -> &mut [SignedBatchEnvelope<FriProof>] {
         self.batches.as_mut_slice()
     }
 }
 
-impl From<ExecuteCommand> for Vec<BatchEnvelope<FriProof>> {
+impl From<ExecuteCommand> for Vec<SignedBatchEnvelope<FriProof>> {
     fn from(value: ExecuteCommand) -> Self {
         value.batches
     }
