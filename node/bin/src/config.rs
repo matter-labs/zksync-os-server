@@ -103,7 +103,7 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some("0x3848fa2dfbf2edc52faad2edc1cb59368f99ec90".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("0xdb1730b6dd6ca0ed1600bb16cce2af6f373a6fce".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
@@ -264,19 +264,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x8fe5df50fb6f5cf3a274bc02933c6df97aef5d0d7a2232ba99ce5ea0b09d29e3".into())]
+    #[config(alias = "operator_private_key", default_t = "0x4551b4333b4b69fdbb0078382b0a45fb00a236cec2e7de06175c9de57e6a50e5".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xaa0a72cc362b4ce66b6083ca435adcfb8c4c41f8602b27a3fe5826d4f5b60803".into())]
+    #[config(default_t = "0xe757ce5295d1bbf71a82cac96d2d8acd4b221b5d5b4e606e2882499da10c1e40".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xc89fac03712cbae6a0c3702ad9c23f152e3a57964a5a8d984f80d8bf99964022".into())]
+    #[config(default_t = "0xe45d06855879d676647d92802459b8592d21f09da191247f3b08818ea55200a6".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
