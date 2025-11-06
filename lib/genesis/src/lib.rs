@@ -58,6 +58,7 @@ pub struct Genesis {
     zk_chain: ZkChain<DynProvider>,
     state: OnceCell<GenesisState>,
     genesis_upgrade_tx: OnceCell<GenesisUpgradeTxInfo>,
+    chain_id: u64,
 }
 
 impl Debug for Genesis {
@@ -72,18 +73,23 @@ impl Debug for Genesis {
 }
 
 impl Genesis {
-    pub fn new(input_source: Arc<dyn GenesisInputSource>, zk_chain: ZkChain<DynProvider>) -> Self {
+    pub fn new(
+        input_source: Arc<dyn GenesisInputSource>,
+        zk_chain: ZkChain<DynProvider>,
+        chain_id: u64,
+    ) -> Self {
         Self {
             input_source,
             zk_chain,
             state: OnceCell::new(),
             genesis_upgrade_tx: OnceCell::new(),
+            chain_id,
         }
     }
 
     pub async fn state(&self) -> &GenesisState {
         self.state
-            .get_or_try_init(|| build_genesis(self.input_source.as_ref()))
+            .get_or_try_init(|| build_genesis(self.input_source.as_ref(), self.chain_id))
             .await
             .expect("Failed to build genesis state")
     }
@@ -116,6 +122,7 @@ pub struct GenesisState {
 
 async fn build_genesis(
     genesis_input_source: &dyn GenesisInputSource,
+    chain_id: u64,
 ) -> anyhow::Result<GenesisState> {
     let genesis_input = genesis_input_source.genesis_input().await?;
 
@@ -184,8 +191,7 @@ async fn build_genesis(
     };
 
     let context = BlockContext {
-        // todo: This shouldn't matter for genesis, right? maybe populate anyways
-        chain_id: 0,
+        chain_id,
         block_number: 0,
         block_hashes: Default::default(),
         timestamp: 0,
@@ -197,6 +203,7 @@ async fn build_genesis(
         pubdata_limit: 100_000_000,
         mix_hash: U256::ZERO,
         execution_version: genesis_input.execution_version,
+        blob_fee: U256::ZERO,
     };
 
     Ok(GenesisState {

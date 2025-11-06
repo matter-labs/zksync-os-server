@@ -4,8 +4,13 @@ use crate::{
 };
 use alloy::primitives::{B256, FixedBytes};
 use zk_ee::utils::Bytes32;
+use zk_ee_0_0_26::utils::Bytes32 as Bytes32V26;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
+use zk_os_basic_system_0_0_26::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafV26;
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
+use zk_os_forward_system_0_0_26::run::{
+    LeafProof as LeafProofV26, ReadStorage as ReadStorageV26, ReadStorageTree as ReadStorageTreeV26,
+};
 
 pub struct MerkleTreeVersion<DB: Database = RocksDBWrapper, P: TreeParams = DefaultTreeParams> {
     pub tree: MerkleTree<DB, P>,
@@ -57,10 +62,16 @@ impl<DB: Database, P: TreeParams> MerkleTreeVersion<DB, P> {
 
 impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorage for MerkleTreeVersion<DB, P> {
     fn read(&mut self, key: Bytes32) -> Option<Bytes32> {
-        self.tree_index(key).and_then(|index| {
+        <Self as ReadStorageTree>::tree_index(self, key).and_then(|index| {
             self.traverse_to_leaf(index)
                 .map(|Leaf { value, .. }| fixed_bytes_to_bytes32(value))
         })
+    }
+}
+
+impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageV26 for MerkleTreeVersion<DB, P> {
+    fn read(&mut self, key: Bytes32V26) -> Option<Bytes32V26> {
+        <Self as ReadStorage>::read(self, key.as_u8_array().into()).map(|v| v.as_u8_array().into())
     }
 }
 
@@ -170,6 +181,37 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTree for Merkle
                 ..
             } => *index,
         }
+    }
+}
+
+impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageTreeV26
+    for MerkleTreeVersion<DB, P>
+{
+    fn tree_index(&mut self, key: Bytes32V26) -> Option<u64> {
+        <Self as ReadStorageTree>::tree_index(self, key.as_u8_array().into())
+    }
+
+    fn merkle_proof(&mut self, tree_index: u64) -> LeafProofV26 {
+        let proof = <Self as ReadStorageTree>::merkle_proof(self, tree_index);
+        let mut path = Box::new([Bytes32V26::zero(); 64]);
+
+        for i in 0..64 {
+            path[i] = proof.path[i].as_u8_array().into();
+        }
+
+        LeafProofV26::new(
+            proof.index,
+            FlatStorageLeafV26 {
+                key: proof.leaf.key.as_u8_array().into(),
+                value: proof.leaf.value.as_u8_array().into(),
+                next: proof.leaf.next,
+            },
+            path,
+        )
+    }
+
+    fn prev_tree_index(&mut self, key: Bytes32V26) -> u64 {
+        <Self as ReadStorageTree>::prev_tree_index(self, key.as_u8_array().into())
     }
 }
 

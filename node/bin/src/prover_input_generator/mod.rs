@@ -8,10 +8,11 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
+use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
-use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
+use zksync_os_multivm::{AbiTxSource, ExecutionVersion, proving_run_execution_version};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
@@ -117,10 +118,48 @@ fn compute_prover_input(
                 unreachable!("proving_run_execution_version does not return 1 or 2")
             } // we prove v1 and v2 blocks with v3, it's reflected in `proving_run_execution_version`
             ExecutionVersion::V3 => {
-                use zk_ee::{common_structs::ProofData, system::metadata::BlockMetadataFromOracle};
+                use zk_ee_0_0_26::{
+                    common_structs::ProofData, system::metadata::BlockMetadataFromOracle,
+                };
+                use zk_os_forward_system_0_0_26::run::{
+                    StorageCommitment, convert::FromInterface, generate_proof_input,
+                };
+
+                let initial_storage_commitment = StorageCommitment {
+                    root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+                    next_free_slot: leaf_count,
+                };
+
+                let list_source = AbiTxSource::new(TxListSource { transactions });
+
+                let bin_path = if enable_logging {
+                    zksync_os_multivm::apps::v3::singleblock_batch_logging_enabled_path(
+                        &app_bin_base_path,
+                    )
+                } else {
+                    zksync_os_multivm::apps::v3::singleblock_batch_path(&app_bin_base_path)
+                };
+
+                generate_proof_input(
+                    bin_path,
+                    BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                    ProofData {
+                        state_root_view: initial_storage_commitment,
+                        last_block_timestamp: replay_record.previous_block_timestamp,
+                    },
+                    tree_view,
+                    state_view,
+                    list_source,
+                )
+                .expect("proof gen failed")
+            }
+            ExecutionVersion::V4 => {
+                use zk_ee::{
+                    common_structs::ProofData,
+                    system::metadata::zk_metadata::BlockMetadataFromOracle,
+                };
                 use zk_os_forward_system::run::{
                     StorageCommitment, convert::FromInterface, generate_proof_input,
-                    test_impl::TxListSource,
                 };
 
                 let initial_storage_commitment = StorageCommitment {
@@ -131,9 +170,11 @@ fn compute_prover_input(
                 let list_source = TxListSource { transactions };
 
                 let bin_path = if enable_logging {
-                    zksync_os_multivm::apps::v3::server_app_logging_enabled_path(&app_bin_base_path)
+                    zksync_os_multivm::apps::v4::singleblock_batch_logging_enabled_path(
+                        &app_bin_base_path,
+                    )
                 } else {
-                    zksync_os_multivm::apps::v3::server_app_path(&app_bin_base_path)
+                    zksync_os_multivm::apps::v4::singleblock_batch_path(&app_bin_base_path)
                 };
 
                 generate_proof_input(

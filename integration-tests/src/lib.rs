@@ -204,7 +204,7 @@ impl Tester {
         if enable_prover {
             let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
-                zksync_os_multivm::apps::v3::multiblock_batch_path(&rocks_db_path.join("app_bins"));
+                zksync_os_multivm::apps::v4::multiblock_batch_path(&rocks_db_path.join("app_bins"));
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
@@ -219,6 +219,7 @@ impl Tester {
                     fri_path: None,
                     max_snark_latency: None,
                     max_fris_per_snark: Some(1),
+                    disable_zk: true,
                 })
                 .await
             });

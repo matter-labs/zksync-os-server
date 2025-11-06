@@ -173,7 +173,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
 
-    let genesis = Genesis::new(genesis_input_source.clone(), l1_state.diamond_proxy.clone());
+    let genesis = Genesis::new(
+        genesis_input_source.clone(),
+        l1_state.diamond_proxy.clone(),
+        chain_id,
+    );
 
     tracing::info!("Initializing BlockReplayStorage");
 

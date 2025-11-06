@@ -7,7 +7,7 @@ use tokio::{
 };
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::NopTracer;
-use zksync_os_interface::traits::{NextTxResponse, TxResultCallback, TxSource};
+use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxResultCallback, TxSource};
 use zksync_os_interface::types::{BlockContext, BlockOutput, TxProcessingOutputOwned};
 use zksync_os_storage_api::ViewState;
 
@@ -58,7 +58,7 @@ impl VmWrapper {
     /// to finish the block.
     pub async fn execute_next_tx(
         &mut self,
-        raw_tx: Vec<u8>,
+        raw_tx: EncodedTx,
     ) -> anyhow::Result<Result<TxProcessingOutputOwned, InvalidTransaction>> {
         let total_observer = EXECUTION_METRICS.tx_execution[&"total"].start();
         let sending_observer = EXECUTION_METRICS.tx_execution[&"sending"].start();

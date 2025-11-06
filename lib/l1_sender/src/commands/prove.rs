@@ -139,6 +139,7 @@ impl ProofCommand {
             // v2 and up are available under their respective execution version.
             Some(2) => 2,
             Some(3) => 3,
+            Some(4) => 4,
             Some(execution_version) => panic!(
                 "unsupported execution version: {execution_version}; there's no verifier defined for it"
             ),
