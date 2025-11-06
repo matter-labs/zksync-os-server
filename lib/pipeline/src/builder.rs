@@ -92,26 +92,4 @@ impl<Output: Send + 'static> Pipeline<Output> {
             false => self.pipe(c_false),
         }
     }
-
-    /// Add a transformer component to the pipeline with prepended messages
-    ///
-    /// This is useful when you need to reschedule messages at the start of the pipeline.
-    /// The prepended messages are sent to the component before any messages from the pipeline.
-    pub fn pipe_with_prepend<C>(mut self, component: C, prepend: Vec<Output>) -> Pipeline<C::Output>
-    where
-        C: PipelineComponent<Input = Output>,
-    {
-        let (output_sender, output_receiver) = mpsc::channel(C::OUTPUT_BUFFER_SIZE);
-        let input_receiver = self.receiver.prepend(prepend);
-
-        self.tasks.push((
-            C::NAME,
-            async move { component.run(input_receiver, output_sender).await }.boxed(),
-        ));
-
-        Pipeline {
-            tasks: self.tasks,
-            receiver: PeekableReceiver::new(output_receiver),
-        }
-    }
 }

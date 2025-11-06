@@ -1,6 +1,6 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
-use crate::commands::L1SenderCommand;
+use crate::commands::SendToL1;
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
@@ -25,10 +25,11 @@ impl ProofCommand {
     }
 }
 
-impl L1SenderCommand for ProofCommand {
+impl SendToL1 for ProofCommand {
     const NAME: &'static str = "prove";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
+    const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
 
     fn solidity_call(&self) -> impl SolCall {
         proveBatchesSharedBridgeCall::new((

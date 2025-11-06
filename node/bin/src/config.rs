@@ -59,10 +59,9 @@ pub struct GeneralConfig {
     pub min_blocks_to_replay: usize,
 
     /// Force a block number to start replaying from.
-    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
-    /// For FullDiffs backend:
+    /// Only FullDiffs backend is supported:
     ///     On EN: can be any historical block number;
-    ///     On Main Node: any historical block number up to the last l1 committed one.
+    ///     On Main Node: any historical block number up to the last l1 executed one.
     #[config(default_t = None)]
     pub force_starting_block_number: Option<u64>,
 
@@ -372,12 +371,6 @@ pub struct ProverInputGeneratorConfig {
     /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
     #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
-
-    /// Normally, the Prover input generator skips the blocks that are already FRI proved and committed to L1.
-    /// When this option is enabled, it will reprocess all the blocks replayed by the node on startup.
-    /// The number of blocks to replay on startup is configurable via `min_blocks_to_replay`.
-    #[config(default_t = false)]
-    pub force_process_old_blocks: bool,
 }
 
 /// Only used on the Main Node.

@@ -8,7 +8,15 @@ pub mod commit;
 pub mod execute;
 pub mod prove;
 
-pub trait L1SenderCommand:
+/// Batches that are already committed/proved may also go through the pipeline.
+/// For such batches, a Passthrough variant is generated.
+/// For batches that have to be processed on L1, a SendToL1 variant is used.
+pub enum L1SenderCommand<Command: SendToL1> {
+    SendToL1(Command),
+    Passthrough(Box<SignedBatchEnvelope<FriProof>>),
+}
+
+pub trait SendToL1:
     Into<Vec<SignedBatchEnvelope<FriProof>>>
     + AsRef<[SignedBatchEnvelope<FriProof>]>
     + AsMut<[SignedBatchEnvelope<FriProof>]>
@@ -17,6 +25,7 @@ pub trait L1SenderCommand:
     const NAME: &'static str;
     const SENT_STAGE: BatchExecutionStage;
     const MINED_STAGE: BatchExecutionStage;
+    const PASSTHROUGH_STAGE: BatchExecutionStage;
     fn solidity_call(&self) -> impl SolCall;
 
     /// Only used for logging - as we send commands in bulk, it's natural to print a single range

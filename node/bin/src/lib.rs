@@ -18,7 +18,7 @@ pub mod tree_manager;
 pub mod zkstack_config;
 
 use crate::batch_sink::{BatchSink, NoOpSink};
-use crate::batcher::{Batcher, util::load_genesis_stored_batch_info};
+use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
 use crate::en_remote_config::load_remote_config;
@@ -41,7 +41,7 @@ use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::network::EthereumWallet;
 use alloy::providers::{Provider, WalletProvider};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::FutureExt;
 use ruint::aliases::U256;
 use std::path::Path;
@@ -51,10 +51,11 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
-use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
@@ -73,8 +74,8 @@ use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteReplay,
-    WriteRepository, WriteState,
+    FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
+    WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
@@ -239,66 +240,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let desired_starting_block = if let Some(forced_starting_block_number) =
-        config.general_config.force_starting_block_number
-    {
-        forced_starting_block_number
-    } else {
-        [
-            node_startup_state
-                .block_replay_storage_last_block
-                .saturating_sub(config.general_config.min_blocks_to_replay as u64),
-            node_startup_state.last_l1_committed_block + 1,
-            node_startup_state.repositories_persisted_block + 1,
-            node_startup_state.tree_last_block + 1,
-            state.block_range_available().end() + 1,
-        ]
-        .into_iter()
-        .chain(
-            config
-                .sequencer_config
-                .block_rebuild
-                .as_ref()
-                .map(|c| c.from_block),
-        )
-        .min()
-        .unwrap()
-        .max(1)
-    };
-
-    let starting_block = if desired_starting_block < state.block_range_available().start() + 1 {
-        // Starting from 1 used to work but with the current compacted state implementation it panics.
-        // The approach has to be re-evaluated if we want to keep compacted storage impl and what to do in this case.
-        // For now just panic early.
-        // TODO(compacted state): re-evaluate the approach.
-        panic!(
-            "Cannot start: desired_starting_block < state.block_range_available().start() + 1: {} < {}",
-            desired_starting_block,
-            state.block_range_available().start() + 1
-        );
-
-        // tracing::warn!(
-        //     desired_starting_block,
-        //     config.general_config.force_starting_block_number,
-        //     min_block_available_in_state = state.block_range_available().start() + 1,
-        //     "Desired starting block is not available in state. Starting from zero."
-        // );
-        // 1
-    } else {
-        desired_starting_block
-    };
-
-    tracing::info!(
-        config.general_config.min_blocks_to_replay,
-        config.general_config.force_starting_block_number,
-        ?node_startup_state,
-        starting_block,
-        "Node state on startup"
-    );
-
-    node_startup_state.assert_consistency();
-
-    tracing::info!("Initializing L1 Watchers");
     let finality_storage = Finality::new(FinalityStatus {
         last_committed_block: last_l1_committed_block,
         last_committed_batch: l1_state.last_committed_batch,
@@ -306,6 +247,44 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_executed_batch: l1_state.last_executed_batch,
     });
 
+    // `starting_block` - the block number to go through the pipeline.
+    // `batcher_prev_batch_info` - to be used by batcher to (re)build its first batch.
+    let (starting_block, batcher_prev_batch_info) =
+        if node_startup_state.l1_state.last_committed_batch > 0 {
+            // Some batches committed - starting from an already committed batch
+            let starting_batch = determine_starting_batch(
+                &config,
+                &node_startup_state,
+                &state,
+                &batch_storage,
+                &finality_storage,
+            )
+            .await;
+            (
+                starting_batch.first_block_number,
+                starting_batch.previous_stored_batch_info,
+            )
+        } else {
+            // No batches committed - starting from block/batch 1.
+            (
+                1,
+                genesis_stored_batch_info(&repositories, &tree_db, &genesis).await,
+            )
+        };
+
+    tracing::info!(
+        config.general_config.min_blocks_to_replay,
+        config.general_config.force_starting_block_number,
+        ?node_startup_state,
+        starting_block,
+        starting_batch_number = batcher_prev_batch_info.batch_number + 1,
+        blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
+        "Node state on startup"
+    );
+
+    node_startup_state.assert_consistency();
+
+    tracing::info!("Initializing L1 Watchers");
     let mut tasks: JoinSet<()> = JoinSet::new();
     tasks.spawn(
         L1CommitWatcher::new(
@@ -495,9 +474,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             finality_storage,
             chain_id,
-            &genesis,
             _stop_receiver.clone(),
             tx_acceptance_state_sender,
+            batcher_prev_batch_info,
         )
         .await;
     } else {
@@ -541,69 +520,21 @@ async fn run_main_node_pipeline(
     tree: MerkleTree<RocksDBWrapper>,
     finality: impl ReadFinality + Clone,
     chain_id: u64,
-    genesis: &Genesis,
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
+    batcher_prev_batch_info: StoredBatchInfo,
 ) {
-    let last_committed_batch_info = if node_state_on_startup.l1_state.last_committed_batch == 0 {
-        let genesis_block = repositories
-            .get_block_by_number(0)
-            .expect("Failed to read genesis block from repositories")
-            .expect("Missing genesis block in repositories");
-        load_genesis_stored_batch_info(
-            genesis_block,
-            tree.clone(),
-            genesis.state().await.expected_genesis_root,
-        )
-        .await
-        .unwrap()
-    } else {
-        batch_storage
-            .get_batch_with_proof(node_state_on_startup.l1_state.last_committed_batch)
-            .await
-            .expect("Failed to get last committed block from proof storage")
-            .expect("Committed batch is not present in proof storage")
-            .batch
-            .batch_info
-            .into_stored()
-    };
-
-    // There may be batches that are Committed but not Proven on L1 yet, or Proven but not Executed yet.
-    // We will reschedule them by loading `BatchEnvelope`s from ProofStorage
-    // and sending them to the corresponding channels.
-    let committed_not_proven_batches =
-        get_committed_not_proven_batches(&node_state_on_startup.l1_state, &batch_storage)
-            .await
-            .expect("Cannot get committed not proven batches");
-
-    let proven_not_executed_batches =
-        get_proven_not_executed_batches(&node_state_on_startup.l1_state, &batch_storage)
-            .await
-            .expect("Cannot get proven not executed batches");
-
-    let batcher_subsystem_first_block_to_process =
-        node_state_on_startup.last_l1_committed_block + 1;
-
-    let prover_input_generation_first_block_to_process = if config
-        .prover_input_generator_config
-        .force_process_old_blocks
-    {
-        // Prover input generator will (re)process all the blocks replayed by the node on startup - at least `min_blocks_to_replay`.
-        // It will process all the blocks sent to it from upstream - not necessarily start from `0`.
-        0
-    } else {
-        // Prover input generator will skip the blocks that are already FRI proved and committed to L1.
-        batcher_subsystem_first_block_to_process
-    };
-
+    let starting_batch_number = batcher_prev_batch_info.batch_number + 1;
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
         config.prover_api_config.job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    let (snark_proving_step, snark_job_manager) =
-        SnarkProvingPipelineStep::new(config.prover_api_config.max_fris_per_snark);
+    let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
+        config.prover_api_config.max_fris_per_snark,
+        node_state_on_startup.l1_state.last_proved_batch,
+    );
 
     tasks.spawn(
         prover_server::run(
@@ -660,25 +591,28 @@ async fn run_main_node_pipeline(
             maximum_in_flight_blocks: config
                 .prover_input_generator_config
                 .maximum_in_flight_blocks,
-            first_block_to_process: prover_input_generation_first_block_to_process,
             app_bin_base_path: config.general_config.rocks_db_path.join("app_bins").clone(),
             read_state: state.clone(),
         })
         .pipe(Batcher {
+            startup_config: BatcherStartupConfig {
+                prev_batch_info: batcher_prev_batch_info,
+                last_committed_block: node_state_on_startup.last_l1_committed_block,
+                last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
+            },
             chain_id,
             chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
-            first_block_to_process: batcher_subsystem_first_block_to_process,
-            last_persisted_block: node_state_on_startup.repositories_persisted_block,
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
-            prev_batch_info: last_committed_batch_info,
+            batch_storage: batch_storage.clone(),
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
         ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
-            next_expected: node_state_on_startup.l1_state.last_committed_batch + 1,
+            next_expected_batch_number: starting_batch_number,
+            last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage: batch_storage.clone(),
             da_input_mode: node_state_on_startup.l1_state.da_input_mode,
         })
@@ -687,13 +621,13 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
-        .pipe_with_prepend(snark_proving_step, committed_not_proven_batches)
+        .pipe(snark_proving_step)
         .pipe(L1Sender::<_, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
-        .pipe_with_prepend(
+        .pipe(
             PriorityTreePipelineStep::new(
                 block_replay_storage.clone(),
                 &priority_tree_db_path,
@@ -702,7 +636,6 @@ async fn run_main_node_pipeline(
             )
             .await
             .unwrap(),
-            proven_not_executed_batches,
         )
         .pipe(L1Sender {
             provider: l1_provider,
@@ -810,40 +743,6 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
     }
 }
 
-async fn get_committed_not_proven_batches(
-    l1_state: &L1State,
-    proof_storage: &ProofStorage,
-) -> anyhow::Result<Vec<SignedBatchEnvelope<FriProof>>> {
-    let mut batch_to_prove = l1_state.last_proved_batch + 1;
-    let mut batches_to_reschedule = Vec::new();
-    while batch_to_prove <= l1_state.last_committed_batch {
-        let batch_with_proof = proof_storage
-            .get_batch_with_proof(batch_to_prove)
-            .await?
-            .context("Failed to get batch")?;
-        batches_to_reschedule.push(batch_with_proof);
-        batch_to_prove += 1;
-    }
-    Ok(batches_to_reschedule)
-}
-
-async fn get_proven_not_executed_batches(
-    l1_state: &L1State,
-    proof_storage: &ProofStorage,
-) -> Result<Vec<SignedBatchEnvelope<FriProof>>> {
-    let mut batch_to_execute = l1_state.last_executed_batch + 1;
-    let mut batches_to_reschedule = Vec::new();
-    while batch_to_execute <= l1_state.last_proved_batch {
-        let batch_with_proof = proof_storage
-            .get_batch_with_proof(batch_to_execute)
-            .await?
-            .context("Failed to get batch")?;
-        batches_to_reschedule.push(batch_with_proof);
-        batch_to_execute += 1;
-    }
-    Ok(batches_to_reschedule)
-}
-
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     batch_storage: &ProofStorage,
@@ -926,4 +825,107 @@ fn run_fake_fri_provers(
             .run()
             .map(report_exit("fake_fri_provers_task_optional")),
     );
+}
+
+/// Determines the batch for node to start from.
+/// This batch is guaranteed to be already committed on L1.
+///
+/// Panics if no batches are committed to L1 yet.
+async fn determine_starting_batch(
+    config: &Config,
+    node_startup_state: &NodeStateOnStartup,
+    state: &impl ReadStateHistory,
+    batch_storage: &ProofStorage,
+    finality_storage: &Finality,
+) -> BatchMetadata {
+    assert!(
+        node_startup_state.l1_state.last_committed_batch > 0,
+        "No batches committed to L1 yet - start with block/batch 1"
+    );
+
+    let desired_starting_block = if let Some(forced_starting_block_number) =
+        config.general_config.force_starting_block_number
+    {
+        forced_starting_block_number
+    } else {
+        // Start with the oldest block from:
+        [
+            // To ensure consistency/correctness, we want to replay at least `config.min_blocks_to_replay` blocks
+            node_startup_state
+                .block_replay_storage_last_block
+                .saturating_sub(config.general_config.min_blocks_to_replay as u64),
+            // We need to replay old unexecuted blocks to rebuild and execute the batches they are in
+            node_startup_state.last_l1_executed_block + 1,
+            // We want to replay at least one block that is already committed -
+            //  this way we can always get previous_batch_info from storage
+            node_startup_state.last_l1_committed_block,
+            // Repositories' persistence may have fallen behind - we need to replay blocks to rebuild it
+            node_startup_state.repositories_persisted_block + 1,
+            // In the current tree implementation this will always be ahead of `last_l1_executed_block`,
+            // but this may change if we make tree persistence async (like elsewhere)
+            node_startup_state.tree_last_block + 1,
+            // For compacted state, we need to replay all blocks that were not persisted yet.
+            // For FullDiffs state (default) - this is always ahead of `last_l1_executed_block`.
+            state.block_range_available().end() + 1,
+            // If block rebuild (aka block reversion) is configured, we should ensure we replay
+            //  all the blocks we are rebuilding
+            config
+                .sequencer_config
+                .block_rebuild
+                .as_ref()
+                .map_or(u64::MAX, |block_rebuild| block_rebuild.from_block),
+        ]
+        .into_iter()
+        .min()
+        .unwrap()
+        // We don't execute the genesis block (number 0) - the earliest we can start is `0`
+        .max(1)
+    };
+
+    let starting_batch_number = batch_storage
+        .get_batch_by_block_number(desired_starting_block, finality_storage)
+        .await
+        .expect("Failed to get batch for desired_starting_block")
+        .expect("desired_starting_block is committed, but corresponding batch number is not found");
+
+    let starting_batch = batch_storage
+        .get_batch_with_proof(starting_batch_number)
+        .await
+        .expect("Failed to get last committed block from proof storage")
+        .expect("Committed batch is not present in proof storage")
+        .batch;
+
+    if starting_batch.first_block_number < state.block_range_available().start() + 1 {
+        // This may only happen with Compacted State. This means that the block we want to rerun was already compacted.
+        // This can be fixed by manually removing the storage persistence - which will force the node to start from block 1.
+
+        // Alternatively, we can clear storage programmatically here and start from 1 - this is not currently implemented
+        panic!(
+            "Cannot start: desired_starting_block < state.block_range_available().start() + 1: {} < {}",
+            desired_starting_block,
+            state.block_range_available().start() + 1
+        );
+    }
+
+    starting_batch
+}
+
+// Implementation node: it's awkward that we need all these arguments to get the genesis StoredBatchInfo.
+// Consider addressing this if refactoring the genesis.
+pub async fn genesis_stored_batch_info(
+    repositories: &impl ReadRepository,
+    tree_db: &MerkleTree<RocksDBWrapper>,
+    genesis: &Genesis,
+) -> StoredBatchInfo {
+    let genesis_block = repositories
+        .get_block_by_number(0)
+        .expect("Failed to read genesis block from repositories")
+        .expect("Missing genesis block in repositories");
+    load_genesis_stored_batch_info(
+        genesis_block,
+        tree_db.clone(),
+        genesis.state().await.expected_genesis_root,
+    )
+    .await
+    .unwrap()
 }
