@@ -746,7 +746,6 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
     }
 }
 
-
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
     batch_storage: &ProofStorage,

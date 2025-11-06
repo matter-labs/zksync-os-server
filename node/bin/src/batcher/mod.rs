@@ -12,7 +12,9 @@ use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchForSigning, MissingSignature, ProverInput};
+use zksync_os_l1_sender::batcher_model::{
+    BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
+};
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
