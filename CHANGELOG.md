@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.2](https://github.com/matter-labs/zksync-os-server/compare/v0.9.1...v0.9.2) (2025-11-06)
+
+
+### Features
+
+* 2FA EN batch signing without L1 verification ([#459](https://github.com/matter-labs/zksync-os-server/issues/459)) ([e6d41ab](https://github.com/matter-labs/zksync-os-server/commit/e6d41abf581e5baeeda73b8a772ab7572a8d2b2e))
+* get rid of l1_gas_pricing_multiplier ([#576](https://github.com/matter-labs/zksync-os-server/issues/576)) ([3699956](https://github.com/matter-labs/zksync-os-server/commit/36999561aa64f3af7b730e0bae8b461fd903a8b5))
+* Protocol upgrade support for provers ([#577](https://github.com/matter-labs/zksync-os-server/issues/577)) ([a60bb89](https://github.com/matter-labs/zksync-os-server/commit/a60bb89c9c7a52c166cc208b98bdf2a3644bec3c))
+* **sentry:** Use CLUSTER_NAME as environment tag ([#570](https://github.com/matter-labs/zksync-os-server/issues/570)) ([0befa23](https://github.com/matter-labs/zksync-os-server/commit/0befa239c7b6576cae986eb1e4f0398131dd17b2))
+
+
+### Bug Fixes
+
+* Consistency checker nonce for failed creates ([#574](https://github.com/matter-labs/zksync-os-server/issues/574)) ([8159d64](https://github.com/matter-labs/zksync-os-server/commit/8159d64d4dff8b1188ce45d6b45dd7e754bed3ad))
+* proving empty blocks - fix division by zero error in metrics tracking ([#584](https://github.com/matter-labs/zksync-os-server/issues/584)) ([3c7d3bd](https://github.com/matter-labs/zksync-os-server/commit/3c7d3bd3ea713dd4b71af687f1110504a767ca87))
+* set WORKDIR to /app ([#573](https://github.com/matter-labs/zksync-os-server/issues/573)) ([265dc34](https://github.com/matter-labs/zksync-os-server/commit/265dc347daba05e82d669486588a8b6980defd9f))
+
 ## [0.9.1](https://github.com/matter-labs/zksync-os-server/compare/v0.9.0...v0.9.1) (2025-10-29)
 
 
