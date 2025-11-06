@@ -47,21 +47,24 @@ impl FakeFriProversPool {
                 loop {
                     // Only take inbound items whose age >= min_age.
                     match jm.pick_next_job(min_age) {
-                        Some((batch_number, _prover_input)) => {
+                        Some((fri_job, _prover_input)) => {
                             // Emulate proving work.
                             let start = Instant::now();
                             sleep(compute_time).await;
 
-                            if let Err(e) = jm.submit_fake_proof(batch_number, PROVER_LABEL).await {
+                            if let Err(e) = jm
+                                .submit_fake_proof(fri_job.batch_number, PROVER_LABEL)
+                                .await
+                            {
                                 tracing::warn!(
-                                    batch_number,
+                                    fri_job.batch_number,
                                     ?e,
                                     elapsed_ms = start.elapsed().as_millis() as u64,
                                     "fake prover failed to submit proof"
                                 );
                             } else {
                                 tracing::info!(
-                                    batch_number,
+                                    fri_job.batch_number,
                                     elapsed_ms = start.elapsed().as_millis() as u64,
                                     "fake prover submitted proof"
                                 );

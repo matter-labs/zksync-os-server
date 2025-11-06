@@ -49,6 +49,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
@@ -608,6 +609,9 @@ async fn run_main_node_pipeline(
             batcher_config: config.batcher_config.clone(),
             batch_storage: batch_storage.clone(),
         })
+        .pipe(BatchVerificationPipelineStep::new(
+            config.batch_verification_config.into(),
+        ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
             next_expected_batch_number: starting_batch_number,
@@ -687,7 +691,17 @@ async fn run_en_pipeline(
                 .then(|| RevmConsistencyChecker::new(state.clone())),
         )
         .pipe(TreeManager { tree: tree.clone() })
-        .pipe(NoOpSink::new())
+        .pipe_if(
+            config.batch_verification_config.client_enabled,
+            BatchVerificationClient::new(
+                finality.clone(),
+                config.batch_verification_config.signing_key.clone(),
+                config.genesis_config.chain_id.unwrap(),
+                *node_state_on_startup.l1_state.diamond_proxy.address(),
+                config.batch_verification_config.connect_address,
+            ),
+            NoOpSink::new(),
+        )
         .spawn(tasks);
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
@@ -731,6 +745,7 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
         Err(err) => tracing::error!(?err, "{name} component failed"),
     }
 }
+
 
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,

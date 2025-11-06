@@ -6,7 +6,7 @@ pub mod config;
 mod metrics;
 pub mod pipeline_component;
 
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
@@ -58,7 +58,7 @@ type TransactionReceiptFuture =
 pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
     mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: Sender<BatchEnvelope<FriProof>>,
+    outbound: Sender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
     to_address: Address,
@@ -189,7 +189,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
 
 async fn process_prepending_passthrough_commands<Input: SendToL1>(
     inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
-    outbound: &Sender<BatchEnvelope<FriProof>>,
+    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
     latency_tracker: &ComponentStateHandle<L1SenderState>,
     command_name: &str,
 ) -> anyhow::Result<()> {
@@ -311,24 +311,29 @@ async fn validate_tx_receipt<Input: SendToL1>(
             .sum();
         let l1_transaction_fee = receipt.gas_used as u128 * receipt.effective_gas_price;
 
+        let l1_transaction_fee_ether_per_l2_tx = l1_transaction_fee
+            .checked_div(l2_txs_count as u128)
+            .map(format_ether);
         tracing::info!(
             %command,
             tx_hash = ?receipt.transaction_hash,
             l1_block_number = receipt.block_number.unwrap(),
             gas_used = receipt.gas_used,
-            gas_used_per_l2_tx = receipt.gas_used / l2_txs_count as u64,
+            gas_used_per_l2_tx = receipt.gas_used.checked_div(l2_txs_count as u64),
             l1_transaction_fee_ether = format_ether(l1_transaction_fee),
-            l1_transaction_fee_ether_per_l2_tx = format_ether(l1_transaction_fee / l2_txs_count as u128),
+            l1_transaction_fee_ether_per_l2_tx,
             "succeeded on L1",
         );
         L1_SENDER_METRICS.gas_used[&Input::NAME].observe(receipt.gas_used);
-        L1_SENDER_METRICS.gas_used_per_l2_tx[&Input::NAME]
-            .observe(receipt.gas_used / l2_txs_count as u64);
+        if let Some(gas_used_per_l2_tx) = receipt.gas_used.checked_div(l2_txs_count as u64) {
+            L1_SENDER_METRICS.gas_used_per_l2_tx[&Input::NAME].observe(gas_used_per_l2_tx);
+        }
         L1_SENDER_METRICS.l1_transaction_fee_ether[&Input::NAME]
             .observe(format_ether(l1_transaction_fee).parse()?);
-        L1_SENDER_METRICS.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
-            .observe(format_ether(l1_transaction_fee / l2_txs_count as u128).parse()?);
-
+        if let Some(l1_transaction_fee_per_l2_tx) = l1_transaction_fee_ether_per_l2_tx {
+            L1_SENDER_METRICS.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
+                .observe(l1_transaction_fee_per_l2_tx.parse()?);
+        }
         Ok(())
     } else {
         tracing::error!(

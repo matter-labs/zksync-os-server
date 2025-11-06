@@ -1,5 +1,5 @@
 use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{BatchEnvelope, FriProof};
+use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use alloy::sol_types::SolCall;
 use itertools::Itertools;
 use std::fmt::Display;
@@ -13,13 +13,13 @@ pub mod prove;
 /// For batches that have to be processed on L1, a SendToL1 variant is used.
 pub enum L1SenderCommand<Command: SendToL1> {
     SendToL1(Command),
-    Passthrough(Box<BatchEnvelope<FriProof>>),
+    Passthrough(Box<SignedBatchEnvelope<FriProof>>),
 }
 
 pub trait SendToL1:
-    Into<Vec<BatchEnvelope<FriProof>>>
-    + AsRef<[BatchEnvelope<FriProof>]>
-    + AsMut<[BatchEnvelope<FriProof>]>
+    Into<Vec<SignedBatchEnvelope<FriProof>>>
+    + AsRef<[SignedBatchEnvelope<FriProof>]>
+    + AsMut<[SignedBatchEnvelope<FriProof>]>
     + Display
 {
     const NAME: &'static str;

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
@@ -26,7 +26,7 @@ pub struct GaplessCommitter {
 
 #[async_trait]
 impl PipelineComponent for GaplessCommitter {
-    type Input = BatchEnvelope<FriProof>;
+    type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<CommitCommand>;
 
     const NAME: &'static str = "gapless_committer";
@@ -40,7 +40,7 @@ impl PipelineComponent for GaplessCommitter {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("gapless_committer", GenericComponentState::WaitingRecv);
 
-        let mut buffer: BTreeMap<u64, BatchEnvelope<FriProof>> = BTreeMap::new();
+        let mut buffer: BTreeMap<u64, SignedBatchEnvelope<FriProof>> = BTreeMap::new();
         let mut next_expected_batch_number = self.next_expected_batch_number;
 
         loop {
@@ -51,7 +51,7 @@ impl PipelineComponent for GaplessCommitter {
                     buffer.insert(batch.batch_number(), batch);
 
                     // Flush ready batches
-                    let mut ready: Vec<BatchEnvelope<FriProof>> = Vec::new();
+                    let mut ready: Vec<SignedBatchEnvelope<FriProof>> = Vec::new();
                     while let Some(next_batch) = buffer.remove(&next_expected_batch_number) {
                         ready.push(next_batch);
                         next_expected_batch_number += 1;

@@ -8,7 +8,7 @@ use tokio::sync::{Mutex, mpsc};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
@@ -17,7 +17,7 @@ use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
 
-type InputChannel = PeekableReceiver<BatchEnvelope<FriProof>>;
+type InputChannel = PeekableReceiver<SignedBatchEnvelope<FriProof>>;
 type OutputChannel = mpsc::Sender<L1SenderCommand<ExecuteCommand>>;
 
 mod db;
