@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/matter-labs/zksync-os-server/compare/v0.9.2...v0.10.0) (2025-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* support zksync-os v0.1.0 ([#557](https://github.com/matter-labs/zksync-os-server/issues/557))
+
+### Features
+
+* add last_execution_version metric ([#590](https://github.com/matter-labs/zksync-os-server/issues/590)) ([9343794](https://github.com/matter-labs/zksync-os-server/commit/9343794c7a27bd315a7a3096591265abb961247f))
+* get rid of batch rescheduling (preparation to get rid of BatchStorage) ([#587](https://github.com/matter-labs/zksync-os-server/issues/587)) ([62dd891](https://github.com/matter-labs/zksync-os-server/commit/62dd89119749fcfe51280676bbc569e189d30626))
+* remove app_bin_unpack_path from config ([#588](https://github.com/matter-labs/zksync-os-server/issues/588)) ([e55b0d4](https://github.com/matter-labs/zksync-os-server/commit/e55b0d43f631efbc39f2a24bbb8dcb08e5474727))
+* support zksync-os v0.1.0 ([#557](https://github.com/matter-labs/zksync-os-server/issues/557)) ([178a1a9](https://github.com/matter-labs/zksync-os-server/commit/178a1a975dc682a24be5dc6d7e33733c7786f493))
+
 ## [0.9.2](https://github.com/matter-labs/zksync-os-server/compare/v0.9.1...v0.9.2) (2025-11-06)
 
 
