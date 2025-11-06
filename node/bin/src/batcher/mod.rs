@@ -12,9 +12,7 @@ use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
-use zksync_os_l1_sender::batcher_model::{
-    BatchForSigning, ProverInput,
-};
+use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchForSigning, MissingSignature, ProverInput};
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -60,7 +58,7 @@ pub struct Batcher {
 #[async_trait]
 impl PipelineComponent for Batcher {
     type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
-    type Output = BatchForSigning<ProverInput>;
+    type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
     const NAME: &'static str = "batcher";
     const OUTPUT_BUFFER_SIZE: usize = 5;
