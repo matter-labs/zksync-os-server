@@ -9,7 +9,6 @@ use alloy::rpc::types::trace::geth::{
     GethDebugTracingOptions, GethTrace,
 };
 use alloy::sol_types::{Revert, SolCall, SolError};
-use serde_json::json;
 use std::collections::HashMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
@@ -443,10 +442,8 @@ async fn debug_trace_call_js_tracer() -> anyhow::Result<()> {
            result: function(ctx, db) { return this.data; }
         }"#;
 
-    let tracer_code = json!({ "tracer": js_str }).to_string();
-
     let mut opts = GethDebugTracingCallOptions::default();
-    opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(tracer_code.to_string()));
+    opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(js_str.to_string()));
     call_request.max_priority_fee_per_gas = Some(1);
     call_request.max_fee_per_gas = Some(u128::MAX);
     call_request.set_from(tester.l2_wallet.default_signer().address());
@@ -505,10 +502,8 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
             result: function(ctx, db) { let [address, key, value] = this.data[this.data.length-1]; return [db.getState(address, key), value]; }
         }"#;
 
-    let tracer_code = json!({ "tracer": js_str }).to_string();
-
     let mut opts = GethDebugTracingCallOptions::default();
-    opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(tracer_code.to_string()));
+    opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(js_str.to_string()));
     call_request.max_priority_fee_per_gas = Some(1);
     call_request.max_fee_per_gas = Some(u128::MAX);
     call_request.set_from(tester.l2_wallet.default_signer().address());

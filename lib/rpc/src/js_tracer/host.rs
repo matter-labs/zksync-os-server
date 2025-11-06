@@ -1,7 +1,7 @@
 use crate::js_tracer;
-use crate::js_tracer::types::{CodeOverlay, StorageOverlay};
+use crate::js_tracer::types::{BalanceOverlay, CodeOverlay, StorageOverlay};
 use crate::js_tracer::utils::{format_hex_u256, parse_address, parse_b256};
-use alloy::primitives::B256;
+use alloy::primitives::{Address, B256, I256, U256};
 use boa_engine::object::FunctionObjectBuilder;
 use boa_engine::{
     Context as BoaContext, Context, JsArgs, JsValue, NativeFunction, Source, js_string,
@@ -23,6 +23,8 @@ struct HostEnvironment<V: ViewState + 'static> {
     storage_overlay: Rc<RefCell<StorageOverlay>>,
     #[unsafe_ignore_trace]
     code_overlay: Rc<RefCell<CodeOverlay>>,
+    #[unsafe_ignore_trace]
+    balance_overlay: Rc<RefCell<BalanceOverlay>>,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -53,6 +55,7 @@ pub(crate) fn init_host_env_in_boa_context(
     state_view: RefCell<impl ViewState + 'static>,
     storage_overlay: Rc<RefCell<StorageOverlay>>,
     code_overlay: Rc<RefCell<CodeOverlay>>,
+    balance_overlay: Rc<RefCell<BalanceOverlay>>,
 ) -> anyhow::Result<()> {
     bootstrap_tracer(ctx, tracer_source)?;
 
@@ -60,6 +63,7 @@ pub(crate) fn init_host_env_in_boa_context(
         state_view,
         storage_overlay,
         code_overlay,
+        balance_overlay,
     };
 
     install_host_bindings(ctx, host_env)?;
@@ -211,14 +215,9 @@ fn host_get_balance<V: ViewState + 'static>(
         return Ok("0x0".to_string());
     };
 
-    let balance = env
-        .state_view
-        .borrow_mut()
-        .get_account(address)
-        .ok_or(anyhow::anyhow!("Account {address:?} not found in a state"))?
-        .balance;
+    let balance_value = resolve_balance(env, address);
 
-    Ok(format_hex_u256(balance))
+    Ok(format_hex_u256(balance_value))
 }
 
 fn host_get_nonce<V: ViewState + 'static>(
@@ -326,6 +325,10 @@ fn host_exists<V: ViewState + 'static>(
         return Ok(entry.value.is_some().to_string());
     }
 
+    if resolve_balance(env, address) > U256::ZERO {
+        return Ok("true".to_string());
+    }
+
     if env
         .storage_overlay
         .borrow()
@@ -338,4 +341,29 @@ fn host_exists<V: ViewState + 'static>(
     let exists = env.state_view.borrow_mut().get_account(address).is_some();
 
     Ok(exists.to_string())
+}
+
+fn resolve_balance<V: ViewState + 'static>(env: &HostEnvironment<V>, address: Address) -> U256 {
+    let delta = {
+        let balance_overlay = env.balance_overlay.borrow();
+        balance_overlay.get(&address).map(|entry| entry.value)
+    };
+
+    let mut balance = I256::from(
+        env.state_view
+            .borrow_mut()
+            .get_account(address)
+            .map(|props| props.balance)
+            .unwrap_or_default(),
+    );
+
+    if let Some(delta) = delta {
+        balance = balance.checked_add(delta).unwrap_or(I256::ZERO);
+    }
+
+    if balance < I256::ZERO {
+        U256::ZERO
+    } else {
+        U256::from(balance)
+    }
 }

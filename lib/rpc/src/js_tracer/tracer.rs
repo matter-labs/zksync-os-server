@@ -1,17 +1,18 @@
 use crate::js_tracer::{
     host::init_host_env_in_boa_context,
     types::{
-        CodeOverlay, CreateType, OverlayEntry, StepCtx, StorageOverlay, TracerMethod, TxContext,
+        BalanceOverlay, CodeOverlay, CreateType, OverlayEntry, StepCtx, StorageOverlay,
+        TracerMethod, TxContext,
     },
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
 use crate::sandbox::{ERGS_PER_GAS, fmt_error_msg, maybe_revert_reason};
 use alloy::hex::ToHexExt;
-use alloy::primitives::{Address, B256, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, I256, U256};
 use boa_engine::{Context as BoaContext, Source};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::ops::Not;
+use std::ops::{Neg, Not};
 use std::{cell::RefCell, collections::hash_map::Entry, hash::Hash, rc::Rc};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
@@ -55,6 +56,7 @@ pub struct JsTracer {
     // Overlays for storage and code modifications
     pub storage_overlay: Rc<RefCell<StorageOverlay>>,
     pub code_overlay: Rc<RefCell<CodeOverlay>>,
+    pub balance_overlay: Rc<RefCell<BalanceOverlay>>,
 
     // Depth tracking and per-tx result
     current_depth: u64,
@@ -77,6 +79,7 @@ impl JsTracer {
 
         let storage_overlay = Rc::new(RefCell::new(StorageOverlay::new()));
         let code_overlay = Rc::new(RefCell::new(CodeOverlay::new()));
+        let balance_overlay = Rc::new(RefCell::new(BalanceOverlay::new()));
 
         init_host_env_in_boa_context(
             &mut ctx,
@@ -84,6 +87,7 @@ impl JsTracer {
             RefCell::new(state_view.clone()),
             Rc::clone(&storage_overlay),
             Rc::clone(&code_overlay),
+            Rc::clone(&balance_overlay),
         )?;
 
         Ok(Self {
@@ -91,6 +95,7 @@ impl JsTracer {
             tracer_config,
             storage_overlay,
             code_overlay,
+            balance_overlay,
             current_depth: 0,
             results: Vec::new(),
             pending_step: None,
@@ -151,11 +156,13 @@ impl JsTracer {
     fn commit_overlays(&mut self) {
         Self::commit_overlay_map(&mut self.storage_overlay.borrow_mut());
         Self::commit_overlay_map(&mut self.code_overlay.borrow_mut());
+        Self::commit_overlay_map(&mut self.balance_overlay.borrow_mut());
     }
 
     fn rollback_overlays(&mut self) {
         Self::rollback_overlay_map(&mut self.storage_overlay.borrow_mut());
         Self::rollback_overlay_map(&mut self.code_overlay.borrow_mut());
+        Self::rollback_overlay_map(&mut self.balance_overlay.borrow_mut());
     }
 
     fn commit_overlay_map<K, V>(map: &mut HashMap<K, OverlayEntry<V>>)
@@ -478,6 +485,38 @@ impl JsTracer {
             "error": error,
         })
     }
+
+    fn apply_balance_delta(&mut self, address: Address, delta: I256) {
+        if delta == I256::ZERO {
+            return;
+        }
+
+        let mut overlay = self.balance_overlay.borrow_mut();
+        match overlay.entry(address) {
+            Entry::Occupied(mut occupied) => {
+                let mut remove_entry = false;
+                {
+                    let entry = occupied.get_mut();
+                    if entry.committed && entry.previous.is_none() {
+                        entry.previous = Some(entry.value);
+                    }
+                    entry.value += delta;
+                    entry.committed = false;
+
+                    if entry.value.is_zero() && entry.previous.is_none() {
+                        remove_entry = true;
+                    }
+                }
+
+                if remove_entry {
+                    occupied.remove_entry();
+                }
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(OverlayEntry::new_pending(delta));
+            }
+        }
+    }
 }
 
 impl AnyTracer for JsTracer {
@@ -491,6 +530,13 @@ impl EvmTracer for JsTracer {
         self.current_depth += 1;
         if self.current_depth == 1 && request.modifier() == CallModifier::Constructor {
             self.pending_create_type = Some(CreateType::Create);
+        }
+
+        let call_value = request.nominal_token_value();
+        if call_value != U256::ZERO {
+            let value_i256 = I256::from(call_value);
+            self.apply_balance_delta(request.caller(), value_i256.neg());
+            self.apply_balance_delta(request.callee(), value_i256);
         }
 
         let call_type = self.consume_call_type(request.modifier());

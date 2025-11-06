@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, I256, U256};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug)]
@@ -51,6 +51,7 @@ impl<V> OverlayEntry<V> {
 
 pub type StorageOverlay = HashMap<(Address, B256), OverlayEntry<B256>>;
 pub type CodeOverlay = HashMap<Address, OverlayEntry<Option<Vec<u8>>>>;
+pub type BalanceOverlay = HashMap<Address, OverlayEntry<I256>>;
 
 pub(crate) struct StepCtx {
     pub opcode: u8,
