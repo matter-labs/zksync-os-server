@@ -130,7 +130,11 @@ alloy::sol! {
             bytes initCalldata;
         }
 
+        /// Defines an upgrade from version A to version B
         event NewProtocolVersion(uint256 indexed oldProtocolVersion, uint256 indexed newProtocolVersion);
+
+        /// Provides an actual data for the upgrade execution.
+        event NewUpgradeCutData(uint256 indexed protocolVersion, DiamondCutData diamondCutData);
     }
 
     // `IZKChain.sol`
