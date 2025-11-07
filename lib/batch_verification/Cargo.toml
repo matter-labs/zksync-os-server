@@ -1,0 +1,44 @@
+[package]
+name = "zksync_os_batch_verification"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_types.workspace = true
+zksync_os_observability.workspace = true
+zksync_os_contract_interface.workspace = true
+zksync_os_l1_sender.workspace = true
+zksync_os_merkle_tree.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_pipeline.workspace = true
+zksync_os_socket.workspace = true
+zksync_os_batch_types.workspace = true
+
+zk_ee.workspace = true
+zk_os_basic_system.workspace = true
+zk_os_forward_system.workspace = true
+zksync_os_interface.workspace = true
+
+alloy = { workspace = true, default-features = false, features = ["rlp"] }
+futures.workspace = true
+serde.workspace = true
+bincode.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+semver = { workspace = true, features = ["serde"] }
+async-trait.workspace = true
+anyhow.workspace = true
+backon.workspace = true
+dashmap.workspace = true
+structdiff.workspace = true
+secrecy.workspace = true
+vise.workspace = true

@@ -118,7 +118,6 @@ impl Tester {
 
         let tempdir = tempfile::tempdir()?;
         let rocks_db_path = tempdir.path().join("rocksdb");
-        let app_bin_unpack_path = tempdir.path().join("apps");
         let object_store_path = main_node_tempdir
             .as_ref()
             .map(|t| t.path())
@@ -128,7 +127,7 @@ impl Tester {
 
         // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
-            rocks_db_path,
+            rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1_address.clone(),
             main_node_rpc_url: main_node_replay_and_rpc_urls.clone().map(|(_, rpc)| rpc),
             ..Default::default()
@@ -189,13 +188,13 @@ impl Tester {
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
                 logging_enabled: enable_prover,
-                app_bin_unpack_path: app_bin_unpack_path.clone(),
                 ..Default::default()
             },
             prover_api_config,
             status_server_config,
             observability_config: Default::default(),
             gas_adjuster_config: Default::default(),
+            batch_verification_config: Default::default(),
         };
         let main_task = tokio::task::spawn(async move {
             zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;
@@ -205,7 +204,7 @@ impl Tester {
         if enable_prover {
             let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
-                zksync_os_multivm::apps::v4::multiblock_batch_path(&app_bin_unpack_path);
+                zksync_os_multivm::apps::v4::multiblock_batch_path(&rocks_db_path.join("app_bins"));
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
@@ -220,6 +219,7 @@ impl Tester {
                     fri_path: None,
                     max_snark_latency: None,
                     max_fris_per_snark: Some(1),
+                    disable_zk: true,
                 })
                 .await
             });

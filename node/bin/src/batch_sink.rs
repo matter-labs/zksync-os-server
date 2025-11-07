@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
 /// Final destination for all processed batches
@@ -10,7 +10,7 @@ pub struct BatchSink;
 
 #[async_trait]
 impl PipelineComponent for BatchSink {
-    type Input = BatchEnvelope<FriProof>;
+    type Input = SignedBatchEnvelope<FriProof>;
     type Output = ();
 
     const NAME: &'static str = "batch_sink";

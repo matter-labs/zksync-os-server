@@ -6,7 +6,9 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
+use zksync_os_batch_types::BatchSignatureSet;
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::LatencyDistributionTracker;
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -28,31 +30,80 @@ pub struct BatchMetadata {
     pub batch_info: BatchInfo,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    // note: can equal to zero
     pub tx_count: usize,
     #[serde(default = "default_execution_version")]
     pub execution_version: u32,
+}
+
+impl BatchMetadata {
+    /// Gets batch metadata verification key hash.
+    ///
+    /// NOTE: Panics if the execution version is unsupported, which *should* never happen in practice.
+    /// We could propagate an error here, but then we need to change APIs everywhere.
+    /// Given it is unlikely to happen in practice, we opt for simplicity.
+    pub fn verification_key_hash(&self) -> &'static str {
+        ExecutionVersion::try_from(self.execution_version)
+            .expect("Unsupported execution version")
+            .vk_hash()
+    }
 }
 
 fn default_execution_version() -> u32 {
     1
 }
 
+#[derive(Debug)]
+pub struct MissingSignature;
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub enum BatchSignatureData {
+    Signed {
+        signatures: BatchSignatureSet,
+    },
+    // default to allow deserializing of older objects
+    /// Batch signatures are not enabled
+    #[default]
+    NotNeeded,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BatchEnvelope<E> {
+pub struct BatchEnvelope<E, S> {
     pub batch: BatchMetadata,
     pub data: E,
+    #[serde(default)] // to allow deserializing older objects
+    pub signature_data: S,
     #[serde(skip, default)]
     pub latency_tracker: LatencyDistributionTracker<BatchExecutionStage>,
 }
 
-impl<E> BatchEnvelope<E> {
+pub type BatchForSigning<E> = BatchEnvelope<E, MissingSignature>;
+pub type SignedBatchEnvelope<E> = BatchEnvelope<E, BatchSignatureData>;
+
+impl<E> BatchEnvelope<E, MissingSignature> {
     pub fn new(batch: BatchMetadata, data: E) -> Self {
         Self {
             batch,
             data,
+            signature_data: MissingSignature,
             latency_tracker: LatencyDistributionTracker::default(),
         }
     }
+
+    pub fn with_signatures(
+        self,
+        signature_data: BatchSignatureData,
+    ) -> BatchEnvelope<E, BatchSignatureData> {
+        BatchEnvelope {
+            batch: self.batch,
+            data: self.data,
+            signature_data,
+            latency_tracker: self.latency_tracker,
+        }
+    }
+}
+
+impl<E, S> BatchEnvelope<E, S> {
     pub fn batch_number(&self) -> u64 {
         self.batch.batch_info.batch_number
     }
@@ -82,15 +133,16 @@ impl<E> BatchEnvelope<E> {
         });
     }
 
-    pub fn with_stage(mut self, stage: BatchExecutionStage) -> BatchEnvelope<E> {
+    pub fn with_stage(mut self, stage: BatchExecutionStage) -> BatchEnvelope<E, S> {
         self.set_stage(stage);
         self
     }
 
-    pub fn with_data<N>(self, data: N) -> BatchEnvelope<N> {
-        BatchEnvelope::<N> {
+    pub fn with_data<N>(self, data: N) -> BatchEnvelope<N, S> {
+        BatchEnvelope {
             batch: self.batch,
             data,
+            signature_data: self.signature_data,
             latency_tracker: self.latency_tracker,
         }
     }
@@ -216,7 +268,7 @@ mod tests {
     fn test_v1_proof_deserialization() {
         // Real testnet envelope. Proof was shortened for brevity.
         let data = r#"{"batch":{"previous_stored_batch_info":{"batch_number":9,"state_commitment":"0x7e7f4bbd2fac4431253feccd4688d4b060d720c9cdb5eb06267e9cc8fdfad39d","number_of_layer1_txs":0,"priority_operations_hash":"0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470","dependency_roots_rolling_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","l2_to_l1_logs_root_hash":"0x692f35c99f9c698852289ffecf07f6dd45770904521149d79aa85aae598fa375","commitment":"0xf1dfa8fe5d6571e1c9bdb01f574cff0cbe8c23183c4fcd6d7dd1b4128e54287c","last_block_timestamp":1758115458},"commit_batch_info":{"batch_number":10,"new_state_commitment":"0x53680ad464b20f43921708bd3e024f365b788b9e11cf49e783607a42172136fc","number_of_layer1_txs":0,"priority_operations_hash":"0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470","dependency_roots_rolling_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","l2_to_l1_logs_root_hash":"0x692f35c99f9c698852289ffecf07f6dd45770904521149d79aa85aae598fa375","l2_da_validator":"0x0000000000000000000000000000000000000000","da_commitment":"0x86b130c978627d2acb4a68c823cfc31efadf6482862566d364cc4bc15e500e2b","first_block_timestamp":1758116549,"last_block_timestamp":1758116549,"chain_id":8022833,"chain_address":"0x02b1ac1cf0a592aefd3c2246b2431388365db272","operator_da_input":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,201,102,180,205,111,127,203,19,178,222,176,220,147,85,249,171,106,46,88,99,189,117,148,44,88,11,167,49,72,205,72,21,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,116,25,135,1,193,217,21,41,206,115,57,17,55,153,69,34,75,25,41,48,9,20,117,70,62,143,98,164,122,16,216,160,0,0,0,2,193,25,138,114,80,95,70,215,34,237,142,12,160,249,191,228,43,163,162,216,104,166,24,217,213,90,128,186,146,85,247,97,20,33,1,64,111,64,166,72,80,155,187,230,197,73,156,145,87,2,137,219,217,151,57,45,241,113,145,154,157,86,109,62,141,1,57,228,183,230,28,9,1,34,1,64,111,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"upgrade_tx_hash":null},"first_block_number":10,"last_block_number":10,"tx_count":1,"execution_version":1},"data":{"Real":[2,252,54,244]}}"#;
-        let b = serde_json::from_str::<BatchEnvelope<FriProof>>(data).unwrap();
+        let b = serde_json::from_str::<SignedBatchEnvelope<FriProof>>(data).unwrap();
         assert!(matches!(b.data, FriProof::Real(RealFriProof::V1(_))));
     }
 }
