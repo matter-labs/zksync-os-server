@@ -1,8 +1,8 @@
 use crate::js_tracer::{
     host::init_host_env_in_boa_context,
     types::{
-        BalanceDelta, BalanceOverlay, CodeOverlay, CreateType, OverlayEntry, StepCtx,
-        StorageOverlay, TracerMethod, TxContext,
+        BalanceDelta, CreateType, FrameState, OverlayCheckpoint, OverlayEntry, OverlayState,
+        StepCtx, TracerMethod, TxContext,
     },
     utils::{extract_js_source_and_config, gas_used_from_resources, wrap_js_invocation},
 };
@@ -11,9 +11,8 @@ use alloy::hex::ToHexExt;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use boa_engine::{Context as BoaContext, Source};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
 use std::ops::Not;
-use std::{cell::RefCell, collections::hash_map::Entry, hash::Hash, rc::Rc};
+use std::{cell::RefCell, collections::hash_map::Entry};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
     AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
@@ -54,9 +53,9 @@ pub struct JsTracer {
     tracer_config: JsonValue,
 
     // Overlays for storage and code modifications
-    pub storage_overlay: Rc<RefCell<StorageOverlay>>,
-    pub code_overlay: Rc<RefCell<CodeOverlay>>,
-    pub balance_overlay: Rc<RefCell<BalanceOverlay>>,
+    storage_overlay: OverlayState<(Address, B256), B256>,
+    code_overlay: OverlayState<Address, Option<Vec<u8>>>,
+    balance_overlay: OverlayState<Address, BalanceDelta>,
 
     // Depth tracking and per-tx result
     current_depth: u64,
@@ -64,7 +63,7 @@ pub struct JsTracer {
     pending_step: Option<StepCtx>,
     pending_create_type: Option<CreateType>,
 
-    frame_stack: Vec<TxContext>,
+    frame_stack: Vec<FrameState>,
     last_finished_frame: Option<TxContext>,
     tx_failed: bool,
 
@@ -77,17 +76,17 @@ impl JsTracer {
 
         let mut ctx = BoaContext::default();
 
-        let storage_overlay = Rc::new(RefCell::new(StorageOverlay::new()));
-        let code_overlay = Rc::new(RefCell::new(CodeOverlay::new()));
-        let balance_overlay = Rc::new(RefCell::new(BalanceOverlay::new()));
+        let storage_overlay = OverlayState::<(Address, B256), B256>::new();
+        let code_overlay = OverlayState::<Address, Option<Vec<u8>>>::new();
+        let balance_overlay = OverlayState::<Address, BalanceDelta>::new();
 
         init_host_env_in_boa_context(
             &mut ctx,
             &tracer_source,
             RefCell::new(state_view.clone()),
-            Rc::clone(&storage_overlay),
-            Rc::clone(&code_overlay),
-            Rc::clone(&balance_overlay),
+            storage_overlay.handle(),
+            code_overlay.handle(),
+            balance_overlay.handle(),
         )?;
 
         Ok(Self {
@@ -153,48 +152,38 @@ impl JsTracer {
             .to_boolean())
     }
 
-    fn commit_overlays(&mut self) {
-        Self::commit_overlay_map(&mut self.storage_overlay.borrow_mut());
-        Self::commit_overlay_map(&mut self.code_overlay.borrow_mut());
-        Self::commit_overlay_map(&mut self.balance_overlay.borrow_mut());
+    fn commit_overlays(&self) {
+        self.storage_overlay.commit();
+        self.code_overlay.commit();
+        self.balance_overlay.commit();
     }
 
-    fn rollback_overlays(&mut self) {
-        Self::rollback_overlay_map(&mut self.storage_overlay.borrow_mut());
-        Self::rollback_overlay_map(&mut self.code_overlay.borrow_mut());
-        Self::rollback_overlay_map(&mut self.balance_overlay.borrow_mut());
+    fn rollback_overlays(&self) {
+        self.storage_overlay.rollback();
+        self.code_overlay.rollback();
+        self.balance_overlay.rollback();
     }
 
-    fn commit_overlay_map<K, V>(map: &mut HashMap<K, OverlayEntry<V>>)
-    where
-        K: Eq + Hash,
-    {
-        map.retain(|_, entry| {
-            if !entry.committed {
-                entry.committed = true;
-                entry.previous = None;
-            }
-            true
-        });
+    fn current_overlay_checkpoint(&self) -> OverlayCheckpoint {
+        OverlayCheckpoint {
+            storage: self.storage_overlay.checkpoint(),
+            code: self.code_overlay.checkpoint(),
+            balance: self.balance_overlay.checkpoint(),
+        }
     }
 
-    fn rollback_overlay_map<K, V>(map: &mut HashMap<K, OverlayEntry<V>>)
-    where
-        K: Eq + Hash,
-    {
-        map.retain(|_, entry| {
-            if entry.committed {
-                return true;
-            }
+    fn clear_overlay_journals(&self) {
+        self.storage_overlay.clear_journal();
+        self.code_overlay.clear_journal();
+        self.balance_overlay.clear_journal();
+    }
 
-            if let Some(prev) = entry.previous.take() {
-                entry.value = prev;
-                entry.committed = true;
-                true
-            } else {
-                false
-            }
-        });
+    fn revert_overlays_to_checkpoint(&self, checkpoint: OverlayCheckpoint) {
+        self.storage_overlay
+            .revert_to_checkpoint(checkpoint.storage);
+        self.code_overlay.revert_to_checkpoint(checkpoint.code);
+        self.balance_overlay
+            .revert_to_checkpoint(checkpoint.balance);
     }
 
     fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
@@ -499,6 +488,8 @@ impl JsTracer {
         let mut overlay = self.balance_overlay.borrow_mut();
         match overlay.entry(address) {
             Entry::Occupied(mut occupied) => {
+                let before = occupied.get().clone();
+                self.balance_overlay.record_update(address, before);
                 let entry = occupied.get_mut();
                 if entry.committed && entry.previous.is_none() {
                     entry.previous = Some(entry.value.clone());
@@ -516,6 +507,7 @@ impl JsTracer {
                 delta.credit(credit)?;
                 delta.debit(debit)?;
                 if !delta.is_empty() {
+                    self.balance_overlay.record_insert(address);
                     vacant.insert(OverlayEntry::new_pending(delta));
                 }
             }
@@ -533,6 +525,7 @@ impl AnyTracer for JsTracer {
 
 impl EvmTracer for JsTracer {
     fn on_new_execution_frame(&mut self, request: impl EvmRequest) {
+        let checkpoint = self.current_overlay_checkpoint();
         self.current_depth += 1;
         if self.current_depth == 1 && request.modifier() == CallModifier::Constructor {
             self.pending_create_type = Some(CreateType::Create);
@@ -568,7 +561,10 @@ impl EvmTracer for JsTracer {
             output: None,
             error: None,
         };
-        self.frame_stack.push(frame_ctx);
+        self.frame_stack.push(FrameState {
+            ctx: frame_ctx,
+            checkpoint,
+        });
 
         let obj = serde_json::json!({
             "type": call_type,
@@ -602,18 +598,23 @@ impl EvmTracer for JsTracer {
             None => (U256::ZERO, None, None),
         };
 
-        if let Some(mut ctx) = self.frame_stack.pop() {
+        let frame_failed = matches!(result, Some((_, CallResult::Failed { .. })) | None);
+
+        if let Some(mut frame_state) = self.frame_stack.pop() {
+            let ctx = &mut frame_state.ctx;
             ctx.gas_used = Some(gas_used);
             ctx.output = output.clone();
             ctx.error = revert_reason.clone();
 
-            if self.frame_stack.is_empty()
-                && matches!(result, Some((_, CallResult::Failed { .. })) | None)
-            {
+            if frame_failed {
+                self.revert_overlays_to_checkpoint(frame_state.checkpoint);
+            }
+
+            if self.frame_stack.is_empty() && frame_failed {
                 self.tx_failed = true;
             }
 
-            self.last_finished_frame = Some(ctx);
+            self.last_finished_frame = Some(frame_state.ctx);
         } else {
             tracing::error!("Execution frame completed but no frame context found");
         }
@@ -635,14 +636,18 @@ impl EvmTracer for JsTracer {
     fn on_storage_write(&mut self, _is_transient: bool, address: Address, key: B256, value: B256) {
         {
             let mut overlay = self.storage_overlay.borrow_mut();
-            match overlay.entry((address, key)) {
+            let storage_key = (address, key);
+            match overlay.entry(storage_key) {
                 Entry::Occupied(mut entry) => {
+                    let before = entry.get().clone();
+                    self.storage_overlay.record_update(storage_key, before);
                     let slot = entry.get_mut();
                     slot.previous = Some(slot.value);
                     slot.value = value;
                     slot.committed = false;
                 }
                 Entry::Vacant(vacant) => {
+                    self.storage_overlay.record_insert(storage_key);
                     vacant.insert(OverlayEntry::new_pending(value));
                 }
             }
@@ -674,20 +679,21 @@ impl EvmTracer for JsTracer {
             slice.to_vec()
         });
 
-        {
-            let mut overlay = self.code_overlay.borrow_mut();
-            match overlay.entry(address) {
-                Entry::Occupied(mut entry) => {
-                    let record = entry.get_mut();
-                    if record.committed && record.previous.is_none() {
-                        record.previous = Some(record.value.clone());
-                    }
-                    record.value = new_value.clone();
-                    record.committed = false;
+        let mut overlay = self.code_overlay.borrow_mut();
+        match overlay.entry(address) {
+            Entry::Occupied(mut entry) => {
+                let before = entry.get().clone();
+                self.code_overlay.record_update(address, before);
+                let record = entry.get_mut();
+                if record.committed && record.previous.is_none() {
+                    record.previous = Some(record.value.clone());
                 }
-                Entry::Vacant(vacant) => {
-                    vacant.insert(OverlayEntry::new_pending(new_value));
-                }
+                record.value = new_value.clone();
+                record.committed = false;
+            }
+            Entry::Vacant(vacant) => {
+                self.code_overlay.record_insert(address);
+                vacant.insert(OverlayEntry::new_pending(new_value));
             }
         }
     }
@@ -700,6 +706,8 @@ impl EvmTracer for JsTracer {
         self.pending_step = None;
         self.pending_create_type = None;
         self.last_finished_frame = None;
+        self.frame_stack.clear();
+        self.clear_overlay_journals();
 
         let config = self.tracer_config.clone();
         self.invoke_method(TracerMethod::Setup, &config);
@@ -708,6 +716,8 @@ impl EvmTracer for JsTracer {
     fn finish_tx(&mut self) {
         if self.error.is_some() {
             self.rollback_overlays();
+            self.clear_overlay_journals();
+            self.frame_stack.clear();
             self.tx_failed = false;
             self.last_finished_frame = None;
             return;
@@ -722,6 +732,8 @@ impl EvmTracer for JsTracer {
                     anyhow::anyhow!("No finished frame found at transaction end"),
                 );
                 self.rollback_overlays();
+                self.clear_overlay_journals();
+                self.frame_stack.clear();
                 self.tx_failed = false;
                 self.last_finished_frame = None;
 
@@ -746,6 +758,8 @@ impl EvmTracer for JsTracer {
             self.commit_overlays();
         }
 
+        self.clear_overlay_journals();
+        self.frame_stack.clear();
         self.tx_failed = false;
         self.last_finished_frame = None;
     }
