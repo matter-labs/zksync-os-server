@@ -31,8 +31,8 @@ fn main() {
         std::fs::create_dir_all(&dir).expect("failed to create directory");
         for variant in [
             "multiblock_batch",
-            "server_app",
-            "server_app_logging_enabled",
+            "singleblock_batch",
+            "singleblock_batch_logging_enabled",
         ] {
             let url = format!(
                 "https://github.com/matter-labs/zksync-os/releases/download/{tag}/{variant}.bin"

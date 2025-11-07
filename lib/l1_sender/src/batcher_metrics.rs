@@ -18,13 +18,16 @@ pub enum BatchExecutionStage {
     FriProofStored,
     CommitL1TxSent,
     CommitL1TxMined,
+    CommitL1Passthrough,
     SnarkProverPicked,
     SnarkProvedReal,
     SnarkProvedFake,
     ProveL1TxSent,
     ProveL1TxMined,
+    ProveL1Passthrough,
     ExecuteL1TxSent,
     ExecuteL1TxMined,
+    ExecuteL1Passthrough,
 }
 
 #[derive(Debug, Metrics)]

@@ -139,6 +139,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                     execution_version: LATEST_EXECUTION_VERSION as u32,
+                    blob_fee: U256::ZERO,
                 };
                 self.pending_block_context_sender
                     .send_replace(Some(block_context));
@@ -191,6 +192,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_price: rebuild.replay_record.block_context.pubdata_price,
                     block_number: rebuild.replay_record.block_context.block_number,
                     timestamp: rebuild.replay_record.block_context.timestamp,
+                    blob_fee: rebuild.replay_record.block_context.blob_fee,
                     chain_id: self.chain_id,
                     coinbase: self.fee_collector_address,
                     block_hashes: self.block_hashes_for_next_block,

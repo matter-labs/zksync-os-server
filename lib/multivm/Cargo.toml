@@ -14,8 +14,11 @@ build = "build.rs"
 [dependencies]
 zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
+zk_os_forward_system_0_0_26.workspace = true
 anyhow.workspace = true
 num_enum.workspace = true
+zksync_os_types.workspace = true
+alloy = { workspace = true, default-features = false, features = ["consensus", "eips", "rlp"] }
 
 [build-dependencies]
 anyhow.workspace = true
