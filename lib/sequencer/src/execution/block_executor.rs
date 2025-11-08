@@ -6,6 +6,7 @@ use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
+use std::collections::HashSet;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
@@ -56,6 +57,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     };
     let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx success
 
+    let mut rejected_signers = HashSet::new();
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
     let seal_reason = loop {
@@ -102,6 +104,16 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             })? {
                             Ok(res) => {
+                                if rejected_signers.contains(&tx.inner.signer()) {
+                                    // Currently if a signer has a rejected tx, all their subsequent txs lead to an unprovable block.
+                                    // Thus we panic here to restart the node.
+                                    // TODO(ZKOS-1.2): remove after it's fixed.
+                                    panic!(
+                                        "Tx from previously rejected signer {:?} was accepted: tx_hash={:?}, block_number={}. Restarting node.",
+                                        tx.inner.signer(), tx.hash(), ctx.block_number
+                                    );
+                                }
+
                                 EXECUTION_METRICS.executed_transactions.inc();
                                 EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
                                 EXECUTION_METRICS.transaction_native_used.observe(res.native_used);
@@ -133,6 +145,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             }
                             Err(e) => {
+                                rejected_signers.insert(tx.inner.signer());
                                 match (tx.tx_type(), command.invalid_tx_policy) {
                                     (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                         return Err(
@@ -319,7 +332,6 @@ pub enum SealReason {
     NativeCycles,
     Pubdata,
     L2ToL1Logs,
-    Blobs,
     Other,
 }
 
@@ -328,6 +340,7 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         InvalidTransaction::InvalidEncoding
         | InvalidTransaction::InvalidStructure
         | InvalidTransaction::PriorityFeeGreaterThanMaxFee
+        | InvalidTransaction::BaseFeeGreaterThanMaxFee
         | InvalidTransaction::CallerGasLimitMoreThanBlock
         | InvalidTransaction::CallerGasLimitMoreThanTxLimit
         | InvalidTransaction::CallGasCostMoreThanGasLimit
@@ -359,16 +372,11 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::BlobElementIsNotSupported
         | InvalidTransaction::EIP7623IntrinsicGasIsTooLow
         | InvalidTransaction::NativeResourcesAreTooExpensive
-        | InvalidTransaction::OtherUnrecoverable(_)
-        | InvalidTransaction::EIP7702HasNullDestination
-        | InvalidTransaction::BlobListTooLong
-        | InvalidTransaction::EmptyBlobList => TxRejectionMethod::Purge,
+        | InvalidTransaction::OtherUnrecoverable(_) => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
-        | InvalidTransaction::NonceTooHigh { .. }
-        | InvalidTransaction::BaseFeeGreaterThanMaxFee
-        | InvalidTransaction::BlobBaseFeeGreaterThanMaxFeePerBlobGas => TxRejectionMethod::Skip,
+        | InvalidTransaction::NonceTooHigh { .. } => TxRejectionMethod::Skip,
 
         InvalidTransaction::BlockGasLimitReached => TxRejectionMethod::SealBlock(SealReason::GasVm),
         InvalidTransaction::BlockNativeLimitReached => {
@@ -379,9 +387,6 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         }
         InvalidTransaction::BlockL2ToL1LogsLimitReached => {
             TxRejectionMethod::SealBlock(SealReason::L2ToL1Logs)
-        }
-        InvalidTransaction::BlockBlobGasLimitReached => {
-            TxRejectionMethod::SealBlock(SealReason::Blobs)
         }
         InvalidTransaction::OtherLimitReached(_) => TxRejectionMethod::SealBlock(SealReason::Other),
     }

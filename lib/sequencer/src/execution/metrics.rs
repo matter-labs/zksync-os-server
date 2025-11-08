@@ -113,8 +113,6 @@ pub struct ExecutionMetrics {
     pub storage_writes_per_block: Histogram<u64>,
 
     pub next_l1_priority_id: Gauge<u64>,
-
-    pub last_execution_version: Gauge<u64>,
 }
 
 #[vise::register]

@@ -1,6 +1,6 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
-use crate::commands::SendToL1;
+use crate::commands::L1SenderCommand;
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
@@ -25,11 +25,10 @@ impl ProofCommand {
     }
 }
 
-impl SendToL1 for ProofCommand {
+impl L1SenderCommand for ProofCommand {
     const NAME: &'static str = "prove";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
-    const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
 
     fn solidity_call(&self) -> impl SolCall {
         proveBatchesSharedBridgeCall::new((
@@ -139,7 +138,6 @@ impl ProofCommand {
             // v2 and up are available under their respective execution version.
             Some(2) => 2,
             Some(3) => 3,
-            Some(4) => 4,
             Some(execution_version) => panic!(
                 "unsupported execution version: {execution_version}; there's no verifier defined for it"
             ),
