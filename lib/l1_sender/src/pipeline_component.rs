@@ -1,5 +1,5 @@
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
-use crate::commands::L1SenderCommand;
+use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::run_l1_sender;
 use alloy::network::EthereumWallet;
@@ -21,9 +21,9 @@ pub struct L1Sender<P, C> {
 impl<P, C> PipelineComponent for L1Sender<P, C>
 where
     P: Provider + WalletProvider<Wallet = EthereumWallet> + Clone + Send + 'static,
-    C: L1SenderCommand + Send + Sync + 'static,
+    C: SendToL1 + Send + Sync + 'static,
 {
-    type Input = C;
+    type Input = L1SenderCommand<C>;
     type Output = SignedBatchEnvelope<FriProof>;
 
     const NAME: &'static str = C::NAME;

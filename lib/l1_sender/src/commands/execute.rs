@@ -1,6 +1,6 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
-use crate::commands::L1SenderCommand;
+use crate::commands::SendToL1;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
@@ -26,10 +26,12 @@ impl ExecuteCommand {
     }
 }
 
-impl L1SenderCommand for ExecuteCommand {
+impl SendToL1 for ExecuteCommand {
     const NAME: &'static str = "execute";
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
+
+    const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1Passthrough;
 
     fn solidity_call(&self) -> impl SolCall {
         IExecutor::executeBatchesSharedBridgeCall::new((

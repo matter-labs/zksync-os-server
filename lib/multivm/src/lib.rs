@@ -3,16 +3,20 @@
 //! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
 use num_enum::TryFromPrimitive;
-use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV3;
+use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV4;
+use zk_os_forward_system_0_0_26::run::RunBlockForward as RunBlockForwardV3;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::AnyTracer;
 use zksync_os_interface::traits::{
-    PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
+    EncodedTx, PreimageSource, ReadStorage, RunBlock, SimulateTx, TxResultCallback, TxSource,
 };
 use zksync_os_interface::types::BlockContext;
 use zksync_os_interface::types::{BlockOutput, TxOutput};
 
+mod adapter;
 pub mod apps;
+
+pub use adapter::AbiTxSource;
 
 #[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
@@ -20,6 +24,7 @@ pub enum ExecutionVersion {
     V1 = 1,
     V2 = 2,
     V3 = 3,
+    V4 = 4,
 }
 
 impl ExecutionVersion {
@@ -35,6 +40,9 @@ impl ExecutionVersion {
     /// verification key hash generated from zksync-os v0.0.26, zksync-airbender v0.5.0 and zkos-wrapper v0.5.0
     const V3_VK_HASH: &'static str =
         "0x6a4509801ec284b8921c63dc6aaba668a0d71382d87ae4095ffc2235154e9fa3";
+    /// verification key hash generated from zksync-os v0.1.0, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
+    const V4_VK_HASH: &'static str =
+        "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
@@ -42,6 +50,7 @@ impl ExecutionVersion {
             ExecutionVersion::V1 => Self::V1_VK_HASH,
             ExecutionVersion::V2 => Self::V2_VK_HASH,
             ExecutionVersion::V3 => Self::V3_VK_HASH,
+            ExecutionVersion::V4 => Self::V4_VK_HASH,
         }
     }
 
@@ -51,12 +60,13 @@ impl ExecutionVersion {
             Self::V1_VK_HASH => Ok(ExecutionVersion::V1),
             Self::V2_VK_HASH => Ok(ExecutionVersion::V2),
             Self::V3_VK_HASH => Ok(ExecutionVersion::V3),
+            Self::V4_VK_HASH => Ok(ExecutionVersion::V4),
             val => Err(anyhow::anyhow!("unknown verification key hash: {val}")),
         }
     }
 }
 
-pub const LATEST_EXECUTION_VERSION: ExecutionVersion = ExecutionVersion::V3;
+pub const LATEST_EXECUTION_VERSION: ExecutionVersion = ExecutionVersion::V4;
 
 pub fn run_block<
     Storage: ReadStorage,
@@ -85,6 +95,20 @@ pub fn run_block<
                     block_context,
                     storage,
                     preimage_source,
+                    AbiTxSource::new(tx_source),
+                    tx_result_callback,
+                    tracer,
+                )
+                .map_err(|err| anyhow::anyhow!(err))
+        }
+        ExecutionVersion::V4 => {
+            let object = RunBlockForwardV4 {};
+            object
+                .run_block(
+                    (),
+                    block_context,
+                    storage,
+                    preimage_source,
                     tx_source,
                     tx_result_callback,
                     tracer,
@@ -95,7 +119,7 @@ pub fn run_block<
 }
 
 pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyTracer>(
-    transaction: Vec<u8>,
+    transaction: EncodedTx,
     block_context: BlockContext,
     storage: Storage,
     preimage_source: PreimgSrc,
@@ -108,6 +132,19 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
     match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             let object = RunBlockForwardV3 {};
+            object
+                .simulate_tx(
+                    (),
+                    adapter::convert_tx_to_abi(transaction),
+                    block_context,
+                    storage,
+                    preimage_source,
+                    tracer,
+                )
+                .map_err(|err| anyhow::anyhow!(err))
+        }
+        ExecutionVersion::V4 => {
+            let object = RunBlockForwardV4 {};
             object
                 .simulate_tx(
                     (),
@@ -135,5 +172,6 @@ pub fn proving_run_execution_version(forward_run_execution_version: u32) -> Exec
         .expect("Unsupported ZKsync OS execution version");
     match forward_run_execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => ExecutionVersion::V3,
+        ExecutionVersion::V4 => ExecutionVersion::V4,
     }
 }

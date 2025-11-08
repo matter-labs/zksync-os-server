@@ -152,6 +152,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             tracing_options,
             state_overrides,
             block_overrides,
+            tx_index: _, // TODO: add support for tx_index
         } = opts;
         let Some(tracer) = tracing_options.tracer else {
             return Err(DebugError::UnsupportedDefaultTracer);

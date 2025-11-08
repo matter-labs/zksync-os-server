@@ -7,7 +7,7 @@ mod metrics;
 pub mod pipeline_component;
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
-use crate::commands::L1SenderCommand;
+use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
 use alloy::network::{EthereumWallet, TransactionBuilder};
@@ -25,7 +25,7 @@ use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use zksync_os_observability::ComponentStateReporter;
+use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_pipeline::PeekableReceiver;
 
 /// Maximum time to wait for a transaction to be included on L1.
@@ -55,9 +55,9 @@ type TransactionReceiptFuture =
 ///
 /// Note: we pass `to_address` - L1 contract address to send transactions to.
 /// It differs between commit/prove/execute (e.g., timelock vs diamond proxy)
-pub async fn run_l1_sender<Input: L1SenderCommand>(
+pub async fn run_l1_sender<Input: SendToL1>(
     // == plumbing ==
-    mut inbound: PeekableReceiver<Input>,
+    mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
     outbound: Sender<SignedBatchEnvelope<FriProof>>,
 
     // == command-specific settings ==
@@ -69,11 +69,21 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
 ) -> anyhow::Result<()> {
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
+    let command_name = Input::NAME;
 
     let operator_address =
         register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
+    // Process all potential passthrough commands first
+    process_prepending_passthrough_commands(
+        &mut inbound,
+        &outbound,
+        &latency_tracker,
+        command_name,
+    )
+    .await?;
+    // At this point, only actual SendToL1 commands are expected
     loop {
         latency_tracker.enter_state(L1SenderState::WaitingRecv);
         // This sleeps until **at least one** command is received from the channel. Additionally,
@@ -83,14 +93,26 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         let received = inbound
             .recv_many(&mut cmd_buffer, config.command_limit)
             .await;
+        let mut commands = cmd_buffer
+            .drain(..)
+            .map(|cmd| -> anyhow::Result<Input> {
+                match cmd {
+                    L1SenderCommand::SendToL1(command) => Ok(command),
+                    L1SenderCommand::Passthrough(batch) => anyhow::bail!(
+                        "Unexpected passthrough command for batch {:?}. \
+                    No passthrough commands are expected after the first `SendToL1`.",
+                        batch.batch_number()
+                    ),
+                }
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         // This method only returns `0` if the channel has been closed and there are no more items
         // in the queue.
         if received == 0 {
             anyhow::bail!("inbound channel closed");
         }
         latency_tracker.enter_state(L1SenderState::SendingToL1);
-        let range = Input::display_range(&cmd_buffer); // Only for logging
-        let command_name = Input::NAME;
+        let range = Input::display_range(&commands); // Only for logging
         tracing::info!(command_name, range, "sending L1 transactions");
         L1_SENDER_METRICS.parallel_transactions[&command_name].set(cmd_buffer.len() as u64);
         // It's important to preserve the order of commands -
@@ -98,7 +120,7 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
         // This holds true because l1 transactions are included in the order of sender nonce.
         // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
         let pending_txs: Vec<(TransactionReceiptFuture, Input)> =
-            futures::stream::iter(cmd_buffer.drain(..))
+            futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
                     let tx_request = tx_request_with_gas_fields(
                         &provider,
@@ -165,6 +187,46 @@ pub async fn run_l1_sender<Input: L1SenderCommand>(
     }
 }
 
+async fn process_prepending_passthrough_commands<Input: SendToL1>(
+    inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
+    outbound: &Sender<SignedBatchEnvelope<FriProof>>,
+    latency_tracker: &ComponentStateHandle<L1SenderState>,
+    command_name: &str,
+) -> anyhow::Result<()> {
+    loop {
+        latency_tracker.enter_state(L1SenderState::WaitingRecv);
+        match inbound
+            .peek_recv(|command| matches!(command, L1SenderCommand::Passthrough(_)))
+            .await
+        {
+            None => anyhow::bail!("inbound channel closed"),
+            // command is SendToL1 (not passthrough)
+            // we don't expect anymore passthroughs and can proceed with normal operations
+            Some(false) => return Ok(()),
+            // command is passthrough
+            Some(true) => {
+                let next_command = inbound.recv().await.context("Inbound channel closed")?;
+                match next_command {
+                    L1SenderCommand::SendToL1(_) => {
+                        anyhow::bail!("Mismatch between peeked and received command")
+                    }
+                    L1SenderCommand::Passthrough(batch) => {
+                        tracing::info!(
+                            command_name,
+                            batch_number = batch.batch_number(),
+                            "Not actually sending to L1, just passing through"
+                        );
+                        latency_tracker.enter_state(L1SenderState::WaitingSend);
+                        outbound
+                            .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
+                            .await?;
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn tx_request_with_gas_fields(
     provider: &dyn Provider,
     operator_address: Address,
@@ -202,7 +264,7 @@ async fn tx_request_with_gas_fields(
 
 async fn register_operator<
     P: Provider + WalletProvider<Wallet = EthereumWallet>,
-    Input: L1SenderCommand,
+    Input: SendToL1,
 >(
     provider: &mut P,
     private_key: SecretString,
@@ -230,7 +292,7 @@ async fn register_operator<
     Ok(address)
 }
 
-async fn validate_tx_receipt<Input: L1SenderCommand>(
+async fn validate_tx_receipt<Input: SendToL1>(
     provider: &impl Provider,
     command: &Input,
     receipt: TransactionReceipt,
