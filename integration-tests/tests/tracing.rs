@@ -530,8 +530,9 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
         values[0], values[1],
         "db.getState must return the same value as stored as a sanity check"
     );
+    let res = secondary_data * calculate_value;
     assert_eq!(
-        format!("{secondary_data:#x}").to_lowercase(),
+        format!("{res:#x}").to_lowercase(),
         format!(
             "{:#x}",
             u128::from_str_radix(values[0].trim_start_matches("0x"), 16)?

@@ -5,6 +5,8 @@ import "./TracingSecondary.sol";
 contract TracingPrimary {
     TracingSecondary secondary;
 
+    uint256 public lastCalculated;
+
     constructor(address _secondary) {
         secondary = TracingSecondary(_secondary);
     }
@@ -14,7 +16,10 @@ contract TracingPrimary {
     }
 
     function calculate(uint256 value) public returns (uint) {
-        return secondary.multiply(value);
+        uint result = secondary.multiply(value);
+        lastCalculated = result;
+
+        return result;
     }
 
     function shouldRevert() public view returns (uint) {
