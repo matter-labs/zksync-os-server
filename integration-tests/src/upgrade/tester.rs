@@ -44,8 +44,6 @@ pub struct UpgradeTester {
     pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<EthDynProvider>,
     // Current protocol version
     pub protocol_version: U256,
-    // TODO (not discoverable without config right now): // Address of bytecode supplier contract
-    // l1_bytecode_supplier: Address,
 }
 
 impl UpgradeTester {
@@ -133,7 +131,7 @@ impl UpgradeTester {
         // Bytecode supplier is a bit special: right now it's not discoverable
         // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
         // to the value stored in `zkos-l1-state.json`.
-        let bytecode_supplier_address = "0x8e7f59534b29d4de9f6979e349392a3dc351592f".parse()?;
+        let bytecode_supplier_address = "0x883498218f553d748e48b43595a7d29a82939f01".parse()?;
         anyhow::ensure!(
             !tester
                 .l1_provider

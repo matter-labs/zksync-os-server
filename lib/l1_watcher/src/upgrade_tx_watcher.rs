@@ -6,14 +6,15 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
 use tokio::sync::mpsc;
-use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeTransaction};
 
-use zk_os_api::helpers::set_properties_code;
-use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
+// TODO: disabled until bytecode supplier integration is ready
+// use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
+// use zk_os_api::helpers::set_properties_code;
+// use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
@@ -21,6 +22,7 @@ const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 pub struct L1UpgradeTxWatcher {
     provider: DynProvider,
     /// Address of the bytecode supplier contract (used to detect published bytecode preimages)
+    #[allow(dead_code)] // TODO: enable once bytecode supplier integration is ready
     bytecode_supplier_address: Address,
     /// Address of the CTM contract (used to detect upgrade priority transactions)
     ctm: Address,
@@ -174,6 +176,7 @@ impl L1UpgradeTxWatcher {
             return Ok(Vec::new());
         }
 
+        // TODO: Bytecode supplier is not ready yet for ZKsync OS.
         panic!("fetching force deployment preimages is not yet implemented");
 
         // tracing::info!(
