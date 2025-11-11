@@ -8,13 +8,17 @@ use tokio::sync::{Mutex, mpsc};
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
 use zksync_os_crypto::hasher::Hasher;
 use zksync_os_crypto::hasher::keccak::KeccakHasher;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_mini_merkle_tree::{HashEmptySubtree, MiniMerkleTree};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::PeekableReceiver;
 use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay, ReplayRecord};
 use zksync_os_types::ZkEnvelope;
+
+type InputChannel = PeekableReceiver<SignedBatchEnvelope<FriProof>>;
+type OutputChannel = mpsc::Sender<L1SenderCommand<ExecuteCommand>>;
 
 mod db;
 
@@ -102,10 +106,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
     ///   and it will keep adding new transactions to the tree for finalized blocks.
     pub async fn prepare_execute_commands(
         self,
-        main_node_channels: Option<(
-            PeekableReceiver<BatchEnvelope<FriProof>>,
-            mpsc::Sender<ExecuteCommand>,
-        )>,
+        main_node_channels: Option<(InputChannel, OutputChannel)>,
         priority_ops_internal_sender: mpsc::Sender<(u64, u64, Option<usize>)>,
     ) -> anyhow::Result<()> {
         let latency_tracker = ComponentStateReporter::global().handle_for(
@@ -132,8 +133,25 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
             let (batch_envelopes, batch_ranges) = match proved_batch_envelopes_receiver.as_mut() {
                 Some(r) => {
                     // todo(#160): we enforce executing one batch at a time for now as we don't have
-                    //             aggregation seal criteria yet
-                    let envelopes = take_n(r, 1).await?;
+                    //             aggregation seal criteria yet.
+                    //             Addressing this includes reworking L1SenderCommand::Passthrough logic -
+                    //             Aggregation is only possible AFTER the last_executed_batch_on_init.
+                    let envelope = take_n(r, 1).await?.pop().unwrap();
+                    if envelope.batch_number() <= self.last_executed_batch_on_init {
+                        tracing::info!(
+                            batch_number = envelope.batch_number(),
+                            "Passing through batch that was already executed"
+                        );
+                        latency_tracker.enter_state(GenericComponentState::WaitingSend);
+                        if let Some(sender) = &execute_batches_sender {
+                            sender
+                                .send(L1SenderCommand::Passthrough(Box::new(envelope)))
+                                .await?;
+                        }
+
+                        continue;
+                    }
+                    let envelopes = vec![envelope];
                     let ranges = envelopes
                         .iter()
                         .map(|e| {
@@ -252,8 +270,11 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
             drop(merkle_tree);
             if let Some(s) = &execute_batches_sender {
                 latency_tracker.enter_state(GenericComponentState::WaitingSend);
-                s.send(ExecuteCommand::new(batch_envelopes.unwrap(), priority_ops))
-                    .await?;
+                s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
+                    batch_envelopes.unwrap(),
+                    priority_ops,
+                )))
+                .await?;
             }
             last_processed_batch = batch_ranges.last().unwrap().0;
         }

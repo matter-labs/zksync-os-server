@@ -5,10 +5,10 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    BatcherConfig, Config, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig,
-    L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RollupPubdataMode, RpcConfig, SequencerConfig, StateBackendConfig,
-    StatusServerConfig, TxValidatorConfig,
+    BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
+    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RollupPubdataMode, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::run;
 use zksync_os_server::zkstack_config::ZkStackConfig;
@@ -171,6 +171,9 @@ fn build_configs() -> Config {
     schema
         .insert(&GasAdjusterConfig::DESCRIPTION, "gas_adjuster")
         .expect("Failed to insert gas adjuster config");
+    schema
+        .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
+        .expect("Failed to insert batch verification config");
 
     let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
 
@@ -258,6 +261,12 @@ fn build_configs() -> Config {
         .parse()
         .expect("Failed to parse gas adjuster config");
 
+    let batch_verification_config = repo
+        .single::<BatchVerificationConfig>()
+        .expect("Failed to load batch verification config")
+        .parse()
+        .expect("Failed to parse batch verification config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -310,5 +319,6 @@ fn build_configs() -> Config {
         status_server_config,
         observability_config,
         gas_adjuster_config,
+        batch_verification_config,
     }
 }

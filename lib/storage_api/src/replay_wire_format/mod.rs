@@ -10,6 +10,8 @@ mod v2;
 #[rustfmt::skip]
 mod v3;
 #[rustfmt::skip]
+mod v4;
+#[rustfmt::skip]
 mod v5;
 
 #[cfg(test)]
@@ -44,6 +46,13 @@ impl ReplayRecord {
             }
             3 => {
                 let wire_format: v3::ReplayWireFormatV3 =
+                    bincode::decode_from_slice(bytes, bincode::config::standard())
+                        .unwrap()
+                        .0;
+                wire_format.into()
+            }
+            4 => {
+                let wire_format: v4::ReplayWireFormatV4 =
                     bincode::decode_from_slice(bytes, bincode::config::standard())
                         .unwrap()
                         .0;

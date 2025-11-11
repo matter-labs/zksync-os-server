@@ -2,7 +2,8 @@ use super::snark_job_manager::SnarkJobManager;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 
@@ -18,18 +19,22 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// - HTTP server (provers call pick_next_job, submit_proof, etc.)
 /// - Fake provers pool
 pub struct SnarkProvingPipelineStep {
-    batches_for_prove_sender: mpsc::Sender<BatchEnvelope<FriProof>>,
+    last_proved_batch_number: u64,
+    batches_for_prove_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     proof_commands_receiver: mpsc::Receiver<ProofCommand>,
 }
 
 impl SnarkProvingPipelineStep {
-    pub fn new(max_fris_per_snark: usize) -> (Self, Arc<SnarkJobManager>) {
+    pub fn new(
+        max_fris_per_snark: usize,
+        last_proved_batch_number: u64,
+    ) -> (Self, Arc<SnarkJobManager>) {
         // Create channels for SnarkJobManager
         // IMPORTANT: capacity `max_fris_per_snark` to allow SnarkJobManager
         //            to group multiple batches (FRI proofs) to a single SNARK
         //            (on `pick_snark_job` request, it consumes messages from the inbound channel up until `max_fris_per_snark`)
         let (batches_for_prove_sender, batches_for_prove_receiver) =
-            mpsc::channel::<BatchEnvelope<FriProof>>(max_fris_per_snark);
+            mpsc::channel::<SignedBatchEnvelope<FriProof>>(max_fris_per_snark);
 
         let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(1);
 
@@ -40,6 +45,7 @@ impl SnarkProvingPipelineStep {
         ));
 
         let result = Self {
+            last_proved_batch_number,
             batches_for_prove_sender,
             proof_commands_receiver,
         };
@@ -50,8 +56,8 @@ impl SnarkProvingPipelineStep {
 
 #[async_trait]
 impl PipelineComponent for SnarkProvingPipelineStep {
-    type Input = BatchEnvelope<FriProof>;
-    type Output = ProofCommand;
+    type Input = SignedBatchEnvelope<FriProof>;
+    type Output = L1SenderCommand<ProofCommand>;
 
     const NAME: &'static str = "snark_proving";
     const OUTPUT_BUFFER_SIZE: usize = 5;
@@ -66,12 +72,16 @@ impl PipelineComponent for SnarkProvingPipelineStep {
         tokio::select! {
             _ = async {
                 while let Some(batch) = input.recv().await {
-                    let _ = self.batches_for_prove_sender.send(batch).await;
+                    if batch.batch_number() > self.last_proved_batch_number {
+                        let _ = self.batches_for_prove_sender.send(batch).await;
+                    } else {
+                        let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
+                    }
                 }
             } => anyhow::bail!("SNARK proving input stream ended unexpectedly"),
             _ = async {
                 while let Some(proof_command) = self.proof_commands_receiver.recv().await {
-                    let _ = output.send(proof_command).await;
+                    let _ = output.send(L1SenderCommand::SendToL1(proof_command)).await;
                 }
             } => anyhow::bail!("SNARK proving output stream ended unexpectedly"),
         }

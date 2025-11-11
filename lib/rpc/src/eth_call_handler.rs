@@ -429,7 +429,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // we know the tx succeeded with the configured gas limit, so we can use that as the
         // highest, in case we applied a gas cap due to caller allowance above
         highest_gas_limit = tx.gas_limit();
-        let initial_highest_gas_limit = highest_gas_limit;
 
         // NOTE: this is the gas the transaction used, which is less than the
         // transaction requires to succeed.
@@ -531,25 +530,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             // New midpoint
             mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
         }
-
-        // At the moment there is an additional pubdata that is charged for each non-first tx for publishing changes of the coinbase account.
-        // To account for it we gas needed to publish 50 bytes of pubdata.
-        // It should be fixed in ZKsync OS v1.3 and this extra margin should be removed.
-        const PUBDATA_BYTES_MARGIN: u64 = 50;
-        let gas_per_pubdata = block_context
-            .pubdata_price
-            .div_ceil(block_context.eip1559_basefee);
-
-        let new_estimate = {
-            let mut gas = U256::from(highest_gas_limit);
-            gas += gas_per_pubdata * U256::from(PUBDATA_BYTES_MARGIN);
-            if gas > U256::from(u64::MAX) {
-                u64::MAX
-            } else {
-                gas.to()
-            }
-        };
-        highest_gas_limit = initial_highest_gas_limit.min(new_estimate);
 
         Ok(U256::from(highest_gas_limit))
     }

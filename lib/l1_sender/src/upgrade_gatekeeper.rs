@@ -1,4 +1,4 @@
-use crate::commands::commit::CommitCommand;
+use crate::commands::{L1SenderCommand, commit::CommitCommand};
 use alloy::providers::DynProvider;
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -66,8 +66,8 @@ impl UpgradeGatekeeper {
 
 #[async_trait]
 impl PipelineComponent for UpgradeGatekeeper {
-    type Input = CommitCommand;
-    type Output = CommitCommand;
+    type Input = L1SenderCommand<CommitCommand>;
+    type Output = L1SenderCommand<CommitCommand>;
 
     const NAME: &'static str = "upgrade_gatekeeper";
     const OUTPUT_BUFFER_SIZE: usize = 5;
@@ -86,12 +86,14 @@ impl PipelineComponent for UpgradeGatekeeper {
                 anyhow::bail!("UpgradeGatekeeper input stream ended unexpectedly");
             };
 
-            latency_tracker.enter_state(GenericComponentState::Processing);
+            if let L1SenderCommand::SendToL1(command) = &command {
+                latency_tracker.enter_state(GenericComponentState::Processing);
 
-            let batch_protocol_version = command.input().batch.protocol_version.clone();
+                let batch_protocol_version = command.input().batch.protocol_version.clone();
 
-            self.wait_until_protocol_version(&batch_protocol_version)
-                .await?;
+                self.wait_until_protocol_version(&batch_protocol_version)
+                    .await?;
+            }
 
             output.send(command).await?;
         }

@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use std::path::Path;
 use tokio::sync::mpsc;
-use zksync_os_l1_sender::batcher_model::{BatchEnvelope, FriProof};
+use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
+use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_priority_tree::PriorityTreeManager;
@@ -58,8 +59,8 @@ where
     Finality: ReadFinality + Clone + Send + 'static,
     BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
 {
-    type Input = BatchEnvelope<FriProof>;
-    type Output = ExecuteCommand;
+    type Input = SignedBatchEnvelope<FriProof>;
+    type Output = L1SenderCommand<ExecuteCommand>;
 
     const NAME: &'static str = "priority_tree";
     const OUTPUT_BUFFER_SIZE: usize = 5;

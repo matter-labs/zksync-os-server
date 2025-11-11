@@ -1,10 +1,12 @@
 use crate::transaction::L1TxType;
 use crate::transaction::l1::L1Envelope;
-use crate::transaction::l2::{L2Envelope, L2Transaction};
+use crate::transaction::l2::L2Transaction;
 use crate::{ZkEnvelope, ZkTransaction};
 use alloy::consensus::Transaction;
+use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, B256, U256};
 use alloy::sol_types::SolValue;
+use zksync_os_interface::traits::EncodedTx;
 
 /// A transaction that can be encoded in ZKsync OS generic transaction format.
 ///
@@ -12,15 +14,32 @@ use alloy::sol_types::SolValue;
 pub trait ZksyncOsEncode {
     /// Encode transaction in ZKsync OS generic transaction format. See
     /// `basic_bootloader::bootloader::transaction::ZkSyncTransaction` for the exact spec.
-    fn encode(self) -> Vec<u8>;
+    fn encode(self) -> EncodedTx;
 }
 
-impl<T> ZksyncOsEncode for T
-where
-    TransactionData: From<T>,
-{
-    fn encode(self) -> Vec<u8> {
-        TransactionData::from(self).abi_encode()
+impl<T: L1TxType> ZksyncOsEncode for L1Envelope<T> {
+    fn encode(self) -> EncodedTx {
+        EncodedTx::Abi(TransactionData::from(self).abi_encode())
+    }
+}
+
+impl ZksyncOsEncode for L2Transaction {
+    fn encode(self) -> EncodedTx {
+        let (envelope, signer) = self.into_parts();
+        EncodedTx::Rlp(envelope.encoded_2718(), signer)
+    }
+}
+
+impl ZksyncOsEncode for ZkTransaction {
+    fn encode(self) -> EncodedTx {
+        let (envelope, signer) = self.into_parts();
+        match envelope {
+            ZkEnvelope::L1(l1_envelope) => l1_envelope.encode(),
+            ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.encode(),
+            ZkEnvelope::L2(l2_envelope) => {
+                L2Transaction::new_unchecked(l2_envelope, signer).encode()
+            }
+        }
     }
 }
 
@@ -99,52 +118,6 @@ impl<T: L1TxType> From<L1Envelope<T>> for TransactionData {
     }
 }
 
-impl From<L2Envelope> for TransactionData {
-    fn from(l2_tx: L2Envelope) -> Self {
-        let nonce = U256::from_be_slice(&l2_tx.nonce().to_be_bytes());
-
-        let should_check_chain_id = if l2_tx.is_legacy() && l2_tx.chain_id().is_some() {
-            U256::ONE
-        } else {
-            U256::ZERO
-        };
-
-        let is_deployment_transaction = if l2_tx.is_create() {
-            U256::ONE
-        } else {
-            U256::ZERO
-        };
-
-        TransactionData {
-            tx_type: U256::from(l2_tx.tx_type() as u8),
-            from: Address::ZERO,
-            to: l2_tx.to().unwrap_or_default(),
-            gas_limit: U256::from(l2_tx.gas_limit()),
-            pubdata_price_limit: U256::from(0),
-            max_fee_per_gas: U256::from(l2_tx.max_fee_per_gas()),
-            max_priority_fee_per_gas: U256::from(
-                l2_tx
-                    .max_priority_fee_per_gas()
-                    .unwrap_or_else(|| l2_tx.max_fee_per_gas()),
-            ),
-            paymaster: Address::ZERO,
-            nonce,
-            value: l2_tx.value(),
-            reserved: [
-                should_check_chain_id,
-                is_deployment_transaction,
-                U256::ZERO,
-                U256::ZERO,
-            ],
-            data: l2_tx.input().to_vec(),
-            signature: l2_tx.signature().as_bytes().to_vec(),
-            factory_deps: vec![],
-            paymaster_input: vec![],
-            reserved_dynamic: vec![],
-        }
-    }
-}
-
 impl From<L2Transaction> for TransactionData {
     fn from(l2_tx: L2Transaction) -> Self {
         let (l2_tx, from) = l2_tx.into_parts();
@@ -208,8 +181,8 @@ impl From<L2Transaction> for TransactionData {
 
 impl From<ZkTransaction> for TransactionData {
     fn from(value: ZkTransaction) -> Self {
-        let (l2_envelope, signer) = value.into_parts();
-        match l2_envelope {
+        let (envelope, signer) = value.into_parts();
+        match envelope {
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
             ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.into(),
             ZkEnvelope::L2(l2_envelope) => L2Transaction::new_unchecked(l2_envelope, signer).into(),

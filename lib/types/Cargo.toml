@@ -20,6 +20,7 @@ serde.workspace = true
 semver.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
+zksync_os_interface.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

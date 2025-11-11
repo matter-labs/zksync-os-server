@@ -9,6 +9,7 @@ use smart_config::{
     de::{Delimited, Optional},
 };
 use std::{path::PathBuf, time::Duration};
+use zksync_os_batch_verification;
 use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
@@ -37,6 +38,7 @@ pub struct Config {
     pub status_server_config: StatusServerConfig,
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
+    pub batch_verification_config: BatchVerificationConfig,
 }
 
 /// "Umbrella" config for the node.
@@ -57,10 +59,9 @@ pub struct GeneralConfig {
     pub min_blocks_to_replay: usize,
 
     /// Force a block number to start replaying from.
-    /// For Compacted backend it can either be `0` or `last_compacted_block + 1`.
-    /// For FullDiffs backend:
+    /// Only FullDiffs backend is supported:
     ///     On EN: can be any historical block number;
-    ///     On Main Node: any historical block number up to the last l1 committed one.
+    ///     On Main Node: any historical block number up to the last l1 executed one.
     #[config(default_t = None)]
     pub force_starting_block_number: Option<u64>,
 
@@ -103,7 +104,7 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some("0x8bd76a67b984e8f0b902a82220a90fc45d9738a9".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("0xfaf7f9079efe7e9b681aab926e7ca9801af4f993".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
@@ -132,7 +133,13 @@ pub struct StatusServerConfig {
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct RebuildBlocksConfig {
+    /// Number of the block to start rebuilding from.
+    /// All blocks starting from this number will be replayed - but unlike normal replay,
+    /// we'll not assert that the result will match the original ReplayRecord (block).
+    /// That is, a block may close earlier (with less transactions),
+    /// have different hash, have some transactions rejected etc
     pub from_block: u64,
+    /// List of blocks to empty (i.e., remove all transactions from).
     #[config(default, with = Delimited(","))]
     pub blocks_to_empty: Vec<u64>,
 }
@@ -205,6 +212,7 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
 
+    /// Block rebuild options.
     #[config(nest)]
     pub block_rebuild: Option<RebuildBlocksConfig>,
 }
@@ -264,19 +272,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0xe3cfac06fad7427cc296c5ef0778f97c7bd59038294a746d59aafd8c8e64c96f".into())]
+    #[config(alias = "operator_private_key", default_t = "0x4767f9b6858faf59e4290e3e666e303a9ff8df30e5e7121b6d2eb264fd2ce7cf".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x18d5754d1941125257bea433b38e5c3562e5ddb096bc84d9d5cb497eab713f40".into())]
+    #[config(default_t = "0x31edee9894c631cbff9ea4a1c7de94d10d0b86ebdb989768e3f00398b0ab4a8a".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x0d8523c8d72254293dd3fec214fe08c1eee7a813dfb959812f4a5c99024ab5e6".into())]
+    #[config(default_t = "0xd63de199732e0fd9802cfa207521c9a6d4c5f492ff816f688e89b278482c19dd".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
@@ -370,16 +378,6 @@ pub struct ProverInputGeneratorConfig {
     /// The batcher will wait for block N to finish before starting block N + maximum_in_flight_blocks.
     #[config(default_t = 16)]
     pub maximum_in_flight_blocks: usize,
-
-    /// Normally, the Prover input generator skips the blocks that are already FRI proved and committed to L1.
-    /// When this option is enabled, it will reprocess all the blocks replayed by the node on startup.
-    /// The number of blocks to replay on startup is configurable via `min_blocks_to_replay`.
-    #[config(default_t = false)]
-    pub force_process_old_blocks: bool,
-
-    /// Path to the directory where RiscV binaries are unpacked (server_app.bin, app_data.bin, etc)
-    #[config(default_t = "./db/app_bins".into())]
-    pub app_bin_unpack_path: PathBuf,
 }
 
 /// Only used on the Main Node.
@@ -547,6 +545,43 @@ pub struct OtlpConfig {
     pub logging_endpoint: Option<String>,
 }
 
+/// Configuration for batch verification client and server
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BatchVerificationConfig {
+    /// [server] If we are collecting batch verification signatures
+    #[config(default_t = false)]
+    pub server_enabled: bool,
+    /// [server] Batch verification server address to listen on.
+    #[config(default_t = "0.0.0.0:3072".into())]
+    pub listen_address: String,
+    /// [en] If we are signing batches
+    #[config(default_t = false)]
+    pub client_enabled: bool,
+    /// [en] Batch verification server address to connect to.
+    #[config(default_t = "127.0.0.1:3072".into())]
+    pub connect_address: String,
+    /// [server] Threshold (number of needed signatures)
+    #[config(default_t = 1)]
+    pub threshold: usize,
+    /// [server] Accepted signer pubkeys
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()])]
+    pub accepted_signers: Vec<String>,
+    /// [server] Iteration timeout
+    #[config(default_t = Duration::from_secs(5))]
+    pub request_timeout: Duration,
+    /// [server] Retry delay between attempts
+    #[config(default_t = Duration::from_secs(1))]
+    pub retry_delay: Duration,
+    /// [server] Total timeout
+    #[config(default_t = Duration::from_secs(300))]
+    pub total_timeout: Duration,
+    /// [en] Signing key
+    // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
+    #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
+    pub signing_key: SecretString,
+}
+
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     fn from(c: RpcConfig) -> Self {
         Self {
@@ -643,6 +678,23 @@ impl From<RebuildBlocksConfig> for RebuildOptions {
         Self {
             rebuild_from_block: c.from_block,
             blocks_to_empty: c.blocks_to_empty.into_iter().collect(),
+        }
+    }
+}
+
+impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerificationConfig {
+    fn from(c: BatchVerificationConfig) -> Self {
+        Self {
+            server_enabled: c.server_enabled,
+            listen_address: c.listen_address,
+            client_enabled: c.client_enabled,
+            connect_address: c.connect_address,
+            threshold: c.threshold,
+            accepted_signers: c.accepted_signers,
+            request_timeout: c.request_timeout,
+            retry_delay: c.retry_delay,
+            total_timeout: c.total_timeout,
+            signing_key: c.signing_key,
         }
     }
 }
