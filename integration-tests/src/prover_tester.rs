@@ -8,6 +8,7 @@ use backon::{ConstantBuilder, Retryable};
 use std::time::Duration;
 use zksync_os_contract_interface::l1_discovery::L1State;
 
+#[derive(Debug)]
 pub struct ProverTester {
     l1_provider: EthDynProvider,
     l2_provider: EthDynProvider,

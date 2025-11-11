@@ -40,6 +40,7 @@ pub enum BlockReplayColumnFamily {
     Txs,
     NodeVersion,
     ProtocolVersion,
+    ForcePreimages,
     BlockOutputHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
@@ -53,6 +54,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::Txs,
         BlockReplayColumnFamily::NodeVersion,
         BlockReplayColumnFamily::ProtocolVersion,
+        BlockReplayColumnFamily::ForcePreimages,
         BlockReplayColumnFamily::BlockOutputHash,
         BlockReplayColumnFamily::Latest,
     ];
@@ -65,6 +67,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::NodeVersion => "node_version",
             BlockReplayColumnFamily::ProtocolVersion => "protocol_version",
             BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
+            BlockReplayColumnFamily::ForcePreimages => "force_preimages",
             BlockReplayColumnFamily::Latest => "latest",
         }
     }
@@ -86,6 +89,7 @@ impl BlockReplayStorage {
 
         let this = Self { db };
         if this.latest_record_checked().is_none() {
+            let genesis_tx = genesis.genesis_upgrade_tx().await;
             let genesis_context = &genesis.state().await.context;
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
@@ -98,6 +102,7 @@ impl BlockReplayStorage {
                 node_version,
                 protocol_version: genesis_protocol_version,
                 block_output_hash: B256::ZERO,
+                force_preimages: genesis_tx.force_deploy_preimages,
             })
         }
         this
@@ -146,6 +151,23 @@ impl BlockReplayStorage {
             BlockReplayColumnFamily::BlockOutputHash,
             &block_num,
             &record.block_output_hash.0,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::ProtocolVersion,
+            &block_num,
+            record.protocol_version.to_string().as_bytes(),
+        );
+        let force_preimages_value = bincode::encode_to_vec(
+            &StorageForcePreimages {
+                preimages: record.force_preimages,
+            },
+            bincode::config::standard(),
+        )
+        .expect("Failed to serialize record.force_preimages");
+        batch.put_cf(
+            BlockReplayColumnFamily::ForcePreimages,
+            &block_num,
+            &force_preimages_value,
         );
 
         self.db
@@ -251,6 +273,21 @@ impl ReadReplay for BlockReplayStorage {
             ProtocolSemanticVersion::latest()
         };
 
+        let force_preimages = if let Some(preimages) = self
+            .db
+            .get_cf(BlockReplayColumnFamily::ForcePreimages, &key)
+            .expect("Failed to read from ForcePreimages CF")
+        {
+            let stored: StorageForcePreimages =
+                bincode::decode_from_slice(&preimages, bincode::config::standard())
+                    .expect("Failed to deserialize force preimages")
+                    .0;
+            stored.preimages
+        } else {
+            // We assume that protocol check would panic if DB is inconsistent state.
+            vec![]
+        };
+
         let block_output_hash = self
             .db
             .get_cf(BlockReplayColumnFamily::BlockOutputHash, &key)
@@ -280,6 +317,7 @@ impl ReadReplay for BlockReplayStorage {
                 .expect("Failed to parse node version"),
             protocol_version,
             block_output_hash: B256::from_slice(&block_output_hash),
+            force_preimages,
         })
     }
 
@@ -337,3 +375,9 @@ pub struct BlockReplayRocksDBMetrics {
 #[vise::register]
 pub static BLOCK_REPLAY_ROCKS_DB_METRICS: vise::Global<BlockReplayRocksDBMetrics> =
     vise::Global::new();
+
+#[derive(Debug, bincode::Encode, bincode::Decode)]
+pub struct StorageForcePreimages {
+    #[bincode(with_serde)]
+    pub preimages: Vec<(B256, Vec<u8>)>,
+}

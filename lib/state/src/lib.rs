@@ -54,7 +54,7 @@ impl StateHandle {
             RocksDB::<PreimagesCF>::new(&rocks_db_path.join(PREIMAGES_STORAGE_DB_NAME))
                 .expect("Failed to open Preimages DB");
 
-        let persistent_preimages = PersistentPreimages::new(preimages_db, genesis).await;
+        let persistent_preimages = PersistentPreimages::new(preimages_db).await;
 
         let storage_map_block = storage_map.latest_block.load(Ordering::Relaxed);
         let preimages_block = persistent_preimages.rocksdb_block_number();
@@ -128,6 +128,14 @@ impl ReadStateHistory for StateHandle {
 }
 
 impl WriteState for StateHandle {
+    fn force_add_preimages<'a, J>(&self, new_preimages: J) -> anyhow::Result<()>
+    where
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
+    {
+        self.persistent_preimages.force_add(new_preimages);
+        Ok(())
+    }
+
     /// Adds a block result to the state components
     /// No atomicity guarantees
     /// PreimageType is currently ignored

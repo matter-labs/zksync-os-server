@@ -42,6 +42,12 @@ pub trait ReadStateHistory: Debug + Send + Sync + 'static {
 }
 
 pub trait WriteState: Send + Sync + 'static {
+    /// Can be used to forcibly add preimages without associating them with a block.
+    /// Useful when preimages are fetched from external source, e.g. genesis upgrade or L1 bytecode supplier.
+    fn force_add_preimages<'a, J>(&self, new_preimages: J) -> anyhow::Result<()>
+    where
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>;
+
     /// Add given block to state.
     fn add_block_result<'a, J>(
         &self,

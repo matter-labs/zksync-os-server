@@ -130,6 +130,25 @@ alloy::sol! {
             bytes initCalldata;
         }
 
+        struct VerifierParams {
+            bytes32 recursionNodeLevelVkHash;
+            bytes32 recursionLeafLevelVkHash;
+            bytes32 recursionCircuitsSetVksHash;
+        }
+
+        struct ProposedUpgrade {
+            L2CanonicalTransaction l2ProtocolUpgradeTx;
+            bytes32 bootloaderHash;
+            bytes32 defaultAccountHash;
+            bytes32 evmEmulatorHash;
+            address verifier;
+            VerifierParams verifierParams;
+            bytes l1ContractsUpgradeCalldata;
+            bytes postUpgradeCalldata;
+            uint256 upgradeTimestamp;
+            uint256 newProtocolVersion;
+        }
+
         /// Defines an upgrade from version A to version B
         event NewProtocolVersion(uint256 indexed oldProtocolVersion, uint256 indexed newProtocolVersion);
 
@@ -147,6 +166,8 @@ alloy::sol! {
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
         function getAdmin() external view returns (address);
+        function getChainTypeManager() external view returns (address);
+        function getProtocolVersion() external view returns (uint256);
     }
 
     // Taken from `IExecutor.sol`
@@ -224,6 +245,11 @@ alloy::sol! {
     // `IChainAdmin.sol`
     interface IChainAdmin {
         event UpdateUpgradeTimestamp(uint256 indexed protocolVersion, uint256 upgradeTimestamp);
+    }
+
+    // `BytecodeSupplier.sol`
+    interface IBytecodeSupplier {
+        event BytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
     }
 }
 
@@ -442,5 +468,16 @@ impl<P: Provider> ZkChain<P> {
     /// Returns the current admin of the chain.
     pub async fn get_admin(&self) -> alloy::contract::Result<Address> {
         self.instance.getAdmin().call().await
+    }
+
+    /// Returns the current CTM for the chain.
+    pub async fn get_chain_type_manager(&self) -> alloy::contract::Result<Address> {
+        self.instance.getChainTypeManager().call().await
+    }
+
+    /// Returns the current protocol version of the chain.
+    /// Returned value is the raw (U256) representation.
+    pub async fn get_raw_protocol_version(&self) -> alloy::contract::Result<U256> {
+        self.instance.getProtocolVersion().call().await
     }
 }

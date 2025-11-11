@@ -1,6 +1,5 @@
 use crate::metrics::PREIMAGES_METRICS;
 use alloy::primitives::B256;
-use zksync_os_genesis::Genesis;
 use zksync_os_interface::traits::PreimageSource;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
@@ -36,22 +35,8 @@ impl PreimagesCF {
 }
 
 impl PersistentPreimages {
-    pub async fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
-        let genesis_needed = rocksdb_block_number(&rocks).is_none();
-        let this = Self { rocks };
-        if genesis_needed {
-            let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
-            let iter = genesis
-                .state()
-                .await
-                .preimages
-                .iter()
-                .chain(force_deploy_preimages.iter())
-                .map(|(k, v)| (*k, v));
-            this.add(0, iter);
-        }
-
-        this
+    pub async fn new(rocks: RocksDB<PreimagesCF>) -> Self {
+        Self { rocks }
     }
 
     pub fn rocksdb_block_number(&self) -> u64 {
@@ -71,6 +56,23 @@ impl PersistentPreimages {
             .flatten();
         latency_observer.observe();
         res
+    }
+
+    /// Unlike `add`, this method does not update the block number.
+    pub fn force_add<'a, J>(&self, new_preimages: J)
+    where
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
+    {
+        let latency_observer = PREIMAGES_METRICS.set[&"force_add"].start();
+
+        let mut batch = self.rocks.new_write_batch();
+
+        for (k, v) in new_preimages {
+            batch.put_cf(PreimagesCF::Storage, k.as_slice(), v);
+        }
+
+        self.rocks.write(batch).expect("RocksDB write failed");
+        latency_observer.observe();
     }
 
     pub fn add<'a, J>(&self, new_block_number: u64, diffs: J)

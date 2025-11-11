@@ -98,6 +98,13 @@ impl ReadStateHistory for FullDiffsState {
 }
 
 impl WriteState for FullDiffsState {
+    fn force_add_preimages<'a, J>(&self, new_preimages: J) -> anyhow::Result<()>
+    where
+        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
+    {
+        self.preimages.add(new_preimages)
+    }
+
     fn add_block_result<'a, J>(
         &self,
         block_number: u64,

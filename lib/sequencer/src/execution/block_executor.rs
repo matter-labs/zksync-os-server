@@ -127,12 +127,17 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                     "Transaction executed"
                                 );
 
+                                let tx_type = tx.tx_type();
                                 executed_txs.push(tx);
                                 cumulative_gas_used += res.gas_used;
 
                                 // arm the timer once, after the first successful tx
                                 if deadline.is_none() && let Some(dur) = deadline_dur {
                                     deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                                }
+                                if tx_type == ZkTxType::Upgrade {
+                                    tracing::debug!(block = ctx.block_number, "sealing block as upgrade tx was executed");
+                                    break SealReason::UpgradeTx;
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
@@ -306,6 +311,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             command.node_version,
             command.protocol_version,
             block_hash_output,
+            command.force_preimages,
         ),
         purged_txs,
     ))
@@ -333,6 +339,8 @@ pub enum SealReason {
     NativeCycles,
     Pubdata,
     L2ToL1Logs,
+    // We executed upgrade transaction
+    UpgradeTx,
     Other,
 }
 

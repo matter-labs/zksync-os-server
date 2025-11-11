@@ -109,6 +109,9 @@ pub struct PreparedBlockCommand<'a> {
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
     pub expected_block_output_hash: Option<B256>,
     pub previous_block_timestamp: u64,
+    /// Contract preimages to be included before the block execution.
+    /// Can be non-empty e.g. when processing upgrade transactions.
+    pub force_preimages: Vec<(B256, Vec<u8>)>,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

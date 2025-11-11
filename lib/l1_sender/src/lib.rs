@@ -5,6 +5,7 @@ pub mod commitment;
 pub mod config;
 mod metrics;
 pub mod pipeline_component;
+pub mod upgrade_gatekeeper;
 
 use crate::batcher_model::{BatchEnvelope, FriProof};
 use crate::commands::L1SenderCommand;

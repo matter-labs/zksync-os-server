@@ -1,6 +1,8 @@
 // Even though Bridgehub is defined in `zksync_os_contract_interface`, we redefine it here,
 // since for an upgrade we need much more internals than the rest of the codebase cares about.
 alloy::sol! {
+    #![sol(all_derives)]
+
     #[sol(rpc)]
     contract Bridgehub {
         // Getters
@@ -56,6 +58,9 @@ alloy::sol! {
 
         // Admin facet
         function upgradeChainFromVersion(uint256 _protocolVersion, DiamondCutData calldata _cutData) external;
+        function getTotalBatchesCommitted() external view returns (uint256);
+        function getTotalBatchesVerified() external view returns (uint256);
+        function getTotalBatchesExecuted() external view returns (uint256);
     }
 
     #[sol(rpc)]
@@ -126,5 +131,23 @@ alloy::sol! {
             address _delegateTo,
             bytes calldata _calldata
         ) external payable;
+    }
+
+    /// Struct used to pass bytecode info for force deployment of ZKsyncOS contracts.
+    struct ForceDeploymentBytecodeInfo {
+        bytes32 bytecodeHash;
+        uint256 bytecodeSize;
+        bytes32 observableBytecodeHash;
+    }
+
+    #[sol(rpc)]
+    contract BytecodesSupplier {
+        /// @notice Publishes the bytecode hash and the bytecode itself.
+        /// @param _bytecode Bytecode to be published.
+        function publishBytecode(bytes calldata _bytecode) public;
+
+        /// @notice Publishes multiple bytecodes.
+        /// @param _bytecodes Array of bytecodes to be published.
+        function publishBytecodes(bytes[] calldata _bytecodes) external;
     }
 }
