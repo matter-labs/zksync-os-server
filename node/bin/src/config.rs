@@ -2,12 +2,14 @@ use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
+use smart_config::de::{Qualified, WellKnown};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{
     DescribeConfig, DeserializeConfig, Serde,
     de::{Delimited, Optional},
 };
+use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_contract_interface::models::BatchDaInputMode;
@@ -216,6 +218,16 @@ impl SequencerConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ConfigAddress(pub Address);
+
+const HASH_DE: Qualified<Serde![str]> =
+    Qualified::new(Serde![str], "hex string with optional 0x prefix");
+impl WellKnown for ConfigAddress {
+    type Deserializer = Qualified<Serde![str]>;
+    const DE: Self::Deserializer = HASH_DE;
+}
+
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct RpcConfig {
@@ -250,6 +262,10 @@ pub struct RpcConfig {
     /// Duration since the last filter poll, after which the filter is considered stale
     #[config(default_t = 15 * TimeUnit::Minutes)]
     pub stale_filter_ttl: Duration,
+
+    /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
+    #[config(default, with = Delimited(","))]
+    pub l2_signer_blacklist: HashSet<ConfigAddress>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -585,6 +601,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_response_size: c.max_response_size,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
+            l2_signer_blacklist: c.l2_signer_blacklist.into_iter().map(|a| a.0).collect(),
             stale_filter_ttl: c.stale_filter_ttl,
         }
     }
