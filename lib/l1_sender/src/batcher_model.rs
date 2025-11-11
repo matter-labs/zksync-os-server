@@ -35,6 +35,7 @@ pub struct BatchMetadata {
     pub tx_count: usize,
     #[serde(default = "default_execution_version")]
     pub execution_version: u32,
+    #[serde(default = "default_protocol_version")] // Default to allow deserializing older objects
     pub protocol_version: ProtocolSemanticVersion,
 }
 
@@ -53,6 +54,11 @@ impl BatchMetadata {
 
 fn default_execution_version() -> u32 {
     1
+}
+
+fn default_protocol_version() -> ProtocolSemanticVersion {
+    // Last protocol version deployed before this field was added
+    ProtocolSemanticVersion::new(0, 29, 1)
 }
 
 #[derive(Debug)]
