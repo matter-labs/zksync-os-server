@@ -1,4 +1,5 @@
 use alloy::primitives::{Address, Bytes, U256};
+use alloy::providers::Provider;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
@@ -81,6 +82,15 @@ async fn upgrade_minor_with_deployments() -> anyhow::Result<()> {
     );
     let stored_value = force_deployed_contract.return42().call().await?;
     assert_eq!(stored_value, U256::from(42));
+
+    let main_node_block = upgrade_tester.tester.l2_provider.get_block_number().await?;
+
+    // Ensure that EN can sync from the upgraded node.
+    let en1 = upgrade_tester.tester.launch_external_node().await?;
+
+    while en1.l2_provider.get_block_number().await? < main_node_block {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 
     Ok(())
 }

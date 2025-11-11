@@ -227,12 +227,15 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         SealPolicy::UntilExhausted {
             allowed_to_finish_early,
         } => {
-            if !allowed_to_finish_early && seal_reason != SealReason::TxStreamExhausted {
+            if !allowed_to_finish_early
+                && seal_reason != SealReason::TxStreamExhausted
+                && seal_reason != SealReason::UpgradeTx
+            {
                 return Err(BlockDump {
                     ctx,
                     txs: all_processed_txs.clone(),
                     error: format!(
-                        "block was expected to be sealed due to stream exhaustion, but sealed due to {:?} instead, block {}",
+                        "block was expected to be sealed due to either stream exhaustion or upgrade tx, but sealed due to {:?} instead, block {}",
                         seal_reason, ctx.block_number
                     ),
                 });
