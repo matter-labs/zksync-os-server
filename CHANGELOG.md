@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.1](https://github.com/matter-labs/zksync-os-server/compare/v0.10.0...v0.10.1) (2025-11-12)
+
+
+### Features
+
+* Add REVM support of multiple execution versions ([#597](https://github.com/matter-labs/zksync-os-server/issues/597)) ([cccdba0](https://github.com/matter-labs/zksync-os-server/commit/cccdba0d7e88878438191079326463c9760c0aa4))
+* set default block time to 250ms ([#598](https://github.com/matter-labs/zksync-os-server/issues/598)) ([3f7c724](https://github.com/matter-labs/zksync-os-server/commit/3f7c724eb671a873064548293f70dff8a6290cb0))
+* set sensible global debug levels ([#600](https://github.com/matter-labs/zksync-os-server/issues/600)) ([5e2cdcf](https://github.com/matter-labs/zksync-os-server/commit/5e2cdcfd46ca6fc0f76c6fc36e393dcc003854f5))
+
+
+### Bug Fixes
+
+* register misc mempool metrics ([#599](https://github.com/matter-labs/zksync-os-server/issues/599)) ([02164b0](https://github.com/matter-labs/zksync-os-server/commit/02164b05fa753e051024bd13bc599a1f2e927336))
+
 ## [0.10.0](https://github.com/matter-labs/zksync-os-server/compare/v0.9.2...v0.10.0) (2025-11-06)
 
 
