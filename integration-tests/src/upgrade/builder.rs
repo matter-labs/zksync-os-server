@@ -1,6 +1,8 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::collections::BTreeMap;
+use zksync_os_types::{L1TxType as _, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
+use zksync_os_types::{ProtocolSemanticVersion, UpgradeTxType};
 
 use zk_os_api::helpers::set_properties_code;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
@@ -10,7 +12,7 @@ use super::interfaces::*;
 #[derive(Debug)]
 pub struct ProtocolUpgradeBuilder {
     /// New protocol version
-    protocol_version: U256,
+    protocol_version: ProtocolSemanticVersion,
 
     /// List of contracts to be force-deployed during the upgrade.
     force_deployments: Option<BTreeMap<Address, Bytes>>,
@@ -30,7 +32,10 @@ pub struct ProtocolUpgradeBuilder {
 
 impl ProtocolUpgradeBuilder {
     /// Create a new `ProtocolUpgradeBuilder` with default values.
-    pub(super) fn new(current_protocol_version: U256, delegate_to: (Address, Bytes)) -> Self {
+    pub(super) fn new(
+        current_protocol_version: ProtocolSemanticVersion,
+        delegate_to: (Address, Bytes),
+    ) -> Self {
         Self {
             protocol_version: current_protocol_version,
             force_deployments: None,
@@ -53,19 +58,26 @@ impl ProtocolUpgradeBuilder {
 
     /// Bump the minor protocol version by the specified amount.
     pub fn bump_minor(mut self, by: u64) -> Self {
-        let semver_minor_version_multiplier = U256::from(4294967296u64); // 2^32
-        self.protocol_version += semver_minor_version_multiplier * U256::from(by);
+        self.protocol_version = ProtocolSemanticVersion::new(
+            0,
+            self.protocol_version.minor + by,
+            self.protocol_version.patch,
+        );
         self
     }
 
     /// Bump the patch protocol version by the specified amount.
     pub fn bump_patch(mut self, by: u64) -> Self {
-        self.protocol_version += U256::from(by);
+        self.protocol_version = ProtocolSemanticVersion::new(
+            0,
+            self.protocol_version.minor,
+            self.protocol_version.patch + by,
+        );
         self
     }
 
     /// Sets the protocol version to the specified value.
-    pub fn set_version(mut self, version: U256) -> Self {
+    pub fn set_version(mut self, version: ProtocolSemanticVersion) -> Self {
         self.protocol_version = version;
         self
     }
@@ -86,10 +98,9 @@ impl ProtocolUpgradeBuilder {
     pub fn build(self) -> ProposedUpgrade {
         let (delegate_to_address, delegate_to_calldata) = self.delegate_to;
 
-        const DEPLOYER_ADDRESS: &str = "0x0000000000000000000000000000000000008007";
+        // Encoded as strings, because they are used as `U256` in the transaction.
+        const FORCE_DEPLOYER_ADDRESS: &str = "0x0000000000000000000000000000000000008007";
         const COMPLEX_UPGRADER_ADDRESS: &str = "0x000000000000000000000000000000000000800f";
-
-        const REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_LIMIT: u32 = 800;
 
         let mut force_deployments: Vec<UniversalForceDeploymentInfo> = Vec::new();
         let factory_deps = Vec::new();
@@ -125,15 +136,15 @@ impl ProtocolUpgradeBuilder {
         .abi_encode();
 
         let l2_upgrade_tx = L2CanonicalTransaction {
-            txType: U256::from(126), // TODO: Check if correct, could be 254 if old code
-            from: DEPLOYER_ADDRESS.parse().unwrap(),
+            txType: U256::from(UpgradeTxType::TX_TYPE),
+            from: FORCE_DEPLOYER_ADDRESS.parse().unwrap(),
             to: COMPLEX_UPGRADER_ADDRESS.parse().unwrap(),
-            gasLimit: U256::from(72000000u64), // TODO: value copy-pasted from Era upgrade test
-            gasPerPubdataByteLimit: U256::from(REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_LIMIT),
+            gasLimit: U256::from(72000000u64), // Value copied from Era, it has to be this big due to pubdata costs.
+            gasPerPubdataByteLimit: U256::from(REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE),
             maxFeePerGas: U256::from(0),
             maxPriorityFeePerGas: U256::from(0),
             paymaster: U256::from(0),
-            nonce: self.protocol_version / U256::from(1u64 << 32), // Nonce must correspond to minor version per contract rules.
+            nonce: U256::from(self.protocol_version.minor), // Nonce must correspond to minor version per contract rules.
             value: U256::from(0),
             reserved: [U256::from(0); 4],
             data: Bytes::from(data),
@@ -159,7 +170,10 @@ impl ProtocolUpgradeBuilder {
             l1ContractsUpgradeCalldata: Default::default(),
             postUpgradeCalldata: Default::default(),
             upgradeTimestamp: self.timestamp,
-            newProtocolVersion: self.protocol_version,
+            newProtocolVersion: self
+                .protocol_version
+                .packed()
+                .expect("incorrect protocol version"),
         }
     }
 }

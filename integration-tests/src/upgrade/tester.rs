@@ -1,13 +1,16 @@
+use std::time::Duration;
+
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
 use crate::dyn_wallet_provider::EthDynProvider;
-use crate::provider::ZksyncApi as _;
-use alloy::eips::BlockId;
+use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, Bytes, TxKind, U256};
+use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::providers::ext::AnvilApi;
 use alloy::providers::{PendingTransactionBuilder, Provider};
-use alloy::rpc::types::TransactionRequest;
+use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
+use anyhow::Context;
+use zksync_os_types::ProtocolSemanticVersion;
 
 use super::ProtocolUpgradeBuilder;
 use super::default_upgrade::DefaultUpgrade;
@@ -43,7 +46,7 @@ pub struct UpgradeTester {
     // Bytecode supplier contract
     pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<EthDynProvider>,
     // Current protocol version
-    pub protocol_version: U256,
+    pub protocol_version: ProtocolSemanticVersion,
 }
 
 impl UpgradeTester {
@@ -51,7 +54,6 @@ impl UpgradeTester {
     pub async fn for_default_upgrade(tester: Tester) -> anyhow::Result<Self> {
         let upgrade_tester = Self::fetch(tester).await?;
         upgrade_tester.enable_impersonation().await?;
-        upgrade_tester.fund_wallets().await?;
         upgrade_tester.wait_for_genesis_upgrade().await?;
         Ok(upgrade_tester)
     }
@@ -66,40 +68,37 @@ impl UpgradeTester {
         // Deploy the upgrade contract on L1.
         let upgrade_contract =
             DefaultUpgrade::deploy(&self.tester.l1_provider, protocol_upgrade).await?;
-
-        // STM upgrade, `setNewVersionUpgrade` call;
-        let upgrade_data = upgrade_contract.diamond_cut_data();
+        tracing::info!("DefaultUpgrade contract deployed");
 
         // Send pause migration to Bridgehub
         self.pause_bridgehub_migrations().await?;
+        tracing::info!("Bridgehub migrations are paused");
+
+        // CTM upgrade, `setNewVersionUpgrade` call;
+        let upgrade_data = upgrade_contract.diamond_cut_data();
         self.set_new_version_on_ctm(
             upgrade_data.clone(),
             deadline,
             protocol_upgrade.newProtocolVersion,
         )
         .await?;
+        tracing::info!("Upgrade is set on CTM");
 
         // Set timestamp for upgrade on a specific chain under stm, `setUpgradeTimestamp` call on L1ChainAdmin
         self.set_upgrade_timestamp(protocol_upgrade.newProtocolVersion, upgrade_timestamp)
             .await?;
+        tracing::info!("Upgrade scheduled on L1");
 
         // Wait until the block _before_ upgrade tx is finalized on L1.
-        let pending_tx = PendingTransactionBuilder::new(
-            self.tester.l2_zk_provider.root().clone(),
-            upgrade_contract.upgrade_tx_l2_hash(),
-        )
-        .expect_successful_receipt()
-        .await?;
-        let upgrade_block_number = pending_tx.block_number.expect("Upgrade tx must be mined");
-        let block_before_upgrade = upgrade_block_number
-            .checked_sub(1)
-            .expect("Upgrade tx can't be in the first block");
-        wait_finalized(&self.tester.l2_provider, block_before_upgrade).await?;
+        self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
+            .await?;
         tracing::info!("Block before upgrade tx is finalized on L1");
 
         self.upgrade_chain(upgrade_data).await?;
+        tracing::info!("Upgrade tx is executed on L1");
 
-        wait_finalized(&self.tester.l2_provider, upgrade_block_number).await?;
+        self.wait_for_upgrade_finalization(upgrade_contract.upgrade_tx_l2_hash())
+            .await?;
         tracing::info!("Upgrade tx is finalized on L1");
 
         Ok(())
@@ -114,7 +113,9 @@ impl UpgradeTester {
             .call()
             .await?;
         let ctm = interfaces::ChainTypeManager::new(ctm, tester.l1_provider.clone());
-        let protocol_version = ctm.getProtocolVersion(U256::from(CHAIN_ID)).call().await?;
+        let raw_protocol_version = ctm.getProtocolVersion(U256::from(CHAIN_ID)).call().await?;
+        let protocol_version = ProtocolSemanticVersion::try_from(raw_protocol_version)
+            .expect("invalid protocol version stored in CTM");
 
         let diamond_proxy = bridgehub.getZKChain(U256::from(CHAIN_ID)).call().await?;
         let diamond_proxy = interfaces::ZkChain::new(diamond_proxy, tester.l1_provider.clone());
@@ -160,6 +161,7 @@ impl UpgradeTester {
         })
     }
 
+    /// Enables impersonation and adds funds to all the wallets participating in the upgrade.
     async fn enable_impersonation(&self) -> anyhow::Result<()> {
         // Enable impersonation and fund all governance accounts
         for addr in [
@@ -186,27 +188,47 @@ impl UpgradeTester {
         Ok(())
     }
 
-    async fn fund_wallets(&self) -> anyhow::Result<()> {
-        for wallet in [self.bridgehub_owner] {
-            self.tester
-                .l1_provider
-                .send_transaction(
-                    TransactionRequest::default()
-                        .with_to(wallet)
-                        .with_value(U256::from(10).pow(U256::from(18u64))), // 1 ETH
-                )
-                .await?
-                .expect_successful_receipt()
-                .await?;
-        }
+    async fn wait_for_genesis_upgrade(&self) -> anyhow::Result<()> {
+        // The genesis transaction has to be in the first block, so we wait for block 1 to be finalized.
+        self.tester
+            .l2_zk_provider
+            .wait_finalized_with_timeout(1, Duration::from_secs(60))
+            .await?;
         Ok(())
     }
 
-    async fn wait_for_genesis_upgrade(&self) -> anyhow::Result<()> {
-        // Wait until the genesis upgrade is executed
-        while self.diamond_proxy.getTotalBatchesExecuted().call().await? == U256::ZERO {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
+    async fn wait_for_upgrade(&self, upgrade_tx_l2_hash: B256) -> anyhow::Result<()> {
+        let pending_tx = PendingTransactionBuilder::new(
+            self.tester.l2_zk_provider.root().clone(),
+            upgrade_tx_l2_hash,
+        )
+        .expect_successful_receipt()
+        .await?;
+        let upgrade_block_number = pending_tx.block_number.expect("Upgrade tx must be mined");
+        let block_before_upgrade = upgrade_block_number
+            .checked_sub(1)
+            .expect("Upgrade tx can't be in the first block");
+        self.tester
+            .l2_zk_provider
+            .wait_finalized_with_timeout(block_before_upgrade, Duration::from_secs(60))
+            .await
+            .context("Block before upgrade transaction was not finalized")?;
+        Ok(())
+    }
+
+    async fn wait_for_upgrade_finalization(&self, upgrade_tx_l2_hash: B256) -> anyhow::Result<()> {
+        let pending_tx = PendingTransactionBuilder::new(
+            self.tester.l2_zk_provider.root().clone(),
+            upgrade_tx_l2_hash,
+        )
+        .expect_successful_receipt()
+        .await?;
+        let upgrade_block_number = pending_tx.block_number.expect("Upgrade tx must be mined");
+        self.tester
+            .l2_zk_provider
+            .wait_finalized_with_timeout(upgrade_block_number, Duration::from_secs(60))
+            .await
+            .context("Block before upgrade transaction was not finalized")?;
         Ok(())
     }
 
@@ -216,15 +238,8 @@ impl UpgradeTester {
             .pauseMigration()
             .into_transaction_request()
             .with_from(self.bridgehub_owner);
-        let hash = self
-            .tester
-            .l1_provider
-            .anvil_send_impersonated_transaction(pause_migration_tx)
+        self.send_impersonated_transaction(pause_migration_tx)
             .await?;
-        PendingTransactionBuilder::new(self.tester.l1_provider.root().clone(), hash)
-            .expect_successful_receipt()
-            .await?;
-
         Ok(())
     }
 
@@ -243,7 +258,7 @@ impl UpgradeTester {
     pub async fn protocol_upgrade_builder(&self) -> anyhow::Result<ProtocolUpgradeBuilder> {
         let delegate_to = self.generic_l2_upgrade_target().await?;
         Ok(ProtocolUpgradeBuilder::new(
-            self.protocol_version,
+            self.protocol_version.clone(),
             delegate_to,
         ))
     }
@@ -284,17 +299,17 @@ impl UpgradeTester {
     ) -> anyhow::Result<()> {
         let tx = self
             .ctm
-            .setNewVersionUpgrade(upgrade_data, self.protocol_version, deadline, new_version)
+            .setNewVersionUpgrade(
+                upgrade_data,
+                self.protocol_version
+                    .packed()
+                    .expect("incorrect protocol version"),
+                deadline,
+                new_version,
+            )
             .into_transaction_request()
             .with_from(self.ctm_owner);
-        let hash = self
-            .tester
-            .l1_provider
-            .anvil_send_impersonated_transaction(tx)
-            .await?;
-        PendingTransactionBuilder::new(self.tester.l1_provider.root().clone(), hash)
-            .expect_successful_receipt()
-            .await?;
+        self.send_impersonated_transaction(tx).await?;
         Ok(())
     }
 
@@ -308,14 +323,7 @@ impl UpgradeTester {
             .setUpgradeTimestamp(protocol_version, timestamp)
             .into_transaction_request()
             .with_from(self.l1_chain_admin_owner);
-        let hash = self
-            .tester
-            .l1_provider
-            .anvil_send_impersonated_transaction(tx)
-            .await?;
-        PendingTransactionBuilder::new(self.tester.l1_provider.root().clone(), hash)
-            .expect_successful_receipt()
-            .await?;
+        self.send_impersonated_transaction(tx).await?;
         Ok(())
     }
 
@@ -325,28 +333,34 @@ impl UpgradeTester {
     ) -> anyhow::Result<()> {
         let tx = self
             .diamond_proxy
-            .upgradeChainFromVersion(self.protocol_version, upgrade_data)
+            .upgradeChainFromVersion(
+                self.protocol_version
+                    .packed()
+                    .expect("Incorrect protocol version"),
+                upgrade_data,
+            )
             .into_transaction_request()
             .with_from(self.diamond_proxy_admin);
+        self.send_impersonated_transaction(tx).await?;
+        Ok(())
+    }
+
+    /// Sends a transaction without a signature, expecting the account to be impersonated.
+    /// Expects the transaction to succeed.
+    async fn send_impersonated_transaction(
+        &self,
+        tx: TransactionRequest,
+    ) -> anyhow::Result<TransactionReceipt> {
+        // `anvil_send_impersonated_transaction` allows sending transaction receipt without signatures, unlike
+        // `send_transaction`, and doesn't require setting bogus signature and encoding unlike `send_raw_transaction`.
         let hash = self
             .tester
             .l1_provider
             .anvil_send_impersonated_transaction(tx)
             .await?;
-        PendingTransactionBuilder::new(self.tester.l1_provider.root().clone(), hash)
+        let receipt = PendingTransactionBuilder::new(self.tester.l1_provider.root().clone(), hash)
             .expect_successful_receipt()
             .await?;
-        Ok(())
+        Ok(receipt)
     }
-}
-
-async fn wait_finalized(provider: &impl Provider, target_block: u64) -> anyhow::Result<()> {
-    while provider
-        .get_block_number_by_id(BlockId::finalized())
-        .await?
-        < Some(target_block)
-    {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    Ok(())
 }

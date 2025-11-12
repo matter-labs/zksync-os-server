@@ -3,9 +3,10 @@ use std::{fmt, ops::Deref, str::FromStr};
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
 
-pub const PACKED_SEMVER_MINOR_OFFSET: u32 = 32;
-pub const PACKED_SEMVER_MINOR_MASK: u32 = 0xFFFF;
-pub const PACKED_SEMVER_PATCH_MASK: u32 = 0xFFFFFFFF;
+const PACKED_SEMVER_PATCH_MASK: u32 = 0xFFFFFFFF;
+const PACKED_SEMVER_MINOR_OFFSET: u32 = 32;
+const PACKED_SEMVER_MINOR_MASK: u32 = 0xFFFFFFFF;
+const PACKED_SEMVER_MAJOR_OFFSET: u32 = 64;
 
 /// `ProtocolVersionId` is a unique identifier of the protocol version.
 ///
@@ -44,8 +45,36 @@ impl ProtocolSemanticVersion {
     }
 
     pub const fn latest() -> Self {
-        Self::new(0, 29, 0)
+        Self::new(0, 29, 1)
     }
+
+    /// Packs the semantic version into a `U256` according to the protocol encoding.
+    /// Can return an error in case the stored version cannot be represented in the
+    /// format expected by the protocol.
+    pub fn packed(&self) -> Result<U256, ProtocolSemanticVersionError> {
+        if self.major != 0 {
+            return Err(ProtocolSemanticVersionError::MajorNonZero);
+        }
+        if self.minor > PACKED_SEMVER_MINOR_MASK as u64 {
+            return Err(ProtocolSemanticVersionError::MinorOverflow);
+        }
+        if self.patch > PACKED_SEMVER_PATCH_MASK as u64 {
+            return Err(ProtocolSemanticVersionError::PatchOverflow);
+        }
+        let minor = U256::from(self.minor) << PACKED_SEMVER_MINOR_OFFSET;
+        let patch = U256::from(self.patch);
+        Ok(minor | patch)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProtocolSemanticVersionError {
+    #[error("Minor version overflow")]
+    MinorOverflow,
+    #[error("Patch version overflow")]
+    PatchOverflow,
+    #[error("Major version must be 0")]
+    MajorNonZero,
 }
 
 impl fmt::Display for ProtocolSemanticVersion {
@@ -55,17 +84,22 @@ impl fmt::Display for ProtocolSemanticVersion {
 }
 
 impl TryFrom<U256> for ProtocolSemanticVersion {
-    type Error = String;
+    type Error = ProtocolSemanticVersionError;
 
     fn try_from(packed: U256) -> Result<Self, Self::Error> {
+        let patch = (packed & U256::from(PACKED_SEMVER_PATCH_MASK))
+            .try_into()
+            .map_err(|_| ProtocolSemanticVersionError::PatchOverflow)?;
+
         let minor = ((packed >> U256::from(PACKED_SEMVER_MINOR_OFFSET))
             & U256::from(PACKED_SEMVER_MINOR_MASK))
         .try_into()
-        .map_err(|err| format!("minor version overflow: {err}"))?;
+        .map_err(|_| ProtocolSemanticVersionError::MinorOverflow)?;
 
-        let patch = (packed & U256::from(PACKED_SEMVER_PATCH_MASK))
-            .try_into()
-            .map_err(|err| format!("patch version overflow: {err}"))?;
+        let major = packed >> U256::from(PACKED_SEMVER_MAJOR_OFFSET);
+        if major != U256::ZERO {
+            return Err(ProtocolSemanticVersionError::MajorNonZero);
+        }
 
         Ok(Self::new(0, minor, patch))
     }
