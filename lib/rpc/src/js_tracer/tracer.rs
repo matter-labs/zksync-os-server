@@ -15,7 +15,8 @@ use std::ops::Not;
 use std::{cell::RefCell, collections::hash_map::Entry};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::tracing::{
-    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources, EvmTracer,
+    AnyTracer, CallModifier, CallResult, EvmFrameInterface, EvmRequest, EvmResources,
+    EvmStackInterface, EvmTracer,
 };
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
@@ -43,7 +44,6 @@ use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 ///   - exists(address): returns true if the address exists in the state or overlays
 ///
 /// Known divergences from geth tracer interface:
-/// - `stack` is not provided in step/fault logs
 /// - `ctx.gasPrice ` is not provided in result()
 ///
 pub struct JsTracer {
@@ -320,10 +320,16 @@ impl JsTracer {
                         getValue() {{ return raw.contract.value; }},
                         getInput() {{ return this.__input.slice(); }},
                     }};
+                    let stack = {{
+                        __entries: raw.stack,
+                        length() {{ return this.__entries.length; }},
+                        peek(n) {{ return this.__entries[n]; }},
+                    }};
                     let log = {{
                         op,
                         memory,
                         contract,
+                        stack,
                         getPC() {{ return raw.pc; }},
                         getGas() {{ return raw.gas; }},
                         getCost() {{ return raw.cost }},
@@ -453,6 +459,17 @@ impl JsTracer {
             .unwrap_or("Invalid opcode");
         let is_push = opcode_name.starts_with("PUSH");
 
+        let stack = frame_state.stack();
+        let mut stack_dump = Vec::with_capacity(stack.len());
+        for idx in 0..stack.len() {
+            match stack.peek_n(idx) {
+                Ok(value) => stack_dump.push(format!("{value:066x}")),
+                Err(err) => {
+                    tracing::error!(?err, "Failed to read stack entry for JS tracer log");
+                    break;
+                }
+            }
+        }
         serde_json::json!({
             "op": {
                 "name": opcode_name,
@@ -469,6 +486,7 @@ impl JsTracer {
             "pc": step_ctx.pc,
             "gas": step_ctx.gas_before,
             "cost": cost,
+            "stack": stack_dump,
             "depth": step_ctx.depth,
             "refund": frame_state.refund_counter(),
             "error": error,

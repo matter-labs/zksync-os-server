@@ -6,6 +6,7 @@ contract TracingPrimary {
     TracingSecondary secondary;
 
     uint256 public lastCalculated;
+    event CalculationDone(uint256 indexed input, uint256 indexed result);
 
     constructor(address _secondary) {
         secondary = TracingSecondary(_secondary);
@@ -18,6 +19,8 @@ contract TracingPrimary {
     function calculate(uint256 value) public returns (uint) {
         uint result = secondary.multiply(value);
         lastCalculated = result;
+
+        emit CalculationDone(value, result);
 
         return result;
     }

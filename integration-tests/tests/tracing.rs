@@ -543,3 +543,99 @@ async fn debug_trace_call_js_tracer_with_db() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test_log::test(tokio::test)]
+async fn debug_trace_call_stack() -> anyhow::Result<()> {
+    let tester = Tester::setup().await?;
+
+    let secondary_data = U256::from(7);
+    let calculate_value = U256::from(3);
+    let secondary_contract =
+        TracingSecondary::deploy(tester.l2_provider.clone(), secondary_data).await?;
+    let primary_contract =
+        TracingPrimary::deploy(tester.l2_provider.clone(), *secondary_contract.address()).await?;
+
+    let mut call_request = primary_contract
+        .calculate(calculate_value)
+        .into_transaction_request();
+
+    let js_str = r#"
+        {
+          setup: function () {
+            this.logs = [];
+          },
+
+          _bytesToHex: function (bytes) {
+            var s = "0x";
+            for (var i = 0; i < bytes.length; i++) {
+              var h = bytes[i].toString(16);
+              if (h.length === 1) h = "0" + h;
+              s += h;
+            }
+            return s;
+          },
+
+          step: function (log, db) {
+            var op = log.op.toString();
+            var topicCount = { LOG0:0, LOG1:1, LOG2:2, LOG3:3, LOG4:4 }[op];
+            if (topicCount === undefined) return;
+
+            let stackTop = log.stack.peek(0);
+
+            this.logs.push({
+              depth: log.getDepth(),
+              pc: log.getPC(),
+              data: stackTop.toString(16),
+            });
+          },
+
+          result: function () {
+            return { type: "events", logs: this.logs };
+          }
+        }"#;
+
+    let mut opts = GethDebugTracingCallOptions::default();
+    opts.tracing_options.tracer = Some(GethDebugTracerType::JsTracer(js_str.to_string()));
+    call_request.max_priority_fee_per_gas = Some(1);
+    call_request.max_fee_per_gas = Some(u128::MAX);
+    call_request.set_from(tester.l2_wallet.default_signer().address());
+
+    let trace = tester
+        .l2_provider
+        .debug_trace_call(call_request, BlockId::latest(), opts)
+        .await?;
+
+    println!("{:?}", trace);
+    let val = match trace {
+        GethTrace::JS(value) => value
+            .as_object()
+            .expect("tracer result missing addresses")
+            .get("logs")
+            .expect("geth tracer result missing data")
+            .as_array()
+            .expect("tracer logs is not an array")
+            .get(0)
+            .expect("tracer logs is empty")
+            .as_object()
+            .expect("tracer log entry is not an object")
+            .get("data")
+            .expect("tracer log entry missing data")
+            .as_str()
+            .expect("tracer log data is not a string")
+            .to_string(),
+        other => panic!("expected JS trace result, got {other:?}"),
+    };
+
+    let res = secondary_data * calculate_value;
+    assert_eq!(
+        format!("{res:#x}").to_lowercase(),
+        format!(
+            "{:#x}",
+            u128::from_str_radix(val.trim_start_matches("0x"), 16)?
+        )
+        .to_lowercase(),
+        "stored value must match the expected one"
+    );
+
+    Ok(())
+}
