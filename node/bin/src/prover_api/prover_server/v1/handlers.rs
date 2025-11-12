@@ -25,7 +25,7 @@ pub(super) async fn pick_fri_job(
     Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
 ) -> Response {
-    tracing::debug!(
+    tracing::trace!(
         "Received FRI job pick request from prover with ID: {}",
         query.id
     );
