@@ -124,8 +124,16 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                     deadline = Some(Box::pin(tokio::time::sleep(dur)));
                                 }
                                 if tx_type == ZkTxType::Upgrade {
-                                    tracing::debug!(block = ctx.block_number, "sealing block as upgrade tx was executed");
-                                    break SealReason::UpgradeTx;
+                                    match &command.seal_policy {
+                                        SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
+                                            tracing::debug!(block = ctx.block_number, "sealing block as upgrade tx was executed");
+                                            break SealReason::UpgradeTx;
+                                        }
+                                        SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
+                                            // We trust that the execution stream will not break protocol invariants.
+                                            tracing::info!(block = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
+                                        }
+                                    }
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
@@ -214,15 +222,12 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         SealPolicy::UntilExhausted {
             allowed_to_finish_early,
         } => {
-            if !allowed_to_finish_early
-                && seal_reason != SealReason::TxStreamExhausted
-                && seal_reason != SealReason::UpgradeTx
-            {
+            if !allowed_to_finish_early && seal_reason != SealReason::TxStreamExhausted {
                 return Err(BlockDump {
                     ctx,
                     txs: all_processed_txs.clone(),
                     error: format!(
-                        "block was expected to be sealed due to either stream exhaustion or upgrade tx, but sealed due to {:?} instead, block {}",
+                        "block was expected to be sealed due to either stream exhaustion, but sealed due to {:?} instead, block {}",
                         seal_reason, ctx.block_number
                     ),
                 });
