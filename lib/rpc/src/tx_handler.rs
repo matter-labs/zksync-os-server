@@ -43,9 +43,7 @@ impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
             .map_err(|_| EthSendRawTransactionError::InvalidTransactionSignature)?;
         let hash = *l2_tx.hash();
         if self.l2_signer_blacklist.contains(&l2_tx.signer()) {
-            return Err(EthSendRawTransactionError::NotAcceptingTransactions(
-                NotAcceptingReason::BlacklistedSigner,
-            ));
+            return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
         self.mempool.add_l2_transaction(l2_tx).await?;
 
@@ -68,4 +66,6 @@ pub enum EthSendRawTransactionError {
     /// Errors related to the transaction pool
     #[error(transparent)]
     PoolError(#[from] PoolError),
+    #[error("Signer is blacklisted")]
+    BlacklistedSigner,
 }
