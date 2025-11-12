@@ -178,12 +178,15 @@ pub struct SequencerConfig {
     pub fee_collector_address: Address,
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
+    #[config(default_t = None)]
     pub base_fee_override: Option<u128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
+    #[config(default_t = None)]
     pub pubdata_price_override: Option<u128>,
 
     /// Override for native price (in wei). If set, native price will be constant and equal to this value.
+    #[config(default_t = None)]
     pub native_price_override: Option<u128>,
 
     /// Maximum number of blocks to produce.
