@@ -119,8 +119,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let timestamp = (millis_since_epoch() / 1000) as u64;
 
                 // Check if we peeked an upgrade transaction info.
-                let mut force_preimages = Vec::new();
-                if let Some(Some(upgrade_tx)) = peeked_tx {
+                let force_preimages = if let Some(Some(upgrade_tx)) = peeked_tx {
                     tracing::info!(
                         block_number = produce_command.block_number,
                         upgrade_tx = ?upgrade_tx,
@@ -129,16 +128,18 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     // Invariant: transactions sent through this stream must be ready for execution, e.g.
                     // transaction should not be sent until timestamp is reached.
                     // We add some margin of error for timestamp comparison.
-                    let current_timestamp = timestamp.saturating_sub(5);
+                    let current_timestamp = timestamp.saturating_add(5);
                     anyhow::ensure!(
-                        upgrade_tx.timestamp <= timestamp,
+                        upgrade_tx.timestamp <= current_timestamp,
                         "upgrade transaction with timestamp {} received too early at {}; tx: {upgrade_tx:?}",
                         upgrade_tx.timestamp,
                         current_timestamp
                     );
                     self.protocol_version = upgrade_tx.protocol_version.clone();
-                    force_preimages = upgrade_tx.force_preimages.clone();
-                }
+                    upgrade_tx.force_preimages.clone()
+                } else {
+                    Vec::new()
+                };
 
                 const NATIVE_PRICE: u128 = 1_000_000;
                 const NATIVE_PER_GAS: u128 = 100;
