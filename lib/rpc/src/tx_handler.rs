@@ -1,6 +1,7 @@
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
-use alloy::primitives::{B256, Bytes};
+use alloy::primitives::{Address, B256, Bytes};
+use std::collections::HashSet;
 use tokio::sync::watch;
 use zksync_os_mempool::{L2TransactionPool, PoolError};
 use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState};
@@ -9,16 +10,19 @@ use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, Transaction
 pub struct TxHandler<Mempool> {
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
+    l2_signer_blacklist: HashSet<Address>,
 }
 
 impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
     pub fn new(
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
+        l2_signer_blacklist: HashSet<Address>,
     ) -> Self {
         Self {
             mempool,
             acceptance_state,
+            l2_signer_blacklist,
         }
     }
 
@@ -38,6 +42,11 @@ impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
             .try_into_recovered()
             .map_err(|_| EthSendRawTransactionError::InvalidTransactionSignature)?;
         let hash = *l2_tx.hash();
+        if self.l2_signer_blacklist.contains(&l2_tx.signer()) {
+            return Err(EthSendRawTransactionError::NotAcceptingTransactions(
+                NotAcceptingReason::BlacklistedSigner,
+            ));
+        }
         self.mempool.add_l2_transaction(l2_tx).await?;
 
         Ok(hash)
