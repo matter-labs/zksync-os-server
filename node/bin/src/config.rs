@@ -151,7 +151,7 @@ pub struct SequencerConfig {
 
     /// Defines the block time for the sequencer.
     /// One of the block Seal Criteria. Only affects the Main Node.
-    #[config(default_t = Duration::from_millis(100))]
+    #[config(default_t = Duration::from_millis(250))]
     pub block_time: Duration,
 
     /// Max number of transactions in a block.
