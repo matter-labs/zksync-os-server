@@ -69,7 +69,14 @@ impl Logs {
         let mut directives = if self.disable_default_logs {
             "".to_string()
         } else {
-            "info,zksync=debug,".to_string()
+            "INFO,\
+            zksync_os_server=DEBUG,\
+            zksync_os_server::prover_api=DEBUG,\
+            zksync_os_sequencer=DEBUG,\
+            zksync_os_priority_tree=DEBUG,\
+            zksync_os_merkle_tree=DEBUG,\
+            "
+            .to_string()
         };
         if let Some(log_directives) = &self.log_directives {
             directives.push_str(log_directives);
