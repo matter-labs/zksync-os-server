@@ -40,8 +40,13 @@ impl UpgradeGatekeeper {
         &self,
         target_protocol_version: &ProtocolSemanticVersion,
     ) -> anyhow::Result<()> {
+        let mut current_protocol_version = self.current_protocol_version().await?;
+        tracing::info!(
+            %current_protocol_version,
+            %target_protocol_version,
+            "Waiting for L1 protocol version {current_protocol_version} to reach target version {target_protocol_version}",
+        );
         loop {
-            let current_protocol_version = self.current_protocol_version().await?;
             match current_protocol_version.cmp(target_protocol_version) {
                 Ordering::Greater => {
                     // We don't expect protocol version on L1 to be greater than the version of non-committed
@@ -52,14 +57,16 @@ impl UpgradeGatekeeper {
                 }
                 Ordering::Equal => {
                     tracing::info!(
-                        "Protocol version on the contract {current_protocol_version} matches batch protocol version"
+                        %current_protocol_version,
+                        "Protocol version on the contract matches batch protocol version"
                     );
                     return Ok(());
                 }
                 Ordering::Less => {
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await; // TODO: do we want to make it configurable?
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
             }
+            current_protocol_version = self.current_protocol_version().await?;
         }
     }
 }
@@ -95,6 +102,7 @@ impl PipelineComponent for UpgradeGatekeeper {
                     .await?;
             }
 
+            latency_tracker.enter_state(GenericComponentState::WaitingSend);
             output.send(command).await?;
         }
     }
