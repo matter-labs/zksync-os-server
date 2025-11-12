@@ -71,7 +71,6 @@ impl Logs {
         } else {
             "INFO,\
             zksync_os_server=DEBUG,\
-            zksync_os_server::prover_api=DEBUG,\
             zksync_os_sequencer=DEBUG,\
             zksync_os_priority_tree=DEBUG,\
             zksync_os_merkle_tree=DEBUG,\
