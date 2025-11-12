@@ -270,7 +270,7 @@ impl ReadReplay for BlockReplayStorage {
                 );
             }
 
-            ProtocolSemanticVersion::latest()
+            ProtocolSemanticVersion::legacy_genesis_version()
         };
 
         let force_preimages = if let Some(preimages) = self

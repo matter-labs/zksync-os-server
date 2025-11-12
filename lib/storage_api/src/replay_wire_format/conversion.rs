@@ -54,7 +54,7 @@ impl From<ReplayWireFormatV1> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![],
         }
@@ -107,7 +107,7 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![],
         }
@@ -158,7 +158,7 @@ impl From<ReplayWireFormatV3> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![],
         }
@@ -264,7 +264,7 @@ impl From<ReplayWireFormatV4> for ReplayRecord {
             transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
             previous_block_timestamp,
             node_version,
-            protocol_version: ProtocolSemanticVersion::latest(), // We assume that old nodes won't have "newer" protocol versions.
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![], // v4 didn't have force_preimages
         }

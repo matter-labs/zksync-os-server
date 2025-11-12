@@ -14,15 +14,11 @@ const PACKED_SEMVER_MAJOR_OFFSET: u32 = 64;
 /// the `major` version being `0`. Also, the protocol version on the contracts may contain
 /// potential patch versions, that may have different contract behavior (e.g. Verifier), but it should not
 /// impact the users.
+// Default is not provided for `ProtocolSemanticVersion`, as it can cause issues in the decentralized network
+// (imagine that EN will use it before executing the upgrade)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProtocolSemanticVersion(semver::Version);
-
-impl Default for ProtocolSemanticVersion {
-    fn default() -> Self {
-        Self::latest()
-    }
-}
 
 // We allow accessing underlying semver, but we intentionally never want it to be modified.
 impl Deref for ProtocolSemanticVersion {
@@ -44,7 +40,9 @@ impl ProtocolSemanticVersion {
         })
     }
 
-    pub const fn latest() -> Self {
+    /// This version was used for all the chains prior to the introduction of protocol upgrades
+    /// support.
+    pub const fn legacy_genesis_version() -> Self {
         Self::new(0, 29, 1)
     }
 
@@ -141,21 +139,6 @@ mod tests {
     fn test_protocol_semantic_version_display() {
         let version = ProtocolSemanticVersion::new(0, 29, 0);
         assert_eq!(version.to_string(), "0.29.0");
-    }
-
-    #[test]
-    fn test_protocol_semantic_version_latest() {
-        // Only change this test when you are sure it's safe to bump the latest protocol version.
-        let latest = ProtocolSemanticVersion::latest();
-        assert_eq!(latest.major, 0);
-        assert_eq!(latest.minor, 29);
-        assert_eq!(latest.patch, 0);
-    }
-
-    #[test]
-    fn test_protocol_semantic_version_default() {
-        let default = ProtocolSemanticVersion::default();
-        assert_eq!(default, ProtocolSemanticVersion::latest());
     }
 
     #[test]

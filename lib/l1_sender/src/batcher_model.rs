@@ -58,7 +58,7 @@ fn default_execution_version() -> u32 {
 
 fn default_protocol_version() -> ProtocolSemanticVersion {
     // Last protocol version deployed before this field was added
-    ProtocolSemanticVersion::new(0, 29, 1)
+    ProtocolSemanticVersion::legacy_genesis_version()
 }
 
 #[derive(Debug)]

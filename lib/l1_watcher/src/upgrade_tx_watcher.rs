@@ -17,7 +17,9 @@ use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeTransac
 // use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 /// Don't try to process that many block linearly
-const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
+/// The constant value is higher than for other watchers, since we're looking for rare/specific events
+/// and we don't expect a lot of results.
+const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 2_500_000;
 
 pub struct L1UpgradeTxWatcher {
     provider: DynProvider,
@@ -42,7 +44,7 @@ impl L1UpgradeTxWatcher {
             config.max_blocks_to_process,
             ?config.poll_interval,
             zk_chain_address = ?zk_chain.address(),
-            "initializing L1 transaction watcher"
+            "initializing upgrade transaction watcher"
         );
 
         let admin = zk_chain.get_admin().await?;
@@ -252,6 +254,8 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         );
 
         // Wait until the timestamp before sending the upgrade tx, so that it's immediately executable.
+        // TODO: this will block the watcher, so if e.g. a timestamp is set far in the future, and then an event
+        // to override it is emitted, we will not be able to process it.
         self.wait_until_timestamp(request.timestamp).await;
 
         tracing::info!(

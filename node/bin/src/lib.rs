@@ -189,7 +189,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // TODO: we should fetch genesis protocol version from the source.
     // Genesis protocol version is available in the upgrade tx, but for ENs we can't expect to scan the whole history for it.
     // So we need to add this version to the genesis file (I guess?) and expose it via RPC
-    let genesis_protocol_version = ProtocolSemanticVersion::latest(); // TODO: use actual version.
+    let genesis_protocol_version = ProtocolSemanticVersion::legacy_genesis_version(); // TODO: use actual version.
 
     tracing::info!("Initializing BlockReplayStorage");
 
