@@ -13,6 +13,4 @@ pub enum NotAcceptingReason {
     BlockProductionDisabled,
     #[error("Transaction submission not implemented on external nodes.")]
     ExternalNode,
-    #[error("Signer is blacklisted.")]
-    BlacklistedSigner,
 }
