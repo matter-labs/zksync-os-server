@@ -40,9 +40,9 @@ pub struct BlockContextProvider<Mempool> {
     node_version: semver::Version,
     genesis: Arc<Genesis>,
     fee_collector_address: Address,
-    base_fee_override: Option<u128>,
-    pubdata_price_override: Option<u128>,
-    native_price_override: Option<u128>,
+    base_fee_override: Option<U256>,
+    pubdata_price_override: Option<U256>,
+    native_price_override: Option<U256>,
     pubdata_price_provider: watch::Receiver<Option<u128>>,
     pending_block_context_sender: watch::Sender<Option<BlockContext>>,
 }
@@ -61,9 +61,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         node_version: semver::Version,
         genesis: Arc<Genesis>,
         fee_collector_address: Address,
-        base_fee_override: Option<u128>,
-        pubdata_price_override: Option<u128>,
-        native_price_override: Option<u128>,
+        base_fee_override: Option<U256>,
+        pubdata_price_override: Option<U256>,
+        native_price_override: Option<U256>,
         pubdata_price_provider: watch::Receiver<Option<u128>>,
         pending_block_context_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
@@ -120,15 +120,17 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 const NATIVE_PER_GAS: u128 = 100;
                 let eip1559_basefee = NATIVE_PRICE * NATIVE_PER_GAS;
                 let block_context = BlockContext {
-                    eip1559_basefee: U256::from(self.base_fee_override.unwrap_or(eip1559_basefee)),
-                    native_price: U256::from(self.native_price_override.unwrap_or(NATIVE_PRICE)),
-                    pubdata_price: U256::from(
-                        self.pubdata_price_override.unwrap_or(
-                            self.pubdata_price_provider
-                                .borrow()
-                                .expect("Pubdata price must be available"),
-                        ),
-                    ),
+                    eip1559_basefee: self
+                        .base_fee_override
+                        .unwrap_or(U256::from(eip1559_basefee)),
+                    native_price: self
+                        .native_price_override
+                        .unwrap_or(U256::from(NATIVE_PRICE)),
+                    pubdata_price: self.pubdata_price_override.unwrap_or(U256::from(
+                        self.pubdata_price_provider
+                            .borrow()
+                            .expect("Pubdata price must be available"),
+                    )),
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
