@@ -64,6 +64,7 @@ impl UpgradeTester {
         protocol_upgrade: &interfaces::ProposedUpgrade,
         deadline: U256,
         upgrade_timestamp: U256,
+        patch_only: bool,
     ) -> anyhow::Result<()> {
         // Deploy the upgrade contract on L1.
         let upgrade_contract =
@@ -89,16 +90,56 @@ impl UpgradeTester {
             .await?;
         tracing::info!("Upgrade scheduled on L1");
 
-        // Wait until the block _before_ upgrade tx is finalized on L1.
-        self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
-            .await?;
-        tracing::info!("Block before upgrade tx is finalized on L1");
+        if patch_only {
+            // TODO: for patch upgrades, there is no L2 upgrade transaction, so we must be somewhat probabilistic.
+            // We will wait until the timestamp + some margin, then fetch the current l2 block and wait until it's finalized.
+            let upgrade_timestamp_secs = u64::try_from(upgrade_timestamp).unwrap();
+            let wait_duration = Duration::from_secs(upgrade_timestamp_secs).saturating_sub(
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?,
+            ) + Duration::from_secs(10); // 10 seconds margin
+            tracing::info!(
+                "Waiting for {:?} until patch upgrade can be executed",
+                wait_duration
+            );
+            tokio::time::sleep(wait_duration).await;
+            let current_l2_block = self.tester.l2_zk_provider.get_block_number().await?;
+            self.tester
+                .l2_zk_provider
+                .wait_finalized_with_timeout(current_l2_block, Duration::from_secs(60))
+                .await?;
+            tracing::info!("Current L2 block is finalized, proceeding with patch upgrade");
+        } else {
+            // Wait until the block _before_ upgrade tx is finalized on L1.
+            self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
+                .await?;
+            tracing::info!("Block before upgrade tx is finalized on L1");
+        }
 
         self.upgrade_chain(upgrade_data).await?;
         tracing::info!("Upgrade tx is executed on L1");
 
-        self.wait_for_upgrade_finalization(upgrade_contract.upgrade_tx_l2_hash())
-            .await?;
+        if patch_only {
+            // For patch upgrades, we need to trigger a transaction finalization, since there is no upgrade tx.
+            // So we send a bogus tx and wait until it's finalized instead.
+            let tx = self
+                .tester
+                .l2_provider
+                .send_transaction(
+                    TransactionRequest::default()
+                        .with_to(self.bridgehub_owner) // Random address
+                        .with_value(U256::from(1u64)),
+                )
+                .await?
+                .expect_successful_receipt()
+                .await?;
+            self.tester
+                .l2_zk_provider
+                .wait_finalized_with_timeout(tx.block_number.unwrap(), Duration::from_secs(60))
+                .await?;
+        } else {
+            self.wait_for_upgrade_finalization(upgrade_contract.upgrade_tx_l2_hash())
+                .await?;
+        }
         tracing::info!("Upgrade tx is finalized on L1");
 
         Ok(())

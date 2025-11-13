@@ -11,6 +11,8 @@ use super::interfaces::*;
 
 #[derive(Debug)]
 pub struct ProtocolUpgradeBuilder {
+    /// Current protocol version (used to determine if the upgrade is patch-only)
+    current_protocol_version: ProtocolSemanticVersion,
     /// New protocol version
     protocol_version: ProtocolSemanticVersion,
 
@@ -37,6 +39,7 @@ impl ProtocolUpgradeBuilder {
         delegate_to: (Address, Bytes),
     ) -> Self {
         Self {
+            current_protocol_version: current_protocol_version.clone(),
             protocol_version: current_protocol_version,
             force_deployments: None,
             delegate_to,
@@ -102,6 +105,8 @@ impl ProtocolUpgradeBuilder {
         const FORCE_DEPLOYER_ADDRESS: &str = "0x0000000000000000000000000000000000008007";
         const COMPLEX_UPGRADER_ADDRESS: &str = "0x000000000000000000000000000000000000800f";
 
+        let patch_only = self.protocol_version.minor == self.current_protocol_version.minor;
+
         let mut force_deployments: Vec<UniversalForceDeploymentInfo> = Vec::new();
         let factory_deps = Vec::new();
 
@@ -128,6 +133,21 @@ impl ProtocolUpgradeBuilder {
             // ));
         }
 
+        let tx_type = if patch_only {
+            assert!(
+                force_deployments.is_empty(),
+                "patch-only upgrades cannot have force deployments"
+            );
+            assert!(
+                factory_deps.is_empty(),
+                "patch-only upgrades cannot have factory deps"
+            );
+            // Patch upgrades do not have a dedicated transaction, so associated transaction must be ignored.
+            U256::from(0)
+        } else {
+            U256::from(UpgradeTxType::TX_TYPE)
+        };
+
         let data = L2ComplexUpgrader::forceDeployAndUpgradeUniversalCall {
             _forceDeployments: force_deployments,
             _delegateTo: delegate_to_address,
@@ -136,7 +156,7 @@ impl ProtocolUpgradeBuilder {
         .abi_encode();
 
         let l2_upgrade_tx = L2CanonicalTransaction {
-            txType: U256::from(UpgradeTxType::TX_TYPE),
+            txType: tx_type,
             from: FORCE_DEPLOYER_ADDRESS.parse().unwrap(),
             to: COMPLEX_UPGRADER_ADDRESS.parse().unwrap(),
             gasLimit: U256::from(72000000u64), // Value copied from Era, it has to be this big due to pubdata costs.

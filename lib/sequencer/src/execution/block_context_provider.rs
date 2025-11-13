@@ -312,7 +312,13 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                         cmd_type,
                         BlockCommandType::Rebuild | BlockCommandType::Replay
                     ) {
-                        assert_eq!(&self.upgrade_transactions.recv().await.unwrap().tx, upgrade);
+                        // Skip fetched patch upgrades
+                        let mut upgrade_tx = self.upgrade_transactions.recv().await.unwrap();
+                        while upgrade_tx.tx.is_none() {
+                            upgrade_tx = self.upgrade_transactions.recv().await.unwrap();
+                        }
+
+                        assert_eq!(upgrade_tx.tx.as_ref(), Some(upgrade));
                     }
                 }
             }

@@ -164,12 +164,14 @@ impl L1UpgradeTxWatcher {
         let proposed_upgrade =
             ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).unwrap(); // TODO: we're in fact parsing `upgrade(..)` signature here
 
-        let l2_upgrade_tx =
-            L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
-
-        let force_preimages = self
-            .fetch_force_preimages(&l2_upgrade_tx.inner.factory_deps)
-            .await?;
+        let patch_only = protocol_version.minor == self.current_protocol_version.minor;
+        let (l2_upgrade_tx, force_preimages) = if patch_only {
+            (None, Vec::new())
+        } else {
+            let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
+            let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
+            (Some(tx), force_preimages)
+        };
 
         let upgrade_tx = UpgradeTransaction {
             tx: l2_upgrade_tx,
@@ -278,7 +280,6 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
 
         tracing::info!(
             protocol_version = ?upgrade_tx.protocol_version,
-            hash = ?upgrade_tx.tx.hash(),
             target_timestamp = request.timestamp,
             "detected upgrade transaction to be sent"
         );
@@ -290,7 +291,6 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
 
         tracing::info!(
             protocol_version = ?upgrade_tx.protocol_version,
-            hash = ?upgrade_tx.tx.hash(),
             "sending upgrade transaction to the mempool"
         );
 

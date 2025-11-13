@@ -63,7 +63,12 @@ impl Stream for BestTransactionsStream<'_> {
                 match this.pending_upgrade_transactions.poll_recv(cx) {
                     Poll::Ready(Some(tx)) => {
                         this.peeked_upgrade_info = Some(tx.clone());
-                        return Poll::Ready(Some(ZkTransaction::from(tx.tx)));
+                        if let Some(envelope) = tx.tx {
+                            return Poll::Ready(Some(ZkTransaction::from(envelope)));
+                        }
+                        // If there is no upgrade transaction (patch-only upgrade), continue to the next step.
+                        // We already set the upgrade info, so protocol version will be updated once
+                        // the first transaction will arrive.
                     }
                     Poll::Pending => {}
                     Poll::Ready(None) => todo!("channel closed"),

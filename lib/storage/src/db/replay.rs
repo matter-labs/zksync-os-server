@@ -77,12 +77,7 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub async fn new(
-        db_path: &Path,
-        genesis: &Genesis,
-        node_version: semver::Version,
-        genesis_protocol_version: ProtocolSemanticVersion,
-    ) -> Self {
+    pub async fn new(db_path: &Path, genesis: &Genesis, node_version: semver::Version) -> Self {
         let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
             .expect("Failed to open BlockReplayStorage")
             .with_sync_writes();
@@ -100,7 +95,7 @@ impl BlockReplayStorage {
                 transactions: vec![],
                 previous_block_timestamp: 0,
                 node_version,
-                protocol_version: genesis_protocol_version,
+                protocol_version: genesis_tx.protocol_version,
                 block_output_hash: B256::ZERO,
                 force_preimages: genesis_tx.force_deploy_preimages,
             })

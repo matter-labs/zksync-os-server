@@ -78,9 +78,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{
-    NotAcceptingReason, ProtocolSemanticVersion, TransactionAcceptanceState, UpgradeTransaction,
-};
+use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState, UpgradeTransaction};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -186,11 +184,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         chain_id,
     );
 
-    // TODO: we should fetch genesis protocol version from the source.
-    // Genesis protocol version is available in the upgrade tx, but for ENs we can't expect to scan the whole history for it.
-    // So we need to add this version to the genesis file (I guess?) and expose it via RPC
-    let genesis_protocol_version = ProtocolSemanticVersion::legacy_genesis_version(); // TODO: use actual version.
-
     tracing::info!("Initializing BlockReplayStorage");
 
     let block_replay_storage = BlockReplayStorage::new(
@@ -200,7 +193,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .join(BLOCK_REPLAY_WAL_DB_NAME),
         &genesis,
         node_version.clone(),
-        genesis_protocol_version.clone(),
     )
     .await;
 
@@ -305,7 +297,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if starting_block == 1 {
         let genesis_upgrade = genesis.genesis_upgrade_tx().await;
         let upgrade_tx = UpgradeTransaction {
-            tx: genesis_upgrade.tx,
+            tx: Some(genesis_upgrade.tx),
             protocol_version: genesis_upgrade.protocol_version,
             timestamp: 0, // No restrictions on timestamp.
             force_preimages: genesis_upgrade.force_deploy_preimages,
@@ -444,10 +436,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
-    let current_protocol_version = first_replay_record
-        .as_ref()
-        .map(|record| record.protocol_version.clone())
-        .unwrap_or(genesis_protocol_version);
+    let current_protocol_version = if let Some(record) = first_replay_record {
+        record.protocol_version.clone()
+    } else {
+        genesis.genesis_upgrade_tx().await.protocol_version
+    };
 
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`

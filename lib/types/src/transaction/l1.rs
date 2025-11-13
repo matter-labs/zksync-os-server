@@ -38,7 +38,7 @@ pub struct UpgradeTransaction {
     /// Which protocol version will be used after the upgrade transaction is executed.
     pub protocol_version: ProtocolSemanticVersion,
     /// The L2 upgrade transaction itself.
-    pub tx: L1UpgradeEnvelope,
+    pub tx: Option<L1UpgradeEnvelope>,
     /// Preimages (e.g. force deployments) for the upgrade transaction (if any).
     pub force_preimages: Vec<(B256, Vec<u8>)>,
 }
