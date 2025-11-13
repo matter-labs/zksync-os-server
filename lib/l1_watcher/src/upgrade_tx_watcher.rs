@@ -347,7 +347,7 @@ async fn find_l1_block_by_protocol_version(
 
     util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
         let res = zk.get_raw_protocol_version(block.into()).await?;
-        Ok(res == protocol_version)
+        Ok(res >= protocol_version)
     })
     .await
 }
