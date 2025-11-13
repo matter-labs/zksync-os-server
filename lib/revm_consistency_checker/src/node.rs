@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use reth_revm::db::CacheDB;
@@ -8,7 +10,7 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_revm::{DefaultZk, ZkBuilder};
+use zksync_os_revm::{DefaultZk, ZkBuilder, ZkSpecId};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 
 use crate::helpers::zk_tx_into_revm_tx;
@@ -51,10 +53,34 @@ where
             "revm_consistency_checker",
             GenericComponentState::WaitingRecv,
         );
+        // Remember unsupported execution versions to log only one warning for it.
+        let mut warned_unsupported_versions: HashSet<u32> = HashSet::new();
+
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
             let Some((block_output, replay_record)) = input.recv().await else {
                 anyhow::bail!("inbound channel closed");
+            };
+            let exec_ver = replay_record.block_context.execution_version;
+            let zk_spec = match ZkSpecId::from_exec_version(exec_ver) {
+                Some(spec) => spec,
+                None => {
+                    // Warn once per execution_version. Afterwards log at info level.
+                    let first_time = warned_unsupported_versions.insert(exec_ver);
+                    if first_time {
+                        tracing::warn!(
+                            execution_version = exec_ver,
+                            "Unsupported ZKsync OS execution version for REVM; skipping block"
+                        );
+                    } else {
+                        tracing::info!(
+                            execution_version = exec_ver,
+                            "Unsupported ZKsync OS execution version for REVM; skipping block"
+                        );
+                    }
+                    // Skip executing this block when there is no supported REVM version.
+                    continue;
+                }
             };
 
             latency_tracker.enter_state(GenericComponentState::Processing);
@@ -74,6 +100,7 @@ where
                     .with_db(&mut cache_db)
                     .modify_cfg_chained(|cfg| {
                         cfg.chain_id = replay_record.block_context.chain_id;
+                        cfg.spec = zk_spec;
                     })
                     .modify_block_chained(|block| {
                         block.number = U256::from(replay_record.block_context.block_number);

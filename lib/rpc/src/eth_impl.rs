@@ -20,6 +20,7 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
+use std::collections::HashSet;
 use std::convert::identity;
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
@@ -52,8 +53,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         eth_call_handler: EthCallHandler<RpcStorage>,
         chain_id: u64,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
+        l2_signer_blacklist: HashSet<Address>,
     ) -> Self {
-        let tx_handler = TxHandler::new(mempool.clone(), acceptance_state);
+        let tx_handler = TxHandler::new(mempool.clone(), acceptance_state, l2_signer_blacklist);
 
         Self {
             tx_handler,

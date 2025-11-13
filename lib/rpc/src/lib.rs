@@ -81,6 +81,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
             eth_call_handler.clone(),
             chain_id,
             acceptance_state,
+            config.l2_signer_blacklist.clone(),
         )
         .into_rpc(),
     )?;
