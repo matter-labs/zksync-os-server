@@ -3,7 +3,7 @@ use crate::model::blocks::{
     BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
 };
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::primitives::{Address, BlockHash, TxHash, U256};
+use alloy::primitives::{Address, BlockHash, TxHash, U128, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::sync::Arc;
@@ -61,9 +61,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         node_version: semver::Version,
         genesis: Arc<Genesis>,
         fee_collector_address: Address,
-        base_fee_override: Option<U256>,
-        pubdata_price_override: Option<U256>,
-        native_price_override: Option<U256>,
+        base_fee_override: Option<U128>,
+        pubdata_price_override: Option<U128>,
+        native_price_override: Option<U128>,
         pubdata_price_provider: watch::Receiver<Option<u128>>,
         pending_block_context_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
@@ -79,9 +79,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             node_version,
             genesis,
             fee_collector_address,
-            base_fee_override,
-            pubdata_price_override,
-            native_price_override,
+            base_fee_override: base_fee_override.map(U256::from),
+            pubdata_price_override: pubdata_price_override.map(U256::from),
+            native_price_override: native_price_override.map(U256::from),
             pubdata_price_provider,
             pending_block_context_sender,
         }

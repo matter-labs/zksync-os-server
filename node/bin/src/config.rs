@@ -1,6 +1,6 @@
 use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -179,15 +179,15 @@ pub struct SequencerConfig {
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
     #[config(default_t = None, with = Optional(Serde![str]))]
-    pub base_fee_override: Option<U256>,
+    pub base_fee_override: Option<U128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
     #[config(default_t = None, with = Optional(Serde![str]))]
-    pub pubdata_price_override: Option<U256>,
+    pub pubdata_price_override: Option<U128>,
 
     /// Override for native price (in wei). If set, native price will be constant and equal to this value.
     #[config(default_t = None, with = Optional(Serde![str]))]
-    pub native_price_override: Option<U256>,
+    pub native_price_override: Option<U128>,
 
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
