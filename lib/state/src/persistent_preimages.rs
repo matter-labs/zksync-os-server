@@ -58,23 +58,6 @@ impl PersistentPreimages {
         res
     }
 
-    /// Unlike `add`, this method does not update the block number.
-    pub fn force_add<'a, J>(&self, new_preimages: J)
-    where
-        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
-    {
-        let latency_observer = PREIMAGES_METRICS.set[&"force_add"].start();
-
-        let mut batch = self.rocks.new_write_batch();
-
-        for (k, v) in new_preimages {
-            batch.put_cf(PreimagesCF::Storage, k.as_slice(), v);
-        }
-
-        self.rocks.write(batch).expect("RocksDB write failed");
-        latency_observer.observe();
-    }
-
     pub fn add<'a, J>(&self, new_block_number: u64, diffs: J)
     where
         J: IntoIterator<Item = (B256, &'a Vec<u8>)>,

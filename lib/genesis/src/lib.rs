@@ -255,13 +255,8 @@ async fn load_genesis_upgrade_tx(
         "Expected exactly one genesis upgrade tx log, found these {logs:?}"
     );
     let sol_event = GenesisUpgrade::decode_log(&logs[0].inner)?.data;
-    let protocol_version =
-        ProtocolSemanticVersion::try_from(sol_event._protocolVersion).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to parse protocol version from genesis upgrade tx: {}",
-                e
-            )
-        })?;
+    let protocol_version = ProtocolSemanticVersion::try_from(sol_event._protocolVersion)
+        .context("Failed to parse protocol version from genesis upgrade tx")?;
     let upgrade_tx = L1UpgradeEnvelope::try_from(sol_event._l2Transaction)?;
     let preimages = sol_event
         ._factoryDeps

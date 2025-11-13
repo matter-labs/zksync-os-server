@@ -477,7 +477,14 @@ impl<P: Provider> ZkChain<P> {
 
     /// Returns the current protocol version of the chain.
     /// Returned value is the raw (U256) representation.
-    pub async fn get_raw_protocol_version(&self) -> alloy::contract::Result<U256> {
-        self.instance.getProtocolVersion().call().await
+    pub async fn get_raw_protocol_version(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<U256> {
+        self.instance
+            .getProtocolVersion()
+            .block(block_id)
+            .call()
+            .await
     }
 }

@@ -65,7 +65,7 @@ impl ProtocolSemanticVersion {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error, Debug, Clone, Copy)]
 pub enum ProtocolSemanticVersionError {
     #[error("Minor version overflow")]
     MinorOverflow,

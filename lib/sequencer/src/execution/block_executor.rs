@@ -12,7 +12,9 @@ use vise::EncodeLabelValue;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::ComponentStateHandle;
-use zksync_os_storage_api::{MeteredViewState, ReadStateHistory, ReplayRecord, WriteState};
+use zksync_os_storage_api::{
+    MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
+};
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -37,9 +39,13 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             txs: Vec::new(),
             error: e.to_string(),
         })?;
+    // Inject any forced preimages into the state view, these are expected to be added to the persistent state
+    // after the block is executed.
+    let state_view_with_force_preimages =
+        OverriddenStateView::with_preimages(state_view, &command.force_preimages);
     let metered_state_view = MeteredViewState {
         component_state_tracker: latency_tracker.clone(),
-        state_view,
+        state_view: state_view_with_force_preimages,
     };
     let mut runner = VmWrapper::new(ctx, metered_state_view);
 
@@ -227,7 +233,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     ctx,
                     txs: all_processed_txs.clone(),
                     error: format!(
-                        "block was expected to be sealed due to either stream exhaustion, but sealed due to {:?} instead, block {}",
+                        "block was expected to be sealed due to stream exhaustion, but sealed due to {:?} instead, block {}",
                         seal_reason, ctx.block_number
                     ),
                 });
@@ -238,11 +244,18 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     latency_tracker.enter_state(SequencerState::Sealing);
 
     /* ---------- seal & return ------------------------------------- */
-    let output = runner.seal_block().await.map_err(|e| BlockDump {
+    let mut output = runner.seal_block().await.map_err(|e| BlockDump {
         ctx,
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+
+    // Since we've overridden the state, we need to insert any forced preimages into the output as well.
+    // Note: the fact that we're doing it here, would also affect the block output hash,
+    // so we'll be able to check consistency upon re-execution.
+    output
+        .published_preimages
+        .extend(command.force_preimages.iter().map(|(k, v)| (*k, v.clone())));
 
     EXECUTION_METRICS
         .storage_writes_per_block

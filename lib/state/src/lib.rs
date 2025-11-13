@@ -128,14 +128,6 @@ impl ReadStateHistory for StateHandle {
 }
 
 impl WriteState for StateHandle {
-    fn force_add_preimages<'a, J>(&self, new_preimages: J) -> anyhow::Result<()>
-    where
-        J: IntoIterator<Item = (B256, &'a Vec<u8>)>,
-    {
-        self.persistent_preimages.force_add(new_preimages);
-        Ok(())
-    }
-
     /// Adds a block result to the state components
     /// No atomicity guarantees
     /// PreimageType is currently ignored

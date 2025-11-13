@@ -103,15 +103,6 @@ where
 
             let prepared_command = self.block_context_provider.prepare_command(cmd).await?;
 
-            self.state
-                .force_add_preimages(
-                    prepared_command
-                        .force_preimages
-                        .iter()
-                        .map(|(k, v)| (*k, v)),
-                )
-                .context("force_add_preimages")?;
-
             tracing::debug!(
                 block_number,
                 starting_l1_priority_id = prepared_command.starting_l1_priority_id,

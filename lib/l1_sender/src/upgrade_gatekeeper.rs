@@ -1,5 +1,5 @@
 use crate::commands::{L1SenderCommand, commit::CommitCommand};
-use alloy::providers::DynProvider;
+use alloy::{eips::BlockId, providers::DynProvider};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::cmp::Ordering;
@@ -24,9 +24,9 @@ impl UpgradeGatekeeper {
     async fn current_protocol_version(&self) -> anyhow::Result<ProtocolSemanticVersion> {
         let current_protocol_version = self
             .zk_chain
-            .get_raw_protocol_version()
+            .get_raw_protocol_version(BlockId::latest())
             .await
-            .context("Failed to fetch current protocol version from L1")?; // TODO: handle transient errors
+            .context("Failed to fetch current protocol version from L1")?;
         let current_protocol_version =
             ProtocolSemanticVersion::try_from(current_protocol_version).map_err(|e| {
                 anyhow::anyhow!(
@@ -63,6 +63,11 @@ impl UpgradeGatekeeper {
                     return Ok(());
                 }
                 Ordering::Less => {
+                    tracing::debug!(
+                        %current_protocol_version,
+                        %target_protocol_version,
+                        "Protocol version on L1 is still less than target version, waiting"
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
             }
