@@ -1,8 +1,11 @@
 use smart_config::value::ExposeSecret;
-use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
+use smart_config::{
+    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, Environment, Yaml,
+};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
+use zksync_os_config_db::ConfigDB;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
@@ -10,8 +13,8 @@ use zksync_os_server::config::{
     ProverApiConfig, ProverInputGeneratorConfig, RollupPubdataMode, RpcConfig, SequencerConfig,
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
-use zksync_os_server::run;
 use zksync_os_server::zkstack_config::ZkStackConfig;
+use zksync_os_server::{CONFIG_DB_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -175,13 +178,34 @@ fn build_configs() -> Config {
         .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
         .expect("Failed to insert batch verification config");
 
-    let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
+    let mut config_sources = ConfigSources::default();
+    config_sources.push(Environment::prefixed(""));
 
-    let mut general_config = repo
+    let mut repo = ConfigRepository::new(&schema).with_all(config_sources.clone());
+
+    let general_config_init = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
         .parse()
         .expect("Failed to parse general config");
+
+    let mut general_config = if general_config_init.config_override_db_enabled {
+        // Add config source from the db.
+        let config_db = ConfigDB::new(&general_config_init.rocks_db_path.join(CONFIG_DB_NAME));
+        let raw_yaml = config_db.read().expect("Failed to read config from db");
+        dbg!(&raw_yaml);
+        let yaml = Yaml::new("config_db.yaml", raw_yaml)
+            .expect("Failed to create yaml config source from db");
+        config_sources.push(yaml);
+        // Rebuild repo and re-load general config.
+        repo = ConfigRepository::new(&schema).with_all(config_sources);
+        repo.single::<GeneralConfig>()
+            .expect("Failed to load general config")
+            .parse()
+            .expect("Failed to parse general config")
+    } else {
+        general_config_init
+    };
 
     let mut genesis_config = repo
         .single::<GenesisConfig>()

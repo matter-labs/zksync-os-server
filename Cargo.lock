@@ -11596,6 +11596,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_config_db"
+version = "0.10.1-non-semver-compat"
+dependencies = [
+ "anyhow",
+ "serde_yaml",
+ "smart-config",
+ "zksync_os_rocksdb",
+]
+
+[[package]]
 name = "zksync_os_contract_interface"
 version = "0.10.1-non-semver-compat"
 dependencies = [
@@ -11978,6 +11988,7 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "serde_json",
+ "serde_yaml",
  "smart-config",
  "thiserror 2.0.12",
  "tokio",
@@ -11985,6 +11996,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0)",
  "zksync-os-revm",
+ "zksync_os_config_db",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_mempool",
@@ -12150,6 +12162,7 @@ dependencies = [
  "zksync-os-revm",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
+ "zksync_os_config_db",
  "zksync_os_contract_interface",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",

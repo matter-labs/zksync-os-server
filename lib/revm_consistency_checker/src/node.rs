@@ -1,12 +1,12 @@
-use std::collections::HashSet;
-
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use reth_revm::db::CacheDB;
-
 use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
+use reth_revm::db::CacheDB;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Sender;
+use zksync_os_config_db::ConfigDB;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
@@ -22,14 +22,42 @@ where
     State: ReadStateHistory + Clone + Send + 'static,
 {
     state: State,
+    config_db: Arc<Mutex<ConfigDB>>,
+    revert_enabled: bool,
 }
 
 impl<State> RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
 {
-    pub fn new(state: State) -> Self {
-        Self { state }
+    pub fn new(state: State, config_db: Arc<Mutex<ConfigDB>>, revert_enabled: bool) -> Self {
+        Self {
+            state,
+            config_db,
+            revert_enabled,
+        }
+    }
+
+    pub fn handle_report(&self, block_number: u64, report: &CompareReport) -> anyhow::Result<()> {
+        report.log_tracing(20);
+        if self.revert_enabled && !report.is_empty() {
+            let config_db = self.config_db.lock().unwrap();
+            let yaml = format!(
+                "
+                sequencer:
+                    block_rebuild:
+                        from_block: {block_number}
+                        blocks_to_empty: \"{block_number}\"
+                general:
+                    reset_config_db_after_block: {block_number}
+            "
+            );
+            config_db.merge_with_yaml(serde_yaml::from_str(&yaml)?)?;
+
+            panic!("REVM consistency check failed for block {block_number}");
+        }
+
+        Ok(())
     }
 }
 
@@ -137,7 +165,7 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                compare_report.log_tracing(20);
+                self.handle_report(replay_record.block_context.block_number, &compare_report)?;
             }
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);

@@ -92,6 +92,13 @@ pub struct GeneralConfig {
     /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
+
+    /// Whether to read the config override from DB.
+    #[config(default)]
+    pub config_override_db_enabled: bool,
+
+    /// If set, clears config DB after target block is finalized, and restarts the node.
+    pub reset_config_db_after_block: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -206,6 +213,9 @@ pub struct SequencerConfig {
     /// blocking process and the overhead should be small.
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
+    /// If enabled, node will revert block with divergence detected by REVM consistency checker.
+    #[config(default_t = false)]
+    pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild options.
     #[config(nest)]

@@ -382,8 +382,10 @@ impl FriJobManager {
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
 
         PROVER_METRICS.prove_time[&(ProverStage::Fri, ProverType::Fake, label)].observe(prove_time);
-        PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Fake, label)]
-            .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
+        if assigned.batch_envelope.batch.tx_count > 0 {
+            PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Fake, label)]
+                .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
+        }
 
         // No verification / deserialization — we emit a fake proof.
 

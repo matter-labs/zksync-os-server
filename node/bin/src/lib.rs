@@ -17,7 +17,7 @@ mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
 
-use crate::batch_sink::{BatchSink, NoOpSink};
+use crate::batch_sink::{BatchSink, NoOpSink, clear_db_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
@@ -45,11 +45,12 @@ use anyhow::Result;
 use futures::FutureExt;
 use ruint::aliases::U256;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
+use zksync_os_config_db::ConfigDB;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
@@ -83,6 +84,7 @@ const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
+pub const CONFIG_DB_NAME: &str = "config";
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
@@ -562,6 +564,8 @@ async fn run_main_node_pipeline(
         .general_config
         .rocks_db_path
         .join(PRIORITY_TREE_DB_NAME);
+    let config_db_path = config.general_config.rocks_db_path.join(CONFIG_DB_NAME);
+    let config_db = Arc::new(Mutex::new(ConfigDB::new(&config_db_path)));
 
     Pipeline::new()
         .pipe(MainNodeCommandSource {
@@ -587,7 +591,15 @@ async fn run_main_node_pipeline(
             config
                 .sequencer_config
                 .revm_consistency_checker_enabled
-                .then(|| RevmConsistencyChecker::new(state.clone())),
+                .then(|| {
+                    RevmConsistencyChecker::new(
+                        state.clone(),
+                        config_db.clone(),
+                        config
+                            .sequencer_config
+                            .revm_consistency_checker_revert_on_divergence,
+                    )
+                }),
         )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(ProverInputGenerator {
@@ -646,7 +658,10 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
-        .pipe(BatchSink)
+        .pipe(BatchSink::new(
+            config.general_config.reset_config_db_after_block,
+            config_db,
+        ))
         .spawn(tasks);
 }
 
@@ -668,6 +683,9 @@ async fn run_en_pipeline(
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
+    let config_db = Arc::new(Mutex::new(ConfigDB::new(
+        &config.general_config.rocks_db_path.join(CONFIG_DB_NAME),
+    )));
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
@@ -689,7 +707,15 @@ async fn run_en_pipeline(
             config
                 .sequencer_config
                 .revm_consistency_checker_enabled
-                .then(|| RevmConsistencyChecker::new(state.clone())),
+                .then(|| {
+                    RevmConsistencyChecker::new(
+                        state.clone(),
+                        config_db.clone(),
+                        config
+                            .sequencer_config
+                            .revm_consistency_checker_revert_on_divergence,
+                    )
+                }),
         )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe_if(
@@ -715,7 +741,7 @@ async fn run_en_pipeline(
                 .join(PRIORITY_TREE_DB_NAME),
         ),
         batch_storage,
-        finality,
+        finality.clone(),
         node_state_on_startup
             .last_l1_executed_block
             .min(node_state_on_startup.block_replay_storage_last_block),
@@ -728,6 +754,11 @@ async fn run_en_pipeline(
             .run()
             .map(report_exit("priority_tree_en")),
     );
+    if let Some(n) = config.general_config.reset_config_db_after_block {
+        tasks.spawn(
+            clear_db_config_task(n, finality, config_db).map(report_exit("clear_db_config_task")),
+        );
+    }
 }
 
 fn block_hashes_for_first_block(repositories: &dyn ReadRepository) -> BlockHashes {
