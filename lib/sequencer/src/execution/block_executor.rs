@@ -12,7 +12,9 @@ use vise::EncodeLabelValue;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::ComponentStateHandle;
-use zksync_os_storage_api::{MeteredViewState, ReadStateHistory, ReplayRecord, WriteState};
+use zksync_os_storage_api::{
+    MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
+};
 use zksync_os_types::{ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
@@ -37,9 +39,13 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             txs: Vec::new(),
             error: e.to_string(),
         })?;
+    // Inject any forced preimages into the state view, these are expected to be added to the persistent state
+    // after the block is executed.
+    let state_view_with_force_preimages =
+        OverriddenStateView::with_preimages(state_view, &command.force_preimages);
     let metered_state_view = MeteredViewState {
         component_state_tracker: latency_tracker.clone(),
-        state_view,
+        state_view: state_view_with_force_preimages,
     };
     let mut runner = VmWrapper::new(ctx, metered_state_view);
 
@@ -115,12 +121,25 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                     "Transaction executed"
                                 );
 
+                                let tx_type = tx.tx_type();
                                 executed_txs.push(tx);
                                 cumulative_gas_used += res.gas_used;
 
                                 // arm the timer once, after the first successful tx
                                 if deadline.is_none() && let Some(dur) = deadline_dur {
                                     deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                                }
+                                if tx_type == ZkTxType::Upgrade {
+                                    match &command.seal_policy {
+                                        SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
+                                            tracing::debug!(block = ctx.block_number, "sealing block as upgrade tx was executed");
+                                            break SealReason::UpgradeTx;
+                                        }
+                                        SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
+                                            // We trust that the execution stream will not break protocol invariants.
+                                            tracing::info!(block = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
+                                        }
+                                    }
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
@@ -225,11 +244,18 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     latency_tracker.enter_state(SequencerState::Sealing);
 
     /* ---------- seal & return ------------------------------------- */
-    let output = runner.seal_block().await.map_err(|e| BlockDump {
+    let mut output = runner.seal_block().await.map_err(|e| BlockDump {
         ctx,
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+
+    // Since we've overridden the state, we need to insert any forced preimages into the output as well.
+    // Note: the fact that we're doing it here, would also affect the block output hash,
+    // so we'll be able to check consistency upon re-execution.
+    output
+        .published_preimages
+        .extend(command.force_preimages.iter().map(|(k, v)| (*k, v.clone())));
 
     EXECUTION_METRICS
         .storage_writes_per_block
@@ -291,7 +317,9 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             executed_txs,
             command.previous_block_timestamp,
             command.node_version,
+            command.protocol_version,
             block_hash_output,
+            command.force_preimages,
         ),
         purged_txs,
     ))
@@ -320,6 +348,8 @@ pub enum SealReason {
     Pubdata,
     L2ToL1Logs,
     Blobs,
+    // We executed upgrade transaction
+    UpgradeTx,
     Other,
 }
 

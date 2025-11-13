@@ -6,17 +6,17 @@ use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
-use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
+use zksync_os_types::{
+    L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, UpgradeTransaction, ZkEnvelope,
+};
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
 /// Last step in the stream where `Produce` and `Replay` are differentiated.
@@ -31,6 +31,7 @@ use zksync_os_types::{L1PriorityEnvelope, L2Envelope, ZkEnvelope};
 pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
+    upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -38,7 +39,9 @@ pub struct BlockContextProvider<Mempool> {
     gas_limit: u64,
     pubdata_limit: u64,
     node_version: semver::Version,
-    genesis: Arc<Genesis>,
+    /// Protocol version to be used for the next produced block.
+    /// Can change in runtime in case of upgrades.
+    protocol_version: ProtocolSemanticVersion,
     fee_collector_address: Address,
     base_fee_override: Option<u128>,
     pubdata_price_override: Option<u128>,
@@ -52,6 +55,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     pub fn new(
         next_l1_priority_id: u64,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
+        upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -59,7 +63,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         gas_limit: u64,
         pubdata_limit: u64,
         node_version: semver::Version,
-        genesis: Arc<Genesis>,
+        protocol_version: ProtocolSemanticVersion,
         fee_collector_address: Address,
         base_fee_override: Option<u128>,
         pubdata_price_override: Option<u128>,
@@ -70,6 +74,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         Self {
             next_l1_priority_id,
             l1_transactions,
+            upgrade_transactions,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -77,7 +82,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             gas_limit,
             pubdata_limit,
             node_version,
-            genesis,
+            protocol_version,
             fee_collector_address,
             base_fee_override,
             pubdata_price_override,
@@ -93,21 +98,18 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     ) -> anyhow::Result<PreparedBlockCommand> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
-                let upgrade_tx = if produce_command.block_number == 1 {
-                    Some(self.genesis.genesis_upgrade_tx().await.tx)
-                } else {
-                    None
-                };
-
                 // Create stream:
-                // - For block #1 genesis upgrade tx goes first.
+                // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
                 // - L1 transactions first, then L2 transactions.
-                let mut best_txs =
-                    best_transactions(&self.l2_mempool, &mut self.l1_transactions, upgrade_tx);
+                let mut best_txs = best_transactions(
+                    &self.l2_mempool,
+                    &mut self.l1_transactions,
+                    &mut self.upgrade_transactions,
+                );
 
                 // Peek to ensure that at least one transaction is available so that timestamp is accurate.
-                let stream_closed = best_txs.wait_peek().await.is_none();
-                if stream_closed {
+                let peeked_tx = best_txs.wait_peek().await;
+                if peeked_tx.is_none() {
                     return Err(anyhow::anyhow!(
                         "BestTransactionsStream closed unexpectedly for block {}",
                         produce_command.block_number
@@ -115,6 +117,29 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
+
+                // Check if we peeked an upgrade transaction info.
+                let force_preimages = if let Some(Some(upgrade_tx)) = peeked_tx {
+                    tracing::info!(
+                        block_number = produce_command.block_number,
+                        upgrade_tx = ?upgrade_tx,
+                        "including protocol upgrade transaction in the block"
+                    );
+                    // Invariant: transactions sent through this stream must be ready for execution, e.g.
+                    // transaction should not be sent until timestamp is reached.
+                    // We add some margin of error for timestamp comparison.
+                    let current_timestamp = timestamp.saturating_add(5);
+                    anyhow::ensure!(
+                        upgrade_tx.timestamp <= current_timestamp,
+                        "upgrade transaction with timestamp {} received too early at {}; tx: {upgrade_tx:?}",
+                        upgrade_tx.timestamp,
+                        current_timestamp
+                    );
+                    self.protocol_version = upgrade_tx.protocol_version.clone();
+                    upgrade_tx.force_preimages.clone()
+                } else {
+                    Vec::new()
+                };
 
                 const NATIVE_PRICE: u128 = 1_000_000;
                 const NATIVE_PER_GAS: u128 = 100;
@@ -154,8 +179,10 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     metrics_label: "produce",
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
+                    protocol_version: self.protocol_version.clone(),
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
+                    force_preimages,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -181,8 +208,10 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     node_version: record.node_version,
+                    protocol_version: record.protocol_version,
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
+                    force_preimages: record.force_preimages,
                 }
             }
             BlockCommand::Rebuild(rebuild) => {
@@ -240,8 +269,10 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     metrics_label: "rebuild",
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
+                    protocol_version: rebuild.replay_record.protocol_version,
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
+                    force_preimages: rebuild.replay_record.force_preimages,
                 }
             }
         };
@@ -275,7 +306,21 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());
                 }
-                ZkEnvelope::Upgrade(_) => {}
+                ZkEnvelope::Upgrade(upgrade) => {
+                    // consume processed upgrade txs for non-produce commands
+                    if matches!(
+                        cmd_type,
+                        BlockCommandType::Rebuild | BlockCommandType::Replay
+                    ) {
+                        // Skip fetched patch upgrades
+                        let mut upgrade_tx = self.upgrade_transactions.recv().await.unwrap();
+                        while upgrade_tx.tx.is_none() {
+                            upgrade_tx = self.upgrade_transactions.recv().await.unwrap();
+                        }
+
+                        assert_eq!(upgrade_tx.tx.as_ref(), Some(upgrade));
+                    }
+                }
             }
         }
         EXECUTION_METRICS

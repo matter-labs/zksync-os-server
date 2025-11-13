@@ -54,6 +54,18 @@ pub(crate) fn seal_batch(
             )
             .collect();
 
+    let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
+    // Sanity check: all blocks in the batch should have the same protocol version
+    for (_, replay_record, _, _) in blocks.iter().skip(1) {
+        anyhow::ensure!(
+            replay_record.protocol_version == protocol_version,
+            "mismatched protocol versions in batch: expected {}, found {}; blocks: {:?}",
+            protocol_version,
+            replay_record.protocol_version,
+            blocks,
+        );
+    }
+
     let batch_envelope = BatchEnvelope::new(
         BatchMetadata {
             previous_stored_batch_info: prev_batch_info,
@@ -65,6 +77,7 @@ pub(crate) fn seal_batch(
                 .map(|(block_output, _, _, _)| block_output.tx_results.len())
                 .sum(),
             execution_version,
+            protocol_version,
         },
         batch_prover_input,
     )

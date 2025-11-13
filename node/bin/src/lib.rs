@@ -59,7 +59,8 @@ use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
+use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
+use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
@@ -77,7 +78,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
+use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState, UpgradeTransaction};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -146,6 +147,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // Channel between L1Watcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
+
+    // Channel between L1UpgradeWatcher and Sequencer
+    let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
+        tokio::sync::mpsc::channel(5);
 
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
@@ -288,6 +293,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     node_startup_state.assert_consistency();
 
+    // If we start from the very first block, we should start by sending upgrade tx for genesis.
+    if starting_block == 1 {
+        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
+        let upgrade_tx = UpgradeTransaction {
+            tx: Some(genesis_upgrade.tx),
+            protocol_version: genesis_upgrade.protocol_version,
+            timestamp: 0, // No restrictions on timestamp.
+            force_preimages: genesis_upgrade.force_deploy_preimages,
+        };
+        l1_upgrade_transactions_sender
+            .send(upgrade_tx)
+            .await
+            .expect("failed to send genesis upgrade transaction to sequencer");
+    }
+
     tracing::info!("Initializing L1 Watchers");
     let mut tasks: JoinSet<()> = JoinSet::new();
     tasks.spawn(
@@ -416,12 +436,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
-    let genesis = Arc::new(genesis);
+    let current_protocol_version = if let Some(record) = first_replay_record {
+        record.protocol_version.clone()
+    } else {
+        genesis.genesis_upgrade_tx().await.protocol_version
+    };
+
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions_for_sequencer,
+        l1_upgrade_transactions_receiver,
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
@@ -429,13 +455,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
-        genesis.clone(),
+        current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,
         config.sequencer_config.pubdata_price_override,
         config.sequencer_config.native_price_override,
         pubdata_price_receiver,
         pending_block_context_sender,
+    );
+
+    // ========== Start L1 Upgrade Watcher ===========
+
+    tasks.spawn(
+        L1UpgradeTxWatcher::new(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
+            config
+                .genesis_config
+                .bytecode_supplier_address
+                .expect("Missing `bytecode_supplier_address` in L1 watcher config"),
+            current_protocol_version,
+            l1_upgrade_transactions_sender,
+        )
+        .await
+        .expect("failed to start L1 upgrade transaction watcher")
+        .run()
+        .map(report_exit("L1 upgrade transaction watcher")),
     );
 
     // ========== Start Sequencer ===========
@@ -620,6 +665,9 @@ async fn run_main_node_pipeline(
             proof_storage: batch_storage.clone(),
             da_input_mode: node_state_on_startup.l1_state.da_input_mode,
         })
+        .pipe(UpgradeGatekeeper::new(
+            node_state_on_startup.l1_state.diamond_proxy.clone(),
+        ))
         .pipe(L1Sender::<_, CommitCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),

@@ -3,6 +3,7 @@ use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
+use zksync_os_types::{ProtocolSemanticVersion, ZkTxType};
 
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
@@ -11,7 +12,9 @@ pub(crate) struct BatchInfoAccumulator {
     pub pubdata_bytes: u64,
     pub l2_to_l1_logs_count: u64,
     pub block_count: u64,
+    pub has_upgrade_tx: bool,
 
+    pub protocol_versions: HashSet<ProtocolSemanticVersion>,
     pub execution_versions: HashSet<u32>,
 
     // Limits
@@ -39,6 +42,23 @@ impl BatchInfoAccumulator {
         self.block_count += 1;
         self.execution_versions
             .insert(replay_record.block_context.execution_version);
+        self.protocol_versions
+            .insert(replay_record.protocol_version.clone());
+
+        if !self.has_upgrade_tx
+            && replay_record
+                .transactions
+                .iter()
+                .any(|tx| tx.tx_type() == ZkTxType::Upgrade)
+        {
+            // Sanity check: upgrade tx must be the only tx in the block.
+            assert_eq!(
+                replay_record.transactions.len(),
+                1,
+                "upgrade tx must be the only tx in the block: {replay_record:?}"
+            );
+            self.has_upgrade_tx = true;
+        }
 
         self
     }
@@ -46,6 +66,23 @@ impl BatchInfoAccumulator {
     /// Checks if the batch should be sealed based on the content of the blocks.
     /// e.g. due to the block count limit, tx count limit, or pubdata size limit.
     pub fn should_seal(&self) -> bool {
+        // With current implementation, sealer assumes that the first block in the batch
+        // can always be included, so we shouldn't return `true` until we add one more block here.
+        // Otherwise, we will end up in a situation where the first block is never included in any batch.
+        if self.has_upgrade_tx && self.block_count > 1 {
+            BATCHER_METRICS.seal_reason[&"upgrade_tx"].inc();
+            tracing::debug!("Batcher: sealing batch due to upgrade transaction");
+            return true;
+        }
+
+        // If patch upgrade was executed, then we will not have an upgrade tx, but we still need to seal the previous
+        // batch to make sure that all the blocks within a batch have the same protocol version.
+        if self.protocol_versions.len() > 1 {
+            BATCHER_METRICS.seal_reason[&"protocol_version_change"].inc();
+            tracing::debug!("Batcher: protocol version changed within the batch");
+            return true;
+        }
+
         if self.block_count > self.blocks_per_batch_limit {
             BATCHER_METRICS.seal_reason[&"blocks_per_batch"].inc();
             tracing::debug!("Batcher: reached blocks per batch limit");
@@ -70,6 +107,8 @@ impl BatchInfoAccumulator {
             return true;
         }
 
+        // TODO: once upgrade functionality is implemented in the sequencer, this check will be equivalent
+        // to the `protocol_versions` one above, so we can remove this logic.
         if self.execution_versions.len() > 1 {
             BATCHER_METRICS.seal_reason[&"execution_version_change"].inc();
             tracing::debug!("Batcher: ZKsync OS version changed within the batch");

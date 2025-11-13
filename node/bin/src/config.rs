@@ -109,6 +109,13 @@ pub struct GenesisConfig {
     #[config(with = Optional(Serde![int]), default_t = Some("0xfaf7f9079efe7e9b681aab926e7ca9801af4f993".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
+    /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
+    /// so it has to be provided explicitly.
+    // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
+    // find it in `zkos-l1-state.json`
+    #[config(with = Optional(Serde![int]), default_t = Some("0x883498218f553d748e48b43595a7d29a82939f01".parse().unwrap()))]
+    pub bytecode_supplier_address: Option<Address>,
+
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(270))]
     pub chain_id: Option<u64>,

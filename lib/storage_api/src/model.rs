@@ -2,7 +2,9 @@ use alloy::primitives::{Address, B256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_interface::types::BlockContext;
-use zksync_os_types::{L1TxSerialId, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{
+    L1TxSerialId, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope, ZkTransaction,
+};
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
 #[rlp(trailing)]
@@ -38,18 +40,25 @@ pub struct ReplayRecord {
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
     pub node_version: semver::Version,
+    /// Version of the protocol that was used to create this replay record.
+    pub protocol_version: ProtocolSemanticVersion,
     /// Hash of the block output.
     pub block_output_hash: B256,
+    /// Forced preimages to be included before the block execution.
+    pub force_preimages: Vec<(B256, Vec<u8>)>,
 }
 
 impl ReplayRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         block_context: BlockContext,
         starting_l1_priority_id: L1TxSerialId,
         transactions: Vec<ZkTransaction>,
         previous_block_timestamp: u64,
         node_version: semver::Version,
+        protocol_version: ProtocolSemanticVersion,
         block_output_hash: B256,
+        force_preimages: Vec<(B256, Vec<u8>)>,
     ) -> Self {
         let first_l1_tx_priority_id = transactions.iter().find_map(|tx| match tx.envelope() {
             ZkEnvelope::L1(l1_tx) => Some(l1_tx.priority_id()),
@@ -68,7 +77,9 @@ impl ReplayRecord {
             transactions,
             previous_block_timestamp,
             node_version,
+            protocol_version,
             block_output_hash,
+            force_preimages,
         }
     }
 }
