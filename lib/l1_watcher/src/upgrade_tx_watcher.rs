@@ -170,6 +170,8 @@ impl L1UpgradeTxWatcher {
         } else {
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
             let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
+
+            println!("\n\n\n\n\n\n\nFetched {} preimages from hardcoded file.", force_preimages.len());
             (Some(tx), force_preimages)
         };
 
@@ -205,13 +207,45 @@ impl L1UpgradeTxWatcher {
     }
 
     async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
-        if hashes.is_empty() {
-            tracing::info!("no force deployment preimages to fetch");
-            return Ok(Vec::new());
+        // HACK
+        use std::fs;
+        use std::collections::HashMap;
+        use alloy::primitives::hex::FromHex;
+        use serde_json::Value;
+
+        // Hardcoded file path (replace with actual path as needed)
+        let file_path = "/Users/stas/zksync_tools/zkos/update_state_json/repos/era-contracts/l1-contracts/scripts/zksync-os-bytecode-hashes.json";
+
+        // Read and parse the JSON file
+        let file_content = fs::read_to_string(file_path)?;
+        let json: Value = serde_json::from_str(&file_content)?;
+
+        // Build a map from B256 to Vec<u8>
+        let mut preimage_map: HashMap<B256, Vec<u8>> = HashMap::new();
+        if let Value::Object(map) = json {
+            for (key, value) in map {
+                // Parse key as B256
+                let hash = B256::from_hex(key.as_str())?;
+                // Parse value as Vec<u8> from hex string
+                let hex_str = value.as_str().ok_or_else(|| anyhow::anyhow!("Invalid value for hash {}", key))?;
+                let bytes = Vec::from_hex(hex_str)?;
+                preimage_map.insert(hash, bytes);
+            }
+        } else {
+            anyhow::bail!("JSON file is not an object");
         }
 
-        // TODO: Bytecode supplier is not ready yet for ZKsync OS.
-        panic!("fetching force deployment preimages is not yet implemented");
+        // Collect preimages for the requested hashes
+        // let mut result = Vec::new();
+        // for hash in hashes {
+        //     if let Some(bytes) = preimage_map.get(hash) {
+        //         result.push((*hash, bytes.clone()));
+        //     }
+        // }
+        Ok(preimage_map.into_iter().collect())
+
+        // // TODO: Bytecode supplier is not ready yet for ZKsync OS.
+        // panic!("fetching force deployment preimages is not yet implemented");
 
         // tracing::info!(
         //     num_hashes = hashes.len(),
