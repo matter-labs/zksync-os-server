@@ -952,7 +952,7 @@ async fn determine_starting_batch(
         };
 
         if last_matching_block + 1 != want_to_start_from {
-            tracing::info!(
+            tracing::warn!(
                 last_matching_block,
                 want_to_start_from,
                 "Node's blocks diverged from main node's blocks. Starting from last matching block + 1."
