@@ -262,6 +262,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // `batcher_prev_batch_info` - to be used by batcher to (re)build its first batch.
     let (starting_block, batcher_prev_batch_info) =
         if node_startup_state.l1_state.last_committed_batch > 0 {
+            let last_matching_block =
+                if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
+                    find_last_matching_main_node_block(&repositories, main_node_rpc_url)
+                        .await
+                        .expect("Failed to find last matching block with main node")
+                } else {
+                    node_startup_state.repositories_persisted_block
+                };
             // Some batches committed - starting from an already committed batch
             let starting_batch = determine_starting_batch(
                 &config,
@@ -269,8 +277,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &state,
                 &batch_storage,
                 &finality_storage,
-                &repositories,
-                config.general_config.main_node_rpc_url.clone(),
+                last_matching_block,
             )
             .await;
             (
@@ -893,8 +900,7 @@ async fn determine_starting_batch(
     state: &impl ReadStateHistory,
     batch_storage: &ProofStorage,
     finality_storage: &Finality,
-    repository_manager: &RepositoryManager,
-    main_node_rpc_url: Option<String>,
+    last_matching_block: u64,
 ) -> BatchMetadata {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
@@ -939,19 +945,7 @@ async fn determine_starting_batch(
         // We don't execute the genesis block (number 0) - the earliest we can start is `0`
         .max(1);
 
-        let last_matching_block = if let Some(main_node_rpc_url) = main_node_rpc_url {
-            find_last_matching_main_node_block(
-                repository_manager,
-                &main_node_rpc_url,
-                want_to_start_from - 1,
-            )
-            .await
-            .expect("Failed to find last matching block with main node")
-        } else {
-            want_to_start_from - 1
-        };
-
-        if last_matching_block + 1 != want_to_start_from {
+        if last_matching_block + 1 < want_to_start_from {
             tracing::warn!(
                 last_matching_block,
                 want_to_start_from,
@@ -959,7 +953,7 @@ async fn determine_starting_batch(
             );
         }
 
-        last_matching_block + 1
+        (last_matching_block + 1).min(want_to_start_from)
     };
 
     let starting_batch_number = batch_storage
@@ -994,7 +988,6 @@ async fn determine_starting_batch(
 async fn find_last_matching_main_node_block(
     repo: &RepositoryManager,
     main_node_rpc_url: &str,
-    up_to_block: u64,
 ) -> anyhow::Result<u64> {
     async fn check(
         repo: &RepositoryManager,
@@ -1015,9 +1008,10 @@ async fn find_last_matching_main_node_block(
 
     let main_node_rpc_client =
         jsonrpsee::http_client::HttpClientBuilder::new().build(main_node_rpc_url)?;
-    // Check last block first. Unless there was a reorg recently, this should be return quickly.
-    if check(repo, &main_node_rpc_client, up_to_block).await? {
-        return Ok(up_to_block);
+    let last_block = repo.get_latest_block();
+    // Check last block first. Unless there was a reorg recently, this should return quickly.
+    if check(repo, &main_node_rpc_client, last_block).await? {
+        return Ok(last_block);
     }
     if !check(repo, &main_node_rpc_client, 0).await? {
         panic!("Genesis block mismatch between EN and main node");
@@ -1025,7 +1019,7 @@ async fn find_last_matching_main_node_block(
 
     // Binary search for the last matching block.
     let mut left = 0u64;
-    let mut right = up_to_block;
+    let mut right = last_block;
     while left < right {
         #[allow(clippy::manual_div_ceil)]
         let mid = (left + right + 1) / 2;
