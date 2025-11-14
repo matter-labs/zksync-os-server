@@ -41,8 +41,9 @@ use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::network::EthereumWallet;
 use alloy::providers::{Provider, WalletProvider};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::FutureExt;
+use jsonrpsee::http_client::HttpClient;
 use ruint::aliases::U256;
 use std::path::Path;
 use std::sync::Arc;
@@ -68,6 +69,7 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_status_server::run_status_server;
@@ -260,6 +262,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // `batcher_prev_batch_info` - to be used by batcher to (re)build its first batch.
     let (starting_block, batcher_prev_batch_info) =
         if node_startup_state.l1_state.last_committed_batch > 0 {
+            let last_matching_block =
+                if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
+                    find_last_matching_main_node_block(&repositories, main_node_rpc_url)
+                        .await
+                        .expect("Failed to find last matching block with main node")
+                } else {
+                    node_startup_state.repositories_persisted_block
+                };
             // Some batches committed - starting from an already committed batch
             let starting_batch = determine_starting_batch(
                 &config,
@@ -267,6 +277,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &state,
                 &batch_storage,
                 &finality_storage,
+                last_matching_block,
             )
             .await;
             (
@@ -889,6 +900,7 @@ async fn determine_starting_batch(
     state: &impl ReadStateHistory,
     batch_storage: &ProofStorage,
     finality_storage: &Finality,
+    last_matching_block: u64,
 ) -> BatchMetadata {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
@@ -901,7 +913,7 @@ async fn determine_starting_batch(
         forced_starting_block_number
     } else {
         // Start with the oldest block from:
-        [
+        let want_to_start_from = [
             // To ensure consistency/correctness, we want to replay at least `config.min_blocks_to_replay` blocks
             node_startup_state
                 .block_replay_storage_last_block
@@ -931,7 +943,17 @@ async fn determine_starting_batch(
         .min()
         .unwrap()
         // We don't execute the genesis block (number 0) - the earliest we can start is `0`
-        .max(1)
+        .max(1);
+
+        if last_matching_block + 1 < want_to_start_from {
+            tracing::warn!(
+                last_matching_block,
+                want_to_start_from,
+                "Node's blocks diverged from main node's blocks. Starting from last matching block + 1."
+            );
+        }
+
+        (last_matching_block + 1).min(want_to_start_from)
     };
 
     let starting_batch_number = batch_storage
@@ -960,6 +982,54 @@ async fn determine_starting_batch(
     }
 
     starting_batch
+}
+
+/// Finds the last block number where the local node's block hash matches the main node's block hash.
+async fn find_last_matching_main_node_block(
+    repo: &RepositoryManager,
+    main_node_rpc_url: &str,
+) -> anyhow::Result<u64> {
+    async fn check(
+        repo: &RepositoryManager,
+        main_node_client: &HttpClient,
+        block_number: u64,
+    ) -> anyhow::Result<bool> {
+        let local_hash = repo
+            .get_block_by_number(block_number)?
+            .map(|b| b.hash())
+            .with_context(|| format!("Local node is missing block {block_number}"))?;
+        let remove_hash = main_node_client
+            .block_by_number(block_number.into(), false)
+            .await?
+            .map(|h| h.header.hash)
+            .with_context(|| format!("Main node is missing block {block_number}"))?;
+        Ok(local_hash == remove_hash)
+    }
+
+    let main_node_rpc_client =
+        jsonrpsee::http_client::HttpClientBuilder::new().build(main_node_rpc_url)?;
+    let last_block = repo.get_latest_block();
+    // Check last block first. Unless there was a reorg recently, this should return quickly.
+    if check(repo, &main_node_rpc_client, last_block).await? {
+        return Ok(last_block);
+    }
+    if !check(repo, &main_node_rpc_client, 0).await? {
+        panic!("Genesis block mismatch between EN and main node");
+    }
+
+    // Binary search for the last matching block.
+    let mut left = 0u64;
+    let mut right = last_block;
+    while left < right {
+        #[allow(clippy::manual_div_ceil)]
+        let mid = (left + right + 1) / 2;
+        if check(repo, &main_node_rpc_client, mid).await? {
+            left = mid;
+        } else {
+            right = mid - 1;
+        }
+    }
+    Ok(left)
 }
 
 // Implementation node: it's awkward that we need all these arguments to get the genesis StoredBatchInfo.
