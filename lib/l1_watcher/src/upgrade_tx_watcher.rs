@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::factory_deps::load_factory_deps;
 use crate::watcher::{L1Watcher, L1WatcherError, ProcessL1Event};
 use crate::{L1WatcherConfig, util};
 use alloy::dyn_abi::SolType;
@@ -206,34 +207,9 @@ impl L1UpgradeTxWatcher {
         }
     }
 
-    async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
-        // HACK
-        use std::fs;
-        use std::collections::HashMap;
-        use alloy::primitives::hex::FromHex;
-        use serde_json::Value;
-
-        // Hardcoded file path (replace with actual path as needed)
-        let file_path = "/Users/stas/zksync_tools/zkos/update_state_json/repos/era-contracts/l1-contracts/scripts/zksync-os-bytecode-hashes.json";
-
-        // Read and parse the JSON file
-        let file_content = fs::read_to_string(file_path)?;
-        let json: Value = serde_json::from_str(&file_content)?;
-
-        // Build a map from B256 to Vec<u8>
-        let mut preimage_map: HashMap<B256, Vec<u8>> = HashMap::new();
-        if let Value::Object(map) = json {
-            for (key, value) in map {
-                // Parse key as B256
-                let hash = B256::from_hex(key.as_str())?;
-                // Parse value as Vec<u8> from hex string
-                let hex_str = value.as_str().ok_or_else(|| anyhow::anyhow!("Invalid value for hash {}", key))?;
-                let bytes = Vec::from_hex(hex_str)?;
-                preimage_map.insert(hash, bytes);
-            }
-        } else {
-            anyhow::bail!("JSON file is not an object");
-        }
+    async fn fetch_force_preimages(&self, _hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
+        // HACK: For now, we load preimages from a hardcoded JSON file.
+        load_factory_deps()
 
         // Collect preimages for the requested hashes
         // let mut result = Vec::new();
@@ -242,7 +218,6 @@ impl L1UpgradeTxWatcher {
         //         result.push((*hash, bytes.clone()));
         //     }
         // }
-        Ok(preimage_map.into_iter().collect())
 
         // // TODO: Bytecode supplier is not ready yet for ZKsync OS.
         // panic!("fetching force deployment preimages is not yet implemented");

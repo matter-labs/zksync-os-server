@@ -17,3 +17,5 @@ pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 
 pub mod util;
 mod watcher;
+
+mod factory_deps;
