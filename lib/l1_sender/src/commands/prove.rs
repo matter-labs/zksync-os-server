@@ -1,7 +1,6 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
 use crate::commands::SendToL1;
-use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{B256, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
@@ -39,10 +38,6 @@ impl SendToL1 for ProofCommand {
             U256::from(self.batches.last().unwrap().batch_number()),
             self.to_calldata_suffix().into(),
         ))
-    }
-
-    fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
-        None
     }
 }
 

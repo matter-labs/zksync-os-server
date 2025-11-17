@@ -29,7 +29,9 @@ pub trait SendToL1:
     const PASSTHROUGH_STAGE: BatchExecutionStage;
     fn solidity_call(&self) -> impl SolCall;
 
-    fn blob_sidecar(&self) -> Option<BlobTransactionSidecar>;
+    fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
+        None
+    }
 
     /// Only used for logging - as we send commands in bulk, it's natural to print a single range
     /// for the whole group, e.g. "1-3, 4, 5-6" instead of "1, 2, 3, 4, 5, 6"

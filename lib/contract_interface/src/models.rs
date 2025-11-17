@@ -123,20 +123,14 @@ impl From<crate::L2DACommitmentScheme> for DACommitmentScheme {
     }
 }
 
-impl Into<zk_ee::common_structs::DACommitmentScheme> for DACommitmentScheme {
-    fn into(self) -> zk_ee::common_structs::DACommitmentScheme {
-        match self {
-            DACommitmentScheme::None => zk_ee::common_structs::DACommitmentScheme::None,
-            DACommitmentScheme::EmptyNoDA => zk_ee::common_structs::DACommitmentScheme::EmptyNoDA,
-            DACommitmentScheme::PubdataKeccak256 => {
-                zk_ee::common_structs::DACommitmentScheme::PubdataKeccak256
-            }
-            DACommitmentScheme::BlobsAndPubdataKeccak256 => {
-                zk_ee::common_structs::DACommitmentScheme::BlobsAndPubdataKeccak256
-            }
-            DACommitmentScheme::BlobsZKsyncOS => {
-                zk_ee::common_structs::DACommitmentScheme::BlobsZKsyncOS
-            }
+impl From<DACommitmentScheme> for zk_ee::common_structs::DACommitmentScheme {
+    fn from(val: DACommitmentScheme) -> Self {
+        match val {
+            DACommitmentScheme::None => Self::None,
+            DACommitmentScheme::EmptyNoDA => Self::EmptyNoDA,
+            DACommitmentScheme::PubdataKeccak256 => Self::PubdataKeccak256,
+            DACommitmentScheme::BlobsAndPubdataKeccak256 => Self::BlobsAndPubdataKeccak256,
+            DACommitmentScheme::BlobsZKsyncOS => Self::BlobsZKsyncOS,
         }
     }
 }
@@ -180,7 +174,7 @@ impl From<CommitBatchInfo> for IExecutor::CommitBatchInfoZKsyncOS {
             value.dependency_roots_rolling_hash,
             value.l2_to_l1_logs_root_hash,
             value.l2_da_commitment_scheme.into(),
-            value.da_commitment.into(),
+            value.da_commitment,
             value.first_block_timestamp,
             // It is expected that for all the newly sent batches this field is always present.
             value.first_block_number.unwrap(),
@@ -203,8 +197,8 @@ impl From<CommitBatchInfo> for IExecutorV29::CommitBatchInfoZKsyncOS {
             value.dependency_roots_rolling_hash,
             value.l2_to_l1_logs_root_hash,
             // we always set l2 da validator address
-            alloy::primitives::Address::ZERO.into(),
-            value.da_commitment.into(),
+            alloy::primitives::Address::ZERO,
+            value.da_commitment,
             value.first_block_timestamp,
             value.last_block_timestamp,
             U256::from(value.chain_id),
