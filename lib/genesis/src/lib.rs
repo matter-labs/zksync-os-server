@@ -150,7 +150,7 @@ fn flat_storage_key_for_contract(address: Address, key: B256) -> B256 {
 
 fn account_properties_flat_key(address: Address) -> B256 {
     let mut bytes = [0u8; 32];
-    bytes[12..32].copy_from_slice(&address.as_slice());
+    bytes[12..32].copy_from_slice(address.as_slice());
 
     flat_storage_key_for_contract(
         ACCOUNT_PROPERTIES_STORAGE_ADDRESS.to_be_bytes().into(),

@@ -198,7 +198,7 @@ impl BatchInfo {
                     };
                 B256::from(system_batch_output.hash())
             }
-            _ => panic!("Unsupported protocol version: {}", protocol_version),
+            _ => panic!("Unsupported protocol version: {protocol_version}"),
         }
     }
 
@@ -254,7 +254,7 @@ fn calculate_da_fields(pubdata: &[u8], pubdata_mode: PubdataMode) -> DAFields {
             // Ok(hasher.finalize().into())
 
             operator_da_input.extend(B256::ZERO.as_slice());
-            operator_da_input.extend(keccak256(&pubdata));
+            operator_da_input.extend(keccak256(pubdata));
             operator_da_input.push(1);
             operator_da_input.extend(B256::ZERO.as_slice());
 
@@ -275,8 +275,7 @@ fn calculate_da_fields(pubdata: &[u8], pubdata_mode: PubdataMode) -> DAFields {
                 .unwrap();
             let versioned_hashes: Vec<u8> = blob_sidecar
                 .versioned_hashes()
-                .map(|hash| hash.0.to_vec())
-                .flatten()
+                .flat_map(|hash| hash.0.to_vec())
                 .collect();
             let da_commitment = keccak256(&versioned_hashes);
 
