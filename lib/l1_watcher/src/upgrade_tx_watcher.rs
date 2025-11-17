@@ -172,7 +172,10 @@ impl L1UpgradeTxWatcher {
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
             let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
 
-            tracing::info!("Fetched {} preimages from the hardcoded file.", force_preimages.len());
+            tracing::info!(
+                "Fetched {} preimages from the hardcoded file.",
+                force_preimages.len()
+            );
             (Some(tx), force_preimages)
         };
 
@@ -207,7 +210,10 @@ impl L1UpgradeTxWatcher {
         }
     }
 
-    async fn fetch_force_preimages(&self, _hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
+    async fn fetch_force_preimages(
+        &self,
+        _hashes: &[B256],
+    ) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
         // HACK: For now, we load preimages from a hardcoded JSON file.
         load_factory_deps()
 

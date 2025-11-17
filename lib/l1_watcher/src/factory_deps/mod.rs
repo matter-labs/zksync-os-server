@@ -4,9 +4,12 @@
 //! This file is to be removed once the sequencer can load factory deps
 //! from L1 directly.
 
-use alloy::{hex::FromHex, primitives::{B256, hex}};
-use std::collections::HashMap;
+use alloy::{
+    hex::FromHex,
+    primitives::{B256, hex},
+};
 use serde::Deserialize;
+use std::collections::HashMap;
 const CONTRACTS_JSON: &str = include_str!("contracts.json");
 
 #[derive(Debug, Deserialize)]
