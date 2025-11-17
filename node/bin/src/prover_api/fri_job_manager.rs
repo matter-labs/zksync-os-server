@@ -175,7 +175,8 @@ impl FriJobManager {
             return Some((fri_job, prover_input));
         }
 
-        if let MinMax(min_batch_number, max_batch_number) = self.assigned_jobs.minmax_assigned_batch_number()
+        if let MinMax(min_batch_number, max_batch_number) =
+            self.assigned_jobs.minmax_assigned_batch_number()
             && max_batch_number - min_batch_number >= self.max_assigned_batch_range as u64
         {
             // fresh assignments are not allowed when there are too many assigned jobs
