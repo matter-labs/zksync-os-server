@@ -52,8 +52,8 @@ mod tests {
         let test_vector = [
             ((0, 29, 0), ExecutionVersion::V4),
             ((0, 29, 1), ExecutionVersion::V4),
-            ((0, 30, 0), ExecutionVersion::V4), // To be updated to V5 once 30 is ready.
-            ((0, 30, 1), ExecutionVersion::V4), // To be updated to V5 once 30 is ready.
+            ((0, 30, 0), ExecutionVersion::V5),
+            ((0, 30, 1), ExecutionVersion::V5),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {

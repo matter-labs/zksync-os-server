@@ -29,7 +29,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
         // from there.
         match (version.minor, version.patch) {
             (29, 0) | (29, 1) => Ok(ProvingVersion::V4),
-            (30, 0) => Ok(ProvingVersion::V4), // To be updated to V5 once 30 is ready.
+            (30, 0) => Ok(ProvingVersion::V5),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
