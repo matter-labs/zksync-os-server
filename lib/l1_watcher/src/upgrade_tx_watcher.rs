@@ -172,7 +172,7 @@ impl L1UpgradeTxWatcher {
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
             let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
 
-            println!("\n\n\n\n\n\n\nFetched {} preimages from hardcoded file.", force_preimages.len());
+            tracing::info!("Fetched {} preimages from the hardcoded file.", force_preimages.len());
             (Some(tx), force_preimages)
         };
 
@@ -210,14 +210,6 @@ impl L1UpgradeTxWatcher {
     async fn fetch_force_preimages(&self, _hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
         // HACK: For now, we load preimages from a hardcoded JSON file.
         load_factory_deps()
-
-        // Collect preimages for the requested hashes
-        // let mut result = Vec::new();
-        // for hash in hashes {
-        //     if let Some(bytes) = preimage_map.get(hash) {
-        //         result.push((*hash, bytes.clone()));
-        //     }
-        // }
 
         // // TODO: Bytecode supplier is not ready yet for ZKsync OS.
         // panic!("fetching force deployment preimages is not yet implemented");
