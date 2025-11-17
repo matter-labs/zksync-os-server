@@ -119,7 +119,7 @@ mod tests {
         let test_vector = [
             ((0, 29, 0), ProvingVersion::V4),
             ((0, 29, 1), ProvingVersion::V4),
-            ((0, 30, 0), ProvingVersion::V4), // To be updated to V5 once 30 is ready.
+            ((0, 30, 0), ProvingVersion::V5),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
