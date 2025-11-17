@@ -3,8 +3,8 @@
 //! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
 use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV5;
-use zk_os_forward_system_0_1_0::run::RunBlockForward as RunBlockForwardV4;
 use zk_os_forward_system_0_0_26::run::RunBlockForward as RunBlockForwardV3;
+use zk_os_forward_system_0_1_0::run::RunBlockForward as RunBlockForwardV4;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::AnyTracer;
 use zksync_os_interface::traits::{

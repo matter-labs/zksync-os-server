@@ -7,7 +7,9 @@ use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_types::{L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{
+    L2_TO_L1_TREE_SIZE, L2ToL1Log, ProtocolSemanticVersion, PubdataMode, ZkEnvelope, ZkTransaction,
+};
 
 const PUBDATA_SOURCE_CALLDATA: u8 = 0;
 
@@ -149,47 +151,55 @@ impl BatchInfo {
         match protocol_version.minor {
             29 => {
                 use zk_ee_0_1_0::utils::Bytes32;
-                let system_batch_output = zk_os_basic_system_0_1_0::system_implementation::system::BatchOutput {
-                    chain_id: U256::from(commit_info.chain_id),
-                    first_block_timestamp: commit_info.first_block_timestamp,
-                    last_block_timestamp: commit_info.last_block_timestamp,
-                    // we always set it to zero
-                    used_l2_da_validator_address: B160::ZERO,
-                    pubdata_commitment: Bytes32::from(commit_info.da_commitment.0),
-                    number_of_layer_1_txs: U256::from(commit_info.number_of_layer1_txs),
-                    priority_operations_hash: Bytes32::from(commit_info.priority_operations_hash.0),
-                    l2_logs_tree_root: Bytes32::from(commit_info.l2_to_l1_logs_root_hash.0),
-                    upgrade_tx_hash: self
-                        .upgrade_tx_hash
-                        .map(|h| Bytes32::from_array(h.0))
-                        .unwrap_or(Bytes32::ZERO),
-                    interop_root_rolling_hash: Bytes32::from(commit_info.dependency_roots_rolling_hash.0),
-                };
+                let system_batch_output =
+                    zk_os_basic_system_0_1_0::system_implementation::system::BatchOutput {
+                        chain_id: U256::from(commit_info.chain_id),
+                        first_block_timestamp: commit_info.first_block_timestamp,
+                        last_block_timestamp: commit_info.last_block_timestamp,
+                        // we always set it to zero
+                        used_l2_da_validator_address: B160::ZERO,
+                        pubdata_commitment: Bytes32::from(commit_info.da_commitment.0),
+                        number_of_layer_1_txs: U256::from(commit_info.number_of_layer1_txs),
+                        priority_operations_hash: Bytes32::from(
+                            commit_info.priority_operations_hash.0,
+                        ),
+                        l2_logs_tree_root: Bytes32::from(commit_info.l2_to_l1_logs_root_hash.0),
+                        upgrade_tx_hash: self
+                            .upgrade_tx_hash
+                            .map(|h| Bytes32::from_array(h.0))
+                            .unwrap_or(Bytes32::ZERO),
+                        interop_root_rolling_hash: Bytes32::from(
+                            commit_info.dependency_roots_rolling_hash.0,
+                        ),
+                    };
                 B256::from(system_batch_output.hash())
-            },
+            }
             30 => {
                 use zk_ee::utils::Bytes32;
-                let system_batch_output = zk_os_basic_system::system_implementation::system::BatchOutput {
-                    chain_id: U256::from(commit_info.chain_id),
-                    first_block_timestamp: commit_info.first_block_timestamp,
-                    last_block_timestamp: commit_info.last_block_timestamp,
-                    da_commitment_scheme: commit_info.l2_da_commitment_scheme.into(),
-                    pubdata_commitment: Bytes32::from(commit_info.da_commitment.0),
-                    number_of_layer_1_txs: U256::from(commit_info.number_of_layer1_txs),
-                    priority_operations_hash: Bytes32::from(commit_info.priority_operations_hash.0),
-                    l2_logs_tree_root: Bytes32::from(commit_info.l2_to_l1_logs_root_hash.0),
-                    upgrade_tx_hash: self
-                        .upgrade_tx_hash
-                        .map(|h| Bytes32::from_array(h.0))
-                        .unwrap_or(Bytes32::ZERO),
-                    interop_root_rolling_hash: Bytes32::from(commit_info.dependency_roots_rolling_hash.0),
-                };
+                let system_batch_output =
+                    zk_os_basic_system::system_implementation::system::BatchOutput {
+                        chain_id: U256::from(commit_info.chain_id),
+                        first_block_timestamp: commit_info.first_block_timestamp,
+                        last_block_timestamp: commit_info.last_block_timestamp,
+                        da_commitment_scheme: commit_info.l2_da_commitment_scheme.into(),
+                        pubdata_commitment: Bytes32::from(commit_info.da_commitment.0),
+                        number_of_layer_1_txs: U256::from(commit_info.number_of_layer1_txs),
+                        priority_operations_hash: Bytes32::from(
+                            commit_info.priority_operations_hash.0,
+                        ),
+                        l2_logs_tree_root: Bytes32::from(commit_info.l2_to_l1_logs_root_hash.0),
+                        upgrade_tx_hash: self
+                            .upgrade_tx_hash
+                            .map(|h| Bytes32::from_array(h.0))
+                            .unwrap_or(Bytes32::ZERO),
+                        interop_root_rolling_hash: Bytes32::from(
+                            commit_info.dependency_roots_rolling_hash.0,
+                        ),
+                    };
                 B256::from(system_batch_output.hash())
-
-            },
-            _ => panic!("Unsupported protocol version: {}", protocol_version)
+            }
+            _ => panic!("Unsupported protocol version: {}", protocol_version),
         }
-
     }
 
     pub fn into_stored(self, protocol_version: &ProtocolSemanticVersion) -> StoredBatchInfo {

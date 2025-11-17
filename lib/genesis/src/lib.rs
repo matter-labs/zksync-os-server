@@ -152,7 +152,10 @@ fn account_properties_flat_key(address: Address) -> B256 {
     let mut bytes = [0u8; 32];
     bytes[12..32].copy_from_slice(&address.as_slice());
 
-    flat_storage_key_for_contract(ACCOUNT_PROPERTIES_STORAGE_ADDRESS.to_be_bytes().into(), bytes.into())
+    flat_storage_key_for_contract(
+        ACCOUNT_PROPERTIES_STORAGE_ADDRESS.to_be_bytes().into(),
+        bytes.into(),
+    )
 }
 
 async fn build_genesis(
@@ -192,7 +195,9 @@ async fn build_genesis(
     for (key, value) in genesis_input.additional_storage_raw {
         let duplicate = storage_logs.insert(key, value).is_some();
         if duplicate {
-            anyhow::bail!("Genesis input contains duplicate storage key in additional_storage_raw: {key:?}");
+            anyhow::bail!(
+                "Genesis input contains duplicate storage key in additional_storage_raw: {key:?}"
+            );
         }
     }
 

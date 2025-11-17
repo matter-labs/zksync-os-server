@@ -16,7 +16,7 @@ use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_by
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{PubdataMode, ExecutionVersion, ProvingVersion, ZksyncOsEncode};
+use zksync_os_types::{ExecutionVersion, ProvingVersion, PubdataMode, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
@@ -197,7 +197,7 @@ fn compute_prover_input(
                     state_view,
                     list_source,
                 )
-                    .expect("proof gen failed")
+                .expect("proof gen failed")
             }
         };
     let latency = prover_input_generation_latency.observe();

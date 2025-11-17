@@ -81,7 +81,9 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState, UpgradeTransaction, PubdataMode};
+use zksync_os_types::{
+    NotAcceptingReason, PubdataMode, TransactionAcceptanceState, UpgradeTransaction,
+};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";

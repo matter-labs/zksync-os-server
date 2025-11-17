@@ -9,7 +9,8 @@ use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLe
 use zk_os_basic_system_0_1_0::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafV0_1_0;
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 use zk_os_forward_system_0_1_0::run::{
-    LeafProof as LeafProofV0_1_0, ReadStorage as ReadStorageV0_1_0, ReadStorageTree as ReadStorageTreeV0_1_0,
+    LeafProof as LeafProofV0_1_0, ReadStorage as ReadStorageV0_1_0,
+    ReadStorageTree as ReadStorageTreeV0_1_0,
 };
 
 pub struct MerkleTreeVersion<DB: Database = RocksDBWrapper, P: TreeParams = DefaultTreeParams> {
@@ -69,7 +70,9 @@ impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorage for MerkleTree
     }
 }
 
-impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageV0_1_0 for MerkleTreeVersion<DB, P> {
+impl<DB: Database + 'static, P: TreeParams + 'static> ReadStorageV0_1_0
+    for MerkleTreeVersion<DB, P>
+{
     fn read(&mut self, key: Bytes32V0_1_0) -> Option<Bytes32V0_1_0> {
         <Self as ReadStorage>::read(self, key.as_u8_array().into()).map(|v| v.as_u8_array().into())
     }

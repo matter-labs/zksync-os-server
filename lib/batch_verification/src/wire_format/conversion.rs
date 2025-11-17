@@ -25,7 +25,8 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
             batch_number,
             first_block_number,
             last_block_number,
-            pubdata_mode: PubdataMode::from_u8(pubdata_mode).expect("Failed to decode pubdata mode"),
+            pubdata_mode: PubdataMode::from_u8(pubdata_mode)
+                .expect("Failed to decode pubdata mode"),
             request_id,
             commit_data: decoded_commit_data,
         }

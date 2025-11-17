@@ -90,7 +90,9 @@ impl ProvingVersion {
     ) -> Self {
         match forward_run_execution_version {
             // TODO: panic?
-            ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => panic!("Unsupported execution version"),
+            ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+                panic!("Unsupported execution version")
+            }
             ExecutionVersion::V4 => Self::V4,
             ExecutionVersion::V5 => Self::V5,
         }

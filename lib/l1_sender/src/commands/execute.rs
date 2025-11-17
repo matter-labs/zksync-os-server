@@ -83,7 +83,13 @@ impl ExecuteCommand {
         let stored_batch_infos = self
             .batches
             .iter()
-            .map(|batch| batch.batch.batch_info.clone().into_stored(&batch.batch.protocol_version))
+            .map(|batch| {
+                batch
+                    .batch
+                    .batch_info
+                    .clone()
+                    .into_stored(&batch.batch.protocol_version)
+            })
             .map(|batch| IExecutor::StoredBatchInfo::from(&batch))
             .collect::<Vec<_>>();
         let priority_ops = self

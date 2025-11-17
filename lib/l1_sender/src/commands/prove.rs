@@ -133,7 +133,13 @@ impl ProofCommand {
         let stored_batch_infos: Vec<StoredBatchInfo> = self
             .batches
             .iter()
-            .map(|batch| batch.batch.batch_info.clone().into_stored(&batch.batch.protocol_version))
+            .map(|batch| {
+                batch
+                    .batch
+                    .batch_info
+                    .clone()
+                    .into_stored(&batch.batch.protocol_version)
+            })
             .collect();
         // todo: awful and temporary
         let verifier_version = match self.proof.proving_execution_version() {

@@ -80,8 +80,8 @@ pub mod v5 {
     use std::sync::OnceLock;
 
     pub const SINGLEBLOCK_BATCH_APP: &[u8] = include_bytes!(concat!(
-    env!("ZKSYNC_OS_0_2_1_SOURCE_PATH"),
-    "/singleblock_batch.bin"
+        env!("ZKSYNC_OS_0_2_1_SOURCE_PATH"),
+        "/singleblock_batch.bin"
     ));
 
     pub fn singleblock_batch_path(base_dir: &Path) -> PathBuf {
@@ -100,12 +100,12 @@ pub mod v5 {
             std::fs::write(&full_path, SINGLEBLOCK_BATCH_APP).unwrap();
             full_path
         })
-            .clone()
+        .clone()
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-    env!("ZKSYNC_OS_0_2_1_SOURCE_PATH"),
-    "/singleblock_batch_logging_enabled.bin"
+        env!("ZKSYNC_OS_0_2_1_SOURCE_PATH"),
+        "/singleblock_batch_logging_enabled.bin"
     ));
 
     pub fn singleblock_batch_logging_enabled_path(base_dir: &Path) -> PathBuf {
@@ -124,12 +124,12 @@ pub mod v5 {
             std::fs::write(&full_path, SINGLEBLOCK_BATCH_LOGGING_ENABLED).unwrap();
             full_path
         })
-            .clone()
+        .clone()
     }
 
     pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
-    env!("ZKSYNC_OS_0_2_1_SOURCE_PATH"),
-    "/multiblock_batch.bin"
+        env!("ZKSYNC_OS_0_2_1_SOURCE_PATH"),
+        "/multiblock_batch.bin"
     ));
 
     pub fn multiblock_batch_path(base_dir: &Path) -> PathBuf {
@@ -148,6 +148,6 @@ pub mod v5 {
             std::fs::write(&full_path, MULTIBLOCK_BATCH).unwrap();
             full_path
         })
-            .clone()
+        .clone()
     }
 }

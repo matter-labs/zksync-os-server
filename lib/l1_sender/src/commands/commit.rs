@@ -89,7 +89,7 @@ impl CommitCommand {
                     "preparing commit calldata"
                 );
                 (stored_batch_info, vec![commit_batch_info]).abi_encode_params()
-            },
+            }
             30 => {
                 let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(
                     self.input.batch.batch_info.commit_info.clone(),
@@ -101,8 +101,11 @@ impl CommitCommand {
                     "preparing commit calldata"
                 );
                 (stored_batch_info, vec![commit_batch_info]).abi_encode_params()
-            },
-            _ => panic!("Unsupported protocol version: {}", self.input.batch.protocol_version)
+            }
+            _ => panic!(
+                "Unsupported protocol version: {}",
+                self.input.batch.protocol_version
+            ),
         };
 
         // Prefixed by current encoding version as expected by protocol
