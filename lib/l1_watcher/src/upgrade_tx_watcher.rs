@@ -273,6 +273,22 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             return Ok(());
         }
 
+        // In localhost environment, we may want to test upgrades to non-live versions, but
+        // we don't want to allow them anywhere else.
+        if !request.protocol_version.is_live() {
+            tracing::warn!(
+                ?request.protocol_version,
+                "received a protocol version that is not marked as live"
+            );
+            // Only allow non-live versions in localhost environment.
+            if self.provider.get_chain_id().await? != 31337 {
+                panic!(
+                    "Received an upgrade to a non-live protocol version: {:?}",
+                    request.protocol_version
+                );
+            }
+        }
+
         let upgrade_tx = self
             .fetch_upgrade_tx(&request)
             .await

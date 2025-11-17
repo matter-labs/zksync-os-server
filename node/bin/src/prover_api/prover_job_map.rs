@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use itertools::{Itertools, MinMaxResult};
 use std::time::{Duration, Instant};
 use zksync_os_l1_sender::batcher_model::{BatchMetadata, ProverInput, SignedBatchEnvelope};
-use zksync_os_multivm::proving_run_execution_version;
+use zksync_os_types::{ExecutionVersion, ProvingVersion};
 
 #[derive(Debug)]
 pub struct AssignedJobEntry {
@@ -75,8 +75,11 @@ impl ProverJobMap {
             );
             // Refresh assignment time to avoid immediate re-pick.
             entry.assigned_at = now;
+            let forward_run_execution_version =
+                ExecutionVersion::try_from(entry.batch_envelope.batch.execution_version)
+                    .expect("Must be valid execution as set by the server");
             let proving_execution_version =
-                proving_run_execution_version(entry.batch_envelope.batch.execution_version);
+                ProvingVersion::from_forward_run_execution_version(forward_run_execution_version);
             return Some((
                 FriJob {
                     batch_number: entry.batch_envelope.batch_number(),
@@ -100,7 +103,11 @@ impl ProverJobMap {
     pub fn get_batch_data(&self, batch_number: u64) -> Option<(&'static str, ProverInput)> {
         self.jobs.get(&batch_number).map(|entry| {
             (
-                entry.batch_envelope.batch.verification_key_hash(),
+                entry
+                    .batch_envelope
+                    .batch
+                    .verification_key_hash()
+                    .expect("VK hash must exist"),
                 entry.batch_envelope.data.clone(),
             )
         })
@@ -121,7 +128,12 @@ impl ProverJobMap {
             .map(|r| JobState {
                 fri_job: FriJob {
                     batch_number: r.batch_envelope.batch_number(),
-                    vk_hash: r.batch_envelope.batch.verification_key_hash().to_string(),
+                    vk_hash: r
+                        .batch_envelope
+                        .batch
+                        .verification_key_hash()
+                        .expect("VK hash must exist")
+                        .to_string(),
                 },
                 assigned_seconds_ago: r.assigned_at.elapsed().as_secs(),
             })
