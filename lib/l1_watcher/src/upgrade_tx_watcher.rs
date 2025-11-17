@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::factory_deps::load_factory_deps;
 use crate::watcher::{L1Watcher, L1WatcherError, ProcessL1Event};
 use crate::{L1WatcherConfig, util};
 use alloy::dyn_abi::SolType;
@@ -170,6 +171,11 @@ impl L1UpgradeTxWatcher {
         } else {
             let tx = L1UpgradeEnvelope::try_from(proposed_upgrade.l2ProtocolUpgradeTx).unwrap();
             let force_preimages = self.fetch_force_preimages(&tx.inner.factory_deps).await?;
+
+            tracing::info!(
+                "Fetched {} preimages from the hardcoded file.",
+                force_preimages.len()
+            );
             (Some(tx), force_preimages)
         };
 
@@ -204,14 +210,15 @@ impl L1UpgradeTxWatcher {
         }
     }
 
-    async fn fetch_force_preimages(&self, hashes: &[B256]) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
-        if hashes.is_empty() {
-            tracing::info!("no force deployment preimages to fetch");
-            return Ok(Vec::new());
-        }
+    async fn fetch_force_preimages(
+        &self,
+        _hashes: &[B256],
+    ) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
+        // HACK: For now, we load preimages from a hardcoded JSON file.
+        load_factory_deps()
 
-        // TODO: Bytecode supplier is not ready yet for ZKsync OS.
-        panic!("fetching force deployment preimages is not yet implemented");
+        // // TODO: Bytecode supplier is not ready yet for ZKsync OS.
+        // panic!("fetching force deployment preimages is not yet implemented");
 
         // tracing::info!(
         //     num_hashes = hashes.len(),
