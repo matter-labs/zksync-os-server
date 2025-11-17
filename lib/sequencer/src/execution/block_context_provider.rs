@@ -4,6 +4,7 @@ use crate::model::blocks::{
 };
 use alloy::consensus::{Block, BlockBody, Header};
 use alloy::primitives::{Address, BlockHash, TxHash, U128, U256};
+use anyhow::Context as _;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,10 +13,10 @@ use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
-use zksync_os_multivm::LATEST_EXECUTION_VERSION;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, UpgradeTransaction, ZkEnvelope,
+    ExecutionVersion, L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, UpgradeTransaction,
+    ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -141,6 +142,12 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     Vec::new()
                 };
 
+                let execution_version: ExecutionVersion = self
+                    .protocol_version
+                    .clone()
+                    .try_into()
+                    .context("Cannot instantiate a block for unsupported execution version")?;
+
                 const NATIVE_PRICE: u128 = 1_000_000;
                 const NATIVE_PER_GAS: u128 = 100;
                 let eip1559_basefee = NATIVE_PRICE * NATIVE_PER_GAS;
@@ -165,7 +172,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    execution_version: LATEST_EXECUTION_VERSION as u32,
+                    execution_version: execution_version as u32,
                     blob_fee: U256::ZERO,
                 };
                 self.pending_block_context_sender
@@ -231,7 +238,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    execution_version: LATEST_EXECUTION_VERSION as u32,
+                    execution_version: rebuild.replay_record.block_context.execution_version,
                 };
                 let txs = if rebuild.make_empty {
                     Vec::new()

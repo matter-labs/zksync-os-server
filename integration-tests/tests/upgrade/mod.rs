@@ -59,8 +59,9 @@ async fn upgrade_minor_with_deployments() -> anyhow::Result<()> {
     let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
 
     // Publish the bytecodes for upgrade beforehand.
-    // TODO: we need to use bytecode instead of creation bytecode for now, since under the hood `publish_bytecodes`
+    // TODO: we need to use bytecode instead of deployed bytecode for now, since under the hood `publish_bytecodes`
     // actually deploys contracts since BytecodesSupplier is not ready for zksync os
+    // Once this is fixed, also check the logic for `ForceDeploymentBytecodeInfo` in the builder.
     upgrade_tester
         .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
         .await?;

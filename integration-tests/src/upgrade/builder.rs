@@ -114,6 +114,10 @@ impl ProtocolUpgradeBuilder {
             let mut account_properties = AccountProperties::default();
             set_properties_code(&mut account_properties, &bytecode);
 
+            // TODO: the current implementation is faulty, since it uses `full_bytecode_len`; the reason for that
+            // is the fact that we deploy preimages using creation bytecode (which includes bytecode artifacts),
+            // but for "real" force deployments we need to use the actual deployed bytecode.
+            // Once BytecodesSupplier is ready for zksync-os, we need to change this logic to use observable bytecode len.
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
                 bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
                 bytecodeSize: U256::from(account_properties.full_bytecode_len()),

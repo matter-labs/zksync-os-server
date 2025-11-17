@@ -3,6 +3,12 @@ use std::{fmt, ops::Deref, str::FromStr};
 use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
 
+mod execution_version;
+mod proving_version;
+
+pub use self::execution_version::{ExecutionVersion, ExecutionVersionError};
+pub use self::proving_version::{ProvingVersion, ProvingVersionError};
+
 const PACKED_SEMVER_PATCH_MASK: u32 = 0xFFFFFFFF;
 const PACKED_SEMVER_MINOR_OFFSET: u32 = 32;
 const PACKED_SEMVER_MINOR_MASK: u32 = 0xFFFFFFFF;
@@ -38,6 +44,20 @@ impl ProtocolSemanticVersion {
             pre: semver::Prerelease::EMPTY,
             build: semver::BuildMetadata::EMPTY,
         })
+    }
+
+    /// Returns `true` if the system is live (or expected to be live) on any of the existing envs.
+    /// Must be updated when a new version is ready to be released.
+    pub fn is_live(&self) -> bool {
+        if self.major != 0 {
+            return false;
+        }
+        // Patch versions can always be live, as they don't change the state transition function.
+        match self.minor {
+            29 => true,
+            // When updating this function, make sure to insert the new non-live version here.
+            _ => false,
+        }
     }
 
     /// This version was used for all the chains prior to the introduction of protocol upgrades
@@ -149,5 +169,20 @@ mod tests {
 
         let deserialized: ProtocolSemanticVersion = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, version);
+    }
+
+    #[test]
+    fn test_protocol_semantic_version_is_live() {
+        let test_vector = [
+            ((0, 28, 5), false),
+            ((0, 29, 0), true),
+            ((0, 29, 1), true),
+            ((0, 29, 99), true),
+            ((0, 30, 0), false), // When updating this test, make sure to insert the new non-live version here.
+        ];
+        for ((major, minor, patch), expected) in test_vector.iter() {
+            let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
+            assert_eq!(version.is_live(), *expected);
+        }
     }
 }
