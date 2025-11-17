@@ -1,3 +1,9 @@
+//! TODO: This is a temporary solution to process factory deps for
+//! upgrade transactions until we have a working bytecodes supplier
+//! contract.
+//! This file is to be removed once the sequencer can load factory deps
+//! from L1 directly.
+
 use alloy::{hex::FromHex, primitives::{B256, hex}};
 use std::collections::HashMap;
 use serde::Deserialize;
