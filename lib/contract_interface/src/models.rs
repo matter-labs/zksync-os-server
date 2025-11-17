@@ -1,4 +1,4 @@
-use crate::IExecutor;
+use crate::{IExecutor, IExecutorV29};
 use alloy::primitives::{B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,26 @@ impl From<CommitBatchInfo> for IExecutor::CommitBatchInfoZKsyncOS {
             value.last_block_timestamp,
             // It is expected that for all the newly sent batches this field is always present.
             value.last_block_number.unwrap(),
+            U256::from(value.chain_id),
+            Bytes::from(value.operator_da_input),
+        ))
+    }
+}
+
+impl From<CommitBatchInfo> for IExecutorV29::CommitBatchInfoZKsyncOS {
+    fn from(value: CommitBatchInfo) -> Self {
+        IExecutorV29::CommitBatchInfoZKsyncOS::from((
+            value.batch_number,
+            value.new_state_commitment,
+            U256::from(value.number_of_layer1_txs),
+            value.priority_operations_hash,
+            value.dependency_roots_rolling_hash,
+            value.l2_to_l1_logs_root_hash,
+            // we always set l2 da validator address
+            alloy::primitives::Address::ZERO.into(),
+            value.da_commitment.into(),
+            value.first_block_timestamp,
+            value.last_block_timestamp,
             U256::from(value.chain_id),
             Bytes::from(value.operator_da_input),
         ))

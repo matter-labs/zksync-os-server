@@ -5,7 +5,7 @@ use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use zksync_os_contract_interface::IExecutor;
+use zksync_os_contract_interface::{IExecutor, IExecutorV29};
 
 #[derive(Debug)]
 pub struct CommitCommand {
@@ -77,16 +77,33 @@ impl CommitCommand {
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
 
-        let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(
-            self.input.batch.batch_info.commit_info.clone(),
-        );
-        tracing::debug!(
-            last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
-            last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
-            new_batch_number = ?commit_batch_info.batchNumber,
-            "preparing commit calldata"
-        );
-        let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+        let encoded_data = match self.input.batch.protocol_version.minor {
+            29 => {
+                let commit_batch_info = IExecutorV29::CommitBatchInfoZKsyncOS::from(
+                    self.input.batch.batch_info.commit_info.clone(),
+                );
+                tracing::debug!(
+                    last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
+                    last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
+                    new_batch_number = ?commit_batch_info.batchNumber,
+                    "preparing commit calldata"
+                );
+                (stored_batch_info, vec![commit_batch_info]).abi_encode_params()
+            },
+            30 => {
+                let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(
+                    self.input.batch.batch_info.commit_info.clone(),
+                );
+                tracing::debug!(
+                    last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
+                    last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
+                    new_batch_number = ?commit_batch_info.batchNumber,
+                    "preparing commit calldata"
+                );
+                (stored_batch_info, vec![commit_batch_info]).abi_encode_params()
+            },
+            _ => panic!("Unsupported protocol version: {}", self.input.batch.protocol_version)
+        };
 
         // Prefixed by current encoding version as expected by protocol
         [[SUPPORTED_ENCODING_VERSION].to_vec(), encoded_data]

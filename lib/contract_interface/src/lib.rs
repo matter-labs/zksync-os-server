@@ -243,6 +243,25 @@ alloy::sol! {
        );
     }
 
+    // taken from v29 version of `IExecutor.sol`
+    // We need this to make the server work with the v29 version of contracts during the upgrade, and it can be removed after
+    interface IExecutorV29 {
+        struct CommitBatchInfoZKsyncOS {
+            uint64 batchNumber;
+            bytes32 newStateCommitment;
+            uint256 numberOfLayer1Txs;
+            bytes32 priorityOperationsHash;
+            bytes32 dependencyRootsRollingHash;
+            bytes32 l2LogsTreeRoot;
+            address l2DaValidator;
+            bytes32 daCommitment;
+            uint64 firstBlockTimestamp;
+            uint64 lastBlockTimestamp;
+            uint256 chainId;
+            bytes operatorDAInput;
+        }
+    }
+
     // `IL1GenesisUpgrade.sol`
     interface IL1GenesisUpgrade {
         event GenesisUpgrade(

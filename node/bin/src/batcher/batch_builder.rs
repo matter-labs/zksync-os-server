@@ -6,7 +6,7 @@ use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
 use zksync_os_l1_sender::commitment::BatchInfo;
-
+use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::PubdataMode;
 
@@ -49,18 +49,35 @@ pub(crate) fn seal_batch(
 
     use zk_os_forward_system::run::generate_batch_proof_input;
 
-    // TODO: in the long-term we should generate proof input per batch
-    let batch_prover_input: ProverInput = generate_batch_proof_input(
-        blocks
-            .iter()
-            .map(|(_, _, _, prover_input)| prover_input.as_slice())
-            .collect(),
-        pubdata_mode.da_commitment_scheme().into(),
-        blocks
-            .iter()
-            .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
-            .collect(),
-    );
+    // execution version should be the same for all the blocks, it is ensured by the seal criteria
+    let batch_prover_input: ProverInput = match proving_run_execution_version(blocks.first().unwrap().1.block_context.execution_version) {
+        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+            unreachable!("proving_run_execution_version does not return 1, 2 or 3")
+        }
+        ExecutionVersion::V4 => {
+            std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
+                .chain(
+                    blocks
+                        .iter()
+                        .flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()),
+                )
+                .collect()
+        }
+        ExecutionVersion::V5 => {
+            // TODO: in the long-term we should generate proof input per batch
+            generate_batch_proof_input(
+                blocks
+                    .iter()
+                    .map(|(_, _, _, prover_input)| prover_input.as_slice())
+                    .collect(),
+                pubdata_mode.da_commitment_scheme().into(),
+                blocks
+                    .iter()
+                    .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())
+                    .collect(),
+            )
+        }
+    };
 
     let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
     // Sanity check: all blocks in the batch should have the same protocol version

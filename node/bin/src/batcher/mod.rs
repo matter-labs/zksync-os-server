@@ -98,7 +98,7 @@ impl PipelineComponent for Batcher {
             };
 
             // Update prev_batch_info for the next iteration
-            prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored();
+            prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored(&batch_envelope.batch.protocol_version);
 
             BATCHER_METRICS
                 .transactions_per_batch
@@ -314,8 +314,8 @@ impl Batcher {
         )?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
-        let rebuilt_stored_batch_info = rebuilt_batch.batch.batch_info.clone().into_stored();
-        let stored_stored_batch_info = existing_batch.batch.batch_info.clone().into_stored();
+        let rebuilt_stored_batch_info = rebuilt_batch.batch.batch_info.clone().into_stored(&rebuilt_batch.batch.protocol_version);
+        let stored_stored_batch_info = existing_batch.batch.batch_info.clone().into_stored(&existing_batch.batch.protocol_version);
 
         anyhow::ensure!(
             rebuilt_stored_batch_info.hash() == stored_stored_batch_info.hash(),
