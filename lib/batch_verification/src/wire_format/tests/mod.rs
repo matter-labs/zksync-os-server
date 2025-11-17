@@ -7,7 +7,7 @@ use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme};
 use zksync_os_types::PubdataMode;
 
 fn create_sample_request() -> BatchVerificationRequest {
-    use alloy::primitives::{Address, B256};
+    use alloy::primitives::B256;
 
     BatchVerificationRequest {
         batch_number: 42,
