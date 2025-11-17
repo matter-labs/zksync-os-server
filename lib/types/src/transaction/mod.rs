@@ -58,7 +58,7 @@ impl ZkEnvelope {
 /// ZKsync OS transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth
 /// we mostly operate on this type as ZKsync OS expects signer to be provided externally (e.g., from
 /// the sequencer). This could change in the future.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ZkTransaction {
     pub inner: Recovered<ZkEnvelope>,
 }

@@ -6,9 +6,8 @@ use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
 use zksync_os_l1_sender::commitment::BatchInfo;
-use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::PubdataMode;
+use zksync_os_types::{PubdataMode, ExecutionVersion, ProvingVersion};
 
 /// Takes a vector of blocks and produces a batch envelope.
 /// This is a pure function that is meant to be stateless and not contained in the `Batcher` struct.
@@ -49,12 +48,15 @@ pub(crate) fn seal_batch(
 
     use zk_os_forward_system::run::generate_batch_proof_input;
 
+    let forward_run_execution_version =
+        ExecutionVersion::try_from(blocks.first().unwrap().1.block_context.execution_version)
+            .expect("Must be valid execution as set by the server");
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let batch_prover_input: ProverInput = match proving_run_execution_version(blocks.first().unwrap().1.block_context.execution_version) {
-        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+    let batch_prover_input: ProverInput = match ProvingVersion::from_forward_run_execution_version(forward_run_execution_version) {
+        ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
             unreachable!("proving_run_execution_version does not return 1, 2 or 3")
         }
-        ExecutionVersion::V4 => {
+        ProvingVersion::V4 => {
             std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
                 .chain(
                     blocks
@@ -63,7 +65,7 @@ pub(crate) fn seal_batch(
                 )
                 .collect()
         }
-        ExecutionVersion::V5 => {
+        ProvingVersion::V5 => {
             // TODO: in the long-term we should generate proof input per batch
             generate_batch_proof_input(
                 blocks

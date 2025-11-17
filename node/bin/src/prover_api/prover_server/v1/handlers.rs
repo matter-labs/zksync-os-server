@@ -8,7 +8,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use zksync_os_l1_sender::batcher_model::FriProof;
-use zksync_os_multivm::ExecutionVersion;
+use zksync_os_types::ProvingVersion;
 
 use crate::prover_api::{
     fri_job_manager::SubmitError,
@@ -59,19 +59,19 @@ pub(super) async fn submit_fri_proof(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
     let prover_id = query.id;
-    let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
+    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("no Execution Version matches the provided Verification Key: {e}"),
+            format!("no Proving Version matches the provided Verification Key: {e}"),
         )
     })?;
     match state
         .fri_job_manager
-        .submit_proof(payload.batch_number, proof_bytes.into(), Some(execution_version), &prover_id)
+        .submit_proof(payload.batch_number, proof_bytes.into(), Some(proving_version), &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::ExecutionVersionMismatch(server_execution_version, prover_execution_version)) => {
+        Err(SubmitError::ProvingVersionMismatch(server_execution_version, prover_execution_version)) => {
             Err((
             StatusCode::BAD_REQUEST,
             format!(
@@ -162,10 +162,10 @@ pub(super) async fn submit_snark_proof(
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
-    let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
+    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("no Execution Version matches the provided verification key: {e}"),
+            format!("no Proving Version matches the provided verification key: {e}"),
         )
     })?;
     match state
@@ -173,7 +173,7 @@ pub(super) async fn submit_snark_proof(
         .submit_proof(
             payload.from_batch_number,
             payload.to_batch_number,
-            Some(execution_version),
+            Some(proving_version),
             proof_bytes,
         )
         .await
@@ -220,7 +220,11 @@ pub(super) async fn peek_snark_job(
     for batch_number in from_batch_number..=to_batch_number {
         match state.proof_storage.get_batch_with_proof(batch_number).await {
             Ok(Some(env)) => {
-                vk_hash = env.batch.verification_key_hash().to_string();
+                vk_hash = env
+                    .batch
+                    .verification_key_hash()
+                    .expect("VK must exist")
+                    .to_string();
                 match env.data {
                     FriProof::Real(real) => {
                         fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))

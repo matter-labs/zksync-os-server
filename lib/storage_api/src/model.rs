@@ -27,7 +27,7 @@ pub struct StoredTxData {
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ReplayRecord {
     pub block_context: BlockContext,
     /// L1 transaction serial id (0-based) expected at the beginning of this block.

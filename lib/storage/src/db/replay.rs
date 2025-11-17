@@ -343,10 +343,13 @@ impl WriteReplay for BlockReplayStorage {
         }
 
         if record.block_context.block_number <= current_latest_record {
-            tracing::info!(
-                "Overriding existing block replay record {}",
-                record.block_context.block_number
-            );
+            let old_record = self.get_replay_record(record.block_context.block_number);
+            if old_record.as_ref() != Some(&record) {
+                tracing::warn!(
+                    "Overriding existing block replay record {}",
+                    record.block_context.block_number
+                );
+            }
         }
 
         self.write_replay_unchecked(record);

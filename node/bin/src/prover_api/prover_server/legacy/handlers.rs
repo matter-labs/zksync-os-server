@@ -52,7 +52,7 @@ pub(super) async fn submit_fri_proof(
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::ExecutionVersionMismatch(_, _)) =>
+        Err(SubmitError::ProvingVersionMismatch(_, _)) =>
             panic!("Should never happen, as provers don't provide execution_version"),
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,

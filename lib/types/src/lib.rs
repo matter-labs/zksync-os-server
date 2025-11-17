@@ -22,4 +22,7 @@ mod pubdata_mode;
 pub use pubdata_mode::PubdataMode;
 
 mod protocol;
-pub use protocol::{ProtocolSemanticVersion, ProtocolSemanticVersionError};
+pub use protocol::{
+    ExecutionVersion, ExecutionVersionError, ProtocolSemanticVersion, ProtocolSemanticVersionError,
+    ProvingVersion, ProvingVersionError,
+};

@@ -13,11 +13,10 @@ use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
-use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{PubdataMode, ExecutionVersion, ProvingVersion, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
@@ -117,12 +116,15 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
+    let forward_run_execution_version =
+        ExecutionVersion::try_from(replay_record.block_context.execution_version)
+            .expect("Must be valid execution as set by the server");
     let prover_input =
-        match proving_run_execution_version(replay_record.block_context.execution_version) {
-            ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+        match ProvingVersion::from_forward_run_execution_version(forward_run_execution_version) {
+            ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
                 unreachable!("proving_run_execution_version does not return 1, 2 or 3")
             }
-            ExecutionVersion::V4 => {
+            ProvingVersion::V4 => {
                 use zk_ee_0_1_0::{
                     common_structs::ProofData,
                     system::metadata::zk_metadata::BlockMetadataFromOracle,
@@ -159,7 +161,7 @@ fn compute_prover_input(
                 )
                 .expect("proof gen failed")
             }
-            ExecutionVersion::V5 => {
+            ProvingVersion::V5 => {
                 use zk_ee::{
                     common_structs::ProofData,
                     system::metadata::zk_metadata::BlockMetadataFromOracle,
