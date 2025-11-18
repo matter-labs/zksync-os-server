@@ -160,7 +160,7 @@ where
             // TODO: would updating mempool in parallel with state make sense?
             self.block_context_provider
                 .on_canonical_state_change(&block_output, &replay_record, cmd_type)
-                .await;
+                .await?;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider.remove_txs(purged_txs_hashes);
 

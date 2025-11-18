@@ -48,15 +48,18 @@ impl L1TxsChannel {
     }
 
     /// Drains `count` envelopes from the buffer, awaiting new ones from the inner receiver if necessary.
-    pub async fn drain_and_reset(&mut self, count: usize) -> Vec<L1PriorityEnvelope> {
+    pub async fn drain_and_reset(
+        &mut self,
+        count: usize,
+    ) -> anyhow::Result<Vec<L1PriorityEnvelope>> {
         while self.buffer.len() < count {
             match self.inner.recv().await {
                 Some(envelope) => self.buffer.push_back(envelope),
-                None => panic!("Channel closed while draining L1 transactions"),
+                None => anyhow::bail!("Channel closed while draining L1 transactions"),
             }
         }
         let drained = self.buffer.drain(..count).collect();
         self.first_unprocessed_idx_in_buffer = 0;
-        drained
+        Ok(drained)
     }
 }

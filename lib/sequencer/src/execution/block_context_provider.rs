@@ -299,7 +299,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
         cmd_type: BlockCommandType,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut l2_transactions = Vec::new();
         let mut l1_transactions = Vec::new();
         for tx in &replay_record.transactions {
@@ -330,7 +330,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         let drained_l1_txs = self
             .l1_transactions
             .drain_and_reset(l1_transactions.len())
-            .await;
+            .await?;
         for (i, l1_tx) in l1_transactions.iter().enumerate() {
             assert_eq!(l1_tx.priority_id(), self.next_l1_priority_id + i as u64);
             assert_eq!(l1_tx, &&drained_l1_txs[i]);
@@ -386,6 +386,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
+        Ok(())
     }
 }
 
