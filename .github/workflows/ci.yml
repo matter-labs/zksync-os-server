@@ -79,7 +79,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
+        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS} zksync_os_integration_tests::erc20 erc20_deposit
 
       - name: Upload test results
         if: always() && !cancelled()

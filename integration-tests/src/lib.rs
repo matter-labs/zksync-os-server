@@ -140,7 +140,6 @@ impl Tester {
                 .clone()
                 .map(|(replay, _)| replay),
             fee_collector_address: Address::random(),
-            block_time: Duration::from_secs(30),
             ..Default::default()
         };
         if let Some(block_time) = block_time {
