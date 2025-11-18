@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -11,6 +11,7 @@ use zksync_os_l1_sender::batcher_model::FriProof;
 
 use crate::prover_api::{
     fri_job_manager::{JobStateLegacy, SubmitError},
+    metrics::{PROVER_API_METRICS, PickJobResult, ProverStage},
     prover_server::{
         AppState,
         legacy::models::{
@@ -21,18 +22,26 @@ use crate::prover_api::{
 };
 
 pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
+    let start = Instant::now();
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
         Some((fri_job, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let prover_input = general_purpose::STANDARD.encode(&bytes);
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NewJob)]
+                .observe(start.elapsed());
             Json(BatchDataPayload {
                 block_number: fri_job.batch_number,
-                prover_input: general_purpose::STANDARD.encode(&bytes),
+                prover_input,
             })
             .into_response()
         }
-        None => StatusCode::NO_CONTENT.into_response(),
+        None => {
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NoJob)]
+                .observe(start.elapsed());
+            StatusCode::NO_CONTENT.into_response()
+        }
     }
 }
 
@@ -41,12 +50,13 @@ pub(super) async fn submit_fri_proof(
     State(state): State<AppState>,
     Json(payload): Json<FriProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    let start = Instant::now();
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
     let prover_id = query.id.as_deref().unwrap_or("unknown_prover");
-    match state
+    let result = match state
         .fri_job_manager
         .submit_proof(payload.block_number, proof_bytes.into(), None, prover_id)
         .await
@@ -72,10 +82,13 @@ pub(super) async fn submit_fri_proof(
             tracing::error!("internal error: {e}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e))
         }
-    }
+    };
+    PROVER_API_METRICS.submit_proof_latency[&ProverStage::Fri].observe(start.elapsed());
+    result
 }
 
 pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
+    let start = Instant::now();
     match state.snark_job_manager.pick_real_job().await {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
@@ -99,6 +112,8 @@ pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
                 })
                 .collect();
 
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::NewJob)]
+                .observe(start.elapsed());
             Json(NextSnarkProverJobPayload {
                 block_number_from: from,
                 block_number_to: to,
@@ -106,9 +121,15 @@ pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
             })
             .into_response()
         }
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => {
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::NoJob)]
+                .observe(start.elapsed());
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             tracing::error!("error picking SNARK job: {e}");
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::Error)]
+                .observe(start.elapsed());
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -119,11 +140,12 @@ pub(super) async fn submit_snark_proof(
     State(state): State<AppState>,
     Json(payload): Json<SnarkProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    let start = Instant::now();
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
-    match state
+    let result = match state
         .snark_job_manager
         .submit_proof(
             payload.block_number_from,
@@ -138,7 +160,9 @@ pub(super) async fn submit_snark_proof(
             StatusCode::BAD_REQUEST,
             format!("proof rejected: {err}").to_string(),
         )),
-    }
+    };
+    PROVER_API_METRICS.submit_proof_latency[&ProverStage::Snark].observe(start.elapsed());
+    result
 }
 
 pub(super) async fn peek_batch_data(
