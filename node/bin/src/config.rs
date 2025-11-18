@@ -328,7 +328,7 @@ pub struct L1SenderConfig {
     pub enabled: bool,
 
     /// Pubdata mode
-    #[config(default_t = PubdataMode::Calldata)]
+    #[config(default_t = PubdataMode::Blobs)]
     #[config(with = Serde![str])]
     pub pubdata_mode: PubdataMode,
 }

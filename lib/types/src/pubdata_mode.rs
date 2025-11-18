@@ -1,3 +1,4 @@
+use crate::ProtocolSemanticVersion;
 use serde::{Deserialize, Serialize};
 
 /// The chain pubdata mode.
@@ -10,6 +11,23 @@ pub enum PubdataMode {
 }
 
 impl PubdataMode {
+    ///
+    /// This method needed only during v29 => v30 protocol upgrade to ensure automatic pubdata mode change.
+    ///
+    /// Before v30 we didn't support blobs, and for some chains we want to automatically change pubdata mode from calldata to blobs during v30 upgrade.
+    /// For this we set blobs DA in the config, but before the v30 upgrade it should be interpreted as calldata DA.
+    ///
+    pub fn adapt_for_protocol_version(&self, protocol_version: &ProtocolSemanticVersion) -> Self {
+        if protocol_version.minor != 29 {
+            return *self;
+        }
+        match self {
+            Self::Blobs => Self::Calldata,
+            Self::Calldata => Self::Calldata,
+            Self::Validium => Self::Validium,
+        }
+    }
+
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(PubdataMode::Blobs),

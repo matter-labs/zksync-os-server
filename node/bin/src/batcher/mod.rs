@@ -233,6 +233,9 @@ impl Batcher {
             .blocks_per_batch
             .observe(blocks.len() as u64);
         accumulator.report_accumulated_resources_to_metrics();
+
+        let protocol_version = &blocks.first().as_ref().unwrap().1.protocol_version;
+
         /* ---------- seal the batch ---------- */
         let batch_envelope = batch_builder::seal_batch(
             &blocks,
@@ -240,7 +243,9 @@ impl Batcher {
             batch_number,
             self.chain_id,
             self.chain_address,
-            self.pubdata_mode,
+            // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
+            self.pubdata_mode
+                .adapt_for_protocol_version(protocol_version),
         )?;
         Ok(batch_envelope)
     }

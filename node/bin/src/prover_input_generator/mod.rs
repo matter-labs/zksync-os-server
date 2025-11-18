@@ -50,9 +50,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         );
 
         let read_state = self.read_state;
-        let da_commitment_scheme = (self.pubdata_mode.da_commitment_scheme() as u8)
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?;
+        let pubdata_mode = self.pubdata_mode;
         let enable_logging = self.enable_logging;
         let app_bin_base_path = self.app_bin_base_path;
         let maximum_in_flight_blocks = self.maximum_in_flight_blocks;
@@ -69,6 +67,15 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 );
                 let read_state_clone = read_state.clone();
                 let app_bin_base_path_clone = app_bin_base_path.clone();
+
+                // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
+                let da_commitment_scheme = pubdata_mode
+                    .adapt_for_protocol_version(&replay_record.protocol_version)
+                    .da_commitment_scheme();
+                let da_commitment_scheme = (da_commitment_scheme as u8)
+                    .try_into()
+                    .expect("Failed to convert DA commitment scheme");
+
                 tokio::task::spawn_blocking(move || {
                     let prover_input = compute_prover_input(
                         &replay_record,
