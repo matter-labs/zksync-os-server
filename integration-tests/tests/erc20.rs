@@ -1,4 +1,3 @@
-use std::time::Duration;
 use alloy::eips::eip1559::Eip1559Estimation;
 use alloy::network::TxSigner;
 use alloy::primitives::{Address, B256, U256, address};
@@ -26,7 +25,6 @@ async fn erc20_deposit() -> anyhow::Result<()> {
     let mint_amount = U256::from(100u64);
     let deposit_amount = U256::from(40u64);
     let l1_erc20 = deploy_l1_token_and_mint(&tester, mint_amount).await?;
-    std::thread::sleep(Duration::from_secs(30));
 
     let alice_l1_initial_balance = l1_erc20.balanceOf(alice).call().await?;
     assert_eq!(
@@ -58,7 +56,6 @@ async fn erc20_deposit() -> anyhow::Result<()> {
         mint_amount - deposit_amount,
         "Unexpected L1 balance after deposit"
     );
-    panic!("fail");
 
     Ok(())
 }
