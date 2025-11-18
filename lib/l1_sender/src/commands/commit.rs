@@ -71,14 +71,13 @@ impl CommitCommand {
     /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
     /// function makes sure last committed batch and new batch are encoded correctly.
     fn to_calldata_suffix(&self) -> Vec<u8> {
-        /// Current commitment encoding version for ZKsync OS.
-        const SUPPORTED_ENCODING_VERSION: u8 = 2;
-
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
 
-        let encoded_data = match self.input.batch.protocol_version.minor {
+        match self.input.batch.protocol_version.minor {
             29 => {
+                const V29_ENCODING_VERSION: u8 = 2;
+
                 let commit_batch_info = IExecutorV29::CommitBatchInfoZKsyncOS::from(
                     self.input.batch.batch_info.commit_info.clone(),
                 );
@@ -88,9 +87,16 @@ impl CommitCommand {
                     new_batch_number = ?commit_batch_info.batchNumber,
                     "preparing commit calldata"
                 );
-                (stored_batch_info, vec![commit_batch_info]).abi_encode_params()
+                let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+                // Prefixed by current encoding version as expected by protocol
+                [[V29_ENCODING_VERSION].to_vec(), encoded_data]
+                    .concat()
+                    .to_vec()
             }
             30 => {
+                const V30_ENCODING_VERSION: u8 = 3;
+
                 let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(
                     self.input.batch.batch_info.commit_info.clone(),
                 );
@@ -100,17 +106,17 @@ impl CommitCommand {
                     new_batch_number = ?commit_batch_info.batchNumber,
                     "preparing commit calldata"
                 );
-                (stored_batch_info, vec![commit_batch_info]).abi_encode_params()
+                let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+                // Prefixed by current encoding version as expected by protocol
+                [[V30_ENCODING_VERSION].to_vec(), encoded_data]
+                    .concat()
+                    .to_vec()
             }
             _ => panic!(
                 "Unsupported protocol version: {}",
                 self.input.batch.protocol_version
             ),
-        };
-
-        // Prefixed by current encoding version as expected by protocol
-        [[SUPPORTED_ENCODING_VERSION].to_vec(), encoded_data]
-            .concat()
-            .to_vec()
+        }
     }
 }
