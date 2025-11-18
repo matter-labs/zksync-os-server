@@ -53,8 +53,16 @@ impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
         self.mempool.add_l2_transaction(l2_tx).await?;
 
         if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
-            // We do not need to wait for pending transaction here, so it's safe to forget about it
-            let _ = tx_forwarder.send_raw_transaction(&tx_bytes).await?;
+            match tx_forwarder.send_raw_transaction(&tx_bytes).await {
+                // We do not need to wait for pending transaction here, so it's safe to forget about it
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::debug!(%err, "forwarding error from main node back to user");
+                    // Remove previously added transaction from local mempool
+                    self.mempool.remove_transactions(vec![hash]);
+                    return Err(err.into());
+                }
+            }
         }
 
         Ok(hash)
