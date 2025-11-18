@@ -27,7 +27,8 @@ pub struct GenesisInput {
     /// Storage entries that set the contracts as deployed and preimages will be derived from this field.
     pub initial_contracts: Vec<(Address, alloy::primitives::Bytes)>,
 
-    /// "Pretty" additional storage in address -> key -> value form.
+    /// Additional storage.
+    /// It can be in "pretty" format: address -> key -> value.
     /// Keys and values must be 32 bytes (B256).
     /// Example:
     /// {
@@ -37,8 +38,11 @@ pub struct GenesisInput {
     ///     "0xb531...6103": "0x0000...1000c"
     ///   }
     /// }
+    /// Or in "raw" flattened format: (hashed_key, value)
+    /// Note, the raw variant is kept for backward compatibility. For new genesis inputs, please use the "pretty" format in `additional_storage`.
+    /// Use `additional_storage_raw` if raw format is needed.
     #[serde(default)]
-    pub additional_storage: BTreeMap<Address, BTreeMap<B256, B256>>,
+    pub additional_storage: AdditionalStorageFormat,
 
     /// Raw (already flattened) additional storage, kept for backward compatibility.
     /// Same format as before.
@@ -55,6 +59,41 @@ impl GenesisInput {
     pub fn load_from_file(path: &Path) -> anyhow::Result<Self> {
         let file = std::fs::File::open(path).context("Failed to open genesis input file")?;
         serde_json::from_reader(file).context("Failed to parse genesis input file")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AdditionalStorageFormat {
+    Pretty(BTreeMap<Address, BTreeMap<B256, B256>>),
+    Raw(Vec<(B256, B256)>),
+}
+
+impl Default for AdditionalStorageFormat {
+    fn default() -> Self {
+        AdditionalStorageFormat::Pretty(BTreeMap::new())
+    }
+}
+
+type StorageSlotsWithPreimage = Vec<(B256, B256, Option<(Address, B256)>)>;
+
+impl AdditionalStorageFormat {
+    pub fn into_storage_slots(self) -> StorageSlotsWithPreimage {
+        match self {
+            AdditionalStorageFormat::Pretty(map) => map
+                .into_iter()
+                .flat_map(|(address, slots)| {
+                    slots.into_iter().map(move |(slot_key, value)| {
+                        let flat_key = flat_storage_key_for_contract(address, slot_key);
+                        (flat_key, value, Some((address, slot_key)))
+                    })
+                })
+                .collect(),
+            AdditionalStorageFormat::Raw(vec) => vec
+                .into_iter()
+                .map(|(key, value)| (key, value, None))
+                .collect(),
+        }
     }
 }
 
@@ -202,17 +241,15 @@ async fn build_genesis(
     }
 
     // 2) Flatten and insert "pretty" additional storage (address -> key -> value).
-    for (address, slots) in genesis_input.additional_storage {
-        for (slot_key, value_b256) in slots {
-            let flat_key = flat_storage_key_for_contract(address, slot_key);
-
-            let duplicate = storage_logs.insert(flat_key, value_b256).is_some();
-            if duplicate {
-                anyhow::bail!(
-                    "Genesis input contains duplicate flattened storage key derived from address {address:?}, slot {slot_key:?}. \
-                     This likely conflicts with additional_storage_raw."
-                );
-            }
+    for (hashed_key, value, address_and_key) in
+        genesis_input.additional_storage.into_storage_slots()
+    {
+        let duplicate = storage_logs.insert(hashed_key, value).is_some();
+        if duplicate {
+            anyhow::bail!(
+                "Genesis input contains duplicate flattened storage key derived from (address, slot): {address_and_key:?}. \
+                 This likely conflicts with additional_storage_raw."
+            );
         }
     }
 
@@ -347,5 +384,29 @@ impl FileGenesisInputSource {
 impl GenesisInputSource for FileGenesisInputSource {
     async fn genesis_input(&self) -> anyhow::Result<GenesisInput> {
         GenesisInput::load_from_file(&self.path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{AdditionalStorageFormat, GenesisInput};
+
+    #[test]
+    fn deserializes_old_genesis_input() {
+        // The point of this test is to check that we can deserialize old genesis inputs with additional_storage being an array.
+        let json = r#"
+        {
+            "initial_contracts": [],
+            "additional_storage": [],
+            "execution_version": 4,
+            "genesis_root": "0xc346a158cce093e99ab65a95c884a26629d0e4f8d00ae20bbca4bfc4b204eec2"
+        }
+        "#;
+        let genesis_input: GenesisInput =
+            serde_json::from_str(json).expect("Failed to deserialize genesis input");
+        assert!(matches!(
+            genesis_input.additional_storage,
+            AdditionalStorageFormat::Raw(_)
+        ));
     }
 }

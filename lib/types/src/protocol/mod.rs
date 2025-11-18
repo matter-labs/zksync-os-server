@@ -179,7 +179,8 @@ mod tests {
             ((0, 29, 0), true),
             ((0, 29, 1), true),
             ((0, 29, 99), true),
-            ((0, 30, 0), false), // When updating this test, make sure to insert the new non-live version here.
+            ((0, 30, 0), true),
+            ((0, 31, 0), false), // When updating this test, make sure to insert the new non-live version here.
         ];
         for ((major, minor, patch), expected) in test_vector.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
