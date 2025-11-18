@@ -15,7 +15,7 @@
 //! `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
 
 use crate::prover_api::fri_proof_verifier;
-use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
+use crate::prover_api::metrics::{PROVER_API_METRICS, PROVER_METRICS, ProverStage, ProverType};
 use crate::prover_api::proof_storage::{ProofStorage, StoredFailedProof};
 use crate::prover_api::prover_job_map::ProverJobMap;
 use alloy::primitives::Bytes;
@@ -167,17 +167,22 @@ impl FriJobManager {
                 fri_job.batch_number,
                 fri_job.vk_hash,
                 assigned_jobs_count = self.assigned_jobs.len(),
+                minmax_assigned_batch_number = ?self.assigned_jobs.minmax_assigned_batch_number(),
                 ?min_inbound_age,
                 "Assigned a timed out job"
             );
+            PROVER_API_METRICS.timed_out_jobs_reassigned[&ProverStage::Fri].inc();
             return Some((fri_job, prover_input));
         }
 
-        if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
-            && max - min >= self.max_assigned_batch_range as u64
+        if let MinMax(min_batch_number, max_batch_number) =
+            self.assigned_jobs.minmax_assigned_batch_number()
+            && max_batch_number - min_batch_number >= self.max_assigned_batch_range as u64
         {
             // fresh assignments are not allowed when there are too many assigned jobs
             tracing::debug!(
+                min_batch_number,
+                max_batch_number,
                 assigned_jobs_count = self.assigned_jobs.len(),
                 max_assigned_batch_range = self.max_assigned_batch_range,
                 "too many assigned jobs; returning None"
@@ -214,6 +219,7 @@ impl FriJobManager {
                         fri_job.batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),
                         ?min_inbound_age,
+                        minmax_assigned_batch_number = ?self.assigned_jobs.minmax_assigned_batch_number(),
                         "Assigned a new job from inbound channel"
                     );
                     self.assigned_jobs.insert(env);
@@ -345,11 +351,17 @@ impl FriJobManager {
         let Some(removed_job) = self.assigned_jobs.remove(batch_number) else {
             tracing::warn!(
                 batch_number,
+                ?prove_time,
                 "Proof persisted; job already removed (racing submit)"
             );
             return Ok(());
         };
-        tracing::info!(batch_number, "Real proof accepted");
+        tracing::info!(
+            batch_number,
+            ?prove_time,
+            minmax_assigned_batch_number = ?self.assigned_jobs.minmax_assigned_batch_number(),
+            "Real proof accepted"
+        );
 
         // get execution version from prover, if available, otherwise fallback
         let proving_version = if let Some(proving_version) = proving_version {
