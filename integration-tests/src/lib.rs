@@ -26,11 +26,13 @@ pub mod dyn_wallet_provider;
 mod network;
 mod prover_tester;
 pub mod provider;
+pub mod upgrade;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 31337;
 
+#[derive(Debug)]
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,

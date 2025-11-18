@@ -127,11 +127,15 @@ pub struct TxPoolValidatorMetrics {
 
 #[vise::register]
 pub(crate) static TRANSACTION_POOL_METRICS: vise::Global<TxPoolMetrics> = vise::Global::new();
+#[vise::register]
 pub(crate) static BLOB_STORE_METRICS: vise::Global<BlobStoreMetrics> = vise::Global::new();
+#[vise::register]
 pub(crate) static ALL_TRANSACTIONS_POOL_METRICS: vise::Global<AllTransactionsMetrics> =
     vise::Global::new();
+#[vise::register]
 pub(crate) static VALIDATION_POOL_METRICS: vise::Global<TxPoolValidationMetrics> =
     vise::Global::new();
+#[vise::register]
 pub(crate) static VALIDATOR_POOL_METRICS: vise::Global<TxPoolValidatorMetrics> =
     vise::Global::new();
 

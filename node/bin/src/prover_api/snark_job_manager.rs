@@ -7,11 +7,11 @@ use zksync_os_l1_sender::batcher_model::{
     FriProof, RealSnarkProof, SignedBatchEnvelope, SnarkProof,
 };
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
 use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_types::ProvingVersion;
 
 use crate::prover_api::fri_job_manager::FriJob;
 
@@ -94,7 +94,7 @@ impl SnarkJobManager {
                 if envelope.data.is_fake() {
                     None
                 } else {
-                    let proving_execution_version = ExecutionVersion::try_from(
+                    let proving_execution_version = ProvingVersion::try_from(
                         envelope
                             .data
                             .proving_execution_version()
@@ -134,7 +134,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
-        execution_version: Option<ExecutionVersion>,
+        proving_version: Option<ProvingVersion>,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
         let mut receiver = self.committed_batch_receiver.lock().await;
@@ -199,9 +199,12 @@ impl SnarkJobManager {
         // This should never happen, but we double-check to guarantee it's the case
         //
         // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
-        if let Some(exec_version) = execution_version {
-            let server_vk = consumed_batches_proven[0].batch.verification_key_hash();
-            let prover_vk = exec_version.vk_hash();
+        if let Some(proving_version) = proving_version {
+            let server_vk = consumed_batches_proven[0]
+                .batch
+                .verification_key_hash()
+                .expect("verification key hash must be present as it was set by server");
+            let prover_vk = proving_version.vk_hash();
             anyhow::ensure!(
                 server_vk == prover_vk,
                 "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
@@ -209,13 +212,15 @@ impl SnarkJobManager {
         }
 
         // get verification key, if available, otherwise fallback
-        let execution_version = if let Some(execution_version) = execution_version {
-            execution_version as u32
+        let proving_version = if let Some(proving_version) = proving_version {
+            proving_version
         } else {
             consumed_batches_proven[0]
                 .data
                 .proving_execution_version()
                 .unwrap_or(2)
+                .try_into()
+                .expect("execution version must exist as it was set by server")
         };
 
         drop(receiver);
@@ -231,7 +236,7 @@ impl SnarkJobManager {
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
-                proving_execution_version: execution_version,
+                proving_execution_version: proving_version as u32,
             }),
         ))
         .await?;

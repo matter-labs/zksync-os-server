@@ -20,6 +20,10 @@ impl CommitCommand {
             da_input_mode,
         }
     }
+
+    pub(crate) fn input(&self) -> &SignedBatchEnvelope<FriProof> {
+        &self.input
+    }
 }
 
 impl SendToL1 for CommitCommand {

@@ -1,13 +1,13 @@
 use crate::metrics::METRICS;
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use std::time::Duration;
-use zksync_os_contract_interface::ZkChain;
 
 pub struct L1Watcher<Processor> {
-    zk_chain: ZkChain<DynProvider>,
+    provider: DynProvider,
+    contract_address: Address,
     next_l1_block: BlockNumber,
     max_blocks_to_process: u64,
     poll_interval: Duration,
@@ -16,14 +16,16 @@ pub struct L1Watcher<Processor> {
 
 impl<Processor: ProcessL1Event> L1Watcher<Processor> {
     pub(crate) fn new(
-        zk_chain: ZkChain<DynProvider>,
+        provider: DynProvider,
+        contract_address: Address,
         next_l1_block: BlockNumber,
         max_blocks_to_process: u64,
         poll_interval: Duration,
         processor: Processor,
     ) -> Self {
         Self {
-            zk_chain,
+            provider,
+            contract_address,
             next_l1_block,
             max_blocks_to_process,
             poll_interval,
@@ -42,7 +44,7 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError<Processor::Error>> {
-        let latest_block = self.zk_chain.provider().get_block_number().await?;
+        let latest_block = self.provider.get_block_number().await?;
 
         while self.next_l1_block <= latest_block {
             let from_block = self.next_l1_block;
@@ -77,8 +79,8 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
             .from_block(from)
             .to_block(to)
             .event_signature(Processor::SolEvent::SIGNATURE_HASH)
-            .address(*self.zk_chain.address());
-        let new_logs = self.zk_chain.provider().get_logs(&filter).await?;
+            .address(self.contract_address);
+        let new_logs = self.provider.get_logs(&filter).await?;
         let new_events = new_logs
             .into_iter()
             .map(|log| {

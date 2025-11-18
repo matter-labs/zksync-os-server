@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -8,10 +8,11 @@ use axum::{
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use zksync_os_l1_sender::batcher_model::FriProof;
-use zksync_os_multivm::ExecutionVersion;
+use zksync_os_types::ProvingVersion;
 
 use crate::prover_api::{
     fri_job_manager::SubmitError,
+    metrics::{PROVER_API_METRICS, PickJobResult, ProverStage},
     prover_server::{
         AppState,
         v1::models::{
@@ -25,7 +26,8 @@ pub(super) async fn pick_fri_job(
     Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
 ) -> Response {
-    tracing::debug!(
+    let start = Instant::now();
+    tracing::trace!(
         "Received FRI job pick request from prover with ID: {}",
         query.id
     );
@@ -34,14 +36,21 @@ pub(super) async fn pick_fri_job(
     match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
         Some((fri_job, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let prover_input = general_purpose::STANDARD.encode(&bytes);
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NewJob)]
+                .observe(start.elapsed());
             Json(BatchDataPayload {
                 batch_number: fri_job.batch_number,
                 vk_hash: fri_job.vk_hash,
-                prover_input: general_purpose::STANDARD.encode(&bytes),
+                prover_input,
             })
             .into_response()
         }
-        None => StatusCode::NO_CONTENT.into_response(),
+        None => {
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Fri, PickJobResult::NoJob)]
+                .observe(start.elapsed());
+            StatusCode::NO_CONTENT.into_response()
+        }
     }
 }
 
@@ -50,6 +59,7 @@ pub(super) async fn submit_fri_proof(
     State(state): State<AppState>,
     Json(payload): Json<FriProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    let start = Instant::now();
     tracing::debug!(
         "Received submit FRI proof request from prover with ID: {}",
         query.id
@@ -59,19 +69,19 @@ pub(super) async fn submit_fri_proof(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
     let prover_id = query.id;
-    let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
+    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("no Execution Version matches the provided Verification Key: {e}"),
+            format!("no Proving Version matches the provided Verification Key: {e}"),
         )
     })?;
-    match state
+    let result = match state
         .fri_job_manager
-        .submit_proof(payload.batch_number, proof_bytes.into(), Some(execution_version), &prover_id)
+        .submit_proof(payload.batch_number, proof_bytes.into(), Some(proving_version), &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::ExecutionVersionMismatch(server_execution_version, prover_execution_version)) => {
+        Err(SubmitError::ProvingVersionMismatch(server_execution_version, prover_execution_version)) => {
             Err((
             StatusCode::BAD_REQUEST,
             format!(
@@ -80,7 +90,7 @@ pub(super) async fn submit_fri_proof(
                 prover_execution_version.vk_hash()
             )
             .to_string(),
-        ))},
+        ))}
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
             proof_final_register_values,
@@ -99,13 +109,16 @@ pub(super) async fn submit_fri_proof(
             tracing::error!("internal error: {e}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, e))
         }
-    }
+    };
+    PROVER_API_METRICS.submit_proof_latency[&ProverStage::Fri].observe(start.elapsed());
+    result
 }
 
 pub(super) async fn pick_snark_job(
     Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
 ) -> Response {
+    let start = Instant::now();
     tracing::debug!(
         "Received SNARK job pick request from prover with ID: {}",
         query.id
@@ -134,6 +147,8 @@ pub(super) async fn pick_snark_job(
                 })
                 .collect();
 
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::NewJob)]
+                .observe(start.elapsed());
             Json(NextSnarkProverJobPayload {
                 from_batch_number: from,
                 to_batch_number: to,
@@ -142,9 +157,15 @@ pub(super) async fn pick_snark_job(
             })
             .into_response()
         }
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => {
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::NoJob)]
+                .observe(start.elapsed());
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             tracing::error!("error picking SNARK job: {e}");
+            PROVER_API_METRICS.pick_job_latency[&(ProverStage::Snark, PickJobResult::Error)]
+                .observe(start.elapsed());
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -155,6 +176,7 @@ pub(super) async fn submit_snark_proof(
     State(state): State<AppState>,
     Json(payload): Json<SnarkProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
+    let start = Instant::now();
     tracing::debug!(
         "Received submit SNARK proof request from prover with ID: {}",
         query.id
@@ -162,18 +184,18 @@ pub(super) async fn submit_snark_proof(
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
-    let execution_version = ExecutionVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
+    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            format!("no Execution Version matches the provided verification key: {e}"),
+            format!("no Proving Version matches the provided verification key: {e}"),
         )
     })?;
-    match state
+    let result = match state
         .snark_job_manager
         .submit_proof(
             payload.from_batch_number,
             payload.to_batch_number,
-            Some(execution_version),
+            Some(proving_version),
             proof_bytes,
         )
         .await
@@ -183,7 +205,9 @@ pub(super) async fn submit_snark_proof(
             StatusCode::BAD_REQUEST,
             format!("proof rejected: {err}").to_string(),
         )),
-    }
+    };
+    PROVER_API_METRICS.submit_proof_latency[&ProverStage::Snark].observe(start.elapsed());
+    result
 }
 
 pub(super) async fn peek_fri_job(
@@ -220,7 +244,11 @@ pub(super) async fn peek_snark_job(
     for batch_number in from_batch_number..=to_batch_number {
         match state.proof_storage.get_batch_with_proof(batch_number).await {
             Ok(Some(env)) => {
-                vk_hash = env.batch.verification_key_hash().to_string();
+                vk_hash = env
+                    .batch
+                    .verification_key_hash()
+                    .expect("VK must exist")
+                    .to_string();
                 match env.data {
                     FriProof::Real(real) => {
                         fri_proofs.push(general_purpose::STANDARD.encode(real.proof()))

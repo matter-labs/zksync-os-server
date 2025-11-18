@@ -1,13 +1,15 @@
 use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U128};
 use serde::{Deserialize, Serialize};
+use smart_config::de::{Qualified, WellKnown};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{
     DescribeConfig, DeserializeConfig, Serde,
     de::{Delimited, Optional},
 };
+use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_contract_interface::models::BatchDaInputMode;
@@ -107,6 +109,13 @@ pub struct GenesisConfig {
     #[config(with = Optional(Serde![int]), default_t = Some("0xfaf7f9079efe7e9b681aab926e7ca9801af4f993".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
+    /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
+    /// so it has to be provided explicitly.
+    // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
+    // find it in `zkos-l1-state.json`
+    #[config(with = Optional(Serde![int]), default_t = Some("0x883498218f553d748e48b43595a7d29a82939f01".parse().unwrap()))]
+    pub bytecode_supplier_address: Option<Address>,
+
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(270))]
     pub chain_id: Option<u64>,
@@ -151,7 +160,7 @@ pub struct SequencerConfig {
 
     /// Defines the block time for the sequencer.
     /// One of the block Seal Criteria. Only affects the Main Node.
-    #[config(default_t = Duration::from_millis(100))]
+    #[config(default_t = Duration::from_millis(250))]
     pub block_time: Duration,
 
     /// Max number of transactions in a block.
@@ -178,13 +187,16 @@ pub struct SequencerConfig {
     pub fee_collector_address: Address,
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    pub base_fee_override: Option<u128>,
+    #[config(default_t = None, with = Optional(Serde![str]))]
+    pub base_fee_override: Option<U128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    pub pubdata_price_override: Option<u128>,
+    #[config(default_t = None, with = Optional(Serde![str]))]
+    pub pubdata_price_override: Option<U128>,
 
     /// Override for native price (in wei). If set, native price will be constant and equal to this value.
-    pub native_price_override: Option<u128>,
+    #[config(default_t = None, with = Optional(Serde![str]))]
+    pub native_price_override: Option<U128>,
 
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
@@ -214,6 +226,16 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ConfigAddress(pub Address);
+
+const HASH_DE: Qualified<Serde![str]> =
+    Qualified::new(Serde![str], "hex string with optional 0x prefix");
+impl WellKnown for ConfigAddress {
+    type Deserializer = Qualified<Serde![str]>;
+    const DE: Self::Deserializer = HASH_DE;
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -250,6 +272,10 @@ pub struct RpcConfig {
     /// Duration since the last filter poll, after which the filter is considered stale
     #[config(default_t = 15 * TimeUnit::Minutes)]
     pub stale_filter_ttl: Duration,
+
+    /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
+    #[config(default, with = Delimited(","))]
+    pub l2_signer_blacklist: HashSet<ConfigAddress>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -585,6 +611,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_response_size: c.max_response_size,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
+            l2_signer_blacklist: c.l2_signer_blacklist.into_iter().map(|a| a.0).collect(),
             stale_filter_ttl: c.stale_filter_ttl,
         }
     }

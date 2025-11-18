@@ -5,7 +5,7 @@ use std::time::Duration;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_mempool::TxStream;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{L1TxSerialId, ZkTransaction};
+use zksync_os_types::{L1TxSerialId, ProtocolSemanticVersion, ZkTransaction};
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from block replay storage
@@ -23,6 +23,14 @@ pub enum BlockCommand {
     Produce(ProduceCommand),
     /// Rebuild an existing block.
     Rebuild(Box<RebuildCommand>),
+}
+
+/// Type of the block command.
+#[derive(Debug, Clone, Copy)]
+pub enum BlockCommandType {
+    Replay,
+    Produce,
+    Rebuild,
 }
 
 /// Command to produce a new block.
@@ -46,6 +54,14 @@ impl BlockCommand {
             BlockCommand::Replay(record) => record.block_context.block_number,
             BlockCommand::Produce(command) => command.block_number,
             BlockCommand::Rebuild(command) => command.replay_record.block_context.block_number,
+        }
+    }
+
+    pub fn command_type(&self) -> BlockCommandType {
+        match self {
+            BlockCommand::Replay(_) => BlockCommandType::Replay,
+            BlockCommand::Produce(_) => BlockCommandType::Produce,
+            BlockCommand::Rebuild(_) => BlockCommandType::Rebuild,
         }
     }
 }
@@ -89,9 +105,13 @@ pub struct PreparedBlockCommand<'a> {
     pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
     pub node_version: semver::Version,
+    pub protocol_version: ProtocolSemanticVersion,
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
     pub expected_block_output_hash: Option<B256>,
     pub previous_block_timestamp: u64,
+    /// Contract preimages to be included before the block execution.
+    /// Can be non-empty e.g. when processing upgrade transactions.
+    pub force_preimages: Vec<(B256, Vec<u8>)>,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

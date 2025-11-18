@@ -41,8 +41,9 @@ use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::network::EthereumWallet;
 use alloy::providers::{Provider, WalletProvider};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::FutureExt;
+use jsonrpsee::http_client::HttpClient;
 use ruint::aliases::U256;
 use std::path::Path;
 use std::sync::Arc;
@@ -59,7 +60,8 @@ use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher};
+use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
+use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
@@ -67,6 +69,7 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
+use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_status_server::run_status_server;
@@ -77,7 +80,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
+use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState, UpgradeTransaction};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -146,6 +149,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // Channel between L1Watcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
+
+    // Channel between L1UpgradeWatcher and Sequencer
+    let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
+        tokio::sync::mpsc::channel(5);
 
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
@@ -255,6 +262,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // `batcher_prev_batch_info` - to be used by batcher to (re)build its first batch.
     let (starting_block, batcher_prev_batch_info) =
         if node_startup_state.l1_state.last_committed_batch > 0 {
+            let last_matching_block =
+                if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
+                    find_last_matching_main_node_block(&repositories, main_node_rpc_url)
+                        .await
+                        .expect("Failed to find last matching block with main node")
+                } else {
+                    node_startup_state.repositories_persisted_block
+                };
             // Some batches committed - starting from an already committed batch
             let starting_batch = determine_starting_batch(
                 &config,
@@ -262,6 +277,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &state,
                 &batch_storage,
                 &finality_storage,
+                last_matching_block,
             )
             .await;
             (
@@ -287,6 +303,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     node_startup_state.assert_consistency();
+
+    // If we start from the very first block, we should start by sending upgrade tx for genesis.
+    if starting_block == 1 {
+        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
+        let upgrade_tx = UpgradeTransaction {
+            tx: Some(genesis_upgrade.tx),
+            protocol_version: genesis_upgrade.protocol_version,
+            timestamp: 0, // No restrictions on timestamp.
+            force_preimages: genesis_upgrade.force_deploy_preimages,
+        };
+        l1_upgrade_transactions_sender
+            .send(upgrade_tx)
+            .await
+            .expect("failed to send genesis upgrade transaction to sequencer");
+    }
 
     tracing::info!("Initializing L1 Watchers");
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -416,12 +447,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
-    let genesis = Arc::new(genesis);
+    let current_protocol_version = if let Some(record) = first_replay_record {
+        record.protocol_version.clone()
+    } else {
+        genesis.genesis_upgrade_tx().await.protocol_version
+    };
+
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions_for_sequencer,
+        l1_upgrade_transactions_receiver,
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
@@ -429,13 +466,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
         node_version,
-        genesis.clone(),
+        current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,
         config.sequencer_config.pubdata_price_override,
         config.sequencer_config.native_price_override,
         pubdata_price_receiver,
         pending_block_context_sender,
+    );
+
+    // ========== Start L1 Upgrade Watcher ===========
+
+    tasks.spawn(
+        L1UpgradeTxWatcher::new(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
+            config
+                .genesis_config
+                .bytecode_supplier_address
+                .expect("Missing `bytecode_supplier_address` in L1 watcher config"),
+            current_protocol_version,
+            l1_upgrade_transactions_sender,
+        )
+        .await
+        .expect("failed to start L1 upgrade transaction watcher")
+        .run()
+        .map(report_exit("L1 upgrade transaction watcher")),
     );
 
     // ========== Start Sequencer ===========
@@ -620,6 +676,9 @@ async fn run_main_node_pipeline(
             proof_storage: batch_storage.clone(),
             da_input_mode: node_state_on_startup.l1_state.da_input_mode,
         })
+        .pipe(UpgradeGatekeeper::new(
+            node_state_on_startup.l1_state.diamond_proxy.clone(),
+        ))
         .pipe(L1Sender::<_, CommitCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
@@ -841,6 +900,7 @@ async fn determine_starting_batch(
     state: &impl ReadStateHistory,
     batch_storage: &ProofStorage,
     finality_storage: &Finality,
+    last_matching_block: u64,
 ) -> BatchMetadata {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
@@ -853,7 +913,7 @@ async fn determine_starting_batch(
         forced_starting_block_number
     } else {
         // Start with the oldest block from:
-        [
+        let want_to_start_from = [
             // To ensure consistency/correctness, we want to replay at least `config.min_blocks_to_replay` blocks
             node_startup_state
                 .block_replay_storage_last_block
@@ -883,7 +943,17 @@ async fn determine_starting_batch(
         .min()
         .unwrap()
         // We don't execute the genesis block (number 0) - the earliest we can start is `0`
-        .max(1)
+        .max(1);
+
+        if last_matching_block + 1 < want_to_start_from {
+            tracing::warn!(
+                last_matching_block,
+                want_to_start_from,
+                "Node's blocks diverged from main node's blocks. Starting from last matching block + 1."
+            );
+        }
+
+        (last_matching_block + 1).min(want_to_start_from)
     };
 
     let starting_batch_number = batch_storage
@@ -912,6 +982,54 @@ async fn determine_starting_batch(
     }
 
     starting_batch
+}
+
+/// Finds the last block number where the local node's block hash matches the main node's block hash.
+async fn find_last_matching_main_node_block(
+    repo: &RepositoryManager,
+    main_node_rpc_url: &str,
+) -> anyhow::Result<u64> {
+    async fn check(
+        repo: &RepositoryManager,
+        main_node_client: &HttpClient,
+        block_number: u64,
+    ) -> anyhow::Result<bool> {
+        let local_hash = repo
+            .get_block_by_number(block_number)?
+            .map(|b| b.hash())
+            .with_context(|| format!("Local node is missing block {block_number}"))?;
+        let remove_hash = main_node_client
+            .block_by_number(block_number.into(), false)
+            .await?
+            .map(|h| h.header.hash)
+            .with_context(|| format!("Main node is missing block {block_number}"))?;
+        Ok(local_hash == remove_hash)
+    }
+
+    let main_node_rpc_client =
+        jsonrpsee::http_client::HttpClientBuilder::new().build(main_node_rpc_url)?;
+    let last_block = repo.get_latest_block();
+    // Check last block first. Unless there was a reorg recently, this should return quickly.
+    if check(repo, &main_node_rpc_client, last_block).await? {
+        return Ok(last_block);
+    }
+    if !check(repo, &main_node_rpc_client, 0).await? {
+        panic!("Genesis block mismatch between EN and main node");
+    }
+
+    // Binary search for the last matching block.
+    let mut left = 0u64;
+    let mut right = last_block;
+    while left < right {
+        #[allow(clippy::manual_div_ceil)]
+        let mid = (left + right + 1) / 2;
+        if check(repo, &main_node_rpc_client, mid).await? {
+            left = mid;
+        } else {
+            right = mid - 1;
+        }
+    }
+    Ok(left)
 }
 
 // Implementation node: it's awkward that we need all these arguments to get the genesis StoredBatchInfo.

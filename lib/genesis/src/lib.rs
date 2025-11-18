@@ -19,7 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_types::L1UpgradeEnvelope;
+use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisInput {
@@ -46,6 +46,7 @@ impl GenesisInput {
 /// - force deploy bytecode hashes and preimages, note that preimages are not padded and do not contain artifacts
 #[derive(Debug, Clone)]
 pub struct GenesisUpgradeTxInfo {
+    pub protocol_version: ProtocolSemanticVersion,
     pub tx: L1UpgradeEnvelope,
     pub force_deploy_preimages: Vec<(B256, Vec<u8>)>,
 }
@@ -254,6 +255,8 @@ async fn load_genesis_upgrade_tx(
         "Expected exactly one genesis upgrade tx log, found these {logs:?}"
     );
     let sol_event = GenesisUpgrade::decode_log(&logs[0].inner)?.data;
+    let protocol_version = ProtocolSemanticVersion::try_from(sol_event._protocolVersion)
+        .context("Failed to parse protocol version from genesis upgrade tx")?;
     let upgrade_tx = L1UpgradeEnvelope::try_from(sol_event._l2Transaction)?;
     let preimages = sol_event
         ._factoryDeps
@@ -268,6 +271,7 @@ async fn load_genesis_upgrade_tx(
         .collect();
 
     Ok(GenesisUpgradeTxInfo {
+        protocol_version,
         tx: upgrade_tx,
         force_deploy_preimages: preimages,
     })

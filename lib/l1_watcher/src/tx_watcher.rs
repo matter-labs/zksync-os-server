@@ -53,7 +53,8 @@ impl L1TxWatcher {
             output,
         };
         let l1_watcher = L1Watcher::new(
-            zk_chain,
+            zk_chain.provider().clone(),
+            *zk_chain.address(),
             next_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
