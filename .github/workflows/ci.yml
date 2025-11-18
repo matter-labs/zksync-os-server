@@ -79,7 +79,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: cargo nextest run --workspace ${NEXTEST_ITERATIONS}
+        run: cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
 
       - name: Upload test results
         if: always() && !cancelled()
