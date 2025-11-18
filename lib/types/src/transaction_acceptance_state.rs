@@ -11,6 +11,4 @@ pub enum NotAcceptingReason {
     /// Block production has been disabled via config (`sequencer_max_blocks_to_produce`)
     #[error("Node is not currently accepting transactions: block production disabled.")]
     BlockProductionDisabled,
-    #[error("Transaction submission not implemented on external nodes.")]
-    ExternalNode,
 }

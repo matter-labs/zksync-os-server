@@ -1,6 +1,8 @@
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{Address, B256, Bytes};
+use alloy::providers::{DynProvider, Provider};
+use alloy::transports::{RpcError, TransportErrorKind};
 use std::collections::HashSet;
 use tokio::sync::watch;
 use zksync_os_mempool::{L2TransactionPool, PoolError};
@@ -11,6 +13,7 @@ pub struct TxHandler<Mempool> {
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     l2_signer_blacklist: HashSet<Address>,
+    tx_forwarder: Option<DynProvider>,
 }
 
 impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
@@ -18,11 +21,13 @@ impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         l2_signer_blacklist: HashSet<Address>,
+        tx_forwarder: Option<DynProvider>,
     ) -> Self {
         Self {
             mempool,
             acceptance_state,
             l2_signer_blacklist,
+            tx_forwarder,
         }
     }
 
@@ -47,6 +52,19 @@ impl<Mempool: L2TransactionPool> TxHandler<Mempool> {
         }
         self.mempool.add_l2_transaction(l2_tx).await?;
 
+        if let Some(tx_forwarder) = self.tx_forwarder.as_ref() {
+            match tx_forwarder.send_raw_transaction(&tx_bytes).await {
+                // We do not need to wait for pending transaction here, so it's safe to forget about it
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::debug!(%err, "forwarding error from main node back to user");
+                    // Remove previously added transaction from local mempool
+                    self.mempool.remove_transactions(vec![hash]);
+                    return Err(err.into());
+                }
+            }
+        }
+
         Ok(hash)
     }
 }
@@ -66,6 +84,9 @@ pub enum EthSendRawTransactionError {
     /// Errors related to the transaction pool
     #[error(transparent)]
     PoolError(#[from] PoolError),
+    /// Error forwarded from main node
+    #[error(transparent)]
+    ForwardError(#[from] RpcError<TransportErrorKind>),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
 }
