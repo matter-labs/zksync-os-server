@@ -40,7 +40,7 @@ use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::network::EthereumWallet;
-use alloy::providers::{Provider, WalletProvider};
+use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use jsonrpsee::http_client::HttpClient;
@@ -80,7 +80,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState, UpgradeTransaction};
+use zksync_os_types::{TransactionAcceptanceState, UpgradeTransaction};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -391,15 +391,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
-    // External nodes: always reject
+    // External nodes: always accepts, but may be rejected on the main node side during forwarding
     let (tx_acceptance_state_sender, tx_acceptance_state_receiver) =
-        if config.sequencer_config.is_main_node() {
-            watch::channel(TransactionAcceptanceState::Accepting)
-        } else {
-            watch::channel(TransactionAcceptanceState::NotAccepting(
-                NotAcceptingReason::ExternalNode,
-            ))
-        };
+        watch::channel(TransactionAcceptanceState::Accepting);
+
+    let main_node_provider = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
+        Some(
+            ProviderBuilder::new()
+                .connect(url)
+                .await
+                .expect("could not connect to main node RPC")
+                .erased(),
+        )
+    } else {
+        None
+    };
 
     let (pending_block_context_sender, pending_block_context_receiver) = watch::channel(None);
     tasks.spawn(
@@ -412,6 +418,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             genesis_input_source,
             tx_acceptance_state_receiver,
             pending_block_context_receiver,
+            main_node_provider,
         )
         .map(report_exit("JSON-RPC server")),
     );
