@@ -17,4 +17,3 @@ serde.workspace = true
 tracing.workspace = true
 vise.workspace = true
 structdiff.workspace = true
-zk_ee.workspace = true

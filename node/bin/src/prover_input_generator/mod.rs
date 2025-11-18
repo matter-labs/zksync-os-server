@@ -50,7 +50,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         );
 
         let read_state = self.read_state;
-        let da_commitment_scheme = self.pubdata_mode.da_commitment_scheme().into();
+        let da_commitment_scheme = (self.pubdata_mode.da_commitment_scheme() as u8)
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?;
         let enable_logging = self.enable_logging;
         let app_bin_base_path = self.app_bin_base_path;
         let maximum_in_flight_blocks = self.maximum_in_flight_blocks;

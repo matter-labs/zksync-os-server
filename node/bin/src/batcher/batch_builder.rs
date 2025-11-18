@@ -73,7 +73,9 @@ pub(crate) fn seal_batch(
                         .iter()
                         .map(|(_, _, _, prover_input)| prover_input.as_slice())
                         .collect(),
-                    pubdata_mode.da_commitment_scheme().into(),
+                    (pubdata_mode.da_commitment_scheme() as u8)
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
                     blocks
                         .iter()
                         .map(|(block_output, _, _, _)| block_output.pubdata.as_slice())

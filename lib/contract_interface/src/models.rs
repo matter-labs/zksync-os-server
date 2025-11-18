@@ -79,6 +79,7 @@ impl From<&StoredBatchInfo> for IExecutor::StoredBatchInfo {
 
 /// User-friendly version of [`crate::L2DACommitmentScheme`] with statically known possible variants.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[repr(u8)]
 pub enum DACommitmentScheme {
     /// Invalid option
     None,
@@ -119,18 +120,6 @@ impl From<crate::L2DACommitmentScheme> for DACommitmentScheme {
             crate::L2DACommitmentScheme::__Invalid => {
                 panic!("Invalid IExecutor::L2DACommitmentScheme from l1")
             }
-        }
-    }
-}
-
-impl From<DACommitmentScheme> for zk_ee::common_structs::DACommitmentScheme {
-    fn from(val: DACommitmentScheme) -> Self {
-        match val {
-            DACommitmentScheme::None => Self::None,
-            DACommitmentScheme::EmptyNoDA => Self::EmptyNoDA,
-            DACommitmentScheme::PubdataKeccak256 => Self::PubdataKeccak256,
-            DACommitmentScheme::BlobsAndPubdataKeccak256 => Self::BlobsAndPubdataKeccak256,
-            DACommitmentScheme::BlobsZKsyncOS => Self::BlobsZKsyncOS,
         }
     }
 }
