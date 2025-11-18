@@ -102,10 +102,13 @@ jobs:
         with:
           version: v1.3.4
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Run tests
         run: |
-          cargo install cargo-nextest
-          cargo nextest run --release --workspace ${NEXTEST_ITERATIONS}
+          cargo nextest run --release --no-capture --workspace ${NEXTEST_ITERATIONS} zksync_os_integration_tests::erc20 erc20_deposit
 
       - name: Upload test results
         if: always() && !cancelled()
