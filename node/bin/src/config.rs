@@ -285,7 +285,7 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x84de5c4407589cd61b3ee6139937c9d548206f96a30bfa86c094ab49a7990ba6".into())]
+    #[config(alias = "operator_private_key", default_t = "0xef2bd6efd849426877d76c24341bc3452d6b2157869442786f6c19d044e04942".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
