@@ -58,6 +58,7 @@ async fn erc20_deposit() -> anyhow::Result<()> {
         mint_amount - deposit_amount,
         "Unexpected L1 balance after deposit"
     );
+    panic!("fail");
 
     Ok(())
 }
