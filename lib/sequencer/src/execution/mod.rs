@@ -128,7 +128,9 @@ where
                     .context("execute_block")?;
 
             if let Some(last_processed_block_at) = last_processed_block_at {
-                EXECUTION_METRICS.time_since_last_block.observe(last_processed_block_at.elapsed());
+                EXECUTION_METRICS
+                    .time_since_last_block
+                    .observe(last_processed_block_at.elapsed());
             }
             last_processed_block_at = Some(Instant::now());
 

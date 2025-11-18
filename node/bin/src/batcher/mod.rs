@@ -98,7 +98,9 @@ impl PipelineComponent for Batcher {
             };
 
             if let Some(last_created_batch_at) = last_created_batch_at {
-                BATCHER_METRICS.time_since_last_batch.observe(last_created_batch_at.elapsed());
+                BATCHER_METRICS
+                    .time_since_last_batch
+                    .observe(last_created_batch_at.elapsed());
             }
 
             last_created_batch_at = Some(Instant::now());
