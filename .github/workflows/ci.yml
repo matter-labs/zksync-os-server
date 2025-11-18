@@ -79,7 +79,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run tests
-        run: RUST_TEST_THREADS=1 cargo nextest run --release --workspace ${NEXTEST_ITERATIONS} -j $(( $(nproc) / 4 ))
+        run: RUST_TEST_THREADS=1 cargo nextest run --release --workspace ${NEXTEST_ITERATIONS} -j $(( $(nproc) / 2 ))
 
       - name: Upload test results
         if: always() && !cancelled()
