@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -106,6 +107,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     }
 }
 
+static SETUP_COMPUTED: OnceLock<Mutex<bool>> = OnceLock::new();
+
+fn setup_computed_flag() -> &'static Mutex<bool> {
+    SETUP_COMPUTED.get_or_init(|| Mutex::new(false))
+}
+
 fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
@@ -193,20 +200,39 @@ fn compute_prover_input(
                 } else {
                     zksync_os_multivm::apps::v5::singleblock_batch_path(&app_bin_base_path)
                 };
-
-                generate_proof_input(
-                    bin_path,
-                    BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                    ProofData {
-                        state_root_view: initial_storage_commitment,
-                        last_block_timestamp: replay_record.previous_block_timestamp,
-                    },
-                    da_commitment_scheme,
-                    tree_view,
-                    state_view,
-                    list_source,
-                )
-                .expect("proof gen failed")
+                let mut setup_computed = setup_computed_flag().lock().unwrap();
+                if *setup_computed == true {
+                    drop(setup_computed);
+                    generate_proof_input(
+                        bin_path,
+                        BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                        ProofData {
+                            state_root_view: initial_storage_commitment,
+                            last_block_timestamp: replay_record.previous_block_timestamp,
+                        },
+                        da_commitment_scheme,
+                        tree_view,
+                        state_view,
+                        list_source,
+                    )
+                        .expect("proof gen failed")
+                } else {
+                    let proof_input = generate_proof_input(
+                        bin_path,
+                        BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                        ProofData {
+                            state_root_view: initial_storage_commitment,
+                            last_block_timestamp: replay_record.previous_block_timestamp,
+                        },
+                        da_commitment_scheme,
+                        tree_view,
+                        state_view,
+                        list_source,
+                    )
+                        .expect("proof gen failed");
+                    *setup_computed = true;
+                    proof_input
+                }
             }
         };
     let latency = prover_input_generation_latency.observe();
