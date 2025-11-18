@@ -30,6 +30,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
         match (version.minor, version.patch) {
             (29, 0) | (29, 1) => Ok(ProvingVersion::V4),
             (30, 0) => Ok(ProvingVersion::V5),
+            (31, 0) => Ok(ProvingVersion::V5),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -89,10 +90,7 @@ impl ProvingVersion {
         forward_run_execution_version: ExecutionVersion,
     ) -> Self {
         match forward_run_execution_version {
-            // TODO: panic?
-            ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
-                panic!("Unsupported execution version")
-            }
+            ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => Self::V3,
             ExecutionVersion::V4 => Self::V4,
             ExecutionVersion::V5 => Self::V5,
         }
@@ -120,6 +118,7 @@ mod tests {
             ((0, 29, 0), ProvingVersion::V4),
             ((0, 29, 1), ProvingVersion::V4),
             ((0, 30, 0), ProvingVersion::V5),
+            ((0, 31, 0), ProvingVersion::V5),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -129,7 +128,7 @@ mod tests {
             assert_eq!(&proving_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 1), (0, 31, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 1), (0, 32, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

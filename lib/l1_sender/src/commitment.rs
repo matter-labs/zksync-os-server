@@ -181,7 +181,9 @@ impl BatchInfo {
                         chain_id: U256::from(commit_info.chain_id),
                         first_block_timestamp: commit_info.first_block_timestamp,
                         last_block_timestamp: commit_info.last_block_timestamp,
-                        da_commitment_scheme: commit_info.l2_da_commitment_scheme.into(),
+                        da_commitment_scheme: (commit_info.l2_da_commitment_scheme as u8)
+                            .try_into()
+                            .expect("Failed to convert DA commitment scheme"),
                         pubdata_commitment: Bytes32::from(commit_info.da_commitment.0),
                         number_of_layer_1_txs: U256::from(commit_info.number_of_layer1_txs),
                         priority_operations_hash: Bytes32::from(

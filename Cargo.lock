@@ -11781,7 +11781,6 @@ dependencies = [
  "structdiff",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.2)",
 ]
 
 [[package]]
@@ -12514,7 +12513,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.12",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.2)",
  "zksync_os_contract_interface",
  "zksync_os_interface",
 ]
