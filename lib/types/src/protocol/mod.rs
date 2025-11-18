@@ -55,6 +55,7 @@ impl ProtocolSemanticVersion {
         // Patch versions can always be live, as they don't change the state transition function.
         match self.minor {
             29 => true,
+            30 => true,
             // When updating this function, make sure to insert the new non-live version here.
             _ => false,
         }

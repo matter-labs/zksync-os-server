@@ -39,7 +39,7 @@ impl<T> L1SenderConfig<T> {
         self.max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128)
     }
 
-    /// Max fee per blob  gas we are willing to spend (in wei).
+    /// Max fee per blob gas we are willing to spend (in wei).
     pub fn max_fee_per_blob_gas(&self) -> u128 {
         self.max_fee_per_blob_gas_gwei as u128 * (GWEI_TO_WEI as u128)
     }
