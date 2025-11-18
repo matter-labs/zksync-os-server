@@ -78,7 +78,8 @@ zk_os_forward_system_0_0_26 = { package = "forward_system", git = "https://githu
 zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0", features = [
     "production",
     "no_print",
-    # We had in issue in this version, and it works only with testing feature.
+    # We had an issue in this version - it's compilable only with the testing feature.
+    # It was used with this feature, so it should stay here forever.
     "testing"
 ], default-features = false }
 
