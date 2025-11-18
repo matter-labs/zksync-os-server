@@ -90,9 +90,7 @@ impl CommitCommand {
                 let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
 
                 // Prefixed by current encoding version as expected by protocol
-                [[V29_ENCODING_VERSION].to_vec(), encoded_data]
-                    .concat()
-                    .to_vec()
+                [[V29_ENCODING_VERSION].to_vec(), encoded_data].concat()
             }
             30 => {
                 const V30_ENCODING_VERSION: u8 = 3;
@@ -109,9 +107,7 @@ impl CommitCommand {
                 let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
 
                 // Prefixed by current encoding version as expected by protocol
-                [[V30_ENCODING_VERSION].to_vec(), encoded_data]
-                    .concat()
-                    .to_vec()
+                [[V30_ENCODING_VERSION].to_vec(), encoded_data].concat()
             }
             _ => panic!(
                 "Unsupported protocol version: {}",
