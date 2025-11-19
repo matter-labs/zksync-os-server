@@ -12,7 +12,6 @@ use smart_config::{
 use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
-use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -20,6 +19,7 @@ use zksync_os_mempool::SubPoolLimit;
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
+use zksync_os_types::PubdataMode;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -106,14 +106,14 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some("0xfaf7f9079efe7e9b681aab926e7ca9801af4f993".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("0x396e757c7b8cb2158b90b2d2d11eed4bd818e58c".parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(with = Optional(Serde![int]), default_t = Some("0x883498218f553d748e48b43595a7d29a82939f01".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some("0xef0b6c2c85f321d876a6fd87e138bae974196623".parse().unwrap()))]
     pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
@@ -278,12 +278,6 @@ pub struct RpcConfig {
     pub l2_signer_blacklist: HashSet<ConfigAddress>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum RollupPubdataMode {
-    Blobs,
-    Calldata,
-}
-
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
@@ -291,19 +285,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x4767f9b6858faf59e4290e3e666e303a9ff8df30e5e7121b6d2eb264fd2ce7cf".into())]
+    #[config(alias = "operator_private_key", default_t = "0xef2bd6efd849426877d76c24341bc3452d6b2157869442786f6c19d044e04942".into())]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x31edee9894c631cbff9ea4a1c7de94d10d0b86ebdb989768e3f00398b0ab4a8a".into())]
+    #[config(default_t = "0x02ae689a20546e6c8a6b16e6c5c62ba67cbf654cd3d0c3ca49b0a64e61c4896a".into())]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xd63de199732e0fd9802cfa207521c9a6d4c5f492ff816f688e89b278482c19dd".into())]
+    #[config(default_t = "0xce3307d58233b61e70dbf8300f73816a9541f138259b381860853898dd911aa2".into())]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
@@ -313,6 +307,10 @@ pub struct L1SenderConfig {
     /// Max priority fee per gas we are willing to spend (in gwei).
     #[config(default_t = 2)]
     pub max_priority_fee_per_gas_gwei: u64,
+
+    /// Max fee per blob gas we are willing to spend (in gwei).
+    #[config(default_t = 1)]
+    pub max_fee_per_blob_gas_gwei: u64,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -329,10 +327,10 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Rollup pubdata mode - either blobs or calldata.
-    #[config(default_t = RollupPubdataMode::Calldata)]
+    /// Pubdata mode
+    #[config(default_t = PubdataMode::Blobs)]
     #[config(with = Serde![str])]
-    pub rollup_pubdata_mode: RollupPubdataMode,
+    pub pubdata_mode: PubdataMode,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -641,6 +639,7 @@ impl L1SenderConfig {
             operator_pk,
             max_fee_per_gas_gwei: self.max_fee_per_gas_gwei,
             max_priority_fee_per_gas_gwei: self.max_priority_fee_per_gas_gwei,
+            max_fee_per_blob_gas_gwei: self.max_fee_per_blob_gas_gwei,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             phantom_data: Default::default(),
@@ -721,19 +720,9 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
 
 pub fn gas_adjuster_config(
     c: GasAdjusterConfig,
-    da_input_mode: BatchDaInputMode,
-    rollup_pubdata_mode: RollupPubdataMode,
+    pubdata_mode: PubdataMode,
     max_priority_fee_per_gas_gwei: u64,
 ) -> zksync_os_gas_adjuster::GasAdjusterConfig {
-    let pubdata_mode = match (da_input_mode, rollup_pubdata_mode) {
-        (BatchDaInputMode::Validium, _) => zksync_os_gas_adjuster::PubdataMode::Validium,
-        (BatchDaInputMode::Rollup, RollupPubdataMode::Blobs) => {
-            zksync_os_gas_adjuster::PubdataMode::Blobs
-        }
-        (BatchDaInputMode::Rollup, RollupPubdataMode::Calldata) => {
-            zksync_os_gas_adjuster::PubdataMode::Calldata
-        }
-    };
     let max_priority_fee_per_gas = max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128);
     zksync_os_gas_adjuster::GasAdjusterConfig {
         pubdata_mode,

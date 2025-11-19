@@ -52,6 +52,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
@@ -80,7 +81,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{TransactionAcceptanceState, UpgradeTransaction};
+use zksync_os_types::{PubdataMode, TransactionAcceptanceState, UpgradeTransaction};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
@@ -179,6 +180,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
+
+    match (config.l1_sender_config.pubdata_mode, l1_state.da_input_mode) {
+        (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
+        | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
+            panic!("Pubdata mode doesn't correspond to pricing mode from the l1");
+        }
+        _ => {}
+    };
 
     let genesis = Genesis::new(
         genesis_input_source.clone(),
@@ -428,8 +437,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if config.sequencer_config.is_main_node() {
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
-            l1_state.da_input_mode,
-            config.l1_sender_config.rollup_pubdata_mode,
+            config.l1_sender_config.pubdata_mode,
             config.l1_sender_config.max_priority_fee_per_gas_gwei,
         );
         let gas_adjuster = GasAdjuster::new(
@@ -660,6 +668,7 @@ async fn run_main_node_pipeline(
                 .maximum_in_flight_blocks,
             app_bin_base_path: config.general_config.rocks_db_path.join("app_bins").clone(),
             read_state: state.clone(),
+            pubdata_mode: config.l1_sender_config.pubdata_mode,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -672,6 +681,7 @@ async fn run_main_node_pipeline(
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
             batch_storage: batch_storage.clone(),
+            pubdata_mode: config.l1_sender_config.pubdata_mode,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
@@ -681,7 +691,6 @@ async fn run_main_node_pipeline(
             next_expected_batch_number: starting_batch_number,
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage: batch_storage.clone(),
-            da_input_mode: node_state_on_startup.l1_state.da_input_mode,
         })
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),

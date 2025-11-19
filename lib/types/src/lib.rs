@@ -18,6 +18,9 @@ pub use transaction::{
     UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
 
+mod pubdata_mode;
+pub use pubdata_mode::PubdataMode;
+
 mod protocol;
 pub use protocol::{
     ExecutionVersion, ExecutionVersionError, ProtocolSemanticVersion, ProtocolSemanticVersionError,

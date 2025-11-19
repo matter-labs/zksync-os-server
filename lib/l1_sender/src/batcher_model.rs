@@ -10,6 +10,7 @@ use time::UtcDateTime;
 use zksync_os_batch_types::BatchSignatureSet;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_observability::LatencyDistributionTracker;
+use zksync_os_types::PubdataMode;
 use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
@@ -31,6 +32,8 @@ pub struct BatchMetadata {
     pub batch_info: BatchInfo,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    #[serde(default = "default_pubdata_mode")]
+    pub pubdata_mode: PubdataMode,
     // note: can equal to zero
     pub tx_count: usize,
     #[serde(default = "default_execution_version")]
@@ -50,6 +53,10 @@ impl BatchMetadata {
 
 fn default_execution_version() -> u32 {
     1
+}
+
+fn default_pubdata_mode() -> PubdataMode {
+    PubdataMode::Calldata
 }
 
 fn default_protocol_version() -> ProtocolSemanticVersion {

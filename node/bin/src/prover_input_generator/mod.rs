@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -7,16 +8,16 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use vise::{Buckets, Histogram, LabeledFamily, Metrics, Unit};
+use zk_ee::common_structs::DACommitmentScheme;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::traits::TxListSource;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_model::ProverInput;
 use zksync_os_merkle_tree::{MerkleTreeVersion, RocksDBWrapper, fixed_bytes_to_bytes32};
-use zksync_os_multivm::AbiTxSource;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ExecutionVersion, ProvingVersion, ZksyncOsEncode};
+use zksync_os_types::{ExecutionVersion, ProvingVersion, PubdataMode, ZksyncOsEncode};
 
 /// This component generates prover input from batch replay data
 pub struct ProverInputGenerator<ReadState> {
@@ -24,6 +25,7 @@ pub struct ProverInputGenerator<ReadState> {
     pub maximum_in_flight_blocks: usize,
     pub app_bin_base_path: PathBuf,
     pub read_state: ReadState,
+    pub pubdata_mode: PubdataMode,
 }
 
 #[async_trait]
@@ -49,13 +51,25 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         );
 
         let read_state = self.read_state;
+        let pubdata_mode = self.pubdata_mode;
         let enable_logging = self.enable_logging;
         let app_bin_base_path = self.app_bin_base_path;
         let maximum_in_flight_blocks = self.maximum_in_flight_blocks;
 
-        ReceiverStream::new(input.into_inner())
-            // generate prover input. Use up to `maximum_in_flight_blocks` threads
-            .map(|(block_output, replay_record, tree)| {
+        let mut input = input.into_inner();
+        // We want to process the first item separately as it involves some heavy trusted-setup-related precomputation.
+        let Some(first_item) = input.recv().await else {
+            return Ok(());
+        };
+        // We create two streams: one for the first item, and one for the rest of the input.
+        let streams: Vec<BoxStream<Self::Input>> = vec![
+            futures::stream::once(async { first_item }).boxed(),
+            ReceiverStream::new(input).boxed(),
+        ];
+        // Streams are processed sequentially but in the same way.
+        for s in streams {
+            // Generates prover input. Uses up to `maximum_in_flight_blocks` threads
+            s.map(|(block_output, replay_record, tree)| {
                 let block_number = replay_record.block_context.block_number;
 
                 tracing::debug!(
@@ -65,11 +79,21 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 );
                 let read_state_clone = read_state.clone();
                 let app_bin_base_path_clone = app_bin_base_path.clone();
+
+                // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
+                let da_commitment_scheme = pubdata_mode
+                    .adapt_for_protocol_version(&replay_record.protocol_version)
+                    .da_commitment_scheme();
+                let da_commitment_scheme = (da_commitment_scheme as u8)
+                    .try_into()
+                    .expect("Failed to convert DA commitment scheme");
+
                 tokio::task::spawn_blocking(move || {
                     let prover_input = compute_prover_input(
                         &replay_record,
                         read_state_clone,
                         tree.block_start.clone(),
+                        da_commitment_scheme,
                         app_bin_base_path_clone,
                         enable_logging,
                     );
@@ -90,7 +114,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 Ok(())
             })
-            .await
+            .await?;
+        }
+        Ok(())
     }
 }
 
@@ -98,6 +124,7 @@ fn compute_prover_input(
     replay_record: &ReplayRecord,
     state_handle: impl ReadStateHistory,
     tree_view: MerkleTreeVersion<RocksDBWrapper>,
+    da_commitment_scheme: DACommitmentScheme,
     app_bin_base_path: PathBuf,
     enable_logging: bool,
 ) -> Vec<u32> {
@@ -117,51 +144,17 @@ fn compute_prover_input(
             .expect("Must be valid execution as set by the server");
     let prover_input =
         match ProvingVersion::from_forward_run_execution_version(forward_run_execution_version) {
-            ProvingVersion::V1 | ProvingVersion::V2 => {
-                unreachable!("proving_run_execution_version does not return 1 or 2")
-            } // we prove v1 and v2 blocks with v3, it's reflected in `proving_run_execution_version`
-            ProvingVersion::V3 => {
-                use zk_ee_0_0_26::{
-                    common_structs::ProofData, system::metadata::BlockMetadataFromOracle,
-                };
-                use zk_os_forward_system_0_0_26::run::{
-                    StorageCommitment, convert::FromInterface, generate_proof_input,
-                };
-
-                let initial_storage_commitment = StorageCommitment {
-                    root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                    next_free_slot: leaf_count,
-                };
-
-                let list_source = AbiTxSource::new(TxListSource { transactions });
-
-                let bin_path = if enable_logging {
-                    zksync_os_multivm::apps::v3::singleblock_batch_logging_enabled_path(
-                        &app_bin_base_path,
-                    )
-                } else {
-                    zksync_os_multivm::apps::v3::singleblock_batch_path(&app_bin_base_path)
-                };
-
-                generate_proof_input(
-                    bin_path,
-                    BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                    ProofData {
-                        state_root_view: initial_storage_commitment,
-                        last_block_timestamp: replay_record.previous_block_timestamp,
-                    },
-                    tree_view,
-                    state_view,
-                    list_source,
-                )
-                .expect("proof gen failed")
+            ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
+                panic!(
+                    "computing prover input for batch with prover version v1-v3 is not supported"
+                );
             }
             ProvingVersion::V4 => {
-                use zk_ee::{
+                use zk_ee_0_1_0::{
                     common_structs::ProofData,
                     system::metadata::zk_metadata::BlockMetadataFromOracle,
                 };
-                use zk_os_forward_system::run::{
+                use zk_os_forward_system_0_1_0::run::{
                     StorageCommitment, convert::FromInterface, generate_proof_input,
                 };
 
@@ -187,6 +180,44 @@ fn compute_prover_input(
                         state_root_view: initial_storage_commitment,
                         last_block_timestamp: replay_record.previous_block_timestamp,
                     },
+                    tree_view,
+                    state_view,
+                    list_source,
+                )
+                .expect("proof gen failed")
+            }
+            ProvingVersion::V5 => {
+                use zk_ee::{
+                    common_structs::ProofData,
+                    system::metadata::zk_metadata::BlockMetadataFromOracle,
+                };
+                use zk_os_forward_system::run::{
+                    StorageCommitment, convert::FromInterface, generate_proof_input,
+                };
+
+                let initial_storage_commitment = StorageCommitment {
+                    root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
+                    next_free_slot: leaf_count,
+                };
+
+                let list_source = TxListSource { transactions };
+
+                let bin_path = if enable_logging {
+                    zksync_os_multivm::apps::v5::singleblock_batch_logging_enabled_path(
+                        &app_bin_base_path,
+                    )
+                } else {
+                    zksync_os_multivm::apps::v5::singleblock_batch_path(&app_bin_base_path)
+                };
+
+                generate_proof_input(
+                    bin_path,
+                    BlockMetadataFromOracle::from_interface(replay_record.block_context),
+                    ProofData {
+                        state_root_view: initial_storage_commitment,
+                        last_block_timestamp: replay_record.previous_block_timestamp,
+                    },
+                    da_commitment_scheme,
                     tree_view,
                     state_view,
                     list_source,

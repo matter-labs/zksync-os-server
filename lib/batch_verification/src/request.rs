@@ -1,6 +1,7 @@
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{self, LengthDelimitedCodec};
 use zksync_os_contract_interface::models::CommitBatchInfo;
+use zksync_os_types::PubdataMode;
 
 /// Request sent from main sequencer to external nodes for batch verification
 #[derive(Clone, PartialEq)]
@@ -8,6 +9,7 @@ pub struct BatchVerificationRequest {
     pub batch_number: u64,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    pub pubdata_mode: PubdataMode,
     pub request_id: u64,
     pub commit_data: CommitBatchInfo,
 }
@@ -18,6 +20,7 @@ impl std::fmt::Debug for BatchVerificationRequest {
             .field("batch_number", &self.batch_number)
             .field("first_block_number", &self.first_block_number)
             .field("last_block_number", &self.last_block_number)
+            .field("pubdata_mode", &self.pubdata_mode)
             .field("request_id", &self.request_id)
             .finish()
     }

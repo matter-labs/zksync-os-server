@@ -6,6 +6,7 @@ use crate::{
 use alloy::sol_types::SolValue;
 use zksync_os_batch_types::BatchSignature;
 use zksync_os_contract_interface::{IExecutor::CommitBatchInfoZKsyncOS, models::CommitBatchInfo};
+use zksync_os_types::PubdataMode;
 
 impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
     fn from(value: BatchVerificationRequestWireFormatV1) -> Self {
@@ -13,6 +14,7 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
             batch_number,
             first_block_number,
             last_block_number,
+            pubdata_mode,
             request_id,
             commit_data,
         } = value;
@@ -23,6 +25,8 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
             batch_number,
             first_block_number,
             last_block_number,
+            pubdata_mode: PubdataMode::from_u8(pubdata_mode)
+                .expect("Failed to decode pubdata mode"),
             request_id,
             commit_data: decoded_commit_data,
         }
@@ -35,6 +39,7 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
             batch_number,
             first_block_number,
             last_block_number,
+            pubdata_mode,
             request_id,
             commit_data,
         } = value;
@@ -44,6 +49,7 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
             batch_number,
             first_block_number,
             last_block_number,
+            pubdata_mode: pubdata_mode.to_u8(),
             request_id,
             commit_data: encoded_commit_data,
         }

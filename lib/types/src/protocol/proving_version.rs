@@ -16,6 +16,7 @@ pub enum ProvingVersion {
     V2 = 2,
     V3 = 3,
     V4 = 4,
+    V5 = 5,
 }
 
 impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
@@ -28,7 +29,8 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
         // from there.
         match (version.minor, version.patch) {
             (29, 0) | (29, 1) => Ok(ProvingVersion::V4),
-            (30, 0) => Ok(ProvingVersion::V4), // To be updated to V5 once 30 is ready.
+            (30, 0) => Ok(ProvingVersion::V5),
+            (31, 0) => Ok(ProvingVersion::V5),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -50,6 +52,9 @@ impl ProvingVersion {
     /// verification key hash generated from zksync-os v0.1.0, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
     const V4_VK_HASH: &'static str =
         "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5";
+    /// verification key hash generated from zksync-os v0.2.2, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
+    const V5_VK_HASH: &'static str =
+        "0x58215d25482d81e7cf127d7d435c81beaa9a29a44c3193aca05bd308dcba09c1";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
@@ -58,6 +63,7 @@ impl ProvingVersion {
             Self::V2 => Self::V2_VK_HASH,
             Self::V3 => Self::V3_VK_HASH,
             Self::V4 => Self::V4_VK_HASH,
+            Self::V5 => Self::V5_VK_HASH,
         }
     }
 
@@ -68,6 +74,7 @@ impl ProvingVersion {
             Self::V2_VK_HASH => Ok(Self::V2),
             Self::V3_VK_HASH => Ok(Self::V3),
             Self::V4_VK_HASH => Ok(Self::V4),
+            Self::V5_VK_HASH => Ok(Self::V5),
             val => Err(ProvingVersionError::UnsupportedVkHash(val.to_string())),
         }
     }
@@ -85,6 +92,7 @@ impl ProvingVersion {
         match forward_run_execution_version {
             ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => Self::V3,
             ExecutionVersion::V4 => Self::V4,
+            ExecutionVersion::V5 => Self::V5,
         }
     }
 }
@@ -109,7 +117,8 @@ mod tests {
         let test_vector = [
             ((0, 29, 0), ProvingVersion::V4),
             ((0, 29, 1), ProvingVersion::V4),
-            ((0, 30, 0), ProvingVersion::V4), // To be updated to V5 once 30 is ready.
+            ((0, 30, 0), ProvingVersion::V5),
+            ((0, 31, 0), ProvingVersion::V5),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -119,7 +128,7 @@ mod tests {
             assert_eq!(&proving_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 1), (0, 31, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 1), (0, 32, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

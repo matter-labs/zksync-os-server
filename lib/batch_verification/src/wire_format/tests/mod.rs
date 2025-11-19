@@ -3,15 +3,17 @@ use crate::{
     BatchVerificationResult,
 };
 use zksync_os_batch_types::BatchSignature;
-use zksync_os_contract_interface::models::CommitBatchInfo;
+use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme};
+use zksync_os_types::PubdataMode;
 
 fn create_sample_request() -> BatchVerificationRequest {
-    use alloy::primitives::{Address, B256};
+    use alloy::primitives::B256;
 
     BatchVerificationRequest {
         batch_number: 42,
         first_block_number: 100,
         last_block_number: 150,
+        pubdata_mode: PubdataMode::Blobs,
         request_id: 12345,
         commit_data: CommitBatchInfo {
             batch_number: 42,
@@ -20,10 +22,12 @@ fn create_sample_request() -> BatchVerificationRequest {
             priority_operations_hash: B256::ZERO,
             dependency_roots_rolling_hash: B256::ZERO,
             l2_to_l1_logs_root_hash: B256::ZERO,
-            l2_da_validator: Address::ZERO,
+            l2_da_commitment_scheme: DACommitmentScheme::BlobsZKsyncOS,
             da_commitment: B256::ZERO,
             first_block_timestamp: 1234567890,
+            first_block_number: Some(1),
             last_block_timestamp: 1234567900,
+            last_block_number: Some(2),
             chain_id: 270,
             operator_da_input: vec![],
         },

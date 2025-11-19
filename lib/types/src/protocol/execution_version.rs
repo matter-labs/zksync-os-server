@@ -12,6 +12,7 @@ pub enum ExecutionVersion {
     V2 = 2,
     V3 = 3,
     V4 = 4,
+    V5 = 5,
 }
 
 impl TryFrom<ProtocolSemanticVersion> for ExecutionVersion {
@@ -27,7 +28,8 @@ impl TryFrom<ProtocolSemanticVersion> for ExecutionVersion {
         // and route it to the current latest version.
         match version.minor {
             29 => Ok(ExecutionVersion::V4),
-            30 => Ok(ExecutionVersion::V4), // To be updated to V5 once 30 is ready.
+            30 => Ok(ExecutionVersion::V5),
+            31 => Ok(ExecutionVersion::V5),
             _ => Err(ExecutionVersionError::UnsupportedVersion(version)),
         }
     }
@@ -51,8 +53,10 @@ mod tests {
         let test_vector = [
             ((0, 29, 0), ExecutionVersion::V4),
             ((0, 29, 1), ExecutionVersion::V4),
-            ((0, 30, 0), ExecutionVersion::V4), // To be updated to V5 once 30 is ready.
-            ((0, 30, 1), ExecutionVersion::V4), // To be updated to V5 once 30 is ready.
+            ((0, 30, 0), ExecutionVersion::V5),
+            ((0, 30, 1), ExecutionVersion::V5),
+            ((0, 31, 0), ExecutionVersion::V5),
+            ((0, 31, 1), ExecutionVersion::V5),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -62,7 +66,7 @@ mod tests {
             assert_eq!(&exec_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 31, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 32, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

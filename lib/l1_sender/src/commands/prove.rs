@@ -128,20 +128,22 @@ impl ProofCommand {
         let stored_batch_infos: Vec<StoredBatchInfo> = self
             .batches
             .iter()
-            .map(|batch| batch.batch.batch_info.clone().into_stored())
+            .map(|batch| {
+                batch
+                    .batch
+                    .batch_info
+                    .clone()
+                    .into_stored(&batch.batch.protocol_version)
+            })
             .collect();
         // todo: awful and temporary
         let verifier_version = match self.proof.proving_execution_version() {
             // Use default verifier for fake proofs.
             None => 0,
-            // Use default verifier for v1.
-            Some(1) => 0,
-            // v2 and up are available under their respective execution version.
-            Some(2) => 2,
-            Some(3) => 3,
             Some(4) => 4,
+            Some(5) => 5,
             Some(execution_version) => panic!(
-                "unsupported execution version: {execution_version}; there's no verifier defined for it"
+                "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
             ),
         };
 

@@ -107,7 +107,7 @@ impl ProtocolUpgradeBuilder {
 
         let patch_only = self.protocol_version.minor == self.current_protocol_version.minor;
 
-        let mut force_deployments: Vec<UniversalForceDeploymentInfo> = Vec::new();
+        let mut force_deployments: Vec<UniversalContractUpgradeInfo> = Vec::new();
         let factory_deps = Vec::new();
 
         for (address, bytecode) in self.force_deployments.unwrap_or_default() {
@@ -120,13 +120,13 @@ impl ProtocolUpgradeBuilder {
             // Once BytecodesSupplier is ready for zksync-os, we need to change this logic to use observable bytecode len.
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
                 bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
-                bytecodeSize: U256::from(account_properties.full_bytecode_len()),
+                bytecodeSize: account_properties.full_bytecode_len(),
                 observableBytecodeHash: B256::from_slice(
                     account_properties.observable_bytecode_hash.as_u8_ref(),
                 ),
             };
-            force_deployments.push(UniversalForceDeploymentInfo {
-                isZKsyncOS: true,
+            force_deployments.push(UniversalContractUpgradeInfo {
+                upgradeType: ContractUpgradeType::ZKsyncOSUnsafeForceDeployment,
                 deployedBytecodeInfo: deployed_bytecode_info.abi_encode().into(),
                 newAddress: address,
             });

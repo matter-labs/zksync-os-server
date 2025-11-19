@@ -173,7 +173,7 @@ impl UpgradeTester {
         // Bytecode supplier is a bit special: right now it's not discoverable
         // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
         // to the value stored in `zkos-l1-state.json`.
-        let bytecode_supplier_address = "0x883498218f553d748e48b43595a7d29a82939f01".parse()?;
+        let bytecode_supplier_address = "0xef0b6c2c85f321d876a6fd87e138bae974196623".parse()?;
         anyhow::ensure!(
             !tester
                 .l1_provider

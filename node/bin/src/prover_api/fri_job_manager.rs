@@ -287,7 +287,10 @@ impl FriJobManager {
             proof_final_register_values,
         }) = fri_proof_verifier::verify_fri_proof(
             batch_metadata.previous_stored_batch_info.state_commitment,
-            batch_metadata.batch_info.clone().into_stored(),
+            batch_metadata
+                .batch_info
+                .clone()
+                .into_stored(&batch_metadata.protocol_version),
             program_proof,
         ) {
             tracing::warn!(

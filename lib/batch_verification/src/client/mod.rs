@@ -195,6 +195,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
             self.chain_id,
             self.diamond_proxy,
             request.batch_number,
+            request.pubdata_mode,
         )
         .commit_info;
 

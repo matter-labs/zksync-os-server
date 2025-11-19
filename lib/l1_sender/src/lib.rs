@@ -11,7 +11,7 @@ use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
-use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::network::{EthereumWallet, TransactionBuilder, TransactionBuilder4844};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
 use alloy::providers::ext::DebugApi;
@@ -123,7 +123,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let pending_txs: Vec<(TransactionReceiptFuture, Input)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
-                    let tx_request = tx_request_with_gas_fields(
+                    let mut tx_request = tx_request_with_gas_fields(
                         &provider,
                         operator_address,
                         config.max_fee_per_gas(),
@@ -132,6 +132,22 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     .await?
                     .with_to(to_address)
                     .with_call(&cmd.solidity_call());
+
+                    if let Some(blob_sidecar) = cmd.blob_sidecar() {
+                        let fee_per_blob_gas = provider.get_blob_base_fee().await?;
+                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas();
+
+                        if fee_per_blob_gas > max_fee_per_blob_gas {
+                            tracing::warn!(
+                                max_fee_per_blob_gas,
+                                fee_per_blob_gas,
+                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
+                            );
+                        }
+                        tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
+                        tx_request.set_blob_sidecar(blob_sidecar);
+                    };
+
                     // We don't wait for receipt here, instead we register an alloy watcher that
                     // polls for the receipt in the background. This future resolves when the watcher
                     // finds it.

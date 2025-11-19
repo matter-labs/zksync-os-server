@@ -16,6 +16,9 @@ pub struct L1SenderConfig<Input> {
     /// Max priority fee per gas we are willing to spend (in gwei).
     pub max_priority_fee_per_gas_gwei: u64,
 
+    /// Max fee per blob gas we are willing to spend (in gwei).
+    pub max_fee_per_blob_gas_gwei: u64,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     pub command_limit: usize,
 
@@ -34,5 +37,10 @@ impl<T> L1SenderConfig<T> {
     /// Max priority fee per gas we are willing to spend (in wei).
     pub fn max_priority_fee_per_gas(&self) -> u128 {
         self.max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128)
+    }
+
+    /// Max fee per blob gas we are willing to spend (in wei).
+    pub fn max_fee_per_blob_gas(&self) -> u128 {
+        self.max_fee_per_blob_gas_gwei as u128 * (GWEI_TO_WEI as u128)
     }
 }

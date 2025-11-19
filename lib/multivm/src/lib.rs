@@ -2,8 +2,9 @@
 //! When adding new ZKsync OS execution version, make sure it is handled in `run_block` and `simulate_tx` methods.
 //! Also, update the `LATEST_EXECUTION_VERSION` constant accordingly.
 
-use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV4;
+use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV5;
 use zk_os_forward_system_0_0_26::run::RunBlockForward as RunBlockForwardV3;
+use zk_os_forward_system_0_1_0::run::RunBlockForward as RunBlockForwardV4;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::AnyTracer;
 use zksync_os_interface::traits::{
@@ -65,6 +66,20 @@ pub fn run_block<
                 )
                 .map_err(|err| anyhow::anyhow!(err))
         }
+        ExecutionVersion::V5 => {
+            let object = RunBlockForwardV5 {};
+            object
+                .run_block(
+                    (),
+                    block_context,
+                    storage,
+                    preimage_source,
+                    tx_source,
+                    tx_result_callback,
+                    tracer,
+                )
+                .map_err(|err| anyhow::anyhow!(err))
+        }
     }
 }
 
@@ -95,6 +110,19 @@ pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyT
         }
         ExecutionVersion::V4 => {
             let object = RunBlockForwardV4 {};
+            object
+                .simulate_tx(
+                    (),
+                    transaction,
+                    block_context,
+                    storage,
+                    preimage_source,
+                    tracer,
+                )
+                .map_err(|err| anyhow::anyhow!(err))
+        }
+        ExecutionVersion::V5 => {
+            let object = RunBlockForwardV5 {};
             object
                 .simulate_tx(
                     (),

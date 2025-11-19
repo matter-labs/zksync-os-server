@@ -21,6 +21,7 @@ use zksync_os_observability::{
 };
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReplayRecord;
+use zksync_os_types::PubdataMode;
 
 pub mod batch_builder;
 mod seal_criteria;
@@ -55,6 +56,7 @@ pub struct Batcher {
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
     pub batch_storage: ProofStorage,
+    pub pubdata_mode: PubdataMode,
 }
 
 #[async_trait]
@@ -96,7 +98,11 @@ impl PipelineComponent for Batcher {
             };
 
             // Update prev_batch_info for the next iteration
-            prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored();
+            prev_batch_info = batch_envelope
+                .batch
+                .batch_info
+                .clone()
+                .into_stored(&batch_envelope.batch.protocol_version);
 
             BATCHER_METRICS
                 .transactions_per_batch
@@ -227,6 +233,9 @@ impl Batcher {
             .blocks_per_batch
             .observe(blocks.len() as u64);
         accumulator.report_accumulated_resources_to_metrics();
+
+        let protocol_version = &blocks.first().as_ref().unwrap().1.protocol_version;
+
         /* ---------- seal the batch ---------- */
         let batch_envelope = batch_builder::seal_batch(
             &blocks,
@@ -234,6 +243,9 @@ impl Batcher {
             batch_number,
             self.chain_id,
             self.chain_address,
+            // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
+            self.pubdata_mode
+                .adapt_for_protocol_version(protocol_version),
         )?;
         Ok(batch_envelope)
     }
@@ -307,11 +319,20 @@ impl Batcher {
             batch_number,
             self.chain_id,
             self.chain_address,
+            existing_batch.batch.pubdata_mode,
         )?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
-        let rebuilt_stored_batch_info = rebuilt_batch.batch.batch_info.clone().into_stored();
-        let stored_stored_batch_info = existing_batch.batch.batch_info.clone().into_stored();
+        let rebuilt_stored_batch_info = rebuilt_batch
+            .batch
+            .batch_info
+            .clone()
+            .into_stored(&rebuilt_batch.batch.protocol_version);
+        let stored_stored_batch_info = existing_batch
+            .batch
+            .batch_info
+            .clone()
+            .into_stored(&existing_batch.batch.protocol_version);
 
         anyhow::ensure!(
             rebuilt_stored_batch_info.hash() == stored_stored_batch_info.hash(),

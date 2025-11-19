@@ -170,6 +170,15 @@ alloy::sol! {
         function getProtocolVersion() external view returns (uint256);
     }
 
+    // Taken from `common/Config.sol`
+    enum L2DACommitmentScheme {
+        NONE,
+        EMPTY_NO_DA,
+        PUBDATA_KECCAK256,
+        BLOBS_AND_PUBDATA_KECCAK256,
+        BLOBS_ZKSYNC_OS
+    }
+
     // Taken from `IExecutor.sol`
     interface IExecutor {
         struct StoredBatchInfo {
@@ -191,10 +200,12 @@ alloy::sol! {
             bytes32 priorityOperationsHash;
             bytes32 dependencyRootsRollingHash;
             bytes32 l2LogsTreeRoot;
-            address l2DaValidator;
+            L2DACommitmentScheme daCommitmentScheme;
             bytes32 daCommitment;
             uint64 firstBlockTimestamp;
+            uint64 firstBlockNumber;
             uint64 lastBlockTimestamp;
+            uint64 lastBlockNumber;
             uint256 chainId;
             bytes operatorDAInput;
         }
@@ -230,6 +241,25 @@ alloy::sol! {
            uint256 _processTo,
            bytes calldata _executeData
        );
+    }
+
+    // taken from v29 version of `IExecutor.sol`
+    // We need this to make the server work with the v29 version of contracts during the upgrade, and it can be removed after
+    interface IExecutorV29 {
+        struct CommitBatchInfoZKsyncOS {
+            uint64 batchNumber;
+            bytes32 newStateCommitment;
+            uint256 numberOfLayer1Txs;
+            bytes32 priorityOperationsHash;
+            bytes32 dependencyRootsRollingHash;
+            bytes32 l2LogsTreeRoot;
+            address l2DaValidator;
+            bytes32 daCommitment;
+            uint64 firstBlockTimestamp;
+            uint64 lastBlockTimestamp;
+            uint256 chainId;
+            bytes operatorDAInput;
+        }
     }
 
     // `IL1GenesisUpgrade.sol`

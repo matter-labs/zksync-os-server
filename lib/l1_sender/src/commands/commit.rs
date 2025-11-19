@@ -1,24 +1,20 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
+use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::U256;
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use zksync_os_contract_interface::IExecutor;
-use zksync_os_contract_interface::models::BatchDaInputMode;
+use zksync_os_contract_interface::{IExecutor, IExecutorV29};
 
 #[derive(Debug)]
 pub struct CommitCommand {
     input: SignedBatchEnvelope<FriProof>,
-    da_input_mode: BatchDaInputMode,
 }
 
 impl CommitCommand {
-    pub fn new(input: SignedBatchEnvelope<FriProof>, da_input_mode: BatchDaInputMode) -> Self {
-        Self {
-            input,
-            da_input_mode,
-        }
+    pub fn new(input: SignedBatchEnvelope<FriProof>) -> Self {
+        Self { input }
     }
 
     pub(crate) fn input(&self) -> &SignedBatchEnvelope<FriProof> {
@@ -39,6 +35,10 @@ impl SendToL1 for CommitCommand {
             U256::from(self.input.batch_number()),
             self.to_calldata_suffix().into(),
         ))
+    }
+
+    fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
+        self.input.batch.batch_info.blob_sidecar.clone()
     }
 }
 
@@ -71,31 +71,49 @@ impl CommitCommand {
     /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
     /// function makes sure last committed batch and new batch are encoded correctly.
     fn to_calldata_suffix(&self) -> Vec<u8> {
-        /// Current commitment encoding version for ZKsync OS.
-        const SUPPORTED_ENCODING_VERSION: u8 = 2;
-
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
-        let mut batch_info = self.input.batch.batch_info.clone();
-        // `BatchInfo` has full da input - even for validium chains we only drop `operator_da_input`
-        // field when we are actually committing the batch this way, we don't need to consider the DA
-        // mode in advance - it's only known to the l1-sender.
-        batch_info.commit_info.operator_da_input = match self.da_input_mode {
-            BatchDaInputMode::Rollup => batch_info.commit_info.operator_da_input,
-            BatchDaInputMode::Validium => U256::ZERO.to_be_bytes_vec(),
-        };
-        let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(batch_info.commit_info);
-        tracing::debug!(
-            last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
-            last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
-            new_batch_number = ?commit_batch_info.batchNumber,
-            "preparing commit calldata"
-        );
-        let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
 
-        // Prefixed by current encoding version as expected by protocol
-        [[SUPPORTED_ENCODING_VERSION].to_vec(), encoded_data]
-            .concat()
-            .to_vec()
+        match self.input.batch.protocol_version.minor {
+            29 => {
+                const V29_ENCODING_VERSION: u8 = 2;
+
+                let commit_batch_info = IExecutorV29::CommitBatchInfoZKsyncOS::from(
+                    self.input.batch.batch_info.commit_info.clone(),
+                );
+                tracing::debug!(
+                    last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
+                    last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
+                    new_batch_number = ?commit_batch_info.batchNumber,
+                    "preparing commit calldata"
+                );
+                let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+                // Prefixed by current encoding version as expected by protocol
+                [[V29_ENCODING_VERSION].to_vec(), encoded_data].concat()
+            }
+            // 31 needed for upgrade integration test
+            30 | 31 => {
+                const V30_ENCODING_VERSION: u8 = 3;
+
+                let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(
+                    self.input.batch.batch_info.commit_info.clone(),
+                );
+                tracing::debug!(
+                    last_batch_hash = ?self.input.batch.previous_stored_batch_info.hash(),
+                    last_batch_number = ?self.input.batch.previous_stored_batch_info.batch_number,
+                    new_batch_number = ?commit_batch_info.batchNumber,
+                    "preparing commit calldata"
+                );
+                let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+                // Prefixed by current encoding version as expected by protocol
+                [[V30_ENCODING_VERSION].to_vec(), encoded_data].concat()
+            }
+            _ => panic!(
+                "Unsupported protocol version: {}",
+                self.input.batch.protocol_version
+            ),
+        }
     }
 }

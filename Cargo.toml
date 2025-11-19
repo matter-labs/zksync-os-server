@@ -75,18 +75,26 @@ zk_os_forward_system_0_0_26 = { package = "forward_system", git = "https://githu
     "evm-compatibility",
     "no_print",
 ] }
-# Dependency on `zk_ee_0_0_26` and `zk_os_basic_system_0_0_26` can be removed after server doesn't have to prove blocks <= V3.
-# After they're removed you'll see where they were used and should be able to clean it up there.
-zk_ee_0_0_26 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.26-rc1" }
-zk_os_basic_system_0_0_26 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.26-rc1" }
+zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0", features = [
+    "production",
+    "no_print",
+    # We had an issue in this version - it's compilable only with the testing feature.
+    # It was used with this feature, so it should stay here forever.
+    "testing"
+], default-features = false }
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0", features = [
+# Dependency on `zk_ee_0_1_0` and `zk_os_basic_system_0_1_0` can be removed after server doesn't have to prove and submit v29 batches.
+# After they're removed you'll see where they were used and should be able to clean it up there.
+zk_ee_0_1_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0" }
+zk_os_basic_system_0_1_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0" }
+
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.2", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0" }
+zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.2" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.2" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.2" }
 
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
@@ -94,7 +102,7 @@ zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/z
 execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
 full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
 
-zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.5.1" }
+zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.6.0" }
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"
