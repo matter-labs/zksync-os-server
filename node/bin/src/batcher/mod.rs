@@ -5,7 +5,6 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::pin::Pin;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::config::SequencerConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
