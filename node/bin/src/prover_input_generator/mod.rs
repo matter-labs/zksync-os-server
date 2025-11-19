@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -55,9 +56,20 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
         let app_bin_base_path = self.app_bin_base_path;
         let maximum_in_flight_blocks = self.maximum_in_flight_blocks;
 
-        ReceiverStream::new(input.into_inner())
-            // generate prover input. Use up to `maximum_in_flight_blocks` threads
-            .map(|(block_output, replay_record, tree)| {
+        let mut input = input.into_inner();
+        // We want to process the first item separately as it involves some heavy trusted-setup-related precomputation.
+        let Some(first_item) = input.recv().await else {
+            return Ok(());
+        };
+        // We create two streams: one for the first item, and one for the rest of the input.
+        let streams: Vec<BoxStream<Self::Input>> = vec![
+            futures::stream::once(async { first_item }).boxed(),
+            ReceiverStream::new(input).boxed(),
+        ];
+        // Streams are processed sequentially but in the same way.
+        for s in streams {
+            // Generates prover input. Uses up to `maximum_in_flight_blocks` threads
+            s.map(|(block_output, replay_record, tree)| {
                 let block_number = replay_record.block_context.block_number;
 
                 tracing::debug!(
@@ -102,7 +114,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 latency_tracker.enter_state(GenericComponentState::ProcessingOrWaitingRecv);
                 Ok(())
             })
-            .await
+            .await?;
+        }
+        Ok(())
     }
 }
 
