@@ -1,8 +1,7 @@
-use crate::watcher::{L1Watcher, L1WatcherError, ProcessL1Event};
-use crate::{L1WatcherConfig, util};
-use alloy::primitives::BlockNumber;
+use crate::watcher::{L1Watcher, L1WatcherError};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
-use std::convert::Infallible;
 use std::sync::Arc;
 use zksync_os_contract_interface::IExecutor::BlockCommit;
 use zksync_os_contract_interface::ZkChain;
@@ -12,18 +11,19 @@ use zksync_os_storage_api::{ReadBatch, WriteFinality};
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
 pub struct L1CommitWatcher<Finality, BatchStorage> {
+    contract_address: Address,
     next_batch_number: u64,
     finality: Finality,
     batch_storage: BatchStorage,
 }
 
 impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality, BatchStorage> {
-    pub async fn new(
+    pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         finality: Finality,
         batch_storage: BatchStorage,
-    ) -> anyhow::Result<L1Watcher<Self>> {
+    ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
         tracing::info!(
@@ -51,19 +51,19 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
+            contract_address: *zk_chain.address(),
             next_batch_number: last_committed_batch + 1,
             finality,
             batch_storage,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
-            *zk_chain.address(),
             // We start from last L1 block as it may contain more committed batches apart from the last
             // one.
             last_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
-            this,
+            this.into(),
         );
 
         Ok(l1_watcher)
@@ -81,6 +81,7 @@ async fn find_l1_commit_block_by_batch_number(
     .await
 }
 
+#[async_trait::async_trait]
 impl<Finality: WriteFinality, BatchStorage: ReadBatch> ProcessL1Event
     for L1CommitWatcher<Finality, BatchStorage>
 {
@@ -88,12 +89,12 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> ProcessL1Event
 
     type SolEvent = BlockCommit;
     type WatchedEvent = BlockCommit;
-    type Error = Infallible;
 
-    async fn process_event(
-        &mut self,
-        batch_commit: BlockCommit,
-    ) -> Result<(), L1WatcherError<Self::Error>> {
+    fn contract_address(&self) -> Address {
+        self.contract_address
+    }
+
+    async fn process_event(&mut self, batch_commit: BlockCommit) -> Result<(), L1WatcherError> {
         let batch_number = batch_commit.batchNumber.to::<u64>();
         let batch_hash = batch_commit.batchHash;
         let batch_commitment = batch_commit.commitment;
@@ -114,7 +115,8 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> ProcessL1Event
             let (_, last_committed_block) = self
                 .batch_storage
                 .get_batch_range_by_number(batch_number)
-                .await?
+                .await
+                .map_err(L1WatcherError::Batch)?
                 .expect("committed batch is missing");
             self.finality.update_finality_status(|finality| {
                 assert!(

@@ -19,6 +19,7 @@ zksync_os_types.workspace = true
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true
 
+async-trait.workspace = true
 alloy = { workspace = true, default-features = false, features = ["reqwest", "rpc-types", "providers"] }
 anyhow.workspace = true
 tokio.workspace = true

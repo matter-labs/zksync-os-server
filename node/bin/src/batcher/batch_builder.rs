@@ -55,7 +55,7 @@ pub(crate) fn seal_batch(
     let batch_prover_input: ProverInput =
         match ProvingVersion::from_forward_run_execution_version(forward_run_execution_version) {
             ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
-                unreachable!("proving_run_execution_version does not return 1, 2 or 3")
+                panic!("sealing batch with prover version v1-v3 is not supported");
             }
             ProvingVersion::V4 => {
                 std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
