@@ -120,7 +120,7 @@ impl ProtocolUpgradeBuilder {
             // Once BytecodesSupplier is ready for zksync-os, we need to change this logic to use observable bytecode len.
             let deployed_bytecode_info = super::interfaces::ForceDeploymentBytecodeInfo {
                 bytecodeHash: B256::from_slice(account_properties.bytecode_hash.as_u8_ref()),
-                bytecodeSize: account_properties.full_bytecode_len().into(),
+                bytecodeSize: account_properties.full_bytecode_len(),
                 observableBytecodeHash: B256::from_slice(
                     account_properties.observable_bytecode_hash.as_u8_ref(),
                 ),
