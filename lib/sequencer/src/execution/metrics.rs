@@ -73,7 +73,7 @@ impl StateAccessLabel for SequencerState {
 pub struct ExecutionMetrics {
     pub block_number: Gauge<u64>,
 
-    #[metrics(unit = Unit::Seconds, buckets = Buckets::linear(60.0..=600.0, 60.0))]
+    #[metrics(unit = Unit::Seconds, buckets = Buckets::exponential(0.1..=600.0, 2.0))]
     pub time_since_last_block: Histogram<Duration>,
 
     #[metrics(labels = ["seal_reason"])]

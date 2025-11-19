@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::config::SequencerConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::block_executor::execute_block;
@@ -67,7 +69,9 @@ where
         // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
         let mut produced_blocks_count = 0u64;
 
+        // Only used for metrics/logs
         let mut last_processed_block_at: Option<Instant> = None;
+        let mut time_since_last_block: Option<Duration> = None;
 
         loop {
             latency_tracker.enter_state(SequencerState::WaitingForCommand);
@@ -127,10 +131,12 @@ where
                     })
                     .context("execute_block")?;
 
-            if let Some(last_processed_block_at) = last_processed_block_at {
+            time_since_last_block = last_processed_block_at
+                .map(|last_processed_block_at| last_processed_block_at.elapsed());
+            if let Some(time_since_last_block) = time_since_last_block {
                 EXECUTION_METRICS
                     .time_since_last_block
-                    .observe(last_processed_block_at.elapsed());
+                    .observe(time_since_last_block);
             }
             last_processed_block_at = Some(Instant::now());
 
@@ -176,6 +182,7 @@ where
 
             tracing::debug!(
                 block_number,
+                time_since_last_block = ?time_since_last_block,
                 "Block processed in sequencer! Sending downstream..."
             );
             EXECUTION_METRICS.block_number.set(block_number);

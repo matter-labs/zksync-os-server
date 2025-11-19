@@ -75,7 +75,9 @@ impl PipelineComponent for Batcher {
 
         let mut prev_batch_info = self.startup_config.prev_batch_info.clone();
 
+        // Only used for metrics/logs
         let mut last_created_batch_at: Option<Instant> = None;
+        let mut time_since_last_batch: Option<Duration> = None;
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -97,10 +99,12 @@ impl PipelineComponent for Batcher {
                     .await?
             };
 
-            if let Some(last_created_batch_at) = last_created_batch_at {
+            time_since_last_batch =
+                last_created_batch_at.map(|last_created_batch_at| last_created_batch_at.elapsed());
+            if let Some(time_since_last_batch) = time_since_last_batch {
                 BATCHER_METRICS
                     .time_since_last_batch
-                    .observe(last_created_batch_at.elapsed());
+                    .observe(time_since_last_batch);
             }
 
             last_created_batch_at = Some(Instant::now());
@@ -117,6 +121,7 @@ impl PipelineComponent for Batcher {
                 batch_metadata = ?batch_envelope.batch,
                 block_count = batch_envelope.batch.last_block_number - batch_envelope.batch.first_block_number + 1,
                 new_state_commitment = ?batch_envelope.batch.batch_info.new_state_commitment,
+                time_since_last_batch = ?time_since_last_batch,
                 "Batch {}", if should_recreate { "recreated" } else { "created" }
             );
 
