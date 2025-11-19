@@ -54,7 +54,7 @@ impl ProvingVersion {
         "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5";
     // TODO: update
     const V5_VK_HASH: &'static str =
-        "0x0000000000000000000000000000000000000000000000000000000000000000";
+        "0x58215d25482d81e7cf127d7d435c81beaa9a29a44c3193aca05bd308dcba09c1";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {

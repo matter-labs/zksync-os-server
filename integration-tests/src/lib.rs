@@ -206,13 +206,13 @@ impl Tester {
         if enable_prover {
             let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
-                zksync_os_multivm::apps::v4::multiblock_batch_path(&rocks_db_path.join("app_bins"));
+                zksync_os_multivm::apps::v5::multiblock_batch_path(&rocks_db_path.join("app_bins"));
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
             tokio::task::spawn(async move {
                 zksync_os_prover_service::run(zksync_os_prover_service::Args {
-                    base_url,
+                    sequencer_urls: vec![base_url.parse().unwrap()],
                     app_bin_path: Some(app_bin_path),
                     circuit_limit: 10000,
                     output_dir: output_dir.to_str().unwrap().to_string(),
