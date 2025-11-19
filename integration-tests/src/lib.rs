@@ -212,7 +212,7 @@ impl Tester {
             std::fs::create_dir_all(&output_dir).unwrap();
             tokio::task::spawn(async move {
                 zksync_os_prover_service::run(zksync_os_prover_service::Args {
-                    base_url,
+                    sequencer_urls: vec![base_url.parse().unwrap()],
                     app_bin_path: Some(app_bin_path),
                     circuit_limit: 10000,
                     output_dir: output_dir.to_str().unwrap().to_string(),
