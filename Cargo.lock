@@ -7189,7 +7189,7 @@ dependencies = [
 [[package]]
 name = "protocol_version"
 version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.5.1#cd9af6e76b9cddb56d6545caa76354f0531a13b4"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#e22dfaadf626a6a46ae92ed6123fb8e824b3dce0"
 
 [[package]]
 name = "prover"
@@ -11801,7 +11801,7 @@ checksum = "12685073683de64e01a87b0f0a8c1e11df2ea3d6dc3846f1320153ef2fe499ed"
 [[package]]
 name = "zksync_os_fri_prover"
 version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.5.1#cd9af6e76b9cddb56d6545caa76354f0531a13b4"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#e22dfaadf626a6a46ae92ed6123fb8e824b3dce0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -11816,6 +11816,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
+ "url",
  "vise",
  "vise-exporter",
  "zksync_sequencer_proof_client",
@@ -12124,7 +12125,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_prover_service"
 version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.5.1#cd9af6e76b9cddb56d6545caa76354f0531a13b4"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#e22dfaadf626a6a46ae92ed6123fb8e824b3dce0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -12133,11 +12134,13 @@ dependencies = [
  "cli",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.1)",
  "protocol_version",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
+ "url",
  "zkos-wrapper",
  "zksync_os_fri_prover",
  "zksync_os_snark_prover",
@@ -12375,7 +12378,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_snark_prover"
 version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.5.1#cd9af6e76b9cddb56d6545caa76354f0531a13b4"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#e22dfaadf626a6a46ae92ed6123fb8e824b3dce0"
 dependencies = [
  "anyhow",
  "clap",
@@ -12389,6 +12392,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
+ "url",
  "vise",
  "vise-exporter",
  "zkos-wrapper",
@@ -12533,7 +12537,7 @@ dependencies = [
 [[package]]
 name = "zksync_sequencer_proof_client"
 version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.5.1#cd9af6e76b9cddb56d6545caa76354f0531a13b4"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#e22dfaadf626a6a46ae92ed6123fb8e824b3dce0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -12548,6 +12552,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
+ "url",
  "vise",
  "zkos-wrapper",
  "zksync_bellman",
