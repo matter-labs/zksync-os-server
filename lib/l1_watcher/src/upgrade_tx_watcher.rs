@@ -320,9 +320,10 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             "sending upgrade transaction to the mempool"
         );
 
-        self.output.send(upgrade_tx.clone()).await.map_err(|e| {
-            L1WatcherError::Batch(anyhow::anyhow!("failed to send upgrade tx: {}", e))
-        })?;
+        self.output
+            .send(upgrade_tx.clone())
+            .await
+            .map_err(|_| L1WatcherError::OutputClosed)?;
 
         self.current_protocol_version = upgrade_tx.protocol_version;
 

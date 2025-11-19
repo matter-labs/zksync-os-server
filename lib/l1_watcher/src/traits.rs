@@ -69,7 +69,7 @@ where
     }
 }
 
-/// A typesafe imlpementation of an L1 event processor.
+/// A typesafe implementation of an L1 event processor.
 /// Defines a single contract and single event type to process,
 /// and expects the event to be already decoded.
 #[async_trait::async_trait]
@@ -102,6 +102,6 @@ where
     E: Into<anyhow::Error>,
 {
     fn erased_try_from(value: T) -> Result<Self, anyhow::Error> {
-        U::try_from(value).map_err(|e| anyhow::anyhow!(e))
+        U::try_from(value).map_err(Into::into)
     }
 }
