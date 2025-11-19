@@ -1,0 +1,52 @@
+name: Check breaking-change PR metadata
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-breaking-metadata:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate breaking-change metadata
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        id: breaking_pr_metadata
+        with:
+          script: |
+            const validator = require('./.github/scripts/check-breaking-pr.js');
+            validator({ github, context, core });
+
+      - uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2
+        # When the previous steps fails, the workflow would stop. By adding this
+        # condition you can continue the execution with the populated error message.
+        if: always() && (steps.breaking_pr_metadata.outputs.error_message != null)
+        with:
+          header: pr-breaking-metadata-error
+          message: |
+            Hey there! 👋🏼
+            
+            It looks like your PR is marked as breaking per [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/),
+            but doesn't include all required metadata in the PR description.
+            
+            See the PR template to make sure that your description includes all required information.
+
+            Details:
+            
+            ```
+            ${{ steps.breaking_pr_metadata.outputs.error_message }}
+            ```
+
+      # Delete a previous comment when the issue has been resolved
+      - if: ${{ steps.breaking_pr_metadata.outputs.error_message == null }}
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2
+        with:   
+          header: pr-breaking-metadata-error
+          delete: true
