@@ -1,31 +1,31 @@
+use crate::ProcessRawEvents;
 use crate::metrics::METRICS;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::Filter;
-use alloy::sol_types::SolEvent;
+use alloy::rpc::types::{Filter, Log};
 use std::time::Duration;
 
-pub struct L1Watcher<Processor> {
+/// An abstract watcher for L1 events.
+/// Handles polling L1 for new blocks and extracting logs,
+/// while delegating the actual event processing to a user-provided processor.
+pub struct L1Watcher {
     provider: DynProvider,
-    contract_address: Address,
     next_l1_block: BlockNumber,
     max_blocks_to_process: u64,
     poll_interval: Duration,
-    processor: Processor,
+    processor: Box<dyn ProcessRawEvents>,
 }
 
-impl<Processor: ProcessL1Event> L1Watcher<Processor> {
+impl L1Watcher {
     pub(crate) fn new(
         provider: DynProvider,
-        contract_address: Address,
         next_l1_block: BlockNumber,
         max_blocks_to_process: u64,
         poll_interval: Duration,
-        processor: Processor,
+        processor: Box<dyn ProcessRawEvents>,
     ) -> Self {
         Self {
             provider,
-            contract_address,
             next_l1_block,
             max_blocks_to_process,
             poll_interval,
@@ -34,8 +34,8 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
     }
 }
 
-impl<Processor: ProcessL1Event> L1Watcher<Processor> {
-    pub async fn run(mut self) -> Result<(), L1WatcherError<Processor::Error>> {
+impl L1Watcher {
+    pub async fn run(mut self) -> Result<(), L1WatcherError> {
         let mut timer = tokio::time::interval(self.poll_interval);
         loop {
             timer.tick().await;
@@ -43,7 +43,7 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
         }
     }
 
-    async fn poll(&mut self) -> Result<(), L1WatcherError<Processor::Error>> {
+    async fn poll(&mut self) -> Result<(), L1WatcherError> {
         let latest_block = self.provider.get_block_number().await?;
 
         while self.next_l1_block <= latest_block {
@@ -52,13 +52,13 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
             let to_block = latest_block.min(from_block + self.max_blocks_to_process - 1);
 
             let events = self
-                .extract_events_from_l1_blocks(from_block, to_block)
+                .extract_logs_from_l1_blocks(from_block, to_block)
                 .await?;
-            METRICS.events_loaded[&Processor::NAME].inc_by(events.len() as u64);
-            METRICS.most_recently_scanned_l1_block[&Processor::NAME].set(to_block);
+            METRICS.events_loaded[&self.processor.name()].inc_by(events.len() as u64);
+            METRICS.most_recently_scanned_l1_block[&self.processor.name()].set(to_block);
 
             for event in events {
-                self.processor.process_event(event).await?;
+                self.processor.process_raw_event(event).await?;
             }
 
             self.next_l1_block = to_block + 1;
@@ -70,56 +70,35 @@ impl<Processor: ProcessL1Event> L1Watcher<Processor> {
     /// Processes a range of L1 blocks for new events.
     ///
     /// Returns a list of new events as extracted from the L1 blocks.
-    async fn extract_events_from_l1_blocks(
+    async fn extract_logs_from_l1_blocks(
         &self,
         from: BlockNumber,
         to: BlockNumber,
-    ) -> Result<Vec<Processor::WatchedEvent>, L1WatcherError<Processor::Error>> {
+    ) -> Result<Vec<Log>, L1WatcherError> {
         let filter = Filter::new()
             .from_block(from)
             .to_block(to)
-            .event_signature(Processor::SolEvent::SIGNATURE_HASH)
-            .address(self.contract_address);
+            .event_signature(self.processor.event_signatures())
+            .address(self.processor.contract_addresses());
         let new_logs = self.provider.get_logs(&filter).await?;
-        let new_events = new_logs
-            .into_iter()
-            .map(|log| {
-                let sol_event = Processor::SolEvent::decode_log(&log.inner)?.data;
-                Processor::WatchedEvent::try_from(sol_event).map_err(L1WatcherError::Convert)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
 
-        if new_events.is_empty() {
+        if new_logs.is_empty() {
             tracing::trace!(l1_block_from = from, l1_block_to = to, "no new events");
         } else {
             tracing::info!(
-                event_count = new_events.len(),
+                event_count = new_logs.len(),
                 l1_block_from = from,
                 l1_block_to = to,
                 "received new events"
             );
         }
 
-        Ok(new_events)
+        Ok(new_logs)
     }
 }
 
-#[allow(async_fn_in_trait)]
-pub trait ProcessL1Event {
-    const NAME: &'static str;
-
-    type SolEvent: SolEvent;
-    type WatchedEvent: TryFrom<Self::SolEvent, Error = Self::Error>;
-    type Error: std::error::Error;
-
-    async fn process_event(
-        &mut self,
-        event: Self::WatchedEvent,
-    ) -> Result<(), L1WatcherError<Self::Error>>;
-}
-
 #[derive(Debug, thiserror::Error)]
-pub enum L1WatcherError<E> {
+pub enum L1WatcherError {
     #[error("L1 does not have any blocks")]
     NoL1Blocks,
     #[error(transparent)]
@@ -127,9 +106,9 @@ pub enum L1WatcherError<E> {
     #[error(transparent)]
     Transport(#[from] alloy::transports::TransportError),
     #[error(transparent)]
-    Batch(#[from] anyhow::Error),
+    Batch(anyhow::Error),
     #[error(transparent)]
-    Convert(E),
+    Convert(anyhow::Error),
     #[error("output has been closed")]
     OutputClosed,
 }

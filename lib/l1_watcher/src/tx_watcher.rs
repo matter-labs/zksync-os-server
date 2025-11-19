@@ -1,28 +1,29 @@
-use crate::watcher::{L1Watcher, L1WatcherError, ProcessL1Event};
-use crate::{L1WatcherConfig, util};
-use alloy::primitives::BlockNumber;
+use crate::watcher::{L1Watcher, L1WatcherError};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
+use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_types::{L1EnvelopeError, L1PriorityEnvelope};
+use zksync_os_types::L1PriorityEnvelope;
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
 pub struct L1TxWatcher {
+    contract_address: Address,
     next_l1_priority_id: u64,
     output: mpsc::Sender<L1PriorityEnvelope>,
 }
 
 impl L1TxWatcher {
-    pub async fn new(
+    pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         output: mpsc::Sender<L1PriorityEnvelope>,
         next_l1_priority_id: u64,
-    ) -> anyhow::Result<L1Watcher<Self>> {
+    ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -49,16 +50,16 @@ impl L1TxWatcher {
         tracing::info!(next_l1_block, "resolved on L1");
 
         let this = Self {
+            contract_address: *zk_chain.address(),
             next_l1_priority_id,
             output,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
-            *zk_chain.address(),
             next_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
-            this,
+            this.into(),
         );
 
         Ok(l1_watcher)
@@ -76,17 +77,18 @@ async fn find_l1_block_by_priority_id(
     .await
 }
 
+#[async_trait::async_trait]
 impl ProcessL1Event for L1TxWatcher {
     const NAME: &'static str = "priority_tx";
 
     type SolEvent = NewPriorityRequest;
     type WatchedEvent = L1PriorityEnvelope;
-    type Error = L1EnvelopeError;
 
-    async fn process_event(
-        &mut self,
-        tx: L1PriorityEnvelope,
-    ) -> Result<(), L1WatcherError<Self::Error>> {
+    fn contract_address(&self) -> Address {
+        self.contract_address
+    }
+
+    async fn process_event(&mut self, tx: L1PriorityEnvelope) -> Result<(), L1WatcherError> {
         if tx.priority_id() < self.next_l1_priority_id {
             tracing::debug!(
                 priority_id = tx.priority_id(),

@@ -322,7 +322,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!("Initializing L1 Watchers");
     let mut tasks: JoinSet<()> = JoinSet::new();
     tasks.spawn(
-        L1CommitWatcher::new(
+        L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
             finality_storage.clone(),
@@ -335,7 +335,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     tasks.spawn(
-        L1ExecuteWatcher::new(
+        L1ExecuteWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
             finality_storage.clone(),
@@ -358,7 +358,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map_or(0, |record| record.starting_l1_priority_id);
 
     tasks.spawn(
-        L1TxWatcher::new(
+        L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
             l1_transactions_sender,
@@ -485,7 +485,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // ========== Start L1 Upgrade Watcher ===========
 
     tasks.spawn(
-        L1UpgradeTxWatcher::new(
+        L1UpgradeTxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
             config

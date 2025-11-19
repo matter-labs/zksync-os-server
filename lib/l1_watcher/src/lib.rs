@@ -18,4 +18,7 @@ pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 pub mod util;
 mod watcher;
 
+mod traits;
+pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
+
 mod factory_deps;
