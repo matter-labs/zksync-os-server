@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::factory_deps::load_factory_deps;
-use crate::watcher::{L1Watcher, L1WatcherError, ProcessL1Event};
-use crate::{L1WatcherConfig, util};
+use crate::watcher::{L1Watcher, L1WatcherError};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
 use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
@@ -28,6 +28,8 @@ const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 
 pub struct L1UpgradeTxWatcher {
+    admin_contract: Address,
+
     provider: DynProvider,
     /// Address of the bytecode supplier contract (used to detect published bytecode preimages)
     #[allow(dead_code)] // TODO: enable once bytecode supplier integration is ready
@@ -42,13 +44,13 @@ pub struct L1UpgradeTxWatcher {
 }
 
 impl L1UpgradeTxWatcher {
-    pub async fn new(
+    pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         output: mpsc::Sender<UpgradeTransaction>,
-    ) -> anyhow::Result<L1Watcher<Self>> {
+    ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
@@ -91,6 +93,7 @@ impl L1UpgradeTxWatcher {
         tracing::info!(last_l1_block, "checking block starting from");
 
         let this = Self {
+            admin_contract: admin,
             provider: zk_chain.provider().clone(),
             bytecode_supplier_address,
             ctm,
@@ -100,11 +103,10 @@ impl L1UpgradeTxWatcher {
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
-            admin,
             last_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
-            this,
+            this.into(),
         );
 
         Ok(l1_watcher)
@@ -260,17 +262,18 @@ impl L1UpgradeTxWatcher {
     }
 }
 
+#[async_trait::async_trait]
 impl ProcessL1Event for L1UpgradeTxWatcher {
     const NAME: &'static str = "upgrade_txs";
 
     type SolEvent = UpdateUpgradeTimestamp;
     type WatchedEvent = L1UpgradeRequest;
-    type Error = UpgradeTxWatcherError;
 
-    async fn process_event(
-        &mut self,
-        request: L1UpgradeRequest,
-    ) -> Result<(), L1WatcherError<Self::Error>> {
+    fn contract_address(&self) -> Address {
+        self.admin_contract
+    }
+
+    async fn process_event(&mut self, request: L1UpgradeRequest) -> Result<(), L1WatcherError> {
         if request.protocol_version <= self.current_protocol_version {
             tracing::info!(
                 ?request.protocol_version,
@@ -299,7 +302,7 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         let upgrade_tx = self
             .fetch_upgrade_tx(&request)
             .await
-            .map_err(L1WatcherError::from)?;
+            .map_err(L1WatcherError::Batch)?;
 
         tracing::info!(
             protocol_version = ?upgrade_tx.protocol_version,
@@ -317,9 +320,10 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             "sending upgrade transaction to the mempool"
         );
 
-        self.output.send(upgrade_tx.clone()).await.map_err(|e| {
-            L1WatcherError::Batch(anyhow::anyhow!("failed to send upgrade tx: {}", e))
-        })?;
+        self.output
+            .send(upgrade_tx.clone())
+            .await
+            .map_err(|_| L1WatcherError::OutputClosed)?;
 
         self.current_protocol_version = upgrade_tx.protocol_version;
 
