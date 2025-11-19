@@ -118,8 +118,14 @@ alloy::sol! {
         function upgrade(ProposedUpgrade calldata _proposedUpgrade) public virtual returns (bytes32 txHash);
     }
 
-    struct UniversalForceDeploymentInfo {
-        bool isZKsyncOS;
+    enum ContractUpgradeType {
+        EraForceDeployment,
+        ZKsyncOSSystemProxyUpgrade,
+        ZKsyncOSUnsafeForceDeployment
+    }
+
+    struct UniversalContractUpgradeInfo {
+        ContractUpgradeType upgradeType;
         bytes deployedBytecodeInfo;
         address newAddress;
     }
@@ -127,7 +133,7 @@ alloy::sol! {
     #[sol(rpc)]
     contract L2ComplexUpgrader {
         function forceDeployAndUpgradeUniversal(
-            UniversalForceDeploymentInfo[] calldata _forceDeployments,
+            UniversalContractUpgradeInfo[] calldata _forceDeployments,
             address _delegateTo,
             bytes calldata _calldata
         ) external payable;
@@ -136,7 +142,7 @@ alloy::sol! {
     /// Struct used to pass bytecode info for force deployment of ZKsyncOS contracts.
     struct ForceDeploymentBytecodeInfo {
         bytes32 bytecodeHash;
-        uint256 bytecodeSize;
+        uint32 bytecodeSize;
         bytes32 observableBytecodeHash;
     }
 
