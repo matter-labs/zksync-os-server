@@ -277,6 +277,10 @@ fn calculate_da_fields(
                 // blob_commitment should be set to zero in ZK OS
                 operator_da_input.extend(B256::ZERO.as_slice());
 
+                if pubdata_mode == PubdataMode::Validium {
+                    operator_da_input = U256::ZERO.to_be_bytes_vec();
+                }
+
                 (da_commitment, operator_da_input, None)
             }
             (PubdataMode::Validium, _) => (B256::ZERO, vec![0u8; 32], None),
