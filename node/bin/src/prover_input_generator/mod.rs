@@ -145,7 +145,7 @@ fn compute_prover_input(
     let prover_input =
         match ProvingVersion::from_forward_run_execution_version(forward_run_execution_version) {
             ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
-                unreachable!("proving_run_execution_version does not return 1, 2 or 3")
+                panic!("computing prover input for batch with prover version v1-v3 is not supported");
             }
             ProvingVersion::V4 => {
                 use zk_ee_0_1_0::{
