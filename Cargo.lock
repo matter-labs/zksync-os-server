@@ -7190,8 +7190,8 @@ dependencies = [
 
 [[package]]
 name = "protocol_version"
-version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#07c8fa9007b6b75ec749ade87f505052b0f1552a"
+version = "0.6.0"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
 
 [[package]]
 name = "prover"
@@ -11811,8 +11811,8 @@ checksum = "12685073683de64e01a87b0f0a8c1e11df2ea3d6dc3846f1320153ef2fe499ed"
 
 [[package]]
 name = "zksync_os_fri_prover"
-version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#07c8fa9007b6b75ec749ade87f505052b0f1552a"
+version = "0.6.0"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -12136,8 +12136,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_prover_service"
-version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#07c8fa9007b6b75ec749ade87f505052b0f1552a"
+version = "0.6.0"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -12389,8 +12389,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_snark_prover"
-version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#07c8fa9007b6b75ec749ade87f505052b0f1552a"
+version = "0.6.0"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
 dependencies = [
  "anyhow",
  "clap",
@@ -12548,8 +12548,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_sequencer_proof_client"
-version = "0.5.1"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?branch=chore%2Fprotocol-protocol-v1.3%2Fzksync-airbender-prover#07c8fa9007b6b75ec749ade87f505052b0f1552a"
+version = "0.6.0"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
 dependencies = [
  "anyhow",
  "async-trait",
