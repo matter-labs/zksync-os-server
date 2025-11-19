@@ -71,7 +71,6 @@ where
 
         // Only used for metrics/logs
         let mut last_processed_block_at: Option<Instant> = None;
-        let mut time_since_last_block: Option<Duration> = None;
 
         loop {
             latency_tracker.enter_state(SequencerState::WaitingForCommand);
@@ -131,7 +130,7 @@ where
                     })
                     .context("execute_block")?;
 
-            time_since_last_block = last_processed_block_at
+            let time_since_last_block = last_processed_block_at
                 .map(|last_processed_block_at| last_processed_block_at.elapsed());
             if let Some(time_since_last_block) = time_since_last_block {
                 EXECUTION_METRICS

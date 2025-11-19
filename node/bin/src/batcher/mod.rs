@@ -5,6 +5,7 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::pin::Pin;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
@@ -77,7 +78,6 @@ impl PipelineComponent for Batcher {
 
         // Only used for metrics/logs
         let mut last_created_batch_at: Option<Instant> = None;
-        let mut time_since_last_batch: Option<Duration> = None;
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -99,7 +99,7 @@ impl PipelineComponent for Batcher {
                     .await?
             };
 
-            time_since_last_batch =
+            let time_since_last_batch =
                 last_created_batch_at.map(|last_created_batch_at| last_created_batch_at.elapsed());
             if let Some(time_since_last_batch) = time_since_last_batch {
                 BATCHER_METRICS
