@@ -5,6 +5,7 @@ mod batch_sink;
 pub mod batcher;
 mod command_source;
 pub mod config;
+pub mod config_constants;
 mod en_remote_config;
 mod l1_provider;
 pub mod metadata;

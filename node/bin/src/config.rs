@@ -106,18 +106,18 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some("0x396e757c7b8cb2158b90b2d2d11eed4bd818e58c".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(with = Optional(Serde![int]), default_t = Some("0xef0b6c2c85f321d876a6fd87e138bae974196623".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
     pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
-    #[config(default_t = Some(270))]
+    #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
@@ -289,19 +289,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0xef2bd6efd849426877d76c24341bc3452d6b2157869442786f6c19d044e04942".into())]
+    #[config(alias = "operator_private_key", default_t = SecretString::from(crate::config_constants::OPERATOR_COMMIT_PK))]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x02ae689a20546e6c8a6b16e6c5c62ba67cbf654cd3d0c3ca49b0a64e61c4896a".into())]
+    #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_PROVE_PK))]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xce3307d58233b61e70dbf8300f73816a9541f138259b381860853898dd911aa2".into())]
+    #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_EXECUTE_PK))]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).

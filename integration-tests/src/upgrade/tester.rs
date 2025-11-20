@@ -16,9 +16,6 @@ use super::ProtocolUpgradeBuilder;
 use super::default_upgrade::DefaultUpgrade;
 use super::interfaces;
 
-// We assume that chain has this ID.
-const CHAIN_ID: u64 = 270;
-
 /// Object that helps with preparation and execution of protocol upgrades in integration tests.
 ///
 /// Tester assumes that governance is an EOA account, and uses impersonation
@@ -150,15 +147,21 @@ impl UpgradeTester {
         let bridgehub = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let bridgehub = interfaces::Bridgehub::new(bridgehub, tester.l1_provider.clone());
         let ctm = bridgehub
-            .chainTypeManager(U256::from(CHAIN_ID))
+            .chainTypeManager(U256::from(zksync_os_server::config_constants::CHAIN_ID))
             .call()
             .await?;
         let ctm = interfaces::ChainTypeManager::new(ctm, tester.l1_provider.clone());
-        let raw_protocol_version = ctm.getProtocolVersion(U256::from(CHAIN_ID)).call().await?;
+        let raw_protocol_version = ctm
+            .getProtocolVersion(U256::from(zksync_os_server::config_constants::CHAIN_ID))
+            .call()
+            .await?;
         let protocol_version = ProtocolSemanticVersion::try_from(raw_protocol_version)
             .expect("invalid protocol version stored in CTM");
 
-        let diamond_proxy = bridgehub.getZKChain(U256::from(CHAIN_ID)).call().await?;
+        let diamond_proxy = bridgehub
+            .getZKChain(U256::from(zksync_os_server::config_constants::CHAIN_ID))
+            .call()
+            .await?;
         let diamond_proxy = interfaces::ZkChain::new(diamond_proxy, tester.l1_provider.clone());
 
         let l1_chain_admin = diamond_proxy.getAdmin().call().await?;
@@ -173,7 +176,8 @@ impl UpgradeTester {
         // Bytecode supplier is a bit special: right now it's not discoverable
         // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
         // to the value stored in `zkos-l1-state.json`.
-        let bytecode_supplier_address = "0xef0b6c2c85f321d876a6fd87e138bae974196623".parse()?;
+        let bytecode_supplier_address =
+            zksync_os_server::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse()?;
         anyhow::ensure!(
             !tester
                 .l1_provider
