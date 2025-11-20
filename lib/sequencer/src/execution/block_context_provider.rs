@@ -224,11 +224,20 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
             }
             BlockCommand::Rebuild(rebuild) => {
+                let block_number = rebuild.replay_record.block_context.block_number;
+                // Kludge for stage env.
+                let execution_version = if self.chain_id == 2702 && block_number == 29544 {
+                    5
+                } else {
+                    // TODO: This is inherently wrong to `execution_version` from the record for blocks where an upgrade happened.
+                    //  If you're rebuild blocks near the upgrade consider it to be an undefined behavior.
+                    rebuild.replay_record.block_context.execution_version
+                };
                 let block_context = BlockContext {
                     eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
                     native_price: rebuild.replay_record.block_context.native_price,
                     pubdata_price: rebuild.replay_record.block_context.pubdata_price,
-                    block_number: rebuild.replay_record.block_context.block_number,
+                    block_number,
                     timestamp: rebuild.replay_record.block_context.timestamp,
                     blob_fee: rebuild.replay_record.block_context.blob_fee,
                     chain_id: self.chain_id,
@@ -238,7 +247,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     pubdata_limit: self.pubdata_limit,
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
-                    execution_version: rebuild.replay_record.block_context.execution_version,
+                    execution_version,
                 };
                 let txs = if rebuild.make_empty {
                     Vec::new()
@@ -335,6 +344,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         EXECUTION_METRICS
             .next_l1_priority_id
             .set(self.next_l1_priority_id);
+        // We update protocol version here, so that we take into account replay records with protocol version bumps.
+        self.protocol_version = replay_record.protocol_version.clone();
 
         // Advance `block_hashes_for_next_block`.
         let last_block_hash = block_output.header.hash();

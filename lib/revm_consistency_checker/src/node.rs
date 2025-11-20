@@ -63,7 +63,7 @@ where
             };
             let exec_ver = replay_record.block_context.execution_version;
             let zk_spec = match ZkSpecId::from_exec_version(exec_ver) {
-                Some(spec) => spec,
+                Some(spec) => Some(spec),
                 None => {
                     // Warn once per execution_version. Afterwards log at info level.
                     let first_time = warned_unsupported_versions.insert(exec_ver);
@@ -79,7 +79,7 @@ where
                         );
                     }
                     // Skip executing this block when there is no supported REVM version.
-                    continue;
+                    None
                 }
             };
 
@@ -91,7 +91,7 @@ where
                 .state_view_at(state_block_number)
                 .map_err(anyhow::Error::from)?;
 
-            {
+            if let Some(zk_spec) = zk_spec {
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
                 let state_provider =
                     RevmStateProvider::new(state_view, block_hashes, state_block_number);
