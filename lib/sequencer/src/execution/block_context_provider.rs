@@ -227,7 +227,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let block_number = rebuild.replay_record.block_context.block_number;
                 // Kludge for stage env.
                 let (execution_version, protocol_version) =
-                    if self.chain_id == 2702 && block_number == 29544 {
+                    if self.chain_id == 2702 && (29544..=29544 + 100).contains(&block_number) {
                         (5, ProtocolSemanticVersion::new(0, 30, 0))
                     } else {
                         // TODO: This is inherently wrong to `execution_version` from the record for blocks where an upgrade happened.
