@@ -226,13 +226,17 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             BlockCommand::Rebuild(rebuild) => {
                 let block_number = rebuild.replay_record.block_context.block_number;
                 // Kludge for stage env.
-                let execution_version = if self.chain_id == 2702 && block_number == 29544 {
-                    5
-                } else {
-                    // TODO: This is inherently wrong to `execution_version` from the record for blocks where an upgrade happened.
-                    //  If you're rebuild blocks near the upgrade consider it to be an undefined behavior.
-                    rebuild.replay_record.block_context.execution_version
-                };
+                let (execution_version, protocol_version) =
+                    if self.chain_id == 2702 && (29544..=29544 + 100).contains(&block_number) {
+                        (5, ProtocolSemanticVersion::new(0, 30, 0))
+                    } else {
+                        // TODO: This is inherently wrong to `execution_version` from the record for blocks where an upgrade happened.
+                        //  If you're rebuild blocks near the upgrade consider it to be an undefined behavior.
+                        (
+                            rebuild.replay_record.block_context.execution_version,
+                            rebuild.replay_record.protocol_version,
+                        )
+                    };
                 let block_context = BlockContext {
                     eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
                     native_price: rebuild.replay_record.block_context.native_price,
@@ -287,7 +291,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     metrics_label: "rebuild",
                     starting_l1_priority_id: self.next_l1_priority_id,
                     node_version: self.node_version.clone(),
-                    protocol_version: rebuild.replay_record.protocol_version,
+                    protocol_version,
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: rebuild.replay_record.force_preimages,
