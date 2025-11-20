@@ -15,3 +15,7 @@ path = "test-results.xml"
 # a longer timeout.
 filter = 'binary(prover)'
 slow-timeout = { period = "15m", terminate-after = 3 }
+
+# Skip slow external node tests in coverage profile
+[profile.coverage]
+default-filter = 'not test(does_not_get_stuck)'
