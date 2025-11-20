@@ -1,5 +1,8 @@
-use alloy::network::{ReceiptResponse, TxSigner};
+use alloy::eips::Encodable2718;
+use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
+use alloy::primitives::{TxHash, U256};
 use alloy::providers::Provider;
+use alloy::rpc::types::TransactionRequest;
 use regex::Regex;
 use std::time::Duration;
 use zksync_os_integration_tests::Tester;
@@ -113,5 +116,80 @@ async fn get_client_version() -> anyhow::Result<()> {
     let client_version = tester.l2_provider.get_client_version().await?;
     let regex = Regex::new(r"^zksync-os/v(\d+)\.(\d+)\.(\d+)")?;
     assert!(regex.is_match(&client_version));
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn send_raw_transaction_sync() -> anyhow::Result<()> {
+    // Test that the node supports `eth_sendRawTransactionSync`
+    let tester = Tester::builder().build().await?;
+
+    let alice = tester.l2_wallet.default_signer().address();
+    // Create a transaction
+    let tx = TransactionRequest::default()
+        .to(alice)
+        .value(U256::from(1))
+        .nonce(0)
+        .gas_price(100_000_000)
+        .gas_limit(50_000);
+    // Build and sign the transaction to get the envelope
+    let tx_envelope = tx.build(&tester.l2_wallet).await?;
+    // Encode the transaction
+    let encoded = tx_envelope.encoded_2718();
+
+    // Send using the sync method - this directly returns the receipt
+    let receipt = tester
+        .l2_provider
+        .send_raw_transaction_sync(&encoded)
+        .await?;
+    assert!(receipt.status());
+
+    // Verify receipt
+    assert_eq!(receipt.to(), Some(alice));
+    // The main idea that returned receipt should be already mined
+    assert!(
+        receipt.block_number().is_some(),
+        "transaction should be mined"
+    );
+    assert_ne!(
+        receipt.transaction_hash(),
+        TxHash::ZERO,
+        "should have valid tx hash"
+    );
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn send_raw_transaction_sync_timeout() -> anyhow::Result<()> {
+    // Test that the node returns an error when `eth_sendRawTransactionSync` timeouts
+    let tester = Tester::builder().build().await?;
+
+    let alice = tester.l2_wallet.default_signer().address();
+    // Create a transaction
+    let tx = TransactionRequest::default()
+        .to(alice)
+        .value(U256::from(1))
+        // !!! NOTE !!! - nonce gap
+        .nonce(1)
+        .gas_price(100_000_000)
+        .gas_limit(50_000);
+    // Build and sign the transaction to get the envelope
+    let tx_envelope = tx.build(&tester.l2_wallet).await?;
+    // Encode the transaction
+    let encoded = tx_envelope.encoded_2718();
+
+    // Send using the sync method - this directly returns the receipt
+    let error = tester
+        .l2_provider
+        .send_raw_transaction_sync(&encoded)
+        .await
+        .expect_err("should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("The transaction was added to the mempool but wasn't processed within")
+    );
+
     Ok(())
 }

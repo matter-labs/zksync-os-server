@@ -291,6 +291,14 @@ pub trait EthApi {
     #[method(name = "sendRawTransaction")]
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256>;
 
+    /// Sends signed transaction, awaiting and returning receipt.
+    #[method(name = "sendRawTransactionSync")]
+    async fn send_raw_transaction_sync(
+        &self,
+        bytes: Bytes,
+        max_wait_ms: Option<U256>,
+    ) -> RpcResult<ZkTransactionReceipt>;
+
     /// Returns an Ethereum specific signature with: sign(keccak256("\x19Ethereum Signed Message:\n"
     /// + len(message) + message))).
     #[method(name = "sign")]

@@ -276,6 +276,10 @@ pub struct RpcConfig {
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
     #[config(default, with = Delimited(","))]
     pub l2_signer_blacklist: HashSet<ConfigAddress>,
+
+    /// Default timeout for `eth_sendRawTransactionSync`
+    #[config(default_t = 2 * TimeUnit::Seconds)]
+    pub send_raw_transaction_sync_timeout: Duration,
 }
 
 /// Only used on the Main Node.
@@ -611,6 +615,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_logs_per_response: c.max_logs_per_response,
             l2_signer_blacklist: c.l2_signer_blacklist.into_iter().map(|a| a.0).collect(),
             stale_filter_ttl: c.stale_filter_ttl,
+            send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
         }
     }
 }

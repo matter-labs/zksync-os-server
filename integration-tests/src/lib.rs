@@ -147,6 +147,8 @@ impl Tester {
         }
         let rpc_config = RpcConfig {
             address: l2_rpc_address.clone(),
+            // Override default with a higher value as the test can be slow in CI
+            send_raw_transaction_sync_timeout: Duration::from_secs(10),
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
