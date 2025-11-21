@@ -15,8 +15,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
-    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
+    BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
+    GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    StatusServerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -70,9 +71,21 @@ impl Tester {
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
+        // Due to type inference issue, we need to specify None type here and this whole function if a de-facto helper for this
+        self.launch_external_node_with_overrides(None::<fn(&mut Config)>)
+            .await
+    }
+
+    pub async fn launch_external_node_with_overrides(
+        &self,
+        config_overrides: Option<impl FnOnce(&mut Config)>,
+    ) -> anyhow::Result<Self> {
         let overrides_fun = |config: &mut Config| {
             config.sequencer_config.block_replay_download_address = Some(self.replay_url.clone());
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+            if let Some(f) = config_overrides {
+                f(config)
+            }
         };
 
         Self::launch_node(
@@ -136,7 +149,7 @@ impl Tester {
             l1_rpc_url: l1_address.clone(),
             ..Default::default()
         };
-        let mut sequencer_config = SequencerConfig {
+        let sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
             fee_collector_address: Address::random(),
             ..Default::default()
@@ -306,6 +319,7 @@ impl Tester {
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
+    batch_verification_config: Option<BatchVerificationConfig>,
 }
 
 impl TesterBuilder {
@@ -317,6 +331,14 @@ impl TesterBuilder {
 
     pub fn block_time(mut self, block_time: Duration) -> Self {
         self.block_time = Some(block_time);
+        self
+    }
+
+    pub fn batch_verification(
+        mut self,
+        batch_verification_config: BatchVerificationConfig,
+    ) -> Self {
+        self.batch_verification_config = Some(batch_verification_config);
         self
     }
 
@@ -334,18 +356,21 @@ impl TesterBuilder {
 
         let l1_wallet = l1_provider.wallet().clone();
 
-        let overrides_fun = self.block_time.map(|block_time| {
-            move |config: &mut Config| {
+        let overrides_fun = move |config: &mut Config| {
+            if let Some(block_time) = self.block_time {
                 config.sequencer_config.block_time = block_time;
             }
-        });
+            if let Some(batch_verification_config) = self.batch_verification_config {
+                config.batch_verification_config = batch_verification_config;
+            }
+        };
 
         Tester::launch_node(
             l1_address,
             EthDynProvider::new(l1_provider),
             l1_wallet,
             self.enable_prover,
-            overrides_fun,
+            Some(overrides_fun),
             None,
         )
         .await
