@@ -70,13 +70,17 @@ impl Tester {
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
+        let overrides_fun = |config: &mut Config| {
+            config.sequencer_config.block_replay_download_address = Some(self.replay_url.clone());
+            config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+        };
+
         Self::launch_node(
             self.l1_address.clone(),
             self.l1_provider.clone(),
             self.l1_wallet.clone(),
             false,
-            Some((self.replay_url.clone(), self.l2_rpc_address.clone())),
-            None,
+            Some(overrides_fun),
             Some(self.main_node_tempdir.clone()),
         )
         .await
@@ -87,8 +91,7 @@ impl Tester {
         l1_provider: EthDynProvider,
         l1_wallet: EthereumWallet,
         enable_prover: bool,
-        main_node_replay_and_rpc_urls: Option<(String, String)>,
-        block_time: Option<Duration>,
+        config_overrides: Option<impl FnOnce(&mut Config)>,
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
     ) -> anyhow::Result<Self> {
         (|| async {
@@ -131,20 +134,13 @@ impl Tester {
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1_address.clone(),
-            main_node_rpc_url: main_node_replay_and_rpc_urls.clone().map(|(_, rpc)| rpc),
             ..Default::default()
         };
         let mut sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
-            block_replay_download_address: main_node_replay_and_rpc_urls
-                .clone()
-                .map(|(replay, _)| replay),
             fee_collector_address: Address::random(),
             ..Default::default()
         };
-        if let Some(block_time) = block_time {
-            sequencer_config.block_time = block_time;
-        }
         let rpc_config = RpcConfig {
             address: l2_rpc_address.clone(),
             // Override default with a higher value as the test can be slow in CI
@@ -175,7 +171,7 @@ impl Tester {
             address: status_address,
         };
 
-        let config = Config {
+        let mut config = Config {
             general_config,
             genesis_config: GenesisConfig {
                 genesis_input_path: Some(
@@ -200,6 +196,8 @@ impl Tester {
             gas_adjuster_config: Default::default(),
             batch_verification_config: Default::default(),
         };
+        config_overrides.map(|f| f(&mut config));
+
         let main_task = tokio::task::spawn(async move {
             zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;
         });
@@ -336,13 +334,18 @@ impl TesterBuilder {
 
         let l1_wallet = l1_provider.wallet().clone();
 
+        let overrides_fun = self.block_time.map(|block_time| {
+            move |config: &mut Config| {
+                config.sequencer_config.block_time = block_time;
+            }
+        });
+
         Tester::launch_node(
             l1_address,
             EthDynProvider::new(l1_provider),
             l1_wallet,
             self.enable_prover,
-            None,
-            self.block_time,
+            overrides_fun,
             None,
         )
         .await

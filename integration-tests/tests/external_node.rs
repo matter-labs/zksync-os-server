@@ -10,6 +10,41 @@ use backon::{ConstantBuilder, Retryable};
 use zksync_os_integration_tests::{Tester, assert_traits::ReceiptAssert, contracts::EventEmitter};
 
 #[test_log::test(tokio::test)]
+async fn batch_verification_works() -> anyhow::Result<()> {
+    let main_node = Tester::setup().await?;
+    let en1 = main_node.launch_external_node().await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    check_contract_present(&en1, contract_address).await?;
+
+    let en2 = main_node.launch_external_node().await?;
+
+    check_contract_present(&en2, contract_address).await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    let contract_address = deploy_tx_receipt
+        .contract_address()
+        .expect("no contract deployed");
+
+    check_contract_present(&en1, contract_address).await?;
+    check_contract_present(&en2, contract_address).await?;
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
 async fn transaction_replay() -> anyhow::Result<()> {
     let main_node = Tester::setup().await?;
     let en1 = main_node.launch_external_node().await?;
