@@ -6,7 +6,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use std::pin::Pin;
 use tokio::sync::mpsc;
-use tokio::time::Sleep;
+use tokio::time::{Instant, Sleep};
 use tracing;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_contract_interface::models::StoredBatchInfo;
@@ -77,6 +77,9 @@ impl PipelineComponent for Batcher {
 
         let mut prev_batch_info = self.startup_config.prev_batch_info.clone();
 
+        // Only used for metrics/logs
+        let mut last_created_batch_at: Option<Instant> = None;
+
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
 
@@ -97,6 +100,16 @@ impl PipelineComponent for Batcher {
                     .await?
             };
 
+            let time_since_last_batch =
+                last_created_batch_at.map(|last_created_batch_at| last_created_batch_at.elapsed());
+            if let Some(time_since_last_batch) = time_since_last_batch {
+                BATCHER_METRICS
+                    .time_since_last_batch
+                    .observe(time_since_last_batch);
+            }
+
+            last_created_batch_at = Some(Instant::now());
+
             // Update prev_batch_info for the next iteration
             prev_batch_info = batch_envelope
                 .batch
@@ -113,6 +126,7 @@ impl PipelineComponent for Batcher {
                 batch_metadata = ?batch_envelope.batch,
                 block_count = batch_envelope.batch.last_block_number - batch_envelope.batch.first_block_number + 1,
                 new_state_commitment = ?batch_envelope.batch.batch_info.new_state_commitment,
+                time_since_last_batch = ?time_since_last_batch,
                 "Batch {}", if should_recreate { "recreated" } else { "created" }
             );
 
