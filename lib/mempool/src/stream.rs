@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use zksync_os_types::{L1PriorityEnvelope, L1UpgradeEnvelope, L2Envelope, ZkTransaction};
+use zksync_os_types::{L1PriorityEnvelope, L2Envelope, UpgradeTransaction, ZkTransaction};
 
 pub trait TxStream: Stream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
@@ -18,29 +18,33 @@ pub trait TxStream: Stream {
 
 pub struct BestTransactionsStream<'a> {
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
-    upgrade_tx: Option<L1UpgradeEnvelope>,
+    pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
     last_polled_l2_tx: Option<Arc<ValidPoolTransaction<L2PooledTransaction>>>,
     peeked_tx: Option<ZkTransaction>,
+    peeked_upgrade_info: Option<UpgradeTransaction>,
+    txs_already_provided: bool,
 }
 
 /// Convenience method to stream best L2 transactions
 pub fn best_transactions<'a>(
     l2_mempool: &impl L2TransactionPool,
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
-    upgrade_tx: Option<L1UpgradeEnvelope>,
+    pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
 ) -> BestTransactionsStream<'a> {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
         l1_transactions,
-        upgrade_tx,
+        pending_upgrade_transactions,
         pending_transactions_listener,
         best_l2_transactions: l2_mempool.best_transactions(),
         last_polled_l2_tx: None,
         peeked_tx: None,
+        peeked_upgrade_info: None,
+        txs_already_provided: false,
     }
 }
 
@@ -54,8 +58,21 @@ impl Stream for BestTransactionsStream<'_> {
                 return Poll::Ready(Some(tx));
             }
 
-            if let Some(upgrade_tx) = this.upgrade_tx.take() {
-                return Poll::Ready(Some(ZkTransaction::from(upgrade_tx)));
+            // We only should provide an upgrade transaction if it's the first one in the stream for this block.
+            if !this.txs_already_provided {
+                match this.pending_upgrade_transactions.poll_recv(cx) {
+                    Poll::Ready(Some(tx)) => {
+                        this.peeked_upgrade_info = Some(tx.clone());
+                        if let Some(envelope) = tx.tx {
+                            return Poll::Ready(Some(ZkTransaction::from(envelope)));
+                        }
+                        // If there is no upgrade transaction (patch-only upgrade), continue to the next step.
+                        // We already set the upgrade info, so protocol version will be updated once
+                        // the first transaction will arrive.
+                    }
+                    Poll::Pending => {}
+                    Poll::Ready(None) => todo!("channel closed"),
+                }
             }
 
             match this.l1_transactions.poll_recv(cx) {
@@ -98,11 +115,26 @@ impl BestTransactionsStream<'_> {
     /// Waits until there is a next transaction and returns a reference to it.
     /// Does not consume the transaction, it will be returned on the next poll.
     /// Returns `None` if the stream is closed.
-    pub async fn wait_peek(&mut self) -> Option<&ZkTransaction> {
+    /// Returns `Some(None)` if there is a transaction in the stream, but it's not an upgrade transaction.
+    /// Returns `Some(Some(upgrade_tx))` if the next transaction is an upgrade transaction.
+    // TODO: this interface leaks implementation details about the internal structure, and in general
+    // this information is only needed for the `BlockContextProvider` which already has access to the stream.
+    // This was introduced only because upgrade transaction can appear after we started waiting for the
+    // first tx, and we need protocol upgrade info to initialize block context.
+    // Consider refactoring this later.
+    pub async fn wait_peek(&mut self) -> Option<Option<UpgradeTransaction>> {
         if self.peeked_tx.is_none() {
             self.peeked_tx = self.next().await;
+            self.txs_already_provided = true; // TODO: implicit expectation that this method is _guaranteed_ to be called before using the stream.
         }
-        self.peeked_tx.as_ref()
+
+        // Return `None` if the stream is closed.
+        #[allow(clippy::question_mark)]
+        if self.peeked_tx.is_none() {
+            return None;
+        }
+
+        Some(self.peeked_upgrade_info.clone())
     }
 }
 

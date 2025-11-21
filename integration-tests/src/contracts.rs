@@ -19,6 +19,14 @@ alloy::sol!(
 );
 
 alloy::sol!(
+    /// Contract that can be used as a target for force deployments
+    /// during upgrade tests.
+    #[sol(rpc)]
+    SampleForceDeployment,
+    "test-contracts/out/SampleForceDeployment.sol/SampleForceDeployment.json"
+);
+
+alloy::sol!(
     /// Simple ERC20 with permissionless mint.
     #[sol(rpc)]
     TestERC20,

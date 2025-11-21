@@ -32,6 +32,19 @@ impl<V: ViewState> OverriddenStateView<V> {
             preimage_overrides,
         }
     }
+
+    pub fn with_preimages(inner: V, preimage_overrides: &[(B256, Vec<u8>)]) -> Self {
+        let preimage_overrides = preimage_overrides
+            .iter()
+            .cloned()
+            .collect::<HashMap<B256, Vec<u8>>>();
+
+        Self {
+            inner,
+            overrides: HashMap::new(),
+            preimage_overrides,
+        }
+    }
 }
 
 impl<V: ViewState> ReadStorage for OverriddenStateView<V> {

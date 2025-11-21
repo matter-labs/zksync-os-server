@@ -148,6 +148,7 @@ impl BatchVerificationServer {
             batch_number: batch_envelope.batch_number(),
             first_block_number: batch_envelope.batch.first_block_number,
             last_block_number: batch_envelope.batch.last_block_number,
+            pubdata_mode: batch_envelope.batch.pubdata_mode,
             commit_data: batch_envelope.batch.batch_info.commit_info.clone(),
             request_id,
         };

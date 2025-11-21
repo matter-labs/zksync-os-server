@@ -152,8 +152,11 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             tracing_options,
             state_overrides,
             block_overrides,
-            tx_index: _, // TODO: add support for tx_index
+            tx_index,
         } = opts;
+        if tx_index.is_some() {
+            return Err(DebugError::UnsupportedTxIndex);
+        }
         let Some(tracer) = tracing_options.tracer else {
             return Err(DebugError::UnsupportedDefaultTracer);
         };
@@ -293,6 +296,9 @@ pub enum DebugError {
     /// Unsupported tracer type
     #[error("tracer {} is not supported", .0.as_str())]
     UnsupportedTracer(GethDebugTracerType),
+    /// Tracing with `tx_index` is not supported
+    #[error("tracing with tx index is not supported")]
+    UnsupportedTxIndex,
     /// When the tracer config does not match the tracer
     #[error("invalid tracer config")]
     InvalidTracerConfig,

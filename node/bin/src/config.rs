@@ -1,16 +1,17 @@
 use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U128};
 use serde::{Deserialize, Serialize};
+use smart_config::de::{Qualified, WellKnown};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{
     DescribeConfig, DeserializeConfig, Serde,
     de::{Delimited, Optional},
 };
+use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
-use zksync_os_contract_interface::models::BatchDaInputMode;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
@@ -18,6 +19,7 @@ use zksync_os_mempool::SubPoolLimit;
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
+use zksync_os_types::PubdataMode;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -104,11 +106,18 @@ pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
     // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some("0xfaf7f9079efe7e9b681aab926e7ca9801af4f993".parse().unwrap()))]
+    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
+    /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
+    /// so it has to be provided explicitly.
+    // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
+    // find it in `zkos-l1-state.json`
+    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
+    pub bytecode_supplier_address: Option<Address>,
+
     /// Chain ID of the chain node operates on.
-    #[config(default_t = Some(270))]
+    #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
@@ -151,7 +160,7 @@ pub struct SequencerConfig {
 
     /// Defines the block time for the sequencer.
     /// One of the block Seal Criteria. Only affects the Main Node.
-    #[config(default_t = Duration::from_millis(100))]
+    #[config(default_t = Duration::from_millis(250))]
     pub block_time: Duration,
 
     /// Max number of transactions in a block.
@@ -178,13 +187,16 @@ pub struct SequencerConfig {
     pub fee_collector_address: Address,
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    pub base_fee_override: Option<u128>,
+    #[config(default_t = None, with = Optional(Serde![str]))]
+    pub base_fee_override: Option<U128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    pub pubdata_price_override: Option<u128>,
+    #[config(default_t = None, with = Optional(Serde![str]))]
+    pub pubdata_price_override: Option<U128>,
 
     /// Override for native price (in wei). If set, native price will be constant and equal to this value.
-    pub native_price_override: Option<u128>,
+    #[config(default_t = None, with = Optional(Serde![str]))]
+    pub native_price_override: Option<U128>,
 
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
@@ -214,6 +226,16 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ConfigAddress(pub Address);
+
+const HASH_DE: Qualified<Serde![str]> =
+    Qualified::new(Serde![str], "hex string with optional 0x prefix");
+impl WellKnown for ConfigAddress {
+    type Deserializer = Qualified<Serde![str]>;
+    const DE: Self::Deserializer = HASH_DE;
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -250,12 +272,14 @@ pub struct RpcConfig {
     /// Duration since the last filter poll, after which the filter is considered stale
     #[config(default_t = 15 * TimeUnit::Minutes)]
     pub stale_filter_ttl: Duration,
-}
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum RollupPubdataMode {
-    Blobs,
-    Calldata,
+    /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
+    #[config(default, with = Delimited(","))]
+    pub l2_signer_blacklist: HashSet<ConfigAddress>,
+
+    /// Default timeout for `eth_sendRawTransactionSync`
+    #[config(default_t = 2 * TimeUnit::Seconds)]
+    pub send_raw_transaction_sync_timeout: Duration,
 }
 
 /// Only used on the Main Node.
@@ -265,19 +289,19 @@ pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
     // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = "0x4767f9b6858faf59e4290e3e666e303a9ff8df30e5e7121b6d2eb264fd2ce7cf".into())]
+    #[config(alias = "operator_private_key", default_t = SecretString::from(crate::config_constants::OPERATOR_COMMIT_PK))]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0x31edee9894c631cbff9ea4a1c7de94d10d0b86ebdb989768e3f00398b0ab4a8a".into())]
+    #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_PROVE_PK))]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
     // TODO: Pre-configured value, to be removed
-    #[config(default_t = "0xd63de199732e0fd9802cfa207521c9a6d4c5f492ff816f688e89b278482c19dd".into())]
+    #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_EXECUTE_PK))]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
@@ -287,6 +311,10 @@ pub struct L1SenderConfig {
     /// Max priority fee per gas we are willing to spend (in gwei).
     #[config(default_t = 2)]
     pub max_priority_fee_per_gas_gwei: u64,
+
+    /// Max fee per blob gas we are willing to spend (in gwei).
+    #[config(default_t = 1)]
+    pub max_fee_per_blob_gas_gwei: u64,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -303,10 +331,10 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Rollup pubdata mode - either blobs or calldata.
-    #[config(default_t = RollupPubdataMode::Calldata)]
+    /// Pubdata mode
+    #[config(default_t = PubdataMode::Blobs)]
     #[config(with = Serde![str])]
-    pub rollup_pubdata_mode: RollupPubdataMode,
+    pub pubdata_mode: PubdataMode,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -585,7 +613,9 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_response_size: c.max_response_size,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
+            l2_signer_blacklist: c.l2_signer_blacklist.into_iter().map(|a| a.0).collect(),
             stale_filter_ttl: c.stale_filter_ttl,
+            send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
         }
     }
 }
@@ -614,6 +644,7 @@ impl L1SenderConfig {
             operator_pk,
             max_fee_per_gas_gwei: self.max_fee_per_gas_gwei,
             max_priority_fee_per_gas_gwei: self.max_priority_fee_per_gas_gwei,
+            max_fee_per_blob_gas_gwei: self.max_fee_per_blob_gas_gwei,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             phantom_data: Default::default(),
@@ -694,19 +725,9 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
 
 pub fn gas_adjuster_config(
     c: GasAdjusterConfig,
-    da_input_mode: BatchDaInputMode,
-    rollup_pubdata_mode: RollupPubdataMode,
+    pubdata_mode: PubdataMode,
     max_priority_fee_per_gas_gwei: u64,
 ) -> zksync_os_gas_adjuster::GasAdjusterConfig {
-    let pubdata_mode = match (da_input_mode, rollup_pubdata_mode) {
-        (BatchDaInputMode::Validium, _) => zksync_os_gas_adjuster::PubdataMode::Validium,
-        (BatchDaInputMode::Rollup, RollupPubdataMode::Blobs) => {
-            zksync_os_gas_adjuster::PubdataMode::Blobs
-        }
-        (BatchDaInputMode::Rollup, RollupPubdataMode::Calldata) => {
-            zksync_os_gas_adjuster::PubdataMode::Calldata
-        }
-    };
     let max_priority_fee_per_gas = max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128);
     zksync_os_gas_adjuster::GasAdjusterConfig {
         pubdata_mode,

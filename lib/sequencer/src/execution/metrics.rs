@@ -71,8 +71,10 @@ impl StateAccessLabel for SequencerState {
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "execution")]
 pub struct ExecutionMetrics {
-    #[metrics(labels = ["stage"])]
-    pub block_number: LabeledFamily<&'static str, Gauge<u64>>,
+    pub block_number: Gauge<u64>,
+
+    #[metrics(unit = Unit::Seconds, buckets = Buckets::exponential(0.1..=600.0, 2.0))]
+    pub time_since_last_block: Histogram<Duration>,
 
     #[metrics(labels = ["seal_reason"])]
     pub seal_reason: LabeledFamily<SealReason, Counter>,

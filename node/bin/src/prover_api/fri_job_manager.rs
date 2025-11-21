@@ -15,7 +15,7 @@
 //! `ComponentStateLatencyTracker`: Only tracks `Processing` / `WaitingSend` states
 
 use crate::prover_api::fri_proof_verifier;
-use crate::prover_api::metrics::{PROVER_METRICS, ProverStage, ProverType};
+use crate::prover_api::metrics::{PROVER_API_METRICS, PROVER_METRICS, ProverStage, ProverType};
 use crate::prover_api::proof_storage::{ProofStorage, StoredFailedProof};
 use crate::prover_api::prover_job_map::ProverJobMap;
 use alloy::primitives::Bytes;
@@ -30,11 +30,11 @@ use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
-use zksync_os_multivm::{ExecutionVersion, proving_run_execution_version};
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
 use zksync_os_pipeline::PeekableReceiver;
+use zksync_os_types::{ExecutionVersion, ProvingVersion};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -49,7 +49,7 @@ pub enum SubmitError {
     DeserializationFailed(bincode::error::DecodeError),
     // server execution version, prover execution version
     #[error("execution error mismatch - server expects {0:?}, but got {1:?} from prover")]
-    ExecutionVersionMismatch(ExecutionVersion, ExecutionVersion),
+    ProvingVersionMismatch(ProvingVersion, ProvingVersion),
     #[error("internal error: {0}")]
     Other(String),
 }
@@ -167,17 +167,22 @@ impl FriJobManager {
                 fri_job.batch_number,
                 fri_job.vk_hash,
                 assigned_jobs_count = self.assigned_jobs.len(),
+                minmax_assigned_batch_number = ?self.assigned_jobs.minmax_assigned_batch_number(),
                 ?min_inbound_age,
                 "Assigned a timed out job"
             );
+            PROVER_API_METRICS.timed_out_jobs_reassigned[&ProverStage::Fri].inc();
             return Some((fri_job, prover_input));
         }
 
-        if let MinMax(min, max) = self.assigned_jobs.minmax_assigned_batch_number()
-            && max - min >= self.max_assigned_batch_range as u64
+        if let MinMax(min_batch_number, max_batch_number) =
+            self.assigned_jobs.minmax_assigned_batch_number()
+            && max_batch_number - min_batch_number >= self.max_assigned_batch_range as u64
         {
             // fresh assignments are not allowed when there are too many assigned jobs
             tracing::debug!(
+                min_batch_number,
+                max_batch_number,
                 assigned_jobs_count = self.assigned_jobs.len(),
                 max_assigned_batch_range = self.max_assigned_batch_range,
                 "too many assigned jobs; returning None"
@@ -199,8 +204,13 @@ impl FriJobManager {
                 Ok(env) => {
                     let env = env.with_stage(BatchExecutionStage::FriProverPicked);
                     let prover_input = env.data.clone();
+                    let forward_run_execution_version =
+                        ExecutionVersion::try_from(env.batch.execution_version)
+                            .expect("Must be valid execution as set by the server");
                     let proving_execution_version =
-                        proving_run_execution_version(env.batch.execution_version);
+                        ProvingVersion::from_forward_run_execution_version(
+                            forward_run_execution_version,
+                        );
                     let fri_job = FriJob {
                         batch_number: env.batch_number(),
                         vk_hash: proving_execution_version.vk_hash().to_string(),
@@ -209,6 +219,7 @@ impl FriJobManager {
                         fri_job.batch_number,
                         assigned_jobs_count = self.assigned_jobs.len(),
                         ?min_inbound_age,
+                        minmax_assigned_batch_number = ?self.assigned_jobs.minmax_assigned_batch_number(),
                         "Assigned a new job from inbound channel"
                     );
                     self.assigned_jobs.insert(env);
@@ -231,7 +242,7 @@ impl FriJobManager {
         batch_number: u64,
         proof_bytes: Bytes,
         // TODO: migrate to ExecutionVersion, once legacy is deprecated
-        execution_version: Option<ExecutionVersion>,
+        proving_version: Option<ProvingVersion>,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -247,13 +258,16 @@ impl FriJobManager {
         //
         // NOTE: We don't check the actual values, but the value that server believes the prove should use.
         // NOTE2: Checking only if prover provided VK version - legacy clients will not provide it
-        if let Some(exec_version) = execution_version {
+        if let Some(exec_version) = proving_version {
             // should never panic
-            let server_execution_version =
-                proving_run_execution_version(batch_metadata.execution_version);
-            if server_execution_version != exec_version {
-                return Err(SubmitError::ExecutionVersionMismatch(
-                    server_execution_version,
+            let forward_run_execution_version =
+                ExecutionVersion::try_from(batch_metadata.execution_version)
+                    .expect("Must be valid execution as set by the server");
+            let server_proving_version =
+                ProvingVersion::from_forward_run_execution_version(forward_run_execution_version);
+            if server_proving_version != exec_version {
+                return Err(SubmitError::ProvingVersionMismatch(
+                    server_proving_version,
                     exec_version,
                 ));
             }
@@ -273,7 +287,10 @@ impl FriJobManager {
             proof_final_register_values,
         }) = fri_proof_verifier::verify_fri_proof(
             batch_metadata.previous_stored_batch_info.state_commitment,
-            batch_metadata.batch_info.clone().into_stored(),
+            batch_metadata
+                .batch_info
+                .clone()
+                .into_stored(&batch_metadata.protocol_version),
             program_proof,
         ) {
             tracing::warn!(
@@ -289,7 +306,12 @@ impl FriJobManager {
                 last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
                 expected_hash_u32s,
                 proof_final_register_values,
-                vk_hash: Some(batch_metadata.verification_key_hash().to_string()),
+                vk_hash: Some(
+                    batch_metadata
+                        .verification_key_hash()
+                        .expect("VK must exist")
+                        .to_string(),
+                ),
                 proof_bytes,
             };
 
@@ -332,23 +354,32 @@ impl FriJobManager {
         let Some(removed_job) = self.assigned_jobs.remove(batch_number) else {
             tracing::warn!(
                 batch_number,
+                ?prove_time,
                 "Proof persisted; job already removed (racing submit)"
             );
             return Ok(());
         };
-        tracing::info!(batch_number, "Real proof accepted");
+        tracing::info!(
+            batch_number,
+            ?prove_time,
+            minmax_assigned_batch_number = ?self.assigned_jobs.minmax_assigned_batch_number(),
+            "Real proof accepted"
+        );
 
         // get execution version from prover, if available, otherwise fallback
-        let execution_version = if let Some(execution_version) = execution_version {
-            proving_run_execution_version(execution_version as u32) as u32
+        let proving_version = if let Some(proving_version) = proving_version {
+            proving_version
         } else {
-            proving_run_execution_version(batch_metadata.execution_version) as u32
+            let forward_run_execution_version =
+                ExecutionVersion::try_from(removed_job.batch_envelope.batch.execution_version)
+                    .expect("Must be valid execution as set by the server");
+            ProvingVersion::from_forward_run_execution_version(forward_run_execution_version)
         };
 
         // Prepare the envelope and send it downstream.
         let proof = RealFriProof::V2 {
             proof: proof_bytes,
-            proving_execution_version: execution_version,
+            proving_execution_version: proving_version as u32,
         };
         let envelope = removed_job
             .batch_envelope
@@ -382,8 +413,12 @@ impl FriJobManager {
         let label: &'static str = Box::leak(prover_id.to_owned().into_boxed_str());
 
         PROVER_METRICS.prove_time[&(ProverStage::Fri, ProverType::Fake, label)].observe(prove_time);
-        PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Fake, label)]
-            .observe(prove_time / assigned.batch_envelope.batch.tx_count as u32);
+        prove_time
+            .checked_div(assigned.batch_envelope.batch.tx_count as u32)
+            .inspect(|t| {
+                PROVER_METRICS.prove_time_per_tx[&(ProverStage::Fri, ProverType::Fake, label)]
+                    .observe(*t);
+            });
 
         // No verification / deserialization — we emit a fake proof.
 

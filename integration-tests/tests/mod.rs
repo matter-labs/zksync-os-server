@@ -7,6 +7,8 @@ use tokio::time::Instant;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
 
+mod upgrade;
+
 #[test_log::test(tokio::test)]
 async fn basic_transfers() -> anyhow::Result<()> {
     // Test that the node can process 100 concurrent transfers to random accounts

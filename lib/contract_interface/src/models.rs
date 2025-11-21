@@ -1,5 +1,5 @@
-use crate::IExecutor;
-use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
+use crate::{IExecutor, IExecutorV29};
+use alloy::primitives::{B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -77,6 +77,53 @@ impl From<&StoredBatchInfo> for IExecutor::StoredBatchInfo {
     }
 }
 
+/// User-friendly version of [`crate::L2DACommitmentScheme`] with statically known possible variants.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[repr(u8)]
+pub enum DACommitmentScheme {
+    /// Invalid option
+    None,
+    /// Empty(`0`) commitment, used for validium
+    EmptyNoDA,
+    /// Keccak of stateDiffHash and keccak(pubdata), used by 3rd party DA solutions
+    PubdataKeccak256,
+    /// This commitment includes blobs data and pubdata hash, ZKsync OS always outputs empty blobs, and it's used only for calldata with ZKsync OS
+    BlobsAndPubdataKeccak256,
+    /// Keccak of blob versioned hashes filled with pubdata, used for blobs DA with ZKsync OS
+    BlobsZKsyncOS,
+}
+
+impl From<DACommitmentScheme> for crate::L2DACommitmentScheme {
+    fn from(value: DACommitmentScheme) -> Self {
+        match value {
+            DACommitmentScheme::None => crate::L2DACommitmentScheme::NONE,
+            DACommitmentScheme::EmptyNoDA => crate::L2DACommitmentScheme::EMPTY_NO_DA,
+            DACommitmentScheme::PubdataKeccak256 => crate::L2DACommitmentScheme::PUBDATA_KECCAK256,
+            DACommitmentScheme::BlobsAndPubdataKeccak256 => {
+                crate::L2DACommitmentScheme::BLOBS_AND_PUBDATA_KECCAK256
+            }
+            DACommitmentScheme::BlobsZKsyncOS => crate::L2DACommitmentScheme::BLOBS_ZKSYNC_OS,
+        }
+    }
+}
+
+impl From<crate::L2DACommitmentScheme> for DACommitmentScheme {
+    fn from(value: crate::L2DACommitmentScheme) -> Self {
+        match value {
+            crate::L2DACommitmentScheme::NONE => DACommitmentScheme::None,
+            crate::L2DACommitmentScheme::EMPTY_NO_DA => DACommitmentScheme::EmptyNoDA,
+            crate::L2DACommitmentScheme::PUBDATA_KECCAK256 => DACommitmentScheme::PubdataKeccak256,
+            crate::L2DACommitmentScheme::BLOBS_AND_PUBDATA_KECCAK256 => {
+                DACommitmentScheme::BlobsAndPubdataKeccak256
+            }
+            crate::L2DACommitmentScheme::BLOBS_ZKSYNC_OS => DACommitmentScheme::BlobsZKsyncOS,
+            crate::L2DACommitmentScheme::__Invalid => {
+                panic!("Invalid IExecutor::L2DACommitmentScheme from l1")
+            }
+        }
+    }
+}
+
 /// User-friendly version of [`IExecutor::CommitBatchInfoZKsyncOS`].
 #[derive(Clone, Serialize, Deserialize, PartialEq, Difference)]
 #[difference(expose)]
@@ -87,12 +134,23 @@ pub struct CommitBatchInfo {
     pub priority_operations_hash: B256,
     pub dependency_roots_rolling_hash: B256,
     pub l2_to_l1_logs_root_hash: B256,
-    pub l2_da_validator: Address,
+    #[serde(default = "default_l2_da_commitment_scheme")]
+    pub l2_da_commitment_scheme: DACommitmentScheme,
     pub da_commitment: B256,
     pub first_block_timestamp: u64,
+    // Note, that pre-zksync-os-v30 batches did not contain this field.
+    pub first_block_number: Option<u64>,
     pub last_block_timestamp: u64,
+    // Note, that pre-zksync-os-v30 batches did not contain this field.
+    pub last_block_number: Option<u64>,
     pub chain_id: u64,
     pub operator_da_input: Vec<u8>,
+}
+
+// `l2_da_commitment_scheme` is not present in storage for old batches, by default we use `BlobsAndPubdataKeccak256`.
+// It corresponds to da commitment used in these batches before adding different DACommitmentScheme options
+fn default_l2_da_commitment_scheme() -> DACommitmentScheme {
+    DACommitmentScheme::BlobsAndPubdataKeccak256
 }
 
 impl From<CommitBatchInfo> for IExecutor::CommitBatchInfoZKsyncOS {
@@ -104,7 +162,31 @@ impl From<CommitBatchInfo> for IExecutor::CommitBatchInfoZKsyncOS {
             value.priority_operations_hash,
             value.dependency_roots_rolling_hash,
             value.l2_to_l1_logs_root_hash,
-            value.l2_da_validator,
+            value.l2_da_commitment_scheme.into(),
+            value.da_commitment,
+            value.first_block_timestamp,
+            // It is expected that for all the newly sent batches this field is always present.
+            value.first_block_number.unwrap(),
+            value.last_block_timestamp,
+            // It is expected that for all the newly sent batches this field is always present.
+            value.last_block_number.unwrap(),
+            U256::from(value.chain_id),
+            Bytes::from(value.operator_da_input),
+        ))
+    }
+}
+
+impl From<CommitBatchInfo> for IExecutorV29::CommitBatchInfoZKsyncOS {
+    fn from(value: CommitBatchInfo) -> Self {
+        IExecutorV29::CommitBatchInfoZKsyncOS::from((
+            value.batch_number,
+            value.new_state_commitment,
+            U256::from(value.number_of_layer1_txs),
+            value.priority_operations_hash,
+            value.dependency_roots_rolling_hash,
+            value.l2_to_l1_logs_root_hash,
+            // we always set l2 da validator address
+            alloy::primitives::Address::ZERO,
             value.da_commitment,
             value.first_block_timestamp,
             value.last_block_timestamp,
@@ -123,10 +205,12 @@ impl From<IExecutor::CommitBatchInfoZKsyncOS> for CommitBatchInfo {
             priority_operations_hash: value.priorityOperationsHash,
             dependency_roots_rolling_hash: value.dependencyRootsRollingHash,
             l2_to_l1_logs_root_hash: value.l2LogsTreeRoot,
-            l2_da_validator: value.l2DaValidator,
+            l2_da_commitment_scheme: value.daCommitmentScheme.into(),
             da_commitment: value.daCommitment,
             first_block_timestamp: value.firstBlockTimestamp,
+            first_block_number: Some(value.firstBlockNumber),
             last_block_timestamp: value.lastBlockTimestamp,
+            last_block_number: Some(value.lastBlockNumber),
             chain_id: value.chainId.to::<u64>(),
             operator_da_input: value.operatorDAInput.as_ref().to_vec(),
         }
@@ -145,7 +229,7 @@ impl fmt::Debug for CommitBatchInfo {
                 &self.dependency_roots_rolling_hash,
             )
             .field("l2_to_l1_logs_root_hash", &self.l2_to_l1_logs_root_hash)
-            .field("l2_da_validator", &self.l2_da_validator)
+            .field("l2_da_commitment_scheme", &self.l2_da_commitment_scheme)
             .field("da_commitment", &self.da_commitment)
             .field("first_block_timestamp", &self.first_block_timestamp)
             .field("last_block_timestamp", &self.last_block_timestamp)
