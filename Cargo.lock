@@ -7281,8 +7281,8 @@ dependencies = [
 
 [[package]]
 name = "protocol_version"
-version = "0.6.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
+version = "0.6.1"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.1#af957c1b26b293660f29da5ed3abb5f976f05a9e"
 
 [[package]]
 name = "prover"
@@ -12009,8 +12009,8 @@ checksum = "8b3ad55a8aa3498e304565de55b61dc930bac227c8c5e81284b623c69f2143d2"
 
 [[package]]
 name = "zksync_os_fri_prover"
-version = "0.6.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
+version = "0.6.1"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.1#af957c1b26b293660f29da5ed3abb5f976f05a9e"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -12334,8 +12334,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_prover_service"
-version = "0.6.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
+version = "0.6.1"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.1#af957c1b26b293660f29da5ed3abb5f976f05a9e"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -12587,8 +12587,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_snark_prover"
-version = "0.6.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
+version = "0.6.1"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.1#af957c1b26b293660f29da5ed3abb5f976f05a9e"
 dependencies = [
  "anyhow",
  "clap",
@@ -12746,8 +12746,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_sequencer_proof_client"
-version = "0.6.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.0#7dee1169d83790f29bbbb140da893582259b08ca"
+version = "0.6.1"
+source = "git+https://github.com/matter-labs/zksync-airbender-prover.git?tag=v0.6.1#af957c1b26b293660f29da5ed3abb5f976f05a9e"
 dependencies = [
  "anyhow",
  "async-trait",
