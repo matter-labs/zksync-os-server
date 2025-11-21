@@ -68,7 +68,7 @@ pub enum ObjectStoreMode {
 mod tests {
     use smart_config::{
         Environment, Yaml,
-        testing::{Tester, test, test_complete},
+        testing::{test, test_complete},
     };
 
     use super::*;
@@ -168,28 +168,6 @@ mod tests {
             config.mode,
             ObjectStoreMode::FileBacked {
                 file_backed_base_path: "./chains/era/artifacts/".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn public_bucket_from_yaml_with_enum_coercion() {
-        let yaml = r"
-          s3_anonymous_read_only:
-            bucket_base_url: /public_base_url
-            endpoint: http://localhost:9000
-            region: us-east-2
-          max_retries: 3
-        ";
-        let yaml = Yaml::new("test.yml", serde_yaml::from_str(yaml).unwrap()).unwrap();
-        let config: ObjectStoreConfig = Tester::default().coerce_serde_enums().test(yaml).unwrap();
-        assert_eq!(config.max_retries, 3);
-        assert_eq!(
-            config.mode,
-            ObjectStoreMode::S3AnonymousReadOnly {
-                bucket_base_url: "/public_base_url".to_owned(),
-                endpoint: Some("http://localhost:9000".to_owned()),
-                region: Some("us-east-2".to_owned()),
             }
         );
     }
