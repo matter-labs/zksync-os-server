@@ -3,7 +3,7 @@ pub mod v4 {
     use std::sync::OnceLock;
 
     pub const SINGLEBLOCK_BATCH_APP: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_1_0_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_1_0-rc1_SOURCE_PATH"),
         "/singleblock_batch.bin"
     ));
 
@@ -27,7 +27,7 @@ pub mod v4 {
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_1_0_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_1_0-rc1_SOURCE_PATH"),
         "/singleblock_batch_logging_enabled.bin"
     ));
 
@@ -51,7 +51,7 @@ pub mod v4 {
     }
 
     pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_1_0_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_1_0-rc1_SOURCE_PATH"),
         "/multiblock_batch.bin"
     ));
 
@@ -80,7 +80,7 @@ pub mod v5 {
     use std::sync::OnceLock;
 
     pub const SINGLEBLOCK_BATCH_APP: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_2_2_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_2_4_SOURCE_PATH"),
         "/singleblock_batch.bin"
     ));
 
@@ -104,7 +104,7 @@ pub mod v5 {
     }
 
     pub const SINGLEBLOCK_BATCH_LOGGING_ENABLED: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_2_2_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_2_4_SOURCE_PATH"),
         "/singleblock_batch_logging_enabled.bin"
     ));
 
@@ -128,7 +128,7 @@ pub mod v5 {
     }
 
     pub const MULTIBLOCK_BATCH: &[u8] = include_bytes!(concat!(
-        env!("ZKSYNC_OS_0_2_2_SOURCE_PATH"),
+        env!("ZKSYNC_OS_0_2_4_SOURCE_PATH"),
         "/multiblock_batch.bin"
     ));
 
