@@ -2748,7 +2748,7 @@ dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
  "c-kzg",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "num-bigint 0.3.3",
+ "num-bigint 0.4.6",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -9625,10 +9625,11 @@ dependencies = [
 
 [[package]]
 name = "smart-config"
-version = "0.2.0-pre"
+version = "0.4.0-pre"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "720d0d1a5fad745fb5e8ac665631528556c9b9cea35433b4949d50cd0cfc8bbb"
+checksum = "fc2d4564b7a55dcf808e6c95051fcf433c0c1f1898af9621f7644f0c0af3114e"
 dependencies = [
+ "alloy",
  "anyhow",
  "compile-fmt",
  "primitive-types",
@@ -9642,9 +9643,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-derive"
-version = "0.2.0-pre"
+version = "0.4.0-pre"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a5fede39e20d50047e6eb1aee008bd44db17e6a851b1e1b00bce117bdf74d50"
+checksum = "a1634024848ad2d76c65a88ddc7b17de8ca323100b3e77d9ee94b103fc5efe65"
 dependencies = [
  "proc-macro2 1.0.95",
  "quote 1.0.40",

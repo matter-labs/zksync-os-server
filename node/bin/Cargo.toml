@@ -76,7 +76,7 @@ semver = { workspace = true, features = ["serde"] }
 backon.workspace = true
 
 bincode.workspace = true
-smart-config = { workspace = true, features = ["primitive-types"] }
+smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
 
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
