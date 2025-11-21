@@ -28,7 +28,7 @@ impl<C: SendToL1> L1SenderCommand<C> {
     pub fn batch_count(&self) -> usize {
         match self {
             Self::SendToL1(cmd) => cmd.as_ref().len(),
-            Self::Passthrough(envelope) => 1,
+            Self::Passthrough(_) => 1,
         }
     }
 }
