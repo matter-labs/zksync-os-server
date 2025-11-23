@@ -63,9 +63,29 @@ where
                 anyhow::bail!("inbound channel closed");
             };
             let raw_exec_ver = replay_record.block_context.execution_version;
-            let exec_ver = ExecutionVersion::try_from(raw_exec_ver)
-                .expect("Must be valid execution as set by the server");
-
+            let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
+                .ok()
+                .and_then(|exec_ver| zk_spec_version(exec_ver))
+            {
+                Some(spec) => Some(spec),
+                None => {
+                    // Warn once per execution_version. Afterwards log at info level.
+                    let first_time = warned_unsupported_versions.insert(raw_exec_ver);
+                    if first_time {
+                        tracing::warn!(
+                            execution_version = raw_exec_ver,
+                            "Invalid or unsupported ZKsync OS execution version for REVM; skipping block"
+                        );
+                    } else {
+                        tracing::info!(
+                            execution_version = raw_exec_ver,
+                            "Invalid or unsupported ZKsync OS execution version for REVM; skipping block"
+                        );
+                    }
+                    // Skip executing this block when there is no supported REVM version.
+                    None
+                }
+            };
             match zk_spec_version(exec_ver) {
                 Some(spec) => Some(spec),
                 None => {
