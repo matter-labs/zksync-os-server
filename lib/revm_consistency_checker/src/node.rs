@@ -10,7 +10,7 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_revm::{DefaultZk, ZkBuilder, ZkSpecId};
+use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::ExecutionVersion;
 
@@ -65,7 +65,7 @@ where
             let raw_exec_ver = replay_record.block_context.execution_version;
             let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
                 .ok()
-                .and_then(|exec_ver| zk_spec_version(exec_ver))
+                .and_then(zk_spec_version)
             {
                 Some(spec) => Some(spec),
                 None => {
@@ -80,26 +80,6 @@ where
                         tracing::info!(
                             execution_version = raw_exec_ver,
                             "Invalid or unsupported ZKsync OS execution version for REVM; skipping block"
-                        );
-                    }
-                    // Skip executing this block when there is no supported REVM version.
-                    None
-                }
-            };
-            match zk_spec_version(exec_ver) {
-                Some(spec) => Some(spec),
-                None => {
-                    // Warn once per execution_version. Afterwards log at info level.
-                    let first_time = warned_unsupported_versions.insert(raw_exec_ver);
-                    if first_time {
-                        tracing::warn!(
-                            execution_version = raw_exec_ver,
-                            "Unsupported ZKsync OS execution version for REVM; skipping block"
-                        );
-                    } else {
-                        tracing::info!(
-                            execution_version = raw_exec_ver,
-                            "Unsupported ZKsync OS execution version for REVM; skipping block"
                         );
                     }
                     // Skip executing this block when there is no supported REVM version.
