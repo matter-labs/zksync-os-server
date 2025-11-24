@@ -577,7 +577,7 @@ pub struct BatchVerificationConfig {
     #[config(default_t = 1)]
     pub threshold: usize,
     /// [server] Accepted signer pubkeys
-    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()])]
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited(","))]
     pub accepted_signers: Vec<String>,
     /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]
