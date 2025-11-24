@@ -2,13 +2,9 @@ use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::{Address, U128};
 use serde::{Deserialize, Serialize};
-use smart_config::de::{Qualified, WellKnown};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
-use smart_config::{
-    DescribeConfig, DeserializeConfig, Serde,
-    de::{Delimited, Optional},
-};
+use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::Delimited};
 use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
@@ -105,23 +101,22 @@ pub enum StateBackendConfig {
 pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
+    #[config(default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
-    pub bytecode_supplier_address: Option<Address>,
+    #[config(default_t = crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap())]
+    pub bytecode_supplier_address: Address,
 
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(with = Optional(Serde![int]), default_t = Some("./genesis/genesis.json".into()))]
+    #[config(default_t = Some("./genesis/genesis.json".into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
@@ -187,15 +182,15 @@ pub struct SequencerConfig {
     pub fee_collector_address: Address,
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    #[config(default_t = None, with = Optional(Serde![str]))]
+    #[config(default_t = None)]
     pub base_fee_override: Option<U128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    #[config(default_t = None, with = Optional(Serde![str]))]
+    #[config(default_t = None)]
     pub pubdata_price_override: Option<U128>,
 
     /// Override for native price (in wei). If set, native price will be constant and equal to this value.
-    #[config(default_t = None, with = Optional(Serde![str]))]
+    #[config(default_t = None)]
     pub native_price_override: Option<U128>,
 
     /// Maximum number of blocks to produce.
@@ -226,16 +221,6 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct ConfigAddress(pub Address);
-
-const HASH_DE: Qualified<Serde![str]> =
-    Qualified::new(Serde![str], "hex string with optional 0x prefix");
-impl WellKnown for ConfigAddress {
-    type Deserializer = Qualified<Serde![str]>;
-    const DE: Self::Deserializer = HASH_DE;
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -275,7 +260,7 @@ pub struct RpcConfig {
 
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
     #[config(default, with = Delimited(","))]
-    pub l2_signer_blacklist: HashSet<ConfigAddress>,
+    pub l2_signer_blacklist: HashSet<Address>,
 
     /// Default timeout for `eth_sendRawTransactionSync`
     #[config(default_t = 2 * TimeUnit::Seconds)]
@@ -619,7 +604,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_response_size: c.max_response_size,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
-            l2_signer_blacklist: c.l2_signer_blacklist.into_iter().map(|a| a.0).collect(),
+            l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
         }

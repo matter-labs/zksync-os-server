@@ -175,7 +175,13 @@ fn build_configs() -> Config {
         .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
         .expect("Failed to insert batch verification config");
 
-    let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
+    let mut env = Environment::prefixed("");
+    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
+    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
+    // an `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
+    env.coerce_json()
+        .expect("failed to coerce JSON envvar values");
+    let repo = ConfigRepository::new(&schema).with(env);
 
     let mut general_config = repo
         .single::<GeneralConfig>()

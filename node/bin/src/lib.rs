@@ -497,10 +497,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1UpgradeTxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
-            config
-                .genesis_config
-                .bytecode_supplier_address
-                .expect("Missing `bytecode_supplier_address` in L1 watcher config"),
+            config.genesis_config.bytecode_supplier_address,
             current_protocol_version,
             l1_upgrade_transactions_sender,
         )
