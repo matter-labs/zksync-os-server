@@ -7,6 +7,7 @@ use crate::model::blocks::BlockCommand;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio::sync::{mpsc::Sender, watch};
+use tokio::time::Instant;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
@@ -66,6 +67,9 @@ where
         // Track how many Produce commands we've processed (for `sequencer_max_blocks_to_produce` config)
         let mut produced_blocks_count = 0u64;
 
+        // Only used for metrics/logs
+        let mut last_processed_block_at: Option<Instant> = None;
+
         loop {
             latency_tracker.enter_state(SequencerState::WaitingForCommand);
 
@@ -124,6 +128,15 @@ where
                     })
                     .context("execute_block")?;
 
+            let time_since_last_block = last_processed_block_at
+                .map(|last_processed_block_at| last_processed_block_at.elapsed());
+            if let Some(time_since_last_block) = time_since_last_block {
+                EXECUTION_METRICS
+                    .time_since_last_block
+                    .observe(time_since_last_block);
+            }
+            last_processed_block_at = Some(Instant::now());
+
             tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
@@ -166,9 +179,10 @@ where
 
             tracing::debug!(
                 block_number,
+                time_since_last_block = ?time_since_last_block,
                 "Block processed in sequencer! Sending downstream..."
             );
-            EXECUTION_METRICS.block_number[&"execute"].set(block_number);
+            EXECUTION_METRICS.block_number.set(block_number);
             EXECUTION_METRICS
                 .last_execution_version
                 .set(replay_record.block_context.execution_version as u64);

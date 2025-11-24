@@ -30,6 +30,9 @@ pub struct RpcConfig {
 
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
     pub l2_signer_blacklist: HashSet<Address>,
+
+    /// Default timeout for `eth_sendRawTransactionSync`
+    pub send_raw_transaction_sync_timeout: Duration,
 }
 
 impl RpcConfig {

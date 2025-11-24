@@ -1,3 +1,4 @@
+use crate::config::RpcConfig;
 use crate::eth_call_handler::EthCallHandler;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
@@ -10,6 +11,7 @@ use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
 use alloy::network::BlockResponse;
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{Address, B256, Bytes, TxHash, U64, U256};
+use alloy::providers::DynProvider;
 use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
@@ -20,7 +22,6 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
-use std::collections::HashSet;
 use std::convert::identity;
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
@@ -35,7 +36,7 @@ use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
-    tx_handler: TxHandler<Mempool>,
+    tx_handler: TxHandler<RpcStorage, Mempool>,
     eth_call_handler: EthCallHandler<RpcStorage>,
 
     // todo: the idea is to only have handlers here, but then get_balance would require its own handler
@@ -48,14 +49,21 @@ pub struct EthNamespace<RpcStorage, Mempool> {
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
     pub fn new(
+        config: RpcConfig,
         storage: RpcStorage,
         mempool: Mempool,
         eth_call_handler: EthCallHandler<RpcStorage>,
         chain_id: u64,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
-        l2_signer_blacklist: HashSet<Address>,
+        tx_forwarder: Option<DynProvider>,
     ) -> Self {
-        let tx_handler = TxHandler::new(mempool.clone(), acceptance_state, l2_signer_blacklist);
+        let tx_handler = TxHandler::new(
+            config,
+            storage.clone(),
+            mempool.clone(),
+            acceptance_state,
+            tx_forwarder,
+        );
 
         Self {
             tx_handler,
@@ -680,6 +688,17 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
         self.tx_handler
             .send_raw_transaction_impl(bytes)
+            .await
+            .to_rpc_result()
+    }
+
+    async fn send_raw_transaction_sync(
+        &self,
+        bytes: Bytes,
+        max_wait_ms: Option<U256>,
+    ) -> RpcResult<ZkTransactionReceipt> {
+        self.tx_handler
+            .send_raw_transaction_sync_impl(bytes, max_wait_ms)
             .await
             .to_rpc_result()
     }

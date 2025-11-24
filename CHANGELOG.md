@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.11.1](https://github.com/matter-labs/zksync-os-server/compare/v0.11.0...v0.11.1) (2025-11-24)
+
+
+### Features
+
+* Add time_since metrics ([#628](https://github.com/matter-labs/zksync-os-server/issues/628)) ([33a7224](https://github.com/matter-labs/zksync-os-server/commit/33a722440f5399f74b8f80b95d9386f285c16c5e))
+* config option to disable batcher hash assertion when rebuilding batches ([#647](https://github.com/matter-labs/zksync-os-server/issues/647)) ([34d45e1](https://github.com/matter-labs/zksync-os-server/commit/34d45e1f3b1420664c6a0e1f4367a47e7d10e27c))
+* update zksync-os with p256 fix ([#642](https://github.com/matter-labs/zksync-os-server/issues/642)) ([ea04463](https://github.com/matter-labs/zksync-os-server/commit/ea044637adb94336999d0e5031dd61c007defc11))
+* upgrade smart-config to 0.4.0; simplify parsing ([#644](https://github.com/matter-labs/zksync-os-server/issues/644)) ([a0c1da9](https://github.com/matter-labs/zksync-os-server/commit/a0c1da9fea1312d46be0f6594d55787ea3ae45dc))
+
+
+### Bug Fixes
+
+* **batcher:** rebuild batches from S3 even when they are not committed ([#645](https://github.com/matter-labs/zksync-os-server/issues/645)) ([608153d](https://github.com/matter-labs/zksync-os-server/commit/608153d83dee7d37d03c9e53120a496454658df5))
+* Update ZKsync REVM deps ([#648](https://github.com/matter-labs/zksync-os-server/issues/648)) ([d66af50](https://github.com/matter-labs/zksync-os-server/commit/d66af5089b5f616da1387d05c7efa480ba5d0b92))
+
+## [0.11.0](https://github.com/matter-labs/zksync-os-server/compare/v0.10.1...v0.11.0) (2025-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* v30 zksync os protocol upgrade support ([#594](https://github.com/matter-labs/zksync-os-server/issues/594))
+* upgrade system (part 1 of N) ([#582](https://github.com/matter-labs/zksync-os-server/issues/582))
+
+### Features
+
+* add config for l2 signer blacklist ([#596](https://github.com/matter-labs/zksync-os-server/issues/596)) ([bc30cc9](https://github.com/matter-labs/zksync-os-server/commit/bc30cc967ed79119158ce90f6f0c4b93561f17a2))
+* add some prover metrics ([#611](https://github.com/matter-labs/zksync-os-server/issues/611)) ([b2483cf](https://github.com/matter-labs/zksync-os-server/commit/b2483cf3c2d36b49e2c9b078d30f30cd94397cb5))
+* **api:** forward EN transactions to main node ([#624](https://github.com/matter-labs/zksync-os-server/issues/624)) ([9a7583c](https://github.com/matter-labs/zksync-os-server/commit/9a7583c87b6e46a13a2cfc69a3796d95cfafa69f))
+* **api:** implement EIP-7966 eth_sendRawTransactionSync ([#621](https://github.com/matter-labs/zksync-os-server/issues/621)) ([0fbf615](https://github.com/matter-labs/zksync-os-server/commit/0fbf615a3d4d99ea4c85296ea8ed0e8e1203c52a))
+* handle reorgs for EN ([#610](https://github.com/matter-labs/zksync-os-server/issues/610)) ([055136d](https://github.com/matter-labs/zksync-os-server/commit/055136d8f5ce8a41048e0be48437e2bf04c16fac))
+* **l1_watcher:** Make l1 watcher processor-agnostic ([#634](https://github.com/matter-labs/zksync-os-server/issues/634)) ([a3fe619](https://github.com/matter-labs/zksync-os-server/commit/a3fe6198be7ec4abd3ef6b2fd8af6337035e0a60))
+* Read force deploys from a file ([#612](https://github.com/matter-labs/zksync-os-server/issues/612)) ([b90473a](https://github.com/matter-labs/zksync-os-server/commit/b90473ad45676c307510d84cb64464bf4c728b97))
+* upgrade system (part 1 of N) ([#582](https://github.com/matter-labs/zksync-os-server/issues/582)) ([4de5e84](https://github.com/matter-labs/zksync-os-server/commit/4de5e841a3fce8eadcfba2c4cb430de022d20d25))
+* upgrade system (part 2 of N) ([#609](https://github.com/matter-labs/zksync-os-server/issues/609)) ([b9a303d](https://github.com/matter-labs/zksync-os-server/commit/b9a303d58adea7a9d8558e374bb28f5944a244f9))
+* v30 zksync os protocol upgrade support ([#594](https://github.com/matter-labs/zksync-os-server/issues/594)) ([c8698a6](https://github.com/matter-labs/zksync-os-server/commit/c8698a683546e29a6e9e2fc58cac4371bbb4c80c))
+
+
+### Bug Fixes
+
+* **config:** add config attributes to fee overrides ([#603](https://github.com/matter-labs/zksync-os-server/issues/603)) ([5539e91](https://github.com/matter-labs/zksync-os-server/commit/5539e918cbfbdb3ad292c442364f04f56d5375bf))
+* fix calculation of da fields for validium v4 ([#636](https://github.com/matter-labs/zksync-os-server/issues/636)) ([72282d2](https://github.com/matter-labs/zksync-os-server/commit/72282d25f64b22d18c791f540438bd457c97cb37))
+* move BlacklistedSigner error to different enum ([#605](https://github.com/matter-labs/zksync-os-server/issues/605)) ([fd9f1bd](https://github.com/matter-labs/zksync-os-server/commit/fd9f1bdabd1d7247ae381df8da8cc40b38646dd3))
+* upgrade issues ([#638](https://github.com/matter-labs/zksync-os-server/issues/638)) ([15697bb](https://github.com/matter-labs/zksync-os-server/commit/15697bb7ec837a06308254e13acae64a2560f224))
+* upgrade issues second part ([#639](https://github.com/matter-labs/zksync-os-server/issues/639)) ([a06bb32](https://github.com/matter-labs/zksync-os-server/commit/a06bb32a0ba71978171e16b8a4a5b15b7838f750))
+
 ## [0.10.1](https://github.com/matter-labs/zksync-os-server/compare/v0.10.0...v0.10.1) (2025-11-12)
 
 

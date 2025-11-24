@@ -1,6 +1,7 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use crate::commitment::BatchInfo;
 use alloy::primitives::Bytes;
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -8,8 +9,9 @@ use std::time::SystemTime;
 use time::UtcDateTime;
 use zksync_os_batch_types::BatchSignatureSet;
 use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_multivm::ExecutionVersion;
 use zksync_os_observability::LatencyDistributionTracker;
+use zksync_os_types::PubdataMode;
+use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
@@ -30,27 +32,36 @@ pub struct BatchMetadata {
     pub batch_info: BatchInfo,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    #[serde(default = "default_pubdata_mode")]
+    pub pubdata_mode: PubdataMode,
     // note: can equal to zero
     pub tx_count: usize,
     #[serde(default = "default_execution_version")]
     pub execution_version: u32,
+    #[serde(default = "default_protocol_version")] // Default to allow deserializing older objects
+    pub protocol_version: ProtocolSemanticVersion,
 }
 
 impl BatchMetadata {
     /// Gets batch metadata verification key hash.
-    ///
-    /// NOTE: Panics if the execution version is unsupported, which *should* never happen in practice.
-    /// We could propagate an error here, but then we need to change APIs everywhere.
-    /// Given it is unlikely to happen in practice, we opt for simplicity.
-    pub fn verification_key_hash(&self) -> &'static str {
-        ExecutionVersion::try_from(self.execution_version)
-            .expect("Unsupported execution version")
-            .vk_hash()
+    pub fn verification_key_hash(&self) -> anyhow::Result<&'static str> {
+        Ok(ProvingVersion::try_from(self.protocol_version.clone())
+            .context("Failed to get proving version from protocol version")?
+            .vk_hash())
     }
 }
 
 fn default_execution_version() -> u32 {
     1
+}
+
+fn default_pubdata_mode() -> PubdataMode {
+    PubdataMode::Calldata
+}
+
+fn default_protocol_version() -> ProtocolSemanticVersion {
+    // Last protocol version deployed before this field was added
+    ProtocolSemanticVersion::legacy_genesis_version()
 }
 
 #[derive(Debug)]

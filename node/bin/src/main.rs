@@ -10,8 +10,8 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
     GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RollupPubdataMode, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig,
+    StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{CONFIG_DB_NAME, run};
@@ -179,6 +179,13 @@ fn build_configs() -> Config {
         .expect("Failed to insert batch verification config");
 
     let mut config_sources = ConfigSources::default();
+
+    let mut env = Environment::prefixed("");
+    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
+    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
+    // an `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
+    env.coerce_json()
+        .expect("failed to coerce JSON envvar values");
     config_sources.push(Environment::prefixed(""));
 
     let mut repo = ConfigRepository::new(&schema).with_all(config_sources.clone());
@@ -319,13 +326,6 @@ fn build_configs() -> Config {
     {
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");
-    }
-
-    if matches!(
-        l1_sender_config.rollup_pubdata_mode,
-        RollupPubdataMode::Blobs
-    ) {
-        panic!("Blobs mode is not supported yet");
     }
 
     Config {

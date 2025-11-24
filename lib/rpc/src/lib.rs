@@ -35,6 +35,7 @@ use crate::ots_impl::OtsNamespace;
 use crate::web3_impl::Web3Namespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
+use alloy::providers::DynProvider;
 use anyhow::Context;
 use hyper::Method;
 use jsonrpsee::RpcModule;
@@ -64,6 +65,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     pending_block_context: watch::Receiver<Option<BlockContext>>,
+    tx_forwarder: Option<DynProvider>,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -76,12 +78,13 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     );
     rpc.merge(
         EthNamespace::new(
+            config.clone(),
             storage.clone(),
             mempool.clone(),
             eth_call_handler.clone(),
             chain_id,
             acceptance_state,
-            config.l2_signer_blacklist.clone(),
+            tx_forwarder,
         )
         .into_rpc(),
     )?;

@@ -1,6 +1,7 @@
 use crate::{RepositoryBlock, StoredTxData};
 use alloy::primitives::TxHash;
 use futures::Stream;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -10,7 +11,7 @@ use tokio_stream::wrappers::BroadcastStream;
 #[derive(Debug, Clone)]
 pub struct BlockNotification {
     pub block: Arc<RepositoryBlock>,
-    pub transactions: Vec<(TxHash, Arc<StoredTxData>)>,
+    pub transactions: HashMap<TxHash, Arc<StoredTxData>>,
 }
 
 /// A type that allows to register block subscriptions.

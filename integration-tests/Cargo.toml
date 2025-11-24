@@ -37,6 +37,10 @@ reqwest.workspace = true
 serde.workspace = true
 regex = "1.11.1"
 
+# Needed for upgrade functionality tests
+zk_os_api.workspace = true
+zk_os_basic_system.workspace = true
+
 [dev-dependencies]
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 regex.workspace = true
