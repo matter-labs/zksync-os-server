@@ -4,10 +4,9 @@ use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
 use reth_revm::db::CacheDB;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Sender;
-use zksync_os_config_db::ConfigDB;
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
@@ -23,7 +22,7 @@ where
     State: ReadStateHistory + Clone + Send + 'static,
 {
     state: State,
-    config_db: Arc<Mutex<ConfigDB>>,
+    internal_config_manager: InternalConfigManager,
     revert_enabled: bool,
 }
 
@@ -31,31 +30,44 @@ impl<State> RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
 {
-    pub fn new(state: State, config_db: Arc<Mutex<ConfigDB>>, revert_enabled: bool) -> Self {
+    pub fn new(
+        state: State,
+        internal_config_manager: InternalConfigManager,
+        revert_enabled: bool,
+    ) -> Self {
         Self {
             state,
-            config_db,
+            internal_config_manager,
             revert_enabled,
         }
     }
 
-    pub fn handle_report(&self, block_number: u64, report: &CompareReport) -> anyhow::Result<()> {
+    pub fn handle_report(
+        &self,
+        replay_record: &ReplayRecord,
+        report: &CompareReport,
+    ) -> anyhow::Result<()> {
         report.log_tracing(20);
         if self.revert_enabled && !report.is_empty() {
-            let config_db = self.config_db.lock().unwrap();
-            let yaml = format!(
-                "
-                sequencer:
-                    block_rebuild:
-                        from_block: {block_number}
-                        blocks_to_empty: \"{block_number}\"
-                general:
-                    reset_config_db_after_block: {block_number}
-            "
-            );
-            config_db.merge_with_yaml(serde_yaml::from_str(&yaml)?)?;
+            let mut config = self.internal_config_manager.read_config()?;
+            config.failing_block = Some(replay_record.block_context.block_number);
 
-            panic!("REVM consistency check failed for block {block_number}");
+            let initial_blacklist_size = config.l2_signer_blacklist.len();
+            for tx in &replay_record.transactions {
+                config.l2_signer_blacklist.insert(tx.signer());
+            }
+            let new_blacklist_size = config.l2_signer_blacklist.len();
+            tracing::info!(
+                "Adding {} new addresses to L2 signer blacklist due to REVM inconsistency",
+                new_blacklist_size - initial_blacklist_size
+            );
+
+            let message = format!(
+                "REVM consistency check failed for block {}",
+                replay_record.block_context.block_number
+            );
+            self.internal_config_manager
+                .write_config_and_panic(&config, &message)?;
         }
 
         Ok(())
@@ -169,7 +181,7 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                self.handle_report(replay_record.block_context.block_number, &compare_report)?;
+                self.handle_report(&replay_record, &compare_report)?;
             }
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);

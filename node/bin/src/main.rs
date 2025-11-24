@@ -1,20 +1,15 @@
 use smart_config::value::ExposeSecret;
 use smart_config::{
-    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, Environment, Yaml,
+    ConfigRepository, ConfigSchema, DescribeConfig, Environment,
 };
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use zksync_os_config_db::ConfigDB;
+use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
-use zksync_os_server::config::{
-    BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
-    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StateBackendConfig,
-    StatusServerConfig, TxValidatorConfig,
-};
+use zksync_os_server::config::{BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig};
 use zksync_os_server::zkstack_config::ZkStackConfig;
-use zksync_os_server::{CONFIG_DB_NAME, run};
+use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -23,7 +18,7 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::main]
 pub async fn main() {
     // =========== load configs ===========
-    let config = build_configs();
+    let mut config = build_external_config();
 
     // =========== init observability ===========
     let logs = zksync_os_observability::Logs::new(
@@ -54,6 +49,8 @@ pub async fn main() {
         .with_opentelemetry(Some(otlp))
         .build();
     tracing::info!(?config, "Loaded config");
+
+    load_internal_config(&mut config);
 
     let prometheus: PrometheusExporterConfig =
         PrometheusExporterConfig::pull(config.observability_config.prometheus.port);
@@ -126,7 +123,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     }
 }
 
-fn build_configs() -> Config {
+fn build_external_config() -> Config {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
     schema
@@ -178,41 +175,19 @@ fn build_configs() -> Config {
         .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
         .expect("Failed to insert batch verification config");
 
-    let mut config_sources = ConfigSources::default();
-
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
     // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
     // an `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
     env.coerce_json()
         .expect("failed to coerce JSON envvar values");
-    config_sources.push(Environment::prefixed(""));
+    let repo = ConfigRepository::new(&schema).with(env);
 
-    let mut repo = ConfigRepository::new(&schema).with_all(config_sources.clone());
-
-    let general_config_init = repo
+    let mut general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
         .parse()
         .expect("Failed to parse general config");
-
-    let mut general_config = if general_config_init.config_override_db_enabled {
-        // Add config source from the db.
-        let config_db = ConfigDB::new(&general_config_init.rocks_db_path.join(CONFIG_DB_NAME));
-        let raw_yaml = config_db.read().expect("Failed to read config from db");
-        dbg!(&raw_yaml);
-        let yaml = Yaml::new("config_db.yaml", raw_yaml)
-            .expect("Failed to create yaml config source from db");
-        config_sources.push(yaml);
-        // Rebuild repo and re-load general config.
-        repo = ConfigRepository::new(&schema).with_all(config_sources);
-        repo.single::<GeneralConfig>()
-            .expect("Failed to load general config")
-            .parse()
-            .expect("Failed to parse general config")
-    } else {
-        general_config_init
-    };
 
     let mut genesis_config = repo
         .single::<GenesisConfig>()
@@ -344,5 +319,32 @@ fn build_configs() -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
+    }
+}
+
+fn load_internal_config(config: &mut Config) {
+    let file_path = config.general_config.rocks_db_path.join(INTERNAL_CONFIG_FILE_NAME);
+    let internal_config_manager =
+        InternalConfigManager::new(file_path).expect("Failed to create internal config manager");
+    let internal_config = internal_config_manager
+        .read_config()
+        .expect("Failed to read internal config");
+    tracing::info!(?internal_config, "Loaded internal config");
+
+    // Merging configs.
+    config.rpc_config.l2_signer_blacklist.extend(internal_config.l2_signer_blacklist);
+    if let Some(failing_block) = internal_config.failing_block {
+        if config.sequencer_config.block_rebuild.is_some() {
+            panic!(
+                "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \
+                 Please remove one of these settings to avoid conflicts.",
+                config.sequencer_config.block_rebuild, failing_block
+            );
+        } else {
+            config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
+                from_block: failing_block,
+                blocks_to_empty: vec![failing_block],
+            });
+        }
     }
 }

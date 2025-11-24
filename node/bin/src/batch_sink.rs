@@ -1,8 +1,7 @@
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use zksync_os_config_db::ConfigDB;
+use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReadFinality;
@@ -10,18 +9,13 @@ use zksync_os_storage_api::ReadFinality;
 /// Final destination for all processed batches
 // todo: add metrics
 pub struct BatchSink {
-    clear_config_after_block_number: Option<u64>,
-    config_db: Arc<Mutex<ConfigDB>>,
+    internal_config_manager: InternalConfigManager,
 }
 
 impl BatchSink {
-    pub fn new(
-        clear_config_after_block_number: Option<u64>,
-        config_db: Arc<Mutex<ConfigDB>>,
-    ) -> Self {
+    pub fn new(internal_config_manager: InternalConfigManager) -> Self {
         Self {
-            clear_config_after_block_number,
-            config_db,
+            internal_config_manager,
         }
     }
 }
@@ -40,6 +34,7 @@ impl PipelineComponent for BatchSink {
         _output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
         let mut input = input.into_inner();
+        let mut internal_config = self.internal_config_manager.read_config()?;
         while let Some(envelope) = input.recv().await {
             tracing::info!(
                 batch_number = envelope.batch_number(),
@@ -50,13 +45,14 @@ impl PipelineComponent for BatchSink {
                 proof = ?envelope.data,
                 " ▶▶▶ Batch has been fully processed"
             );
-            if let Some(n) = self.clear_config_after_block_number
+            if let Some(n) = internal_config.failing_block
                 && envelope.batch.last_block_number >= n
             {
-                tracing::info!("Clearing config DB and restarting node");
-                let db = self.config_db.lock().unwrap();
-                db.delete()?;
-                panic!("Restarting node to apply new configuration");
+                let message = "Removing `failing_block` from the internal config";
+                tracing::info!(message);
+                internal_config.failing_block = None;
+                self.internal_config_manager
+                    .write_config_and_panic(&internal_config, message)?;
             }
         }
         anyhow::bail!("Failed to receive committed batch");
@@ -104,21 +100,27 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
     }
 }
 
-/// Task that periodically checks the finality status and clears the config DB when the specified block number is reached.
-/// Should only be run for ENs.
-pub async fn clear_db_config_task<F: ReadFinality>(
-    clear_config_after_block_number: u64,
+/// Task that periodically checks the finality status and removes `failing_block` from the internal config
+/// when the specified block number is reached. Should only be run for ENs.
+pub async fn clear_failing_block_config_task<F: ReadFinality>(
     finality: F,
-    config_db: Arc<Mutex<ConfigDB>>,
+    internal_config_manager: InternalConfigManager,
 ) -> anyhow::Result<()> {
-    loop {
-        if finality.get_finality_status().last_executed_block >= clear_config_after_block_number {
-            tracing::info!("Clearing config DB and restarting node");
-            let db = config_db.lock().unwrap();
-            db.delete()?;
-            panic!("Restarting node to apply new configuration");
-        } else {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut internal_config = internal_config_manager.read_config()?;
+    if let Some(failing_block_number) = internal_config.failing_block {
+        loop {
+            if finality.get_finality_status().last_executed_block >= failing_block_number {
+                let message = "Removing `failing_block` from the internal config";
+                tracing::info!(message);
+                internal_config.failing_block = None;
+                internal_config_manager.write_config_and_panic(&internal_config, message)?;
+            } else {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
+    } else {
+        // Do nothing
+        futures::future::pending::<()>().await;
+        Ok(())
     }
 }

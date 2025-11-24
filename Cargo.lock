@@ -11981,16 +11981,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zksync_os_config_db"
-version = "0.11.1-non-semver-compat"
-dependencies = [
- "anyhow",
- "serde_yaml",
- "smart-config",
- "zksync_os_rocksdb",
-]
-
-[[package]]
 name = "zksync_os_contract_interface"
 version = "0.11.1-non-semver-compat"
 dependencies = [
@@ -12127,6 +12117,17 @@ dependencies = [
  "alloy-primitives",
  "serde",
  "zksync_os_evm_errors",
+]
+
+[[package]]
+name = "zksync_os_internal_config"
+version = "0.11.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -12394,9 +12395,9 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
  "zksync-os-revm",
- "zksync_os_config_db",
  "zksync_os_genesis",
  "zksync_os_interface",
+ "zksync_os_internal_config",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
  "zksync_os_multivm",
@@ -12571,11 +12572,11 @@ dependencies = [
  "zksync-os-revm",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
- "zksync_os_config_db",
  "zksync_os_contract_interface",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
  "zksync_os_interface",
+ "zksync_os_internal_config",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",
