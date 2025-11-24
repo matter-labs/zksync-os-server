@@ -177,8 +177,19 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                                 tracing::warn!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → skipped");
                                             },
                                             TxRejectionMethod::SealBlock(reason) => {
-                                                tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
-                                                break reason;
+                                                // For ProduceBlock (SealPolicy::Decide), don't seal if no transactions have been executed yet
+                                                if matches!(command.seal_policy, SealPolicy::Decide(..)) && executed_txs.is_empty() {
+                                                    tracing::warn!(
+                                                        tx_hash = %tx.hash(),
+                                                        block = ctx.block_number,
+                                                        ?e,
+                                                        ?reason,
+                                                        "block limit reached on first tx in ProduceBlock → skipping instead of sealing"
+                                                    );
+                                                } else {
+                                                    tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
+                                                    break reason;
+                                                }
                                             }
                                         }
                                     }
