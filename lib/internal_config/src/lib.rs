@@ -2,7 +2,6 @@
 //! Internal config is stored in a JSON file on disk and read/written as needed.
 //! Internal config is expected to be read at node startup and merged with the main config.
 
-use alloy::consensus::private::serde_json;
 use alloy::primitives::Address;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
