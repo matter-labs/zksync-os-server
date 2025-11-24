@@ -10,10 +10,11 @@ use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_revm::{DefaultZk, ZkBuilder, ZkSpecId};
+use zksync_os_revm::{DefaultZk, ZkBuilder};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
+use zksync_os_types::ExecutionVersion;
 
-use crate::helpers::zk_tx_into_revm_tx;
+use crate::helpers::{zk_spec_version, zk_tx_into_revm_tx};
 use crate::revm_state_provider::RevmStateProvider;
 use crate::storage_diff_comp::CompareReport;
 
@@ -61,21 +62,24 @@ where
             let Some((block_output, replay_record)) = input.recv().await else {
                 anyhow::bail!("inbound channel closed");
             };
-            let exec_ver = replay_record.block_context.execution_version;
-            let zk_spec = match ZkSpecId::from_exec_version(exec_ver) {
+            let raw_exec_ver = replay_record.block_context.execution_version;
+            let zk_spec = match ExecutionVersion::try_from(raw_exec_ver)
+                .ok()
+                .and_then(zk_spec_version)
+            {
                 Some(spec) => Some(spec),
                 None => {
                     // Warn once per execution_version. Afterwards log at info level.
-                    let first_time = warned_unsupported_versions.insert(exec_ver);
+                    let first_time = warned_unsupported_versions.insert(raw_exec_ver);
                     if first_time {
                         tracing::warn!(
-                            execution_version = exec_ver,
-                            "Unsupported ZKsync OS execution version for REVM; skipping block"
+                            execution_version = raw_exec_ver,
+                            "Invalid or unsupported ZKsync OS execution version for REVM; skipping block"
                         );
                     } else {
                         tracing::info!(
-                            execution_version = exec_ver,
-                            "Unsupported ZKsync OS execution version for REVM; skipping block"
+                            execution_version = raw_exec_ver,
+                            "Invalid or unsupported ZKsync OS execution version for REVM; skipping block"
                         );
                     }
                     // Skip executing this block when there is no supported REVM version.
