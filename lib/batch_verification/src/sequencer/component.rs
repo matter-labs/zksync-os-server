@@ -57,6 +57,9 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
         if self.config.server_enabled {
             let (server, response_receiver) = BatchVerificationServer::new();
             let server = Arc::new(server);
+            // Stores response channels for each request ID to route responses
+            // depending on request id. Allows collect_batch_verification_signatures
+            // to be run concurrently. Unimplemented currently.
             let response_channels = Arc::new(DashMap::new());
 
             let server_for_fut = server.clone();
@@ -92,6 +95,10 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
     }
 }
 
+/// Takes BatchVerificationResponse from server and routes them to appropriate
+/// per-request id channels. The full flow is:
+/// BatchVerificationServer -> response_receiver -> run_batch_response_processor ->
+/// -> response_channels -> BatchVerifier::collect_batch_verification_signatures
 async fn run_batch_response_processor(
     mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
     response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
@@ -257,7 +264,10 @@ impl BatchVerifier {
         }
     }
 
-    /// Process a batch envelope and collect verification signatures
+    /// Process a batch envelope and collect verification signatures.
+    /// We discard collected signatures if not enough are collected. If a node
+    /// has signed a request once, it will sign the same batch again,
+    /// so it's safe to discard.
     async fn collect_batch_verification_signatures<E: Send + Sync>(
         &self,
         batch_envelope: &BatchForSigning<E>,
