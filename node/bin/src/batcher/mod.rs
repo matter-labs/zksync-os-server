@@ -352,25 +352,32 @@ impl Batcher {
         )?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
-        let rebuilt_stored_batch_info = rebuilt_batch
-            .batch
-            .batch_info
-            .clone()
-            .into_stored(&rebuilt_batch.batch.protocol_version);
-        let stored_stored_batch_info = existing_batch
-            .batch
-            .batch_info
-            .clone()
-            .into_stored(&existing_batch.batch.protocol_version);
+        if self.batcher_config.assert_rebuilt_batch_hashes {
+            let rebuilt_stored_batch_info = rebuilt_batch
+                .batch
+                .batch_info
+                .clone()
+                .into_stored(&rebuilt_batch.batch.protocol_version);
+            let stored_stored_batch_info = existing_batch
+                .batch
+                .batch_info
+                .clone()
+                .into_stored(&existing_batch.batch.protocol_version);
 
-        anyhow::ensure!(
-            rebuilt_stored_batch_info.hash() == stored_stored_batch_info.hash(),
-            "Rebuilt batch info does not match stored batch info for batch {}. \
-             Rebuilt info: {:?}, Stored info: {:?}",
-            batch_number,
-            rebuilt_stored_batch_info,
-            stored_stored_batch_info
-        );
+            anyhow::ensure!(
+                rebuilt_stored_batch_info.hash() == stored_stored_batch_info.hash(),
+                "Rebuilt batch info does not match stored batch info for batch {}. \
+                 Rebuilt info: {:?}, Stored info: {:?}",
+                batch_number,
+                rebuilt_stored_batch_info,
+                stored_stored_batch_info
+            );
+        } else {
+            tracing::warn!(
+                batch_number,
+                "Batch hash verification is disabled - skipping verification of rebuilt batch"
+            );
+        }
 
         Ok(rebuilt_batch)
     }

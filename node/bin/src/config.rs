@@ -384,6 +384,12 @@ pub struct BatcherConfig {
     /// Max number of blocks per batch
     #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
+
+    /// Whether to verify that rebuilt batches match stored batches by comparing hashes.
+    /// Enabled by default for safety. Disabling this check can be useful for debugging or
+    /// when recovering from corrupted state.
+    #[config(default_t = true)]
+    pub assert_rebuilt_batch_hashes: bool,
 }
 
 /// Only used on the Main Node.
