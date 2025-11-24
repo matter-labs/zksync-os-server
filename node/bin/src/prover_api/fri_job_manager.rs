@@ -1,7 +1,7 @@
 //! Concurrent in‑memory queue for FRI prover work.
 //!
 //! * Incoming jobs are received through via `add_job`.
-//!     No more than `max_assigned_batch_range` batch span is accepted
+//!   No more than `max_assigned_batch_range` batch span is accepted
 //! * Assigned jobs are added to `ProverJobMap` immediately.
 //! * Provers request work via [`pick_next_job`]:
 //!     * If there is an already assigned job that has timed out, it is reassigned.
