@@ -1,3 +1,4 @@
+use crate::client::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
 use crate::{
     BatchVerificationRequest, BatchVerificationRequestDecoder, BatchVerificationResponse,
     BatchVerificationResponseCodec, BatchVerificationResult,
@@ -125,10 +126,12 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
                             match verification_result {
                                 Ok(signature) => {
                                     tracing::info!(batch_number, request_id, "Approved batch verification request");
+                                    BATCH_VERIFICATION_CLIENT_METRICS.record_request_success(request_id, batch_number);
                                     writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Success(signature) }).await?;
                                 },
                                 Err(reason) => {
                                     tracing::info!(batch_number, request_id, "Batch verification failed: {}", reason);
+                                    BATCH_VERIFICATION_CLIENT_METRICS.record_request_failure(request_id, batch_number);
                                     writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }

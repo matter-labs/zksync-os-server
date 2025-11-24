@@ -1,3 +1,4 @@
+use super::metrics::BATCH_VERIFICATION_SEQUENCER_METRICS;
 use super::server::{BatchVerificationRequestError, BatchVerificationServer};
 use crate::config::BatchVerificationConfig;
 use crate::{BatchVerificationResponse, BatchVerificationResult};
@@ -192,6 +193,7 @@ impl BatchVerifier {
     ) -> anyhow::Result<()> {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("batch_verifier", GenericComponentState::WaitingRecv);
+        let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
 
         loop {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -203,11 +205,14 @@ impl BatchVerifier {
             };
             latency_tracker.enter_state(GenericComponentState::Processing);
             let batch_envelope = batch_envelope.with_stage(BatchExecutionStage::SigningStarted);
+            metrics.last_batch_number.set(batch_envelope.batch_number());
+
             let mut retry_count = 0;
             let deadline = Instant::now() + self.config.total_timeout;
+            let start_time = Instant::now();
             let signatures = loop {
                 match self
-                    .collect_batch_verification_signatures(&batch_envelope)
+                    .collect_batch_verification_signatures(&batch_envelope, retry_count + 1)
                     .await
                 {
                     Ok(result) => break Ok(result),
@@ -236,6 +241,10 @@ impl BatchVerifier {
                     }
                 }
             }?;
+
+            metrics.attempts_to_success.observe(retry_count + 1);
+            metrics.total_latency.observe(start_time.elapsed());
+
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             singed_batcher_sender
                 .send(
@@ -252,8 +261,11 @@ impl BatchVerifier {
     async fn collect_batch_verification_signatures<E: Send + Sync>(
         &self,
         batch_envelope: &BatchForSigning<E>,
+        attempt_number: u64,
     ) -> Result<BatchSignatureSet, BatchVerificationError> {
+        let metrics = &*BATCH_VERIFICATION_SEQUENCER_METRICS;
         let request_id = self.request_id_counter.fetch_add(1, Ordering::SeqCst);
+        metrics.last_request_id.set(request_id);
 
         tracing::info!(
             batch_number = batch_envelope.batch_number(),
@@ -277,6 +289,7 @@ impl BatchVerifier {
 
         // Collect responses with timeout
         let mut responses = BatchSignatureSet::new();
+        let start_time = Instant::now();
         let deadline = Instant::now() + self.config.request_timeout;
 
         loop {
@@ -302,7 +315,11 @@ impl BatchVerifier {
                 continue;
             };
 
+            let latency = start_time.elapsed();
             let signer = validated_signature.signer().to_string();
+
+            metrics.per_signer_latency[&signer].observe(latency);
+            metrics.successful_attempt_per_signer[&signer].observe(attempt_number);
 
             if responses.push(validated_signature).is_err() {
                 tracing::warn!(
@@ -318,6 +335,7 @@ impl BatchVerifier {
                 batch_number = batch_envelope.batch_number(),
                 request_id = request_id,
                 signer = signer,
+                response_latency_ms = latency.as_millis() as u64,
                 "Validated response {} of {}",
                 responses.len(),
                 self.config.threshold
