@@ -17,6 +17,7 @@ pub struct InternalConfig {
     pub failing_block: Option<u64>,
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
     /// To be merged with the external blacklist in the main config.
+    #[serde(default)]
     pub l2_signer_blacklist: HashSet<Address>,
 }
 

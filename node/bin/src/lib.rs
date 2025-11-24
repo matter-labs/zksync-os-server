@@ -47,7 +47,7 @@ use futures::FutureExt;
 use jsonrpsee::http_client::HttpClient;
 use ruint::aliases::U256;
 use std::path::Path;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;

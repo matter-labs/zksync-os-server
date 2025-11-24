@@ -1,13 +1,16 @@
 use smart_config::value::ExposeSecret;
-use smart_config::{
-    ConfigRepository, ConfigSchema, DescribeConfig, Environment,
-};
+use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
-use zksync_os_server::config::{BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig};
+use zksync_os_server::config::{
+    BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
+    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+};
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
@@ -323,7 +326,10 @@ fn build_external_config() -> Config {
 }
 
 fn load_internal_config(config: &mut Config) {
-    let file_path = config.general_config.rocks_db_path.join(INTERNAL_CONFIG_FILE_NAME);
+    let file_path = config
+        .general_config
+        .rocks_db_path
+        .join(INTERNAL_CONFIG_FILE_NAME);
     let internal_config_manager =
         InternalConfigManager::new(file_path).expect("Failed to create internal config manager");
     let internal_config = internal_config_manager
@@ -332,7 +338,10 @@ fn load_internal_config(config: &mut Config) {
     tracing::info!(?internal_config, "Loaded internal config");
 
     // Merging configs.
-    config.rpc_config.l2_signer_blacklist.extend(internal_config.l2_signer_blacklist);
+    config
+        .rpc_config
+        .l2_signer_blacklist
+        .extend(internal_config.l2_signer_blacklist);
     if let Some(failing_block) = internal_config.failing_block {
         if config.sequencer_config.block_rebuild.is_some() {
             panic!(
