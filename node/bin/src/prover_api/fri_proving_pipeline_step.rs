@@ -19,6 +19,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// - HTTP server (provers call pick_next_job, submit_proof, etc.)
 /// - Fake provers pool
 pub struct FriProvingPipelineStep {
+    last_commited_batch_number: u64,
     batches_for_prove_sender: mpsc::Sender<SignedBatchEnvelope<ProverInput>>,
     batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
 }
@@ -26,6 +27,7 @@ pub struct FriProvingPipelineStep {
 impl FriProvingPipelineStep {
     pub fn new(
         proof_storage: ProofStorage,
+        last_commited_batch_number: u64,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<FriJobManager>) {
@@ -47,6 +49,7 @@ impl FriProvingPipelineStep {
         ));
 
         let result = Self {
+            last_commited_batch_number,
             batches_for_prove_sender,
             batches_with_proof_receiver,
         };
@@ -73,7 +76,12 @@ impl PipelineComponent for FriProvingPipelineStep {
         tokio::select! {
             _ = async {
                 while let Some(batch) = input.recv().await {
-                    let _ = self.batches_for_prove_sender.send(batch).await;
+                    if batch.batch_number() > self.last_commited_batch_number {
+                        let _ = self.batches_for_prove_sender.send(batch).await;
+                     }
+                     // else {
+                    //     let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
+                    // }
                 }
             } => anyhow::bail!("FRI proving input stream ended unexpectedly"),
             _ = async {
