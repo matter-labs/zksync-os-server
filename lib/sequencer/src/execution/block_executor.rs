@@ -168,17 +168,16 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                         // mark the tx as invalid regardless of the `rejection_method`.
                                         command.tx_source.as_mut().mark_last_tx_as_invalid();
                                         // add tx to `purged_txs` only if we are purging it.
-                                        match (rejection_method, command.seal_policy) {
-                                            (TxRejectionMethod::Purge, _) => {
+                                        match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
+                                            (TxRejectionMethod::Purge, _, _) => {
                                                 purged_txs.push((*tx.hash(), e.clone()));
                                                 tracing::info!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → purged");
                                             }
-                                            (TxRejectionMethod::Skip, _) => {
+                                            (TxRejectionMethod::Skip, _, _) => {
                                                 tracing::info!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → skipped");
                                             },
                                             // For Produce, don't seal if no transactions have been executed yet
-                                            (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..)) => {
-                                                if executed_txs.is_empty() {
+                                            (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
                                                     purged_txs.push((*tx.hash(), e.clone()));
                                                     tracing::info!(
                                                         tx_hash = %tx.hash(),
@@ -187,12 +186,8 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                                         ?reason,
                                                         "block limit reached on first tx for Produce → rejecting tx instead of sealing",
                                                     );
-                                                } else {
-                                                    tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
-                                                    break reason;
-                                                }
                                             }
-                                            (TxRejectionMethod::SealBlock(reason), SealPolicy::UntilExhausted { .. }) => {
+                                            (TxRejectionMethod::SealBlock(reason), _, _) => {
                                                 tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
                                                     break reason;
                                             }
