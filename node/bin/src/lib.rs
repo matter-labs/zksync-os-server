@@ -744,6 +744,8 @@ async fn run_en_pipeline(
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
+            record_overrides: config.sequencer_config.en_replay_record_overrides.clone(),
+            up_to_block: config.sequencer_config.en_sync_up_to_block,
             replay_download_address: config
                 .sequencer_config
                 .block_replay_download_address

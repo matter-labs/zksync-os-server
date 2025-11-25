@@ -1,4 +1,5 @@
 use crate::replay_transport::replay_receiver;
+use alloy::primitives::Bytes;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -29,6 +30,8 @@ pub struct RebuildOptions {
 #[derive(Debug)]
 pub struct ExternalNodeCommandSource {
     pub starting_block: u64,
+    pub record_overrides: Vec<(u64, Bytes)>,
+    pub up_to_block: Option<u64>,
     pub replay_download_address: String,
 }
 
@@ -80,15 +83,31 @@ impl PipelineComponent for ExternalNodeCommandSource {
         output: mpsc::Sender<BlockCommand>,
     ) -> anyhow::Result<()> {
         // TODO: no need for a Stream in `replay_receiver` - just send to channel right away instead
-        let mut stream = replay_receiver(self.starting_block, self.replay_download_address.clone())
-            .await
-            .map_err(|err| {
-                tracing::error!(?err, "Failed to connect to main node to receive blocks");
-                err
-            })?;
+        let mut stream = replay_receiver(
+            self.starting_block,
+            self.record_overrides,
+            self.replay_download_address.clone(),
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!(?err, "Failed to connect to main node to receive blocks");
+            err
+        })?;
 
         while let Some(command) = stream.next().await {
             tracing::debug!(?command, "Received block command from main node");
+
+            if let Some(up_to_block) = self.up_to_block
+                && command.block_number() > up_to_block
+            {
+                tracing::info!(
+                    up_to_block,
+                    "Reached up_to_block, halting external command source"
+                );
+                // Sleeping indefinitely.
+                futures::future::pending::<()>().await;
+            }
+
             if output.send(command).await.is_err() {
                 tracing::warn!("Command output channel closed, stopping source");
                 break;
