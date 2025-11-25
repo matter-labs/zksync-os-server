@@ -13,6 +13,7 @@ use super::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
 /// This may be optimized by using a ring buffer for data storage instead.
 pub(super) struct BlockCache<Finality> {
     data: HashMap<u64, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
+    /// Range of cached data. Range is inclusive of both bounds.
     range: Option<(u64, u64)>,
     finality: Finality,
 }
@@ -67,7 +68,7 @@ impl<Finality: ReadFinality> BlockCache<Finality> {
             for num in low..block_number {
                 self.data.remove(&num);
             }
-            let new_range = (block_number + 1, high);
+            let new_range = (block_number, high);
 
             if new_range.0 > new_range.1 {
                 self.range = None;
