@@ -108,6 +108,9 @@ pub async fn clear_failing_block_config_task<F: ReadFinality>(
 ) -> anyhow::Result<()> {
     let mut internal_config = internal_config_manager.read_config()?;
     if let Some(failing_block_number) = internal_config.failing_block {
+        tracing::info!(
+            "Starting `clear_failing_block_config_task` to monitor finality status for block number {failing_block_number}"
+        );
         loop {
             if finality.get_finality_status().last_executed_block >= failing_block_number {
                 let message = "Removing `failing_block` from the internal config";
