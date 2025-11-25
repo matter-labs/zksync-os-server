@@ -168,29 +168,33 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                         // mark the tx as invalid regardless of the `rejection_method`.
                                         command.tx_source.as_mut().mark_last_tx_as_invalid();
                                         // add tx to `purged_txs` only if we are purging it.
-                                        match rejection_method {
-                                            TxRejectionMethod::Purge => {
+                                        match (rejection_method, command.seal_policy) {
+                                            (TxRejectionMethod::Purge, _) => {
                                                 purged_txs.push((*tx.hash(), e.clone()));
-                                                tracing::warn!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → purged");
+                                                tracing::info!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → purged");
                                             }
-                                            TxRejectionMethod::Skip => {
-                                                tracing::warn!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → skipped");
+                                            (TxRejectionMethod::Skip, _) => {
+                                                tracing::info!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → skipped");
                                             },
-                                            TxRejectionMethod::SealBlock(reason) => {
-                                                // For ProduceBlock (SealPolicy::Decide) or Replay (SealPolicy::UntilExhausted { allowed_to_finish_early: false }), don't seal if no transactions have been executed yet
-                                                if matches!(command.seal_policy, SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: false }) && executed_txs.is_empty() {
+                                            // For Produce, don't seal if no transactions have been executed yet
+                                            (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..)) => {
+                                                if executed_txs.is_empty() {
                                                     purged_txs.push((*tx.hash(), e.clone()));
-                                                    tracing::warn!(
+                                                    tracing::info!(
                                                         tx_hash = %tx.hash(),
                                                         block = ctx.block_number,
                                                         ?e,
                                                         ?reason,
-                                                        "block limit reached on first tx for Produce/Replay → rejecting tx instead of sealing",
+                                                        "block limit reached on first tx for Produce → rejecting tx instead of sealing",
                                                     );
                                                 } else {
                                                     tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
                                                     break reason;
                                                 }
+                                            }
+                                            (TxRejectionMethod::SealBlock(reason), SealPolicy::UntilExhausted { .. }) => {
+                                                tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
+                                                    break reason;
                                             }
                                         }
                                     }
