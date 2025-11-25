@@ -29,13 +29,15 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
 }
 pub struct BatchVerificationPipelineStep<E> {
     config: BatchVerificationConfig,
+    last_committed_batch_number: u64,
     _phantom: std::marker::PhantomData<E>,
 }
 
 impl<E> BatchVerificationPipelineStep<E> {
-    pub fn new(config: BatchVerificationConfig) -> Self {
+    pub fn new(config: BatchVerificationConfig, last_committed_batch_number: u64) -> Self {
         Self {
             config,
+            last_committed_batch_number,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -75,7 +77,12 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
                     .boxed()
                     .map(report_exit("Batch response processor"));
 
-            let verifier = BatchVerifier::new(self.config, response_channels, server);
+            let verifier = BatchVerifier::new(
+                self.config,
+                response_channels,
+                server,
+                self.last_committed_batch_number,
+            );
             let verifier_fut = verifier
                 .run(input, output)
                 .boxed()
@@ -141,6 +148,7 @@ struct BatchVerifier {
     request_id_counter: AtomicU64,
     server: Arc<BatchVerificationServer>,
     response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+    last_committed_batch_number: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -177,6 +185,7 @@ impl BatchVerifier {
         config: BatchVerificationConfig,
         response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
         server: Arc<BatchVerificationServer>,
+        last_committed_batch_number: u64,
     ) -> Self {
         let accepted_signers = config
             .accepted_signers
@@ -190,6 +199,7 @@ impl BatchVerifier {
             response_channels,
             server,
             accepted_signers,
+            last_committed_batch_number,
         }
     }
 
@@ -210,6 +220,24 @@ impl BatchVerifier {
                 tracing::info!("BatchForSigning channel closed, exiting verifier",);
                 break Ok(());
             };
+
+            // We skip signing batches that were already committed. This happens on startup
+            if batch_envelope.batch_number() <= self.last_committed_batch_number {
+                tracing::info!(
+                    "Skipping signing of already committed batch {}",
+                    batch_envelope.batch_number()
+                );
+                singed_batcher_sender
+                    .send(
+                        batch_envelope
+                            .with_signatures(BatchSignatureData::NotNeeded)
+                            .with_stage(BatchExecutionStage::BatchSigned),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Failed to send signed batch envelope"))?;
+                continue;
+            }
+
             latency_tracker.enter_state(GenericComponentState::Processing);
             let batch_envelope = batch_envelope.with_stage(BatchExecutionStage::SigningStarted);
             metrics.last_batch_number.set(batch_envelope.batch_number());
