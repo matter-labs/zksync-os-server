@@ -78,7 +78,7 @@ impl PipelineComponent for FriProvingPipelineStep {
                 while let Some(batch) = input.recv().await {
                     if batch.batch_number() > self.last_commited_batch_number {
                         let _ = self.batches_for_prove_sender.send(batch).await;
-                     }
+                    }
                     else {
                         // todo: Get proof and send down the pipeline?
                     }
