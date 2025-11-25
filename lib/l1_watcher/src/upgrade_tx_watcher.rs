@@ -273,7 +273,11 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         self.admin_contract
     }
 
-    async fn process_event(&mut self, request: L1UpgradeRequest) -> Result<(), L1WatcherError> {
+    async fn process_event(
+        &mut self,
+        request: L1UpgradeRequest,
+        _log: Log,
+    ) -> Result<(), L1WatcherError> {
         if request.protocol_version <= self.current_protocol_version {
             tracing::info!(
                 ?request.protocol_version,

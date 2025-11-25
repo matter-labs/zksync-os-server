@@ -83,9 +83,15 @@ impl L1Watcher {
         let new_logs = self.provider.get_logs(&filter).await?;
 
         if new_logs.is_empty() {
-            tracing::trace!(l1_block_from = from, l1_block_to = to, "no new events");
+            tracing::trace!(
+                event_name = &self.processor.name(),
+                l1_block_from = from,
+                l1_block_to = to,
+                "no new events"
+            );
         } else {
             tracing::info!(
+                event_name = &self.processor.name(),
                 event_count = new_logs.len(),
                 l1_block_from = from,
                 l1_block_to = to,
@@ -109,6 +115,8 @@ pub enum L1WatcherError {
     Batch(anyhow::Error),
     #[error(transparent)]
     Convert(anyhow::Error),
+    #[error(transparent)]
+    Other(anyhow::Error),
     #[error("output has been closed")]
     OutputClosed,
 }

@@ -77,6 +77,22 @@ impl From<&StoredBatchInfo> for IExecutor::StoredBatchInfo {
     }
 }
 
+impl From<IExecutor::StoredBatchInfo> for StoredBatchInfo {
+    fn from(value: IExecutor::StoredBatchInfo) -> Self {
+        Self {
+            batch_number: value.batchNumber,
+            state_commitment: value.batchHash,
+            number_of_layer1_txs: value.numberOfLayer1Txs.to(),
+            priority_operations_hash: value.priorityOperationsHash,
+            dependency_roots_rolling_hash: value.dependencyRootsRollingHash,
+            l2_to_l1_logs_root_hash: value.l2LogsTreeRoot,
+            commitment: value.commitment,
+            // fixme: unused?
+            last_block_timestamp: 0,
+        }
+    }
+}
+
 /// User-friendly version of [`crate::L2DACommitmentScheme`] with statically known possible variants.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[repr(u8)]
