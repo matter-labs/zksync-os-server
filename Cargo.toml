@@ -30,6 +30,7 @@ members = [
     "lib/batch_verification",
     "lib/batch_types",
     "lib/socket",
+    "lib/internal_config"
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -211,6 +212,7 @@ zksync_os_gas_adjuster = { version = "=0.11.1-non-semver-compat", path = "lib/ga
 zksync_os_batch_verification = { version = "=0.11.1-non-semver-compat", path = "lib/batch_verification" }
 zksync_os_batch_types = { version = "=0.11.1-non-semver-compat", path = "lib/batch_types" }
 zksync_os_socket = { version = "=0.11.1-non-semver-compat", path = "lib/socket" }
+zksync_os_internal_config = { version = "=0.11.1-non-semver-compat", path = "lib/internal_config" }
 
 zksync_os_server = { version = "=0.11.1-non-semver-compat", path = "node/bin" }
 

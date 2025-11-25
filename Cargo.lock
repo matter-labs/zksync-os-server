@@ -12120,6 +12120,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_internal_config"
+version = "0.11.1-non-semver-compat"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "zksync_os_l1_sender"
 version = "0.11.1-non-semver-compat"
 dependencies = [
@@ -12376,6 +12387,7 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "serde_json",
+ "serde_yaml",
  "smart-config",
  "thiserror 2.0.12",
  "tokio",
@@ -12385,6 +12397,7 @@ dependencies = [
  "zksync-os-revm",
  "zksync_os_genesis",
  "zksync_os_interface",
+ "zksync_os_internal_config",
  "zksync_os_mempool",
  "zksync_os_merkle_tree",
  "zksync_os_multivm",
@@ -12563,6 +12576,7 @@ dependencies = [
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
  "zksync_os_interface",
+ "zksync_os_internal_config",
  "zksync_os_l1_sender",
  "zksync_os_l1_watcher",
  "zksync_os_mempool",

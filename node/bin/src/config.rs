@@ -211,6 +211,9 @@ pub struct SequencerConfig {
     /// blocking process and the overhead should be small.
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
+    /// If enabled, node will revert block with divergence detected by REVM consistency checker.
+    #[config(default_t = false)]
+    pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild options.
     #[config(nest)]

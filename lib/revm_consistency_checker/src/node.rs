@@ -1,13 +1,12 @@
-use std::collections::HashSet;
-
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use reth_revm::db::CacheDB;
-
 use reth_revm::ExecuteCommitEvm;
 use reth_revm::context::{Context, ContextTr};
+use reth_revm::db::CacheDB;
+use std::collections::HashSet;
 use tokio::sync::mpsc::Sender;
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_revm::{DefaultZk, ZkBuilder};
@@ -23,14 +22,55 @@ where
     State: ReadStateHistory + Clone + Send + 'static,
 {
     state: State,
+    internal_config_manager: InternalConfigManager,
+    revert_enabled: bool,
 }
 
 impl<State> RevmConsistencyChecker<State>
 where
     State: ReadStateHistory + Clone + Send + 'static,
 {
-    pub fn new(state: State) -> Self {
-        Self { state }
+    pub fn new(
+        state: State,
+        internal_config_manager: InternalConfigManager,
+        revert_enabled: bool,
+    ) -> Self {
+        Self {
+            state,
+            internal_config_manager,
+            revert_enabled,
+        }
+    }
+
+    pub fn handle_report(
+        &self,
+        replay_record: &ReplayRecord,
+        report: &CompareReport,
+    ) -> anyhow::Result<()> {
+        report.log_tracing(20);
+        if self.revert_enabled && !report.is_empty() {
+            let mut config = self.internal_config_manager.read_config()?;
+            config.failing_block = Some(replay_record.block_context.block_number);
+
+            let initial_blacklist_size = config.l2_signer_blacklist.len();
+            for tx in &replay_record.transactions {
+                config.l2_signer_blacklist.insert(tx.signer());
+            }
+            let new_blacklist_size = config.l2_signer_blacklist.len();
+            tracing::info!(
+                "Adding {} new addresses to L2 signer blacklist due to REVM inconsistency",
+                new_blacklist_size - initial_blacklist_size
+            );
+
+            let message = format!(
+                "REVM consistency check failed for block {}",
+                replay_record.block_context.block_number
+            );
+            self.internal_config_manager
+                .write_config_and_panic(&config, &message)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -141,7 +181,7 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                compare_report.log_tracing(20);
+                self.handle_report(&replay_record, &compare_report)?;
             }
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
