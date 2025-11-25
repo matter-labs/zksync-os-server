@@ -185,7 +185,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                                         block = ctx.block_number,
                                                         ?e,
                                                         ?reason,
-                                                        "block limit reached on first tx in ProduceBlock → rejecting tx instead of sealing"
+                                                        "block limit reached on first tx for Produce/Replay→ rejecting tx instead of sealing",
                                                     );
                                                 } else {
                                                     tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
