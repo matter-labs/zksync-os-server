@@ -36,9 +36,13 @@ pub async fn replay_server(
                     .split_whitespace()
                     .find(|s| s.starts_with("/block_replays"))
                 {
-                    let url = Url::parse(&format!("http://dummy{}", url_str)).unwrap();
-                    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
-                    BlockReplayQuery::parse(pairs)
+                    if let Ok(url) = Url::parse(&format!("http://dummy{url_str}")) {
+                        let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+                        BlockReplayQuery::parse(pairs)
+                    } else {
+                        tracing::info!("Could not parse URL from HTTP headers");
+                        BlockReplayQuery::default()
+                    }
                 } else {
                     tracing::info!("/block_replays not found in HTTP headers");
                     BlockReplayQuery::default()
@@ -100,7 +104,7 @@ pub async fn replay_receiver(
     let path = if query_string.is_empty() {
         "/block_replays".to_string()
     } else {
-        format!("/block_replays?{}", query.query_string())
+        format!("/block_replays?{}", query_string)
     };
     let mut socket = connect(&address, &path).await?;
 
@@ -180,7 +184,7 @@ impl BlockReplayQuery {
             if !query.is_empty() {
                 query.push('&');
             }
-            query.push_str(&format!("override_{}={}", block_number, override_type));
+            query.push_str(&format!("override_{block_number}={override_type}"));
         }
         query
     }
@@ -188,12 +192,11 @@ impl BlockReplayQuery {
     pub fn parse(query_pairs: Vec<(String, String)>) -> Self {
         let mut record_overrides = Vec::new();
         for (key, value) in query_pairs {
-            if key.starts_with("override_") {
-                if let Ok(block_number) = key["override_".len()..].parse::<u64>() {
-                    if let Ok(bytes) = value.parse() {
-                        record_overrides.push((block_number, bytes));
-                    }
-                }
+            if let Some(suffix) = key.strip_prefix("override_")
+                && let Ok(block_number) = suffix.parse::<u64>()
+                && let Ok(bytes) = value.parse()
+            {
+                record_overrides.push((block_number, bytes));
             }
         }
         Self { record_overrides }
