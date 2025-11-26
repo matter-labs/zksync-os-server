@@ -601,7 +601,7 @@ async fn run_main_node_pipeline(
     config: Config,
     l1_provider: FillProvider<
         impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-        impl Provider<Ethereum> + Clone + Send + 'static,
+        impl Provider<Ethereum> + Clone + 'static,
     >,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,

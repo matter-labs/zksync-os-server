@@ -22,7 +22,7 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
 impl<F, P, C> PipelineComponent for L1Sender<F, P, C>
 where
     F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
-    P: Provider<Ethereum> + Clone + Send + 'static,
+    P: Provider<Ethereum> + Clone + 'static,
     C: SendToL1 + Send + Sync + 'static,
 {
     type Input = L1SenderCommand<C>;
