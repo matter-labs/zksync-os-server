@@ -158,10 +158,14 @@ impl ProcessL1Event for BatchRangeWatcher {
             }
 
             let commit_batch_info = CommitBatchInfo::from(commit_batch_infos.remove(0));
-            assert_eq!(
-                self.next_batch_number, commit_batch_info.batch_number,
-                "non-sequential batch discovered"
-            );
+
+            if self.next_batch_number != commit_batch_info.batch_number {
+                return Err(L1WatcherError::Other(anyhow::anyhow!(
+                    "non-sequential batch discovered: expected {}, got {}",
+                    self.next_batch_number,
+                    commit_batch_info.batch_number
+                )));
+            }
 
             tracing::info!(
                 batch_number,
