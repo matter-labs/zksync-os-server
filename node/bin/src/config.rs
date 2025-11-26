@@ -365,6 +365,10 @@ pub struct MempoolConfig {
     pub max_pending_txs: usize,
     #[config(default_t = usize::MAX)]
     pub max_pending_size: usize,
+    /// Minimal fee per gas (in WEI) for a transaction to be accepted by mempool
+    /// Defaults to `7` which is the lowest possible value of base fee under mainnet EIP-1559 params
+    #[config(default_t = 7)]
+    pub minimal_protocol_basefee: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -694,6 +698,7 @@ impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
     fn from(c: MempoolConfig) -> Self {
         Self {
             pending_limit: SubPoolLimit::new(c.max_pending_txs, c.max_pending_size),
+            minimal_protocol_basefee: c.minimal_protocol_basefee,
             ..Default::default()
         }
     }
