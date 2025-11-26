@@ -40,7 +40,8 @@ use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
-use alloy::network::EthereumWallet;
+use alloy::network::{Ethereum, EthereumWallet};
+use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
@@ -598,7 +599,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: Config,
-    l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
+    l1_provider: FillProvider<
+        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
+        impl Provider<Ethereum> + Clone + 'static,
+    >,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
@@ -725,13 +729,13 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),
         ))
-        .pipe(L1Sender::<_, CommitCommand> {
+        .pipe(L1Sender::<_, _, CommitCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
         .pipe(snark_proving_step)
-        .pipe(L1Sender::<_, ProofCommand> {
+        .pipe(L1Sender::<_, _, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,

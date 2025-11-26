@@ -25,6 +25,9 @@ pub struct L1SenderConfig<Input> {
     /// How often to poll L1 for new blocks.
     pub poll_interval: Duration,
 
+    /// Use Fusaka blob transaction format if the timestamp has passed.
+    pub fusaka_upgrade_timestamp: u64,
+
     pub phantom_data: PhantomData<Input>,
 }
 
