@@ -79,16 +79,19 @@ impl PipelineComponent for Batcher {
         // First batch in the channel, if present, is always last executed batch. If it is missing
         // (channel is empty), then there are no executed batches on L1 yet, and we should start from
         // genesis.
-        let mut prev_batch_info = match self.committed_batches.recv().await {
+        let (mut prev_batch_info, first_expected_block) = match self.committed_batches.recv().await
+        {
             None => {
                 tracing::info!("no committed batches yet; defaulting to genesis");
-                self.startup_config.genesis_batch_info.clone()
+                (self.startup_config.genesis_batch_info.clone(), 1)
             }
             Some(last_executed_batch) => {
                 tracing::info!(
                     ?last_executed_batch,
                     "using last executed batch as starting point"
                 );
+                let last_executed_block_number =
+                    last_executed_batch.commit_info.last_block_number.unwrap();
                 // todo: stop using this struct once fully migrated from S3
                 let last_executed_batch_info = BatchInfo {
                     commit_info: last_executed_batch.commit_info,
@@ -97,9 +100,32 @@ impl PipelineComponent for Batcher {
                     blob_sidecar: None,
                 };
 
-                last_executed_batch_info.into_stored(&last_executed_batch.protocol_version)
+                (
+                    last_executed_batch_info.into_stored(&last_executed_batch.protocol_version),
+                    last_executed_block_number + 1,
+                )
             }
         };
+
+        // We might receive some blocks that belong to already executed batches. We can skip these
+        // as there is no need to perform any L1 operations on them.
+        loop {
+            let next_block_number = input
+                .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
+                .await
+                .context("batcher inbound channel unexpectedly closed")?;
+            if next_block_number >= first_expected_block {
+                break;
+            }
+            tracing::debug!(
+                block_number = next_block_number,
+                "skipping already executed block"
+            );
+            input
+                .recv()
+                .await
+                .expect("impossible: missing an already peeked batch");
+        }
 
         // Only used for metrics/logs
         let mut last_created_batch_at: Option<Instant> = None;
