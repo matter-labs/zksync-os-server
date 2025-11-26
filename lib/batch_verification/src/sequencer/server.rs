@@ -175,3 +175,56 @@ impl BatchVerificationServer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+impl BatchVerificationServer {
+    pub fn subscribe_for_tests(&self) -> broadcast::Receiver<BatchVerificationRequest> {
+        self.verification_request_broadcast.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::dummy_batch_envelope;
+
+    #[tokio::test]
+    async fn send_verification_request_errors_on_not_enough_clients() {
+        let (server, _responses) = BatchVerificationServer::new();
+        let batch_envelope = dummy_batch_envelope(1, 1, 5);
+
+        let result = server
+            .send_verification_request(&batch_envelope, 42, 1)
+            .await;
+
+        match result {
+            Err(BatchVerificationRequestError::NotEnoughClients(clients, required)) => {
+                assert_eq!(clients, 0);
+                assert_eq!(required, 1);
+            }
+            _ => panic!("Expected NotEnoughClients error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_verification_request_sends_to_all_clients() {
+        let (server, _responses) = BatchVerificationServer::new();
+        let batch_envelope = dummy_batch_envelope(7, 10, 20);
+
+        let mut rx = server.verification_request_broadcast.subscribe();
+
+        let send_fut = server.send_verification_request(&batch_envelope, 5, 1);
+
+        let recv_fut = async {
+            let req = rx.recv().await.expect("expected request");
+            assert_eq!(req.batch_number, 7);
+            assert_eq!(req.first_block_number, 10);
+            assert_eq!(req.last_block_number, 20);
+            assert_eq!(req.pubdata_mode, batch_envelope.batch.pubdata_mode);
+            assert_eq!(req.commit_data, batch_envelope.batch.batch_info.commit_info);
+            assert_eq!(req.request_id, 5);
+        };
+
+        let _ = tokio::join!(send_fut, recv_fut);
+    }
+}
