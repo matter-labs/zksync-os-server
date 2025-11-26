@@ -104,7 +104,7 @@ pub async fn replay_receiver(
     let path = if query_string.is_empty() {
         "/block_replays".to_string()
     } else {
-        format!("/block_replays?{}", query_string)
+        format!("/block_replays?{query_string}",)
     };
     let mut socket = connect(&address, &path).await?;
 
