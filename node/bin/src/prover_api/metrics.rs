@@ -11,9 +11,16 @@ pub struct ProverMetrics {
     #[metrics(labels = ["stage"])]
     pub prover_job_map_max_batch_number: LabeledFamily<ProverStage, Gauge>,
     #[metrics(labels = ["stage"])]
+    /// Total number of batches in ProverMap.
+    /// There may be gaps - so prover_job_map_max_batch_number - prover_job_map_min_batch_number
+    /// doesn't always equal to .batch_count()
     pub batch_count: LabeledFamily<ProverStage, Gauge>,
+    /// The time passed between when a job was picked and reported back
     #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
     pub prove_time: LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
+    /// The time passed between when a job was picked and reported back
+    /// divided by the number of transactions in job.
+    /// That is, for SNARKs it's divided by the total number of txs in batch range.
     #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
     pub prove_time_per_tx: LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
     #[metrics(labels = ["stage", "type"], buckets = Buckets::values(&[1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 50.0]))]
