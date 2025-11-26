@@ -268,6 +268,13 @@ pub struct RpcConfig {
     /// Default timeout for `eth_sendRawTransactionSync`
     #[config(default_t = 2 * TimeUnit::Seconds)]
     pub send_raw_transaction_sync_timeout: Duration,
+
+    /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
+    /// Needed to account for pubdata price market fluctuations. Setting this to `1.0` can lead to
+    /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)
+    /// because pubdata price increase in-between estimation and sequencing.
+    #[config(default_t = 1.5)]
+    pub estimate_gas_pubdata_price_factor: f64,
 }
 
 /// Only used on the Main Node.
@@ -617,6 +624,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
+            estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
         }
     }
 }
