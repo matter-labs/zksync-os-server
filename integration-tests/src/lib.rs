@@ -32,6 +32,12 @@ mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 31337;
+pub const BATCH_VERIFICATION_KEY_1: &str =
+    "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47";
+pub const BATCH_VERIFICATION_ADDR_1: &str = "0xdF3401331FeB729f138258bAC135359f3CBA6760";
+pub const BATCH_VERIFICATION_KEY_2: &str =
+    "0xf9306dd03807c08b646d47c739bd51e4d2a25b02bad0efb3d93f095982ac98cd";
+pub const BATCH_VERIFICATION_ADDR_2: &str = "0x7A255d9331f3D4ca05cD0f16c3BCC08D682ac62B";
 
 #[derive(Debug)]
 pub struct Tester {
@@ -191,14 +197,15 @@ impl Tester {
             listen_address: batch_verification_address.clone(),
             client_enabled: false,
             connect_address: batch_verification_address.clone(),
-            threshold: 1,
-            accepted_signers: vec!["0xdF3401331FeB729f138258bAC135359f3CBA6760".into()],
+            threshold: 1, // default to 1 of 2
+            accepted_signers: vec![
+                BATCH_VERIFICATION_ADDR_1.into(),
+                BATCH_VERIFICATION_ADDR_2.into(),
+            ],
             request_timeout: Duration::from_millis(100),
             retry_delay: Duration::from_millis(10),
             total_timeout: Duration::from_secs(300),
-            // address 0xdF3401331FeB729f138258bAC135359f3CBA6760
-            signing_key: "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47"
-                .into(),
+            signing_key: BATCH_VERIFICATION_KEY_1.into(),
         };
 
         let status_server_config = StatusServerConfig {
