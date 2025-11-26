@@ -64,7 +64,9 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher};
+use zksync_os_l1_watcher::{
+    BatchRangeWatcher, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
+};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
@@ -357,6 +359,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to start L1 execute watcher")
         .run()
         .map(report_exit("L1 execute watcher")),
+    );
+
+    tasks.spawn(
+        BatchRangeWatcher::create_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
+            node_startup_state.l1_state.last_executed_batch,
+            node_startup_state.l1_state.last_committed_batch,
+        )
+        .await
+        .expect("failed to start L1 batch range watcher")
+        .run()
+        .map(report_exit("L1 batch range watcher")),
     );
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
@@ -969,7 +984,7 @@ async fn determine_starting_batch(
             // We need to replay old unexecuted blocks to rebuild and execute the batches they are in
             node_startup_state.last_l1_executed_block + 1,
             // We want to replay at least one block that is already committed -
-            //  this way we can always get previous_batch_info from storage
+            // this way we can always get previous_batch_info from storage
             node_startup_state.last_l1_committed_block,
             // Repositories' persistence may have fallen behind - we need to replay blocks to rebuild it
             node_startup_state.repositories_persisted_block + 1,
@@ -980,7 +995,7 @@ async fn determine_starting_batch(
             // For FullDiffs state (default) - this is always ahead of `last_l1_executed_block`.
             state.block_range_available().end() + 1,
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
-            //  all the blocks we are rebuilding
+            // all the blocks we are rebuilding
             config
                 .sequencer_config
                 .block_rebuild

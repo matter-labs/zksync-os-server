@@ -2,6 +2,7 @@ use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
+use alloy::rpc::types::Log;
 use std::sync::Arc;
 use zksync_os_contract_interface::IExecutor::BlockExecution;
 use zksync_os_contract_interface::ZkChain;
@@ -94,7 +95,11 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> ProcessL1Event
         self.contract_address
     }
 
-    async fn process_event(&mut self, batch_execute: BlockExecution) -> Result<(), L1WatcherError> {
+    async fn process_event(
+        &mut self,
+        batch_execute: BlockExecution,
+        _log: Log,
+    ) -> Result<(), L1WatcherError> {
         let batch_number = batch_execute.batchNumber.to::<u64>();
         let batch_hash = batch_execute.batchHash;
         let batch_commitment = batch_execute.commitment;

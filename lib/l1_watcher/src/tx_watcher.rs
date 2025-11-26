@@ -2,6 +2,7 @@ use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
+use alloy::rpc::types::Log;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
@@ -88,7 +89,11 @@ impl ProcessL1Event for L1TxWatcher {
         self.contract_address
     }
 
-    async fn process_event(&mut self, tx: L1PriorityEnvelope) -> Result<(), L1WatcherError> {
+    async fn process_event(
+        &mut self,
+        tx: L1PriorityEnvelope,
+        _log: Log,
+    ) -> Result<(), L1WatcherError> {
         if tx.priority_id() < self.next_l1_priority_id {
             tracing::debug!(
                 priority_id = tx.priority_id(),

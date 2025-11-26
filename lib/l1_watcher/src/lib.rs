@@ -15,6 +15,9 @@ pub use execute_watcher::L1ExecuteWatcher;
 mod upgrade_tx_watcher;
 pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 
+mod batch_range_watcher;
+pub use batch_range_watcher::BatchRangeWatcher;
+
 pub mod util;
 mod watcher;
 
