@@ -59,7 +59,7 @@ impl FakeFriProversPool {
 
                             // Check if we should timeout (drop) this job
                             let should_timeout = timeout_frequency > 0.0
-                                && rand::rng().random::<f64>() < timeout_frequency;
+                                && rand::rng().random::<f64>() <= timeout_frequency;
 
                             if should_timeout {
                                 tracing::info!(

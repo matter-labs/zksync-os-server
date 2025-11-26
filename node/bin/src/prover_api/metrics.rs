@@ -4,6 +4,8 @@ use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics, 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover")]
 pub struct ProverMetrics {
+    /// Minimum and maximum batch numbers in the job map (picked or unpicked)
+    /// (there may be gaps - so the diff doesn't always equal to .batch_count())
     #[metrics(labels = ["stage"])]
     pub prover_job_map_min_batch_number: LabeledFamily<ProverStage, Gauge>,
     #[metrics(labels = ["stage"])]

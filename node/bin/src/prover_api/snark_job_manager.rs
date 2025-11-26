@@ -16,7 +16,7 @@ use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
 ///
-/// Support orchestrating multiple SNARK provers
+/// Supports multiple SNARK provers
 ///
 /// Supports both real and fake proofs.
 ///  - Fake FRI proofs always result in fake SNARK proofs.
@@ -80,7 +80,7 @@ impl SnarkJobManager {
 
         let batches_with_real_proofs = self
             .jobs
-            .pick_jobs_while(self.max_fris_per_snark, &prover_id, |job| {
+            .pick_jobs_while_with_limit(self.max_fris_per_snark, &prover_id, |job| {
                 !job.batch_envelope.data.is_fake()
             })
             .await;
@@ -180,7 +180,7 @@ impl SnarkJobManager {
         loop {
             let assigned: Vec<(FriJob, FriProof)> = self
                 .jobs
-                .pick_jobs_while(self.max_fris_per_snark, "fake_prover", |job| {
+                .pick_jobs_while_with_limit(self.max_fris_per_snark, "fake_prover", |job| {
                     job.batch_envelope.data.is_fake()
                         || (timeout_for_real_fris.is_some()
                             && job.metadata.added_at.elapsed() >= timeout_for_real_fris.unwrap())

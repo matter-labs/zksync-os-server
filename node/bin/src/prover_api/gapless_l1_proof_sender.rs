@@ -58,7 +58,7 @@ impl PipelineComponent for GaplessL1ProofSender {
                     }
                 }
                 None => {
-                    anyhow::bail!("GaplessCommitterPassthrough input stream ended unexpectedly");
+                    anyhow::bail!("GaplessL1ProofSender input stream ended unexpectedly");
                 }
             }
         }

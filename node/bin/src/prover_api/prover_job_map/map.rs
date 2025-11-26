@@ -78,9 +78,11 @@ impl<T: Clone> ProverJobMap<T> {
                 max_assigned_batch_range = self.max_assigned_batch_range,
                 "Waiting for space in job map"
             );
+            // Create notified future while holding lock to avoid missing notifications
+            let notified = self.space_available.notified();
             // Drop lock before awaiting notification
             drop(jobs);
-            self.space_available.notified().await;
+            notified.await;
             // Re-acquire lock after notification
             jobs = self.lock_with_tracking(JobMapMethod::AddJob).await;
         }
@@ -110,7 +112,7 @@ impl<T: Clone> ProverJobMap<T> {
     pub async fn pick_job(&self, min_age: Duration, prover_id: &str) -> Option<(FriJob, T)> {
         let now = Instant::now();
         let mut result = self
-            .pick_jobs_while(1, prover_id, |entry| {
+            .pick_jobs_while_with_limit(1, prover_id, |entry| {
                 // min_age is non-zero only for fake provers
                 // for real provers this is no-op - that is, we always take the oldest eligible job
                 now.duration_since(entry.metadata.added_at) >= min_age
@@ -129,7 +131,7 @@ impl<T: Clone> ProverJobMap<T> {
     /// For SNARK jobs, used with `limit = max_fri_per_snark`
     ///
     /// Returns empty Vec if no eligible jobs are found.
-    pub async fn pick_jobs_while<F>(
+    pub async fn pick_jobs_while_with_limit<F>(
         &self,
         limit: usize,
         prover_id: &str,
@@ -440,5 +442,303 @@ impl<T: Clone> ProverJobMap<T> {
             .observe(acquire_time);
 
         TrackedLockGuard::new(guard, Instant::now(), self.prover_stage, method)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prover_api::metrics::ProverStage;
+    use alloy::primitives::{Address, B256};
+    use std::time::Duration;
+    use zksync_os_contract_interface::models::{
+        CommitBatchInfo, DACommitmentScheme, StoredBatchInfo,
+    };
+    use zksync_os_l1_sender::batcher_model::{BatchForSigning, BatchMetadata};
+    use zksync_os_l1_sender::commitment::BatchInfo;
+    use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
+
+    fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {
+        let batch = BatchMetadata {
+            previous_stored_batch_info: StoredBatchInfo {
+                batch_number: batch_number.saturating_sub(1),
+                state_commitment: B256::ZERO,
+                number_of_layer1_txs: 0,
+                priority_operations_hash: B256::ZERO,
+                dependency_roots_rolling_hash: B256::ZERO,
+                l2_to_l1_logs_root_hash: B256::ZERO,
+                commitment: B256::ZERO,
+                last_block_timestamp: 0,
+            },
+            batch_info: BatchInfo {
+                commit_info: CommitBatchInfo {
+                    batch_number,
+                    new_state_commitment: B256::ZERO,
+                    number_of_layer1_txs: 0,
+                    priority_operations_hash: B256::ZERO,
+                    dependency_roots_rolling_hash: B256::ZERO,
+                    l2_to_l1_logs_root_hash: B256::ZERO,
+                    l2_da_commitment_scheme: DACommitmentScheme::BlobsAndPubdataKeccak256,
+                    da_commitment: B256::ZERO,
+                    first_block_timestamp: 0,
+                    first_block_number: Some(batch_number),
+                    last_block_timestamp: 0,
+                    last_block_number: Some(batch_number),
+                    chain_id: 1,
+                    operator_da_input: vec![],
+                },
+                chain_address: Address::ZERO,
+                upgrade_tx_hash: None,
+                blob_sidecar: None,
+            },
+            first_block_number: batch_number,
+            last_block_number: batch_number,
+            pubdata_mode: PubdataMode::Calldata,
+            tx_count: 10,
+            execution_version: 1,
+            protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
+        };
+
+        BatchForSigning::new(batch, vec![1, 2, 3])
+            .with_signatures(zksync_os_l1_sender::batcher_model::BatchSignatureData::NotNeeded)
+    }
+
+    #[tokio::test]
+    async fn test_add_and_complete_job() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+
+        let envelope = create_test_batch_envelope(1);
+        map.add_job(envelope).await;
+
+        let metadata = map.get_job_batch_metadata(1).await;
+        assert!(metadata.is_some());
+        assert_eq!(metadata.unwrap().batch_info.commit_info.batch_number, 1);
+
+        let result = map
+            .complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
+            .await;
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().batch_number(), 1);
+
+        let metadata = map.get_job_batch_metadata(1).await;
+        assert!(metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pick_job() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(2)).await;
+
+        let job = map.pick_job(Duration::ZERO, "prover-1").await;
+        assert!(job.is_some());
+        let (fri_job, _data) = job.unwrap();
+        assert_eq!(fri_job.batch_number, 1);
+
+        // Job 1 is now assigned, should pick job 2
+        let job = map.pick_job(Duration::ZERO, "prover-2").await;
+        assert!(job.is_some());
+        let (fri_job, _data) = job.unwrap();
+        assert_eq!(fri_job.batch_number, 2);
+
+        // All jobs assigned, should return None
+        let job = map.pick_job(Duration::ZERO, "prover-3").await;
+        assert!(job.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pick_job_with_timeout() {
+        let map = ProverJobMap::new(Duration::from_millis(100), 100, ProverStage::Fri);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+
+        let job = map.pick_job(Duration::ZERO, "prover-1").await;
+        assert!(job.is_some());
+
+        // Try to pick again immediately - should return None (still assigned)
+        let job = map.pick_job(Duration::ZERO, "prover-2").await;
+        assert!(job.is_none());
+
+        // Wait for timeout
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Should be able to pick again after timeout
+        let job = map.pick_job(Duration::ZERO, "prover-2").await;
+        assert!(job.is_some());
+        let (fri_job, _data) = job.unwrap();
+        assert_eq!(fri_job.batch_number, 1);
+    }
+
+    #[tokio::test]
+    async fn test_pick_multiple_jobs() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(2)).await;
+        map.add_job(create_test_batch_envelope(3)).await;
+
+        let jobs = map
+            .pick_jobs_while_with_limit(2, "prover-1", |_| true)
+            .await;
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].0.batch_number, 1);
+        assert_eq!(jobs[1].0.batch_number, 2);
+    }
+
+    #[tokio::test]
+    async fn test_pick_multiple_jobs_with_gap() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(3)).await; // Gap: no batch 2
+
+        // Should only pick batch 1, not 3 (due to gap)
+        let jobs = map
+            .pick_jobs_while_with_limit(5, "prover-1", |_| true)
+            .await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].0.batch_number, 1);
+    }
+
+    #[tokio::test]
+    async fn test_complete_many_jobs() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(2)).await;
+        map.add_job(create_test_batch_envelope(3)).await;
+
+        let result = map
+            .complete_many_jobs(
+                1,
+                3,
+                crate::prover_api::metrics::ProverType::Real,
+                "prover-1",
+            )
+            .await;
+        assert!(result.is_some());
+        let envelopes = result.unwrap();
+        assert_eq!(envelopes.len(), 3);
+
+        // All jobs should be removed
+        assert!(map.get_job_batch_metadata(1).await.is_none());
+        assert!(map.get_job_batch_metadata(2).await.is_none());
+        assert!(map.get_job_batch_metadata(3).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_complete_many_jobs_with_missing() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(3)).await;
+
+        // Try to complete 1-3, but 2 is missing
+        let result = map
+            .complete_many_jobs(
+                1,
+                3,
+                crate::prover_api::metrics::ProverType::Real,
+                "prover-1",
+            )
+            .await;
+        assert!(result.is_none());
+
+        // Original jobs should still be there
+        assert!(map.get_job_batch_metadata(1).await.is_some());
+        assert!(map.get_job_batch_metadata(3).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_batch_range_limit() {
+        use std::sync::Arc;
+
+        let map = Arc::new(ProverJobMap::new(
+            Duration::from_secs(60),
+            5, // Small range limit
+            ProverStage::Fri,
+        ));
+
+        // Add jobs up to the limit
+        for i in 1..=5 {
+            map.add_job(create_test_batch_envelope(i)).await;
+        }
+
+        // Try to add another job - should block until we complete one
+        let map_clone = Arc::clone(&map);
+        let add_task = tokio::spawn(async move {
+            map_clone.add_job(create_test_batch_envelope(6)).await;
+        });
+
+        // Give it time to hit the limit
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Complete a job to make space
+        map.complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
+            .await;
+
+        // Now the add should succeed
+        tokio::time::timeout(Duration::from_millis(500), add_task)
+            .await
+            .expect("add_job should complete after space is available")
+            .expect("task should not panic");
+
+        assert!(map.get_job_batch_metadata(6).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_status() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(2)).await;
+
+        let _ = map.pick_job(Duration::ZERO, "prover-1").await;
+
+        let status = map.status().await;
+        assert_eq!(status.len(), 2);
+
+        // Batch 1 should be assigned
+        assert_eq!(status[0].fri_job.batch_number, 1);
+        assert!(status[0].assigned_seconds_ago.is_some());
+        assert_eq!(
+            status[0].assigned_to_prover_id,
+            Some("prover-1".to_string())
+        );
+
+        // Batch 2 should be pending
+        assert_eq!(status[1].fri_job.batch_number, 2);
+        assert!(status[1].assigned_seconds_ago.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_prover_input() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+
+        let envelope = create_test_batch_envelope(1);
+        map.add_job(envelope).await;
+
+        let result = map.get_prover_input(1).await;
+        assert!(result.is_some());
+        let (_vk, data) = result.unwrap();
+        assert_eq!(data, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_double_complete_job() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+
+        let result1 = map
+            .complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
+            .await;
+        assert!(result1.is_some());
+
+        let result2 = map
+            .complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
+            .await;
+        assert!(result2.is_none());
     }
 }

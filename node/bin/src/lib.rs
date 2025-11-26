@@ -32,7 +32,7 @@ use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
 use crate::prover_api::gapless_committer::GaplessCommitter;
-use crate::prover_api::gapless_l1_prove_sender::GaplessL1ProofSender;
+use crate::prover_api::gapless_l1_proof_sender::GaplessL1ProofSender;
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
