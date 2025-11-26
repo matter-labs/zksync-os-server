@@ -10,7 +10,7 @@ use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::providers::Provider;
 
 alloy::sol! {
@@ -168,6 +168,8 @@ alloy::sol! {
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
+        function getL2SystemContractsUpgradeTxHash() external view returns (bytes32);
+        function getL2SystemContractsUpgradeBatchNumber() external view returns (uint256);
     }
 
     // Taken from `common/Config.sol`
@@ -521,5 +523,27 @@ impl<P: Provider> ZkChain<P> {
             .block(block_id)
             .call()
             .await
+    }
+
+    /// Returns current upgrade transaction waiting to be executed. Zeroed out if not present.
+    pub async fn get_upgrade_tx_hash(&self, block_id: BlockId) -> alloy::contract::Result<TxHash> {
+        self.instance
+            .getL2SystemContractsUpgradeTxHash()
+            .block(block_id)
+            .call()
+            .await
+    }
+
+    /// Returns batch number that contains current upgrade transaction. Returns `0` if not present.
+    pub async fn get_upgrade_batch_number(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<u64> {
+        self.instance
+            .getL2SystemContractsUpgradeBatchNumber()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
     }
 }

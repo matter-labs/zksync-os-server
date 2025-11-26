@@ -1,10 +1,12 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::consensus::Transaction;
+use alloy::eips::BlockId;
 use alloy::primitives::{Address, B256, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use alloy::sol_types::{SolCall, SolValue};
+use anyhow::Context;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
@@ -18,8 +20,7 @@ const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 /// Discovers block ranges for batches `[last_executed_batch + 1; last_committed_batch]`. This is
 /// needed to rebuild batches correctly in Batcher during replay.
 pub struct BatchRangeWatcher {
-    contract_address: Address,
-    provider: DynProvider,
+    zk_chain: ZkChain<DynProvider>,
     next_batch_number: u64,
     last_batch_number: u64,
     batch_ranges_sender: mpsc::Sender<CommittedBatch>,
@@ -59,15 +60,15 @@ impl BatchRangeWatcher {
             })?;
         tracing::info!(last_l1_block, "resolved on L1");
 
+        let provider = zk_chain.provider().clone();
         let this = Self {
-            contract_address: *zk_chain.address(),
-            provider: zk_chain.provider().clone(),
+            zk_chain,
             next_batch_number: last_executed_batch,
             last_batch_number: last_committed_batch,
             batch_ranges_sender,
         };
         let l1_watcher = L1Watcher::new(
-            zk_chain.provider().clone(),
+            provider,
             // We start from last L1 block as we start watching from `last_executed_batch` inclusively
             last_l1_block,
             config.max_blocks_to_process,
@@ -98,7 +99,7 @@ impl ProcessL1Event for BatchRangeWatcher {
     type WatchedEvent = ReportCommittedBatchRangeZKsyncOS;
 
     fn contract_address(&self) -> Address {
-        self.contract_address
+        *self.zk_chain.address()
     }
 
     fn should_continue(&self) -> bool {
@@ -130,7 +131,8 @@ impl ProcessL1Event for BatchRangeWatcher {
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
             // todo: retry-backoff logic in case tx is missing
             let tx = self
-                .provider
+                .zk_chain
+                .provider()
                 .get_transaction_by_hash(tx_hash)
                 .await?
                 .expect("tx not found");
@@ -169,12 +171,38 @@ impl ProcessL1Event for BatchRangeWatcher {
                 "discovered committed batch range"
             );
 
+            let block_id =
+                BlockId::number(log.block_number.expect("indexed log without block number"));
+            let upgrade_batch_number = self
+                .zk_chain
+                .get_upgrade_batch_number(block_id)
+                .await
+                .context("failed to fetch upgrade batch number")
+                .map_err(L1WatcherError::Other)?;
+            let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
+                Some(
+                    self.zk_chain
+                        .get_upgrade_tx_hash(block_id)
+                        .await
+                        .context("failed to fetch upgrade tx hash")
+                        .map_err(L1WatcherError::Other)?,
+                )
+            } else {
+                None
+            };
+            let packed_protocol_version = self
+                .zk_chain
+                .get_raw_protocol_version(block_id)
+                .await
+                .context("failed to fetch protocol version")
+                .map_err(L1WatcherError::Other)?;
+
             let committed_batch = CommittedBatch {
                 commit_info: commit_batch_info,
-                // todo: grab upgrade tx hash (if any) from L1
-                upgrade_tx_hash: None,
-                // todo: grab protocol version from L1
-                protocol_version: ProtocolSemanticVersion::new(0, 30, 0),
+                upgrade_tx_hash,
+                protocol_version: ProtocolSemanticVersion::try_from(packed_protocol_version)
+                    .context("invalid protocol version fetched from L1")
+                    .map_err(L1WatcherError::Other)?,
             };
 
             self.batch_ranges_sender
