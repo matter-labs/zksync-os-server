@@ -12171,6 +12171,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
+ "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.12",

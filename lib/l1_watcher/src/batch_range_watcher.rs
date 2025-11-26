@@ -1,14 +1,16 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::{Address, B256, BlockNumber};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use alloy::sol_types::{SolCall, SolValue};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
-use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
+use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_contract_interface::{IExecutor, ZkChain};
+use zksync_os_types::ProtocolSemanticVersion;
 
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
@@ -20,6 +22,7 @@ pub struct BatchRangeWatcher {
     provider: DynProvider,
     next_batch_number: u64,
     last_batch_number: u64,
+    batch_ranges_sender: mpsc::Sender<CommittedBatch>,
 }
 
 impl BatchRangeWatcher {
@@ -28,6 +31,7 @@ impl BatchRangeWatcher {
         zk_chain: ZkChain<DynProvider>,
         last_executed_batch: u64,
         last_committed_batch: u64,
+        batch_ranges_sender: mpsc::Sender<CommittedBatch>,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         tracing::info!(
@@ -58,13 +62,13 @@ impl BatchRangeWatcher {
         let this = Self {
             contract_address: *zk_chain.address(),
             provider: zk_chain.provider().clone(),
-            next_batch_number: last_executed_batch + 1,
+            next_batch_number: last_executed_batch,
             last_batch_number: last_committed_batch,
+            batch_ranges_sender,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
-            // We start from last L1 block as it may contain more committed batches apart from the last
-            // one.
+            // We start from last L1 block as we start watching from `last_executed_batch` inclusively
             last_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
@@ -97,6 +101,10 @@ impl ProcessL1Event for BatchRangeWatcher {
         self.contract_address
     }
 
+    fn should_continue(&self) -> bool {
+        self.next_batch_number <= self.last_batch_number && self.last_batch_number > 0
+    }
+
     async fn process_event(
         &mut self,
         event: ReportCommittedBatchRangeZKsyncOS,
@@ -115,8 +123,9 @@ impl ProcessL1Event for BatchRangeWatcher {
                 "skipping already processed batch range",
             );
         } else if batch_number > self.last_batch_number {
+            // This can trigger if one L1 block has multiple events inside. But generally `Self::should_continue`
+            // implementation will stop processor immediately after the last batch of interest was processed.
             tracing::trace!(batch_number, "batch is outside of range of interest");
-            // todo: provide a way to safely terminate early here (or defer indefinitely)
         } else {
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
             // todo: retry-backoff logic in case tx is missing
@@ -135,11 +144,10 @@ impl ProcessL1Event for BatchRangeWatcher {
                 )));
             }
 
-            let (stored_batch_info, mut commit_batch_infos) =
-                <(
-                    IExecutor::StoredBatchInfo,
-                    Vec<IExecutor::CommitBatchInfoZKsyncOS>,
-                )>::abi_decode_params(&commit_data[1..])?;
+            let (_, mut commit_batch_infos) = <(
+                IExecutor::StoredBatchInfo,
+                Vec<IExecutor::CommitBatchInfoZKsyncOS>,
+            )>::abi_decode_params(&commit_data[1..])?;
             if commit_batch_infos.len() != 1 {
                 return Err(L1WatcherError::Other(anyhow::anyhow!(
                     "unexpected number of committed batch infos: {}",
@@ -147,18 +155,41 @@ impl ProcessL1Event for BatchRangeWatcher {
                 )));
             }
 
-            let stored_batch_info = StoredBatchInfo::from(stored_batch_info);
             let commit_batch_info = CommitBatchInfo::from(commit_batch_infos.remove(0));
+            assert_eq!(
+                self.next_batch_number, commit_batch_info.batch_number,
+                "non-sequential batch discovered"
+            );
 
             tracing::info!(
                 batch_number,
                 first_block_number,
                 last_block_number,
-                ?stored_batch_info,
                 ?commit_batch_info,
                 "discovered committed batch range"
             );
+
+            let committed_batch = CommittedBatch {
+                commit_info: commit_batch_info,
+                // todo: grab upgrade tx hash (if any) from L1
+                upgrade_tx_hash: None,
+                // todo: grab protocol version from L1
+                protocol_version: ProtocolSemanticVersion::new(0, 30, 0),
+            };
+
+            self.batch_ranges_sender
+                .send(committed_batch)
+                .await
+                .map_err(|_| L1WatcherError::OutputClosed)?;
+            self.next_batch_number += 1;
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+pub struct CommittedBatch {
+    pub commit_info: CommitBatchInfo,
+    pub upgrade_tx_hash: Option<B256>,
+    pub protocol_version: ProtocolSemanticVersion,
 }
