@@ -1,7 +1,7 @@
 use alloy::primitives::{B256, BlockNumber};
 use std::convert::TryInto;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
 use zksync_os_genesis::Genesis;
@@ -89,23 +89,27 @@ impl BlockReplayStorage {
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
             );
-            this.write_replay_unchecked(ReplayRecord {
-                block_context: *genesis_context,
-                starting_l1_priority_id: 0,
-                transactions: vec![],
-                previous_block_timestamp: 0,
-                node_version,
-                protocol_version: genesis_tx.protocol_version,
-                block_output_hash: B256::ZERO,
-                force_preimages: genesis_tx.force_deploy_preimages,
-            })
+            this.write_replay_unchecked(
+                ReplayRecord {
+                    block_context: *genesis_context,
+                    starting_l1_priority_id: 0,
+                    transactions: vec![],
+                    previous_block_timestamp: 0,
+                    node_version,
+                    protocol_version: genesis_tx.protocol_version,
+                    block_output_hash: B256::ZERO,
+                    force_preimages: genesis_tx.force_deploy_preimages,
+                },
+                None,
+            )
         }
         this
     }
 
-    fn write_replay_unchecked(&self, record: ReplayRecord) {
+    fn write_replay_unchecked(&self, record: ReplayRecord, db_key: Option<Vec<u8>>) {
         // Prepare record
-        let block_num = record.block_context.block_number.to_be_bytes();
+        let db_key =
+            db_key.unwrap_or_else(|| record.block_context.block_number.to_be_bytes().to_vec());
         let context_value =
             bincode::serde::encode_to_vec(record.block_context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
@@ -124,32 +128,28 @@ impl BlockReplayStorage {
             .latest_record_checked()
             .is_none_or(|l| l < record.block_context.block_number)
         {
-            batch.put_cf(
-                BlockReplayColumnFamily::Latest,
-                Self::LATEST_KEY,
-                &block_num,
-            );
+            batch.put_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY, &db_key);
         }
-        batch.put_cf(BlockReplayColumnFamily::Context, &block_num, &context_value);
+        batch.put_cf(BlockReplayColumnFamily::Context, &db_key, &context_value);
         batch.put_cf(
             BlockReplayColumnFamily::StartingL1SerialId,
-            &block_num,
+            &db_key,
             &starting_l1_tx_id_value,
         );
-        batch.put_cf(BlockReplayColumnFamily::Txs, &block_num, &txs_value);
+        batch.put_cf(BlockReplayColumnFamily::Txs, &db_key, &txs_value);
         batch.put_cf(
             BlockReplayColumnFamily::NodeVersion,
-            &block_num,
+            &db_key,
             &node_version_value,
         );
         batch.put_cf(
             BlockReplayColumnFamily::BlockOutputHash,
-            &block_num,
+            &db_key,
             &record.block_output_hash.0,
         );
         batch.put_cf(
             BlockReplayColumnFamily::ProtocolVersion,
-            &block_num,
+            &db_key,
             record.protocol_version.to_string().as_bytes(),
         );
         let force_preimages_value = bincode::encode_to_vec(
@@ -161,7 +161,7 @@ impl BlockReplayStorage {
         .expect("Failed to serialize record.force_preimages");
         batch.put_cf(
             BlockReplayColumnFamily::ForcePreimages,
-            &block_num,
+            &db_key,
             &force_preimages_value,
         );
 
@@ -343,16 +343,33 @@ impl WriteReplay for BlockReplayStorage {
         }
 
         if record.block_context.block_number <= current_latest_record {
-            let old_record = self.get_replay_record(record.block_context.block_number);
-            if old_record.as_ref() != Some(&record) {
+            let old_record = self
+                .get_replay_record(record.block_context.block_number)
+                .expect("Old record must exist");
+            if old_record != record {
+                let seconds = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Incorrect system time")
+                    .as_secs();
+                let db_key = old_record
+                    .block_context
+                    .block_number
+                    .to_be_bytes()
+                    .to_vec()
+                    .into_iter()
+                    .chain(seconds.to_be_bytes())
+                    .collect();
+                let old_record_hex_db_key = alloy::hex::encode_prefixed(&db_key);
                 tracing::warn!(
-                    "Overriding existing block replay record {}",
-                    record.block_context.block_number
+                    block = record.block_context.block_number,
+                    old_record_hex_db_key,
+                    "Overriding existing block replay record",
                 );
+                self.write_replay_unchecked(old_record, Some(db_key));
             }
         }
 
-        self.write_replay_unchecked(record);
+        self.write_replay_unchecked(record, None);
         latency_observer.observe();
         true
     }

@@ -212,6 +212,11 @@ alloy::sol! {
 
         event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
         event BlockExecution(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
+        event ReportCommittedBatchRangeZKsyncOS(
+            uint64 indexed batchNumber,
+            uint64 indexed firstBlockNumber,
+            uint64 indexed lastBlockNumber
+        );
 
         function commitBatchesSharedBridge(
             address _chainAddress,

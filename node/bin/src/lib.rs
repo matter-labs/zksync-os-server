@@ -18,7 +18,7 @@ mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
 
-use crate::batch_sink::{BatchSink, NoOpSink};
+use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
@@ -41,7 +41,8 @@ use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
-use alloy::network::EthereumWallet;
+use alloy::network::{Ethereum, EthereumWallet};
+use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
@@ -59,12 +60,15 @@ use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
+use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
-use zksync_os_l1_watcher::{L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher};
+use zksync_os_l1_watcher::{
+    BatchRangeWatcher, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
+};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_object_store::ObjectStoreFactory;
@@ -89,6 +93,7 @@ const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
+pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
@@ -358,6 +363,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(report_exit("L1 execute watcher")),
     );
 
+    tasks.spawn(
+        BatchRangeWatcher::create_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
+            node_startup_state.l1_state.last_executed_batch,
+            node_startup_state.l1_state.last_committed_batch,
+        )
+        .await
+        .expect("failed to start L1 batch range watcher")
+        .run()
+        .map(report_exit("L1 batch range watcher")),
+    );
+
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
     assert!(
         first_replay_record.is_some() || starting_block == 1,
@@ -498,10 +516,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1UpgradeTxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
-            config
-                .genesis_config
-                .bytecode_supplier_address
-                .expect("Missing `bytecode_supplier_address` in L1 watcher config"),
+            config.genesis_config.bytecode_supplier_address,
             current_protocol_version,
             l1_upgrade_transactions_sender,
         )
@@ -585,7 +600,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: Config,
-    l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
+    l1_provider: FillProvider<
+        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
+        impl Provider<Ethereum> + Clone + 'static,
+    >,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
@@ -637,6 +655,12 @@ async fn run_main_node_pipeline(
         .general_config
         .rocks_db_path
         .join(PRIORITY_TREE_DB_NAME);
+    let internal_config_path = config
+        .general_config
+        .rocks_db_path
+        .join(INTERNAL_CONFIG_FILE_NAME);
+    let internal_config_manager = InternalConfigManager::new(internal_config_path)
+        .expect("Failed to initialize InternalConfigManager");
 
     Pipeline::new()
         .pipe(MainNodeCommandSource {
@@ -662,7 +686,15 @@ async fn run_main_node_pipeline(
             config
                 .sequencer_config
                 .revm_consistency_checker_enabled
-                .then(|| RevmConsistencyChecker::new(state.clone())),
+                .then(|| {
+                    RevmConsistencyChecker::new(
+                        state.clone(),
+                        internal_config_manager.clone(),
+                        config
+                            .sequencer_config
+                            .revm_consistency_checker_revert_on_divergence,
+                    )
+                }),
         )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe(ProverInputGenerator {
@@ -689,6 +721,7 @@ async fn run_main_node_pipeline(
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
+            node_state_on_startup.l1_state.last_committed_batch,
         ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
@@ -699,14 +732,14 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),
         ))
-        .pipe(L1Sender::<_, CommitCommand> {
+        .pipe(L1Sender::<_, _, CommitCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(starting_batch_number))
-        .pipe(L1Sender::<_, ProofCommand> {
+        .pipe(L1Sender::<_, _, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
@@ -726,7 +759,7 @@ async fn run_main_node_pipeline(
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
-        .pipe(BatchSink)
+        .pipe(BatchSink::new(internal_config_manager))
         .spawn(tasks);
 }
 
@@ -748,6 +781,12 @@ async fn run_en_pipeline(
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
+    let internal_config_path = config
+        .general_config
+        .rocks_db_path
+        .join(INTERNAL_CONFIG_FILE_NAME);
+    let internal_config_manager = InternalConfigManager::new(internal_config_path)
+        .expect("Failed to initialize InternalConfigManager");
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
@@ -769,7 +808,15 @@ async fn run_en_pipeline(
             config
                 .sequencer_config
                 .revm_consistency_checker_enabled
-                .then(|| RevmConsistencyChecker::new(state.clone())),
+                .then(|| {
+                    RevmConsistencyChecker::new(
+                        state.clone(),
+                        internal_config_manager.clone(),
+                        config
+                            .sequencer_config
+                            .revm_consistency_checker_revert_on_divergence,
+                    )
+                }),
         )
         .pipe(TreeManager { tree: tree.clone() })
         .pipe_if(
@@ -795,7 +842,7 @@ async fn run_en_pipeline(
                 .join(PRIORITY_TREE_DB_NAME),
         ),
         batch_storage,
-        finality,
+        finality.clone(),
         node_state_on_startup
             .last_l1_executed_block
             .min(node_state_on_startup.block_replay_storage_last_block),
@@ -807,6 +854,10 @@ async fn run_en_pipeline(
         priority_tree_en_step
             .run()
             .map(report_exit("priority_tree_en")),
+    );
+    tasks.spawn(
+        clear_failing_block_config_task(finality, internal_config_manager)
+            .map(report_exit("clear_failing_block_config_task")),
     );
 }
 
@@ -944,7 +995,7 @@ async fn determine_starting_batch(
             // We need to replay old unexecuted blocks to rebuild and execute the batches they are in
             node_startup_state.last_l1_executed_block + 1,
             // We want to replay at least one block that is already committed -
-            //  this way we can always get previous_batch_info from storage
+            // this way we can always get previous_batch_info from storage
             node_startup_state.last_l1_committed_block,
             // Repositories' persistence may have fallen behind - we need to replay blocks to rebuild it
             node_startup_state.repositories_persisted_block + 1,
@@ -955,7 +1006,7 @@ async fn determine_starting_batch(
             // For FullDiffs state (default) - this is always ahead of `last_l1_executed_block`.
             state.block_range_available().end() + 1,
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
-            //  all the blocks we are rebuilding
+            // all the blocks we are rebuilding
             config
                 .sequencer_config
                 .block_rebuild

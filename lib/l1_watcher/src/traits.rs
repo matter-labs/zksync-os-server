@@ -55,7 +55,7 @@ where
         let sol_event = T::SolEvent::decode_log(&log.inner)?.data;
         let watched_event =
             T::WatchedEvent::erased_try_from(sol_event).map_err(L1WatcherError::Convert)?;
-        self.process_event(watched_event).await?;
+        self.process_event(watched_event, log).await?;
         Ok(())
     }
 }
@@ -85,7 +85,11 @@ pub trait ProcessL1Event {
     fn contract_address(&self) -> Address;
 
     /// Invoked each time a new event is found.
-    async fn process_event(&mut self, event: Self::WatchedEvent) -> Result<(), L1WatcherError>;
+    async fn process_event(
+        &mut self,
+        event: Self::WatchedEvent,
+        log: Log,
+    ) -> Result<(), L1WatcherError>;
 }
 
 /// Implementation of `TryFrom` that erases the error type to `anyhow::Error`.

@@ -5,9 +5,9 @@ use reth_revm::context::TxEnv;
 use reth_revm::primitives::TxKind;
 use reth_revm::state::Bytecode;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
-use zksync_os_revm::ZKsyncTx;
 use zksync_os_revm::transaction::abstraction::ZKsyncTxBuilder;
-use zksync_os_types::ZkTransaction;
+use zksync_os_revm::{ZKsyncTx, ZkSpecId};
+use zksync_os_types::{ExecutionVersion, ZkTransaction};
 
 /// Get unpadded code from full bytecode with artifacts.
 pub fn get_unpadded_code(full_bytecode: &[u8], account: &AccountProperties) -> Bytecode {
@@ -124,4 +124,13 @@ pub fn zk_tx_into_revm_tx(
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {:?}", e))
         .unwrap()
+}
+
+pub fn zk_spec_version(execution_version: ExecutionVersion) -> Option<ZkSpecId> {
+    match execution_version {
+        ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
+            Some(ZkSpecId::AtlasV1)
+        }
+        ExecutionVersion::V4 | ExecutionVersion::V5 => Some(ZkSpecId::AtlasV2),
+    }
 }

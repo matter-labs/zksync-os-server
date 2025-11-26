@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.1](https://github.com/matter-labs/zksync-os-server/compare/v0.11.0...v0.11.1) (2025-11-24)
+
+
+### Features
+
+* Add time_since metrics ([#628](https://github.com/matter-labs/zksync-os-server/issues/628)) ([33a7224](https://github.com/matter-labs/zksync-os-server/commit/33a722440f5399f74b8f80b95d9386f285c16c5e))
+* config option to disable batcher hash assertion when rebuilding batches ([#647](https://github.com/matter-labs/zksync-os-server/issues/647)) ([34d45e1](https://github.com/matter-labs/zksync-os-server/commit/34d45e1f3b1420664c6a0e1f4367a47e7d10e27c))
+* update zksync-os with p256 fix ([#642](https://github.com/matter-labs/zksync-os-server/issues/642)) ([ea04463](https://github.com/matter-labs/zksync-os-server/commit/ea044637adb94336999d0e5031dd61c007defc11))
+* upgrade smart-config to 0.4.0; simplify parsing ([#644](https://github.com/matter-labs/zksync-os-server/issues/644)) ([a0c1da9](https://github.com/matter-labs/zksync-os-server/commit/a0c1da9fea1312d46be0f6594d55787ea3ae45dc))
+
+
+### Bug Fixes
+
+* **batcher:** rebuild batches from S3 even when they are not committed ([#645](https://github.com/matter-labs/zksync-os-server/issues/645)) ([608153d](https://github.com/matter-labs/zksync-os-server/commit/608153d83dee7d37d03c9e53120a496454658df5))
+* Update ZKsync REVM deps ([#648](https://github.com/matter-labs/zksync-os-server/issues/648)) ([d66af50](https://github.com/matter-labs/zksync-os-server/commit/d66af5089b5f616da1387d05c7efa480ba5d0b92))
+
 ## [0.11.0](https://github.com/matter-labs/zksync-os-server/compare/v0.10.1...v0.11.0) (2025-11-20)
 
 

@@ -2,13 +2,9 @@ use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::{Address, U128};
 use serde::{Deserialize, Serialize};
-use smart_config::de::{Qualified, WellKnown};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
-use smart_config::{
-    DescribeConfig, DeserializeConfig, Serde,
-    de::{Delimited, Optional},
-};
+use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::Delimited};
 use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
@@ -105,23 +101,22 @@ pub enum StateBackendConfig {
 pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
-    // TODO: Pre-configured value, to be removed. Optional(Serde![int]) is a temp hack, replace it with Serde![str] after removing the default.
-    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
+    #[config(default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(with = Optional(Serde![int]), default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
-    pub bytecode_supplier_address: Option<Address>,
+    #[config(default_t = crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap())]
+    pub bytecode_supplier_address: Address,
 
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(with = Optional(Serde![int]), default_t = Some("./genesis/genesis.json".into()))]
+    #[config(default_t = Some("./genesis/genesis.json".into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
@@ -187,15 +182,15 @@ pub struct SequencerConfig {
     pub fee_collector_address: Address,
 
     /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    #[config(default_t = None, with = Optional(Serde![str]))]
+    #[config(default_t = None)]
     pub base_fee_override: Option<U128>,
 
     /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    #[config(default_t = None, with = Optional(Serde![str]))]
+    #[config(default_t = None)]
     pub pubdata_price_override: Option<U128>,
 
     /// Override for native price (in wei). If set, native price will be constant and equal to this value.
-    #[config(default_t = None, with = Optional(Serde![str]))]
+    #[config(default_t = None)]
     pub native_price_override: Option<U128>,
 
     /// Maximum number of blocks to produce.
@@ -216,6 +211,9 @@ pub struct SequencerConfig {
     /// blocking process and the overhead should be small.
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
+    /// If enabled, node will revert block with divergence detected by REVM consistency checker.
+    #[config(default_t = false)]
+    pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild options.
     #[config(nest)]
@@ -226,16 +224,6 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct ConfigAddress(pub Address);
-
-const HASH_DE: Qualified<Serde![str]> =
-    Qualified::new(Serde![str], "hex string with optional 0x prefix");
-impl WellKnown for ConfigAddress {
-    type Deserializer = Qualified<Serde![str]>;
-    const DE: Self::Deserializer = HASH_DE;
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -275,11 +263,18 @@ pub struct RpcConfig {
 
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
     #[config(default, with = Delimited(","))]
-    pub l2_signer_blacklist: HashSet<ConfigAddress>,
+    pub l2_signer_blacklist: HashSet<Address>,
 
     /// Default timeout for `eth_sendRawTransactionSync`
     #[config(default_t = 2 * TimeUnit::Seconds)]
     pub send_raw_transaction_sync_timeout: Duration,
+
+    /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
+    /// Needed to account for pubdata price market fluctuations. Setting this to `1.0` can lead to
+    /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)
+    /// because pubdata price increase in-between estimation and sequencing.
+    #[config(default_t = 1.5)]
+    pub estimate_gas_pubdata_price_factor: f64,
 }
 
 /// Only used on the Main Node.
@@ -324,6 +319,13 @@ pub struct L1SenderConfig {
     #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
 
+    /// Use Fusaka blob transaction format if the timestamp has passed.
+    ///
+    /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
+    /// does not support EIP-7594 yet (https://github.com/foundry-rs/foundry/issues/12222).
+    #[config(default_t = u64::MAX)]
+    pub fusaka_upgrade_timestamp: u64,
+
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -363,6 +365,10 @@ pub struct MempoolConfig {
     pub max_pending_txs: usize,
     #[config(default_t = usize::MAX)]
     pub max_pending_size: usize,
+    /// Minimal fee per gas (in WEI) for a transaction to be accepted by mempool
+    /// Defaults to `7` which is the lowest possible value of base fee under mainnet EIP-1559 params
+    #[config(default_t = 7)]
+    pub minimal_protocol_basefee: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -384,6 +390,12 @@ pub struct BatcherConfig {
     /// Max number of blocks per batch
     #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
+
+    /// Whether to verify that rebuilt batches match stored batches by comparing hashes.
+    /// Enabled by default for safety. Disabling this check can be useful for debugging or
+    /// when recovering from corrupted state.
+    #[config(default_t = true)]
+    pub assert_rebuilt_batch_hashes: bool,
 }
 
 /// Only used on the Main Node.
@@ -597,7 +609,7 @@ pub struct BatchVerificationConfig {
     #[config(default_t = 1)]
     pub threshold: usize,
     /// [server] Accepted signer pubkeys
-    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()])]
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited(","))]
     pub accepted_signers: Vec<String>,
     /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]
@@ -624,9 +636,10 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_response_size: c.max_response_size,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
-            l2_signer_blacklist: c.l2_signer_blacklist.into_iter().map(|a| a.0).collect(),
+            l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
+            estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
         }
     }
 }
@@ -658,6 +671,7 @@ impl L1SenderConfig {
             max_fee_per_blob_gas_gwei: self.max_fee_per_blob_gas_gwei,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
     }
@@ -695,6 +709,7 @@ impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
     fn from(c: MempoolConfig) -> Self {
         Self {
             pending_limit: SubPoolLimit::new(c.max_pending_txs, c.max_pending_size),
+            minimal_protocol_basefee: c.minimal_protocol_basefee,
             ..Default::default()
         }
     }
