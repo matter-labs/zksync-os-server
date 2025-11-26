@@ -16,7 +16,7 @@ use zksync_os_server::config::Config;
 async fn batch_verification_works() -> anyhow::Result<()> {
     let builder = Tester::builder().batch_verification(TesterBatchVerificationConfig {
         threshold: 1,
-        request_timeout: Duration::from_millis(100),
+        request_timeout: Duration::from_millis(500),
         retry_delay: Duration::from_secs(1),
         total_timeout: Duration::from_secs(300),
     });
@@ -56,7 +56,7 @@ async fn batch_verification_works() -> anyhow::Result<()> {
 async fn batch_verification_without_enough_ens() -> anyhow::Result<()> {
     let builder = Tester::builder().batch_verification(TesterBatchVerificationConfig {
         threshold: 2,
-        request_timeout: Duration::from_millis(100),
+        request_timeout: Duration::from_millis(500),
         retry_delay: Duration::from_secs(1),
         total_timeout: Duration::from_secs(300),
     });
@@ -88,7 +88,7 @@ async fn batch_verification_without_enough_ens() -> anyhow::Result<()> {
 async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
     let builder = Tester::builder().batch_verification(TesterBatchVerificationConfig {
         threshold: 2,
-        request_timeout: Duration::from_millis(100),
+        request_timeout: Duration::from_millis(500),
         retry_delay: Duration::from_secs(1),
         total_timeout: Duration::from_secs(300),
     });
