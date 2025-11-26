@@ -160,6 +160,9 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     let envelope = provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
 
                     let pending_block = provider.get_block(BlockId::pending()).await?.expect("no pending block");
+                    // todo: make conversion unconditional (and remove respective config) once both:
+                    //       1) Fusaka upgrade is executed on mainnet
+                    //       2) anvil supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
                     let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
                         // Convert the envelope into an EIP-7594 transaction by converting the sidecar
                         envelope.try_map_eip4844(|tx| {
