@@ -4,7 +4,6 @@ use crate::{
 };
 use futures::{SinkExt, StreamExt};
 use tokio::io::BufReader;
-use tokio::net::ToSocketAddrs;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::{
@@ -46,7 +45,9 @@ impl BatchVerificationServer {
     }
 
     /// Start the TCP server that accepts connections from external nodes
-    pub async fn run_server(&self, address: impl ToSocketAddrs) -> anyhow::Result<()> {
+    pub async fn run_server(&self, address: String) -> anyhow::Result<()> {
+        tracing::info!("Starting Batch Verification server at {}", address);
+
         let listener = TcpListener::bind(address).await?;
         let response_sender = self.response_sender.clone();
 

@@ -59,6 +59,7 @@ pub struct Tester {
     l1_address: String,
     replay_url: String,
     l2_rpc_address: String,
+    batch_verification_address: String,
 }
 
 impl Tester {
@@ -72,17 +73,19 @@ impl Tester {
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
         // Due to type inference issue, we need to specify None type here and this whole function if a de-facto helper for this
-        self.launch_external_node_with_overrides(None::<fn(&mut Config)>)
+        self.launch_external_node_overrides(None::<fn(&mut Config)>)
             .await
     }
 
-    pub async fn launch_external_node_with_overrides(
+    pub async fn launch_external_node_overrides(
         &self,
         config_overrides: Option<impl FnOnce(&mut Config)>,
     ) -> anyhow::Result<Self> {
         let overrides_fun = |config: &mut Config| {
             config.sequencer_config.block_replay_download_address = Some(self.replay_url.clone());
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+            config.batch_verification_config.connect_address =
+                self.batch_verification_address.clone();
             if let Some(f) = config_overrides {
                 f(config)
             }
@@ -127,11 +130,14 @@ impl Tester {
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let replay_locked_port = LockedPort::acquire_unused().await?;
         let status_locked_port = LockedPort::acquire_unused().await?;
+        let batch_verification_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
+        let batch_verification_address =
+            format!("localhost:{}", batch_verification_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
         let tempdir = tempfile::tempdir()?;
@@ -180,6 +186,21 @@ impl Tester {
             ..Default::default()
         };
 
+        let batch_verification_config = BatchVerificationConfig {
+            server_enabled: false,
+            listen_address: batch_verification_address.clone(),
+            client_enabled: false,
+            connect_address: batch_verification_address.clone(),
+            threshold: 1,
+            accepted_signers: vec!["0xdF3401331FeB729f138258bAC135359f3CBA6760".into()],
+            request_timeout: Duration::from_millis(100),
+            retry_delay: Duration::from_millis(10),
+            total_timeout: Duration::from_secs(300),
+            // address 0xdF3401331FeB729f138258bAC135359f3CBA6760
+            signing_key: "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47"
+                .into(),
+        };
+
         let status_server_config = StatusServerConfig {
             address: status_address,
         };
@@ -207,9 +228,11 @@ impl Tester {
             status_server_config,
             observability_config: Default::default(),
             gas_adjuster_config: Default::default(),
-            batch_verification_config: Default::default(),
+            batch_verification_config,
         };
-        config_overrides.map(|f| f(&mut config));
+        if let Some(f) = config_overrides {
+            f(&mut config)
+        }
 
         let main_task = tokio::task::spawn(async move {
             zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;
@@ -308,6 +331,7 @@ impl Tester {
             main_task,
             l1_address,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
+            batch_verification_address,
             replay_url,
             tempdir: tempdir.clone(),
             main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
@@ -315,11 +339,18 @@ impl Tester {
     }
 }
 
+pub struct TesterBatchVerificationConfig {
+    pub threshold: usize,
+    pub request_timeout: Duration,
+    pub retry_delay: Duration,
+    pub total_timeout: Duration,
+}
+
 #[derive(Default)]
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
-    batch_verification_config: Option<BatchVerificationConfig>,
+    batch_verification: Option<TesterBatchVerificationConfig>,
 }
 
 impl TesterBuilder {
@@ -336,9 +367,9 @@ impl TesterBuilder {
 
     pub fn batch_verification(
         mut self,
-        batch_verification_config: BatchVerificationConfig,
+        batch_verification_config: TesterBatchVerificationConfig,
     ) -> Self {
-        self.batch_verification_config = Some(batch_verification_config);
+        self.batch_verification = Some(batch_verification_config);
         self
     }
 
@@ -360,8 +391,13 @@ impl TesterBuilder {
             if let Some(block_time) = self.block_time {
                 config.sequencer_config.block_time = block_time;
             }
-            if let Some(batch_verification_config) = self.batch_verification_config {
-                config.batch_verification_config = batch_verification_config;
+            if let Some(batch_verification) = self.batch_verification {
+                config.batch_verification_config.server_enabled = true;
+                config.batch_verification_config.threshold = batch_verification.threshold;
+                config.batch_verification_config.request_timeout =
+                    batch_verification.request_timeout;
+                config.batch_verification_config.retry_delay = batch_verification.retry_delay;
+                config.batch_verification_config.total_timeout = batch_verification.total_timeout;
             }
         };
 

@@ -7,31 +7,31 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::{network::ReceiptResponse, primitives::Address};
 use backon::{ConstantBuilder, Retryable};
+use zksync_os_integration_tests::TesterBatchVerificationConfig;
+use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{Tester, assert_traits::ReceiptAssert, contracts::EventEmitter};
-use zksync_os_server::config::{BatchVerificationConfig, Config};
+use zksync_os_server::config::Config;
 
 #[test_log::test(tokio::test)]
 async fn batch_verification_works() -> anyhow::Result<()> {
-    let verification_config = BatchVerificationConfig {
-        // TODO port deduplication?
-        server_enabled: true,
-        listen_address: "127.0.0.1:3072".to_string(),
-        client_enabled: true,
-        connect_address: "127.0.0.1:3072".to_string(),
+    let builder = Tester::builder().batch_verification(TesterBatchVerificationConfig {
         threshold: 1,
-        accepted_signers: vec!["0xdF3401331FeB729f138258bAC135359f3CBA6760".into()],
         request_timeout: Duration::from_millis(100),
         retry_delay: Duration::from_millis(10),
-        total_timeout: Duration::from_secs(10),
-        // address 0xdF3401331FeB729f138258bAC135359f3CBA6760
-        signing_key: "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47".into(),
-    };
-
-    let builder = Tester::builder().batch_verification(verification_config.clone());
+        total_timeout: Duration::from_secs(300),
+    });
     let main_node = builder.build().await?;
-    let en1 = main_node
-        .launch_external_node_with_overrides(Some(|config: &mut Config| {
-            config.batch_verification_config = verification_config.clone();
+
+    // Genesis block should not get finalized because EN with 2FA is needed.
+    main_node
+        .l2_zk_provider
+        .wait_not_finalized(1, Duration::from_secs(60))
+        .await?;
+
+    let _en1 = main_node
+        .launch_external_node_overrides(Some(|config: &mut Config| {
+            let bv_config = &mut config.batch_verification_config;
+            bv_config.client_enabled = true;
         }))
         .await?;
 
@@ -40,34 +40,15 @@ async fn batch_verification_works() -> anyhow::Result<()> {
         .await?
         .expect_successful_receipt()
         .await?;
-    let contract_address = deploy_tx_receipt
-        .contract_address()
-        .expect("no contract deployed");
 
-    check_contract_present(&en1, contract_address).await?;
-    //TODO assertion batch committed instead
-
-    let en2 = main_node
-        .launch_external_node_with_overrides(Some(|config: &mut Config| {
-            config.batch_verification_config = verification_config.clone();
-        }))
+    // Check batch is eventually finalized
+    main_node
+        .l2_zk_provider
+        .wait_finalized_with_timeout(
+            deploy_tx_receipt.block_number.unwrap(),
+            Duration::from_secs(60),
+        )
         .await?;
-
-    check_contract_present(&en2, contract_address).await?;
-
-    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
-        .send()
-        .await?
-        .expect_successful_receipt()
-        .await?;
-    let contract_address = deploy_tx_receipt
-        .contract_address()
-        .expect("no contract deployed");
-
-    check_contract_present(&en1, contract_address).await?;
-    check_contract_present(&en2, contract_address).await?;
-    //TODO assertion batch committed instead
-
     Ok(())
 }
 
