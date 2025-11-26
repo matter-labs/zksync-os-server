@@ -312,6 +312,13 @@ pub struct L1SenderConfig {
     #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
 
+    /// Use Fusaka blob transaction format if the timestamp has passed.
+    ///
+    /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
+    /// does not support EIP-7594 yet (https://github.com/foundry-rs/foundry/issues/12222).
+    #[config(default_t = u64::MAX)]
+    pub fusaka_upgrade_timestamp: u64,
+
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -641,6 +648,7 @@ impl L1SenderConfig {
             max_fee_per_blob_gas_gwei: self.max_fee_per_blob_gas_gwei,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
     }
