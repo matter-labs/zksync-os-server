@@ -230,7 +230,7 @@ impl BatchVerifier {
                 singed_batcher_sender
                     .send(
                         batch_envelope
-                            .with_signatures(BatchSignatureData::NotNeeded)
+                            .with_signatures(BatchSignatureData::AlreadyCommitted)
                             .with_stage(BatchExecutionStage::BatchSigned),
                     )
                     .await

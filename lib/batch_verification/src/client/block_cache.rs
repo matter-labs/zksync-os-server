@@ -50,7 +50,8 @@ impl<Finality: ReadFinality> BlockCache<Finality> {
             BATCH_VERIFICATION_CLIENT_METRICS.update_cache_range(start, end);
         } else {
             // some synthetic value that will be ok on a graph. size is right (empty)
-            BATCH_VERIFICATION_CLIENT_METRICS.update_cache_range(block_number, block_number - 1);
+            BATCH_VERIFICATION_CLIENT_METRICS
+                .update_cache_range(block_number, block_number.saturating_sub(1));
         }
         Ok(())
     }
