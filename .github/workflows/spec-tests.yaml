@@ -159,7 +159,7 @@ jobs:
     runs-on: matterlabs-ci-runner-high-performance
     env:
       RPC_URL: http://localhost:3050
-      CHAIN_ID: 270
+      CHAIN_ID: 6565
       # Use hardcoded rich wallet
       WALLET_ADDRESS: "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049"
       PRIVATE_KEY: "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110"
