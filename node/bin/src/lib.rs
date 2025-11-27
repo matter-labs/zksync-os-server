@@ -91,7 +91,7 @@ const REPOSITORY_DB_NAME: &str = "repository";
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
-    _stop_receiver: watch::Receiver<bool>,
+    stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
@@ -384,7 +384,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         run_status_server(
             config.status_server_config.address.clone(),
-            _stop_receiver.clone(),
+            stop_receiver.clone(),
         )
         .map(report_exit("Status server")),
     );
@@ -547,7 +547,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             finality_storage,
             chain_id,
-            _stop_receiver.clone(),
+            stop_receiver.clone(),
             tx_acceptance_state_sender,
             batcher_prev_batch_info,
         )
@@ -566,7 +566,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             starting_block,
             repositories,
             finality_storage,
-            _stop_receiver.clone(),
+            stop_receiver.clone(),
             tx_acceptance_state_sender,
         )
         .await;
@@ -738,7 +738,7 @@ async fn run_en_pipeline(
     starting_block: u64,
     repositories: impl WriteRepository + Clone,
     finality: impl ReadFinality + Clone,
-    _stop_receiver: watch::Receiver<bool>,
+    stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
     Pipeline::new()
@@ -751,6 +751,7 @@ async fn run_en_pipeline(
                 .block_replay_download_address
                 .clone()
                 .expect("EN must have replay_download_address"),
+            stop_receiver: stop_receiver.clone(),
         })
         .pipe(Sequencer {
             block_context_provider,

@@ -5,7 +5,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::HashSet;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
 use zksync_os_storage_api::{ReadReplay, ReadReplayExt};
@@ -33,6 +33,7 @@ pub struct ExternalNodeCommandSource {
     pub record_overrides: Vec<(u64, Bytes)>,
     pub up_to_block: Option<u64>,
     pub replay_download_address: String,
+    pub stop_receiver: watch::Receiver<bool>,
 }
 
 #[async_trait]
@@ -78,7 +79,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
     const OUTPUT_BUFFER_SIZE: usize = 5;
 
     async fn run(
-        self,
+        mut self,
         _input: PeekableReceiver<()>,
         output: mpsc::Sender<BlockCommand>,
     ) -> anyhow::Result<()> {
@@ -104,8 +105,8 @@ impl PipelineComponent for ExternalNodeCommandSource {
                     up_to_block,
                     "Reached up_to_block, halting external command source"
                 );
-                // Sleeping indefinitely.
-                futures::future::pending::<()>().await;
+                // Wait for stop signal.
+                let _ = self.stop_receiver.wait_for(|stop| *stop).await;
             }
 
             if output.send(command).await.is_err() {

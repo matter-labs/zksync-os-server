@@ -100,7 +100,7 @@ pub async fn replay_receiver(
     // Instead of negotiating an upgrade, we just drop down to the TCP layer after the headers.
     let query_bytes = serde_json::to_vec(&query)?;
     socket.write_u32(query_bytes.len().try_into()?).await?;
-    socket.write(&query_bytes).await?;
+    socket.write_all(&query_bytes).await?;
     let replay_version = socket.read_u32().await?;
 
     Ok(
