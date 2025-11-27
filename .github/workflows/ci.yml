@@ -168,6 +168,10 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
+        with:
+          enable_cache: 'true'
+          cache_shared_key: 'prover-tests'
+          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check CUDA version
         run: |
@@ -209,7 +213,7 @@ jobs:
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release -p zksync_os_integration_tests \
-            --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
+            --features gpu-prover-tests --test prover --archive-file ${PROVER_GPU_TESTS}.tar.zst
 
       - name: Upload tests
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
