@@ -111,7 +111,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Measure coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace
+        run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace --release --profile coverage
 
       - name: Generate codecov report
         uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
