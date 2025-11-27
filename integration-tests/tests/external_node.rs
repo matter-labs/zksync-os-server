@@ -46,7 +46,7 @@ async fn transaction_replay() -> anyhow::Result<()> {
 
 /// It is easy to write to a channel that the EN doesn't need
 /// which leads to the EN getting stuck when the channel is full.
-#[test_log::test(tokio::test(flavor = "current_thread"))]
+#[test_log::test(tokio::test)]
 async fn does_not_get_stuck() -> anyhow::Result<()> {
     let main_node = Tester::setup().await?;
     let en1 = main_node.launch_external_node().await?;
