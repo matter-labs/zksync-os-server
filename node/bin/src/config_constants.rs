@@ -12,7 +12,7 @@ pub const BRIDGEHUB_ADDRESS: &str = "0xaab95dfc116d9d9d9dd931cda1fd4142db135365"
 pub const BYTECODE_SUPPLIER_ADDRESS: &str = "0xa1c853945dd5ba2771e4b947a1bfabf4022e59dd";
 
 /// Chain ID of the chain node operates on.
-pub const CHAIN_ID: u64 = 270;
+pub const CHAIN_ID: u64 = 6565;
 
 /// Private key to commit batches to L1
 /// Must be consistent with the operator key set on the contract (permissioned!)
