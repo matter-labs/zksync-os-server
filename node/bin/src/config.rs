@@ -300,16 +300,16 @@ pub struct L1SenderConfig {
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend (in gwei).
-    #[config(default_t = 101)]
-    pub max_fee_per_gas_gwei: u64,
+    #[config(default_t = 101.0)]
+    pub max_fee_per_gas_gwei: f64,
 
     /// Max priority fee per gas we are willing to spend (in gwei).
     #[config(default_t = 1.0)]
     pub max_priority_fee_per_gas_gwei: f64,
 
     /// Max fee per blob gas we are willing to spend (in gwei).
-    #[config(default_t = 1)]
-    pub max_fee_per_blob_gas_gwei: u64,
+    #[config(default_t = 1.0)]
+    pub max_fee_per_blob_gas_gwei: f64,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
