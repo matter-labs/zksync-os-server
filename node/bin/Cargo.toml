@@ -90,4 +90,3 @@ jsonrpsee = { workspace = true, default-features = false, features = [
 ] }
 
 sentry.workspace = true
-url.workspace = true
