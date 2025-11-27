@@ -32,6 +32,7 @@ use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
 use crate::prover_api::gapless_committer::GaplessCommitter;
+use crate::prover_api::gapless_l1_proof_sender::GaplessL1ProofSender;
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
@@ -621,13 +622,15 @@ async fn run_main_node_pipeline(
     let starting_batch_number = batcher_prev_batch_info.batch_number + 1;
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
-        config.prover_api_config.job_timeout,
+        config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
 
     let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
         config.prover_api_config.max_fris_per_snark,
         node_state_on_startup.l1_state.last_proved_batch,
+        config.prover_api_config.snark_job_timeout,
+        config.prover_api_config.max_assigned_batch_range,
     );
 
     tasks.spawn(
@@ -735,6 +738,7 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
         .pipe(snark_proving_step)
+        .pipe(GaplessL1ProofSender::new(starting_batch_number))
         .pipe(L1Sender::<_, _, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
@@ -943,6 +947,7 @@ fn run_fake_fri_provers(
         workers = config.fake_fri_provers.workers,
         compute_time = ?config.fake_fri_provers.compute_time,
         min_task_age = ?config.fake_fri_provers.min_age,
+        timeout_frequency = ?config.fake_fri_provers.timeout_frequency,
         "Initializing fake FRI provers"
     );
     let fake_provers_pool = FakeFriProversPool::new(
@@ -950,6 +955,7 @@ fn run_fake_fri_provers(
         config.fake_fri_provers.workers,
         config.fake_fri_provers.compute_time,
         config.fake_fri_provers.min_age,
+        config.fake_fri_provers.timeout_frequency,
     );
     tasks.spawn(
         fake_provers_pool

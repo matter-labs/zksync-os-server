@@ -65,7 +65,10 @@ impl PipelineComponent for Batcher {
     type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
     const NAME: &'static str = "batcher";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+
+    // The next component is `FriProvingPipelineStep` which contains an internal queue for FRI jobs.
+    // We don't want to add additional buffers - as soon as the queue is full, we want to halt batching.
+    const OUTPUT_BUFFER_SIZE: usize = 1;
 
     async fn run(
         mut self,

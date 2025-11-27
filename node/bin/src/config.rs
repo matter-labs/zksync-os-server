@@ -435,9 +435,13 @@ pub struct ProverApiConfig {
     /// however, we won't turn real FRI proofs into fake ones - even on timeout.
     pub fake_snark_provers: FakeSnarkProversConfig,
 
-    /// Timeout after which a prover job is assigned to another Fri Prover Worker.
+    /// Timeout after which a FRI prover job is assigned to another Fri Prover Worker.
+    #[config(alias = "job_timeout", default_t = Duration::from_secs(300))]
+    pub fri_job_timeout: Duration,
+
+    /// Timeout after which a SNARK prover job is assigned to another SNARK Prover Worker.
     #[config(default_t = Duration::from_secs(300))]
-    pub job_timeout: Duration,
+    pub snark_job_timeout: Duration,
 
     /// Max difference between the oldest and newest batch number being proven
     /// If the difference is larger than this, provers will not be assigned new jobs - only retries.
@@ -475,6 +479,13 @@ pub struct FakeFriProversConfig {
     /// This gives real provers a head start when picking jobs
     #[config(default_t = Duration::from_millis(3000))]
     pub min_age: Duration,
+
+    /// Probability (0.0 to 1.0) that a job will timeout/be dropped instead of submitting a proof.
+    /// 0.0 means never timeout (default behavior).
+    /// For example, 0.1 means 10% of jobs will be dropped.
+    /// Used to test queuing behavior on timeout.
+    #[config(default_t = 0.0)]
+    pub timeout_frequency: f64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

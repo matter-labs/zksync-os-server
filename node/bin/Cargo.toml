@@ -89,5 +89,6 @@ async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = [
     "client",
 ] }
+rand.workspace = true
 
 sentry.workspace = true

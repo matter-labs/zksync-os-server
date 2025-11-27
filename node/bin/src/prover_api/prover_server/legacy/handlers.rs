@@ -9,8 +9,8 @@ use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use zksync_os_l1_sender::batcher_model::FriProof;
 
+use crate::prover_api::fri_job_manager::{JobState, SubmitError};
 use crate::prover_api::{
-    fri_job_manager::{JobStateLegacy, SubmitError},
     metrics::{PROVER_API_METRICS, PickJobResult, ProverStage},
     prover_server::{
         AppState,
@@ -25,7 +25,11 @@ pub(super) async fn pick_fri_job(State(state): State<AppState>) -> Response {
     let start = Instant::now();
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
-    match state.fri_job_manager.pick_next_job(Duration::from_secs(0)) {
+    match state
+        .fri_job_manager
+        .pick_next_job(Duration::from_secs(0), "unknown_prover".to_string())
+        .await
+    {
         Some((fri_job, input)) => {
             let bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
             let prover_input = general_purpose::STANDARD.encode(&bytes);
@@ -89,7 +93,11 @@ pub(super) async fn submit_fri_proof(
 
 pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
     let start = Instant::now();
-    match state.snark_job_manager.pick_real_job().await {
+    match state
+        .snark_job_manager
+        .pick_real_job("unknown_prover".to_string())
+        .await
+    {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
             let from = batches.first().unwrap().0.batch_number;
@@ -136,7 +144,7 @@ pub(super) async fn pick_snark_job(State(state): State<AppState>) -> Response {
 }
 
 pub(super) async fn submit_snark_proof(
-    Query(_query): Query<ProverQuery>,
+    Query(query): Query<ProverQuery>,
     State(state): State<AppState>,
     Json(payload): Json<SnarkProofPayload>,
 ) -> Result<Response, (StatusCode, String)> {
@@ -152,6 +160,7 @@ pub(super) async fn submit_snark_proof(
             payload.block_number_to,
             None,
             proof_bytes,
+            query.id.unwrap_or("unknown_prover".to_string()),
         )
         .await
     {
@@ -169,7 +178,7 @@ pub(super) async fn peek_batch_data(
     Path(batch_number): Path<u64>,
     State(state): State<AppState>,
 ) -> Response {
-    match state.fri_job_manager.peek_batch_data(batch_number) {
+    match state.fri_job_manager.peek_batch_data(batch_number).await {
         Some((_, prover_input)) => {
             let bytes: Vec<u8> = prover_input.iter().flat_map(|v| v.to_le_bytes()).collect();
             Json(BatchDataPayload {
@@ -247,12 +256,7 @@ pub(super) async fn peek_fri_proofs(
 }
 
 pub(super) async fn status(State(state): State<AppState>) -> Response {
-    let status: Vec<JobStateLegacy> = state
-        .fri_job_manager
-        .status()
-        .into_iter()
-        .map(|state| state.into())
-        .collect();
+    let status: Vec<JobState> = state.fri_job_manager.status().await;
     Json(status).into_response()
 }
 
