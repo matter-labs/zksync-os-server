@@ -17,6 +17,8 @@ struct Args {
     /// Bridgehub address
     #[arg(short, long)]
     bridgehub: Option<Address>,
+    /// L2 chain ID
+    chain_id: Option<u64>,
     /// L1 RPC URL
     #[arg(short, long)]
     l1_rpc_url: Option<String>,
@@ -44,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let amount = args
         .amount
         .unwrap_or_else(|| U256::from(100u128 * 10u128.pow(18)));
-    let l2_chain_id = 270;
+    let l2_chain_id = args.chain_id.unwrap_or(6565);
 
     let l1_wallet = EthereumWallet::new(LocalSigner::from_str(&private_key).unwrap());
     let l1_provider = ProviderBuilder::new()
