@@ -1072,12 +1072,20 @@ async fn find_last_matching_main_node_block(
             .get_block_by_number(block_number)?
             .map(|b| b.hash())
             .with_context(|| format!("Local node is missing block {block_number}"))?;
-        let remove_hash = main_node_client
+        if let Some(remote_block) = main_node_client
             .block_by_number(block_number.into(), false)
             .await?
-            .map(|h| h.header.hash)
-            .with_context(|| format!("Main node is missing block {block_number}"))?;
-        Ok(local_hash == remove_hash)
+        {
+            Ok(local_hash == remote_block.hash())
+        } else {
+            // Main node is missing this block in RPC, assume there is a divergence.
+            //
+            // If we happen to query main node during restart it might not have this block in RPC
+            // yet but have it in replay storage. Should still be fine to assume there is a divergence
+            // in such cases. Ideally, we should be able to query main node's replay state through
+            // interactive replay transport instead.
+            Ok(false)
+        }
     }
 
     let main_node_rpc_client =
