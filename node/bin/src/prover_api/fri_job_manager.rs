@@ -59,8 +59,7 @@ pub struct FailedFriProof {
     pub last_block_timestamp: u64,
     pub expected_hash_u32s: [u32; 8],
     pub proof_final_register_values: [u32; 16],
-    // TODO: migrate to String, once legacy is deprecated
-    pub vk_hash: Option<String>,
+    pub vk_hash: String,
     pub proof_bytes: Bytes,
 }
 
@@ -156,8 +155,7 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
-        // TODO: migrate to ExecutionVersion, once legacy is deprecated
-        proving_version: Option<ProvingVersion>,
+        proving_version: ProvingVersion,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -171,20 +169,16 @@ impl FriJobManager {
         //
         // This should never happen, but we double-check to guarantee it's the case.
         //
-        // NOTE: We don't check the actual values, but the value that server believes the prove should use.
-        // NOTE2: Checking only if prover provided VK version - legacy clients will not provide it
-        if let Some(exec_version) = proving_version {
-            // should never panic
-            let server_proving_version = batch_metadata
-                .proving_version()
-                .expect("Must be valid execution as set by the server");
+        // NOTE: We don't check the actual values, but the value that server believes the prover should use.
+        let server_proving_version = batch_metadata
+            .proving_version()
+            .expect("Must be valid execution as set by the server");
 
-            if server_proving_version != exec_version {
-                return Err(SubmitError::ProvingVersionMismatch(
-                    server_proving_version,
-                    exec_version,
-                ));
-            }
+        if server_proving_version != proving_version {
+            return Err(SubmitError::ProvingVersionMismatch(
+                server_proving_version,
+                proving_version,
+            ));
         }
 
         self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
@@ -207,15 +201,6 @@ impl FriJobManager {
                 "Job already removed (racing submit)"
             );
             return Ok(());
-        };
-        // get execution version from prover, if available, otherwise fallback
-        let proving_version = if let Some(proving_version) = proving_version {
-            proving_version
-        } else {
-            removed_job
-                .batch
-                .proving_version()
-                .expect("Must be valid execution as set by the server")
         };
 
         // Prepare the envelope and send it downstream.
@@ -275,12 +260,10 @@ impl FriJobManager {
                 last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
                 expected_hash_u32s,
                 proof_final_register_values,
-                vk_hash: Some(
-                    batch_metadata
-                        .verification_key_hash()
-                        .expect("VK must exist")
-                        .to_string(),
-                ),
+                vk_hash: batch_metadata
+                    .verification_key_hash()
+                    .expect("VK must exist")
+                    .to_string(),
                 proof_bytes: proof_bytes.clone(),
             };
 

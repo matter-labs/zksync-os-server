@@ -81,7 +81,7 @@ pub(super) async fn submit_fri_proof(
     })?;
     let result = match state
         .fri_job_manager
-        .submit_proof(payload.batch_number, proof_bytes.into(), Some(proving_version), &prover_id)
+        .submit_proof(payload.batch_number, proof_bytes.into(), proving_version, &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
@@ -199,7 +199,7 @@ pub(super) async fn submit_snark_proof(
         .submit_proof(
             payload.from_batch_number,
             payload.to_batch_number,
-            Some(proving_version),
+            proving_version,
             proof_bytes,
             query.id,
         )
@@ -322,7 +322,7 @@ pub(super) async fn get_failed_fri_proof(
                 last_batch_timestamp: failed_proof.last_block_timestamp,
                 expected_hash_u32s: failed_proof.expected_hash_u32s,
                 proof_final_register_values: failed_proof.proof_final_register_values,
-                vk_hash: failed_proof.vk_hash.unwrap_or_default(),
+                vk_hash: failed_proof.vk_hash,
                 proof: general_purpose::STANDARD.encode(failed_proof.proof_bytes),
             };
 
