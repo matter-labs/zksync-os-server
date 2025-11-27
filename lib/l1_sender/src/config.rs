@@ -14,7 +14,7 @@ pub struct L1SenderConfig<Input> {
     pub max_fee_per_gas_gwei: u64,
 
     /// Max priority fee per gas we are willing to spend (in gwei).
-    pub max_priority_fee_per_gas_gwei: u64,
+    pub max_priority_fee_per_gas_gwei: f64,
 
     /// Max fee per blob gas we are willing to spend (in gwei).
     pub max_fee_per_blob_gas_gwei: u64,
@@ -39,7 +39,7 @@ impl<T> L1SenderConfig<T> {
 
     /// Max priority fee per gas we are willing to spend (in wei).
     pub fn max_priority_fee_per_gas(&self) -> u128 {
-        self.max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128)
+        (self.max_priority_fee_per_gas_gwei * GWEI_TO_WEI as f64) as u128
     }
 
     /// Max fee per blob gas we are willing to spend (in wei).

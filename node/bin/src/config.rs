@@ -304,8 +304,8 @@ pub struct L1SenderConfig {
     pub max_fee_per_gas_gwei: u64,
 
     /// Max priority fee per gas we are willing to spend (in gwei).
-    #[config(default_t = 2)]
-    pub max_priority_fee_per_gas_gwei: u64,
+    #[config(default_t = 1.0)]
+    pub max_priority_fee_per_gas_gwei: f64,
 
     /// Max fee per blob gas we are willing to spend (in gwei).
     #[config(default_t = 1)]
@@ -752,9 +752,9 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
 pub fn gas_adjuster_config(
     c: GasAdjusterConfig,
     pubdata_mode: PubdataMode,
-    max_priority_fee_per_gas_gwei: u64,
+    max_priority_fee_per_gas_gwei: f64,
 ) -> zksync_os_gas_adjuster::GasAdjusterConfig {
-    let max_priority_fee_per_gas = max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128);
+    let max_priority_fee_per_gas = (max_priority_fee_per_gas_gwei * GWEI_TO_WEI as f64) as u128;
     zksync_os_gas_adjuster::GasAdjusterConfig {
         pubdata_mode,
         max_base_fee_samples: c.max_base_fee_samples,
