@@ -8,7 +8,7 @@ use clap::Parser;
 use std::str::FromStr;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_server::config_constants::BRIDGEHUB_ADDRESS;
+use zksync_os_server::config_constants::{BRIDGEHUB_ADDRESS, CHAIN_ID};
 use zksync_os_types::REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE;
 
 #[derive(Parser, Debug)]
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let amount = args
         .amount
         .unwrap_or_else(|| U256::from(100u128 * 10u128.pow(18)));
-    let l2_chain_id = args.chain_id.unwrap_or(6565);
+    let l2_chain_id = args.chain_id.unwrap_or(CHAIN_ID);
 
     let l1_wallet = EthereumWallet::new(LocalSigner::from_str(&private_key).unwrap());
     let l1_provider = ProviderBuilder::new()
