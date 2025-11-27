@@ -18,6 +18,7 @@ struct Args {
     #[arg(short, long)]
     bridgehub: Option<Address>,
     /// L2 chain ID
+    #[arg(short = 'c', long)]
     chain_id: Option<u64>,
     /// L1 RPC URL
     #[arg(short, long)]
