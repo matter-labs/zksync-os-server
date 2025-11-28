@@ -209,7 +209,7 @@ jobs:
           # This is required to make sure that the paths to workspace artifacts like zkos-l1-state.json
           # are correct inside prebuilt binary.
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
-          WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
+          WORKSPACE_DIR: "/opt/./actions-runner/_work/zksync-os-server/zksync-os-server"
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release -p zksync_os_integration_tests \
@@ -228,7 +228,7 @@ jobs:
   #  Run prover integration tests on GPU machine  #
   #################################################
   prover-tests:
-    runs-on: matterlabs-ci-gpu-runner
+    runs-on: [matterlabs-ci-gpu-runner, hetzner]
     needs: build-prover-tests
     steps:
       - name: Checkout code
@@ -239,6 +239,8 @@ jobs:
 
       - name: Check Nvidia driver version
         run: |
+          echo $WORKSPACE
+          pwd
           nvidia-smi
 
       - name: Download prebuilt tests
@@ -249,9 +251,9 @@ jobs:
       - name: Download CRS setup file
         if: steps.cache-crs.outputs.cache-hit != 'true'
         env:
-          # Download CRS file from US storage as all runners are US-based
-          CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-us/setup-keys/setup_compact.key
-        run: wget "${CRS_FILE_URL}"
+          # Download CRS file from EU storage for GPU runner
+          CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
+        run: wget -q --show-progress "${CRS_FILE_URL}"
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
@@ -263,7 +265,7 @@ jobs:
           ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
-            --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}
+            --workspace-remap ${GITHUB_WORKSPACE}
 
 
   ###############################
