@@ -197,8 +197,12 @@ impl ReadReplay for BlockReplayStorage {
             .map(|(context, _)| context)
     }
 
-    fn get_replay_record(&self, block_number: u64) -> Option<ReplayRecord> {
-        let key = block_number.to_be_bytes();
+    fn get_replay_record_by_key(
+        &self,
+        block_number: u64,
+        db_key: Option<Vec<u8>>,
+    ) -> Option<ReplayRecord> {
+        let key = db_key.unwrap_or_else(|| block_number.to_be_bytes().to_vec());
         let Some(block_context) = self
             .db
             .get_cf(BlockReplayColumnFamily::Context, &key)
