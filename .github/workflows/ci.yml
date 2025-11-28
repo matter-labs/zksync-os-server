@@ -209,7 +209,7 @@ jobs:
           # This is required to make sure that the paths to workspace artifacts like zkos-l1-state.json
           # are correct inside prebuilt binary.
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
-          WORKSPACE_DIR: "/home/./runner/_work/zksync-os-server/zksync-os-server"
+          WORKSPACE_DIR: "/opt/./actions-runner/_work/zksync-os-server/zksync-os-server"
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release -p zksync_os_integration_tests \
@@ -239,6 +239,8 @@ jobs:
 
       - name: Check Nvidia driver version
         run: |
+          echo $WORKSPACE
+          pwd
           nvidia-smi
 
       - name: Download prebuilt tests
