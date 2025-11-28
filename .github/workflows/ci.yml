@@ -249,9 +249,9 @@ jobs:
       - name: Download CRS setup file
         if: steps.cache-crs.outputs.cache-hit != 'true'
         env:
-          # Download CRS file from US storage as all runners are US-based
-          CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-us/setup-keys/setup_compact.key
-        run: wget "${CRS_FILE_URL}"
+          # Download CRS file from EU storage for GPU runner
+          CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
+        run: wget -q --show-progress "${CRS_FILE_URL}"
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
