@@ -17,7 +17,7 @@ use zksync_os_types::ProtocolSemanticVersion;
 /// Don't try to process that many block linearly
 const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
-/// Discovers block ranges for batches `[last_executed_batch + 1; last_committed_batch]`. This is
+/// Discovers commitment data for batches `[last_executed_batch; last_committed_batch]`. This is
 /// needed to rebuild batches correctly in Batcher during replay.
 pub struct BatchRangeWatcher {
     zk_chain: ZkChain<DynProvider>,
@@ -175,8 +175,18 @@ impl ProcessL1Event for BatchRangeWatcher {
                 "discovered committed batch range"
             );
 
+            // L1 block where this batch got committed.
             let block_id =
                 BlockId::number(log.block_number.expect("indexed log without block number"));
+            // To recreate batch's commitment (and hence it's `StoredBatchInfo` form) we need to
+            // know any potential upgrade transaction hash that was applied in this batch.
+            //
+            // Unfortunately, this information is not passed in `CommitBatchInfo` so we must derive
+            // it through other means. Querying `getL2SystemContractsUpgradeTxHash()` and
+            // `getL2SystemContractsUpgradeBatchNumber()` should work for the vast majority of cases
+            // except when the batch got committed and executed in the same L1 block (which should
+            // never happen in current implementation as commit->prove->execute operations are submitted
+            // sequentially after at least 1 block confirmation).
             let upgrade_batch_number = self
                 .zk_chain
                 .get_upgrade_batch_number(block_id)
@@ -184,6 +194,8 @@ impl ProcessL1Event for BatchRangeWatcher {
                 .context("failed to fetch upgrade batch number")
                 .map_err(L1WatcherError::Other)?;
             let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
+                // If the latest upgrade transaction belongs to this batch then current upgrade tx
+                // hash must also be present on L1. Thus, we fetch it.
                 Some(
                     self.zk_chain
                         .get_upgrade_tx_hash(block_id)
@@ -192,8 +204,15 @@ impl ProcessL1Event for BatchRangeWatcher {
                         .map_err(L1WatcherError::Other)?,
                 )
             } else {
+                // Either latest in-progress upgrade transaction belongs to a different batch or
+                // there is none. If none, `upgrade_batch_number` would be `0` and thus never equal
+                // to the currently inspected batch as genesis does not get committed via this flow.
                 None
             };
+            // Fetch active protocol version at the moment the batch got committed. This should work
+            // for the vast majority of cases except when upgrade gets applied in the same L1 block
+            // but after batch was committed.
+            // todo: validate logic above, maybe it's fine because all batches have to be executed first?
             let packed_protocol_version = self
                 .zk_chain
                 .get_raw_protocol_version(block_id)
@@ -219,9 +238,12 @@ impl ProcessL1Event for BatchRangeWatcher {
     }
 }
 
+/// Commitment information about a batch. Contains enough data to restore `StoredBatchInfo` that
+/// got applied on-chain.
 #[derive(Debug)]
 pub struct CommittedBatch {
     pub commit_info: CommitBatchInfo,
+    // todo: this should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
     pub upgrade_tx_hash: Option<B256>,
     pub protocol_version: ProtocolSemanticVersion,
 }
