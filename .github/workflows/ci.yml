@@ -228,7 +228,7 @@ jobs:
   #  Run prover integration tests on GPU machine  #
   #################################################
   prover-tests:
-    runs-on: matterlabs-ci-gpu-runner
+    runs-on: [matterlabs-ci-gpu-runner, hetzner]
     needs: build-prover-tests
     steps:
       - name: Checkout code
@@ -263,7 +263,7 @@ jobs:
           ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
-            --workspace-remap ${GITHUB_WORKSPACE} ${NEXTEST_ITERATIONS}
+            --workspace-remap ${GITHUB_WORKSPACE}
 
 
   ###############################
