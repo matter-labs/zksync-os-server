@@ -17,6 +17,22 @@ pub enum L1SenderCommand<Command: SendToL1> {
     Passthrough(Box<SignedBatchEnvelope<FriProof>>),
 }
 
+impl<C: SendToL1> L1SenderCommand<C> {
+    pub fn first_batch_number(&self) -> u64 {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref()[0].batch_number(),
+            Self::Passthrough(envelope) => envelope.batch_number(),
+        }
+    }
+
+    pub fn batch_count(&self) -> usize {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref().len(),
+            Self::Passthrough(_) => 1,
+        }
+    }
+}
+
 pub trait SendToL1:
     Into<Vec<SignedBatchEnvelope<FriProof>>>
     + AsRef<[SignedBatchEnvelope<FriProof>]>

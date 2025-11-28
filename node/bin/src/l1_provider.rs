@@ -1,4 +1,5 @@
-use alloy::network::EthereumWallet;
+use alloy::network::{Ethereum, EthereumWallet};
+use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use alloy::rpc::client::RpcClient;
 use alloy::signers::local::PrivateKeySigner;
@@ -41,7 +42,10 @@ impl RetryPolicy for OptimisticRetryPolicy {
 
 pub async fn build_node_l1_provider(
     l1_rpc_url: &str,
-) -> impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static {
+) -> FillProvider<
+    impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
+    impl Provider<Ethereum> + Clone + 'static,
+> {
     let retry_layer = RetryBackoffLayer::new_with_policy(
         2,        // max retries, excluding the initial attempt
         200,      // backoff in ms,

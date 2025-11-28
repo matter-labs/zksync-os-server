@@ -32,6 +32,7 @@ use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
 use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
 use crate::prover_api::gapless_committer::GaplessCommitter;
+use crate::prover_api::gapless_l1_proof_sender::GaplessL1ProofSender;
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
@@ -40,7 +41,8 @@ use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
-use alloy::network::EthereumWallet;
+use alloy::network::{Ethereum, EthereumWallet};
+use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::{Context, Result};
 use futures::FutureExt;
@@ -95,7 +97,7 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
-    _stop_receiver: watch::Receiver<bool>,
+    stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
     let node_version: semver::Version = NODE_VERSION.parse().unwrap();
@@ -401,7 +403,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tasks.spawn(
         run_status_server(
             config.status_server_config.address.clone(),
-            _stop_receiver.clone(),
+            stop_receiver.clone(),
         )
         .map(report_exit("Status server")),
     );
@@ -564,7 +566,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             tree_db,
             finality_storage,
             chain_id,
-            _stop_receiver.clone(),
+            stop_receiver.clone(),
             tx_acceptance_state_sender,
             batcher_prev_batch_info,
         )
@@ -583,7 +585,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             starting_block,
             repositories,
             finality_storage,
-            _stop_receiver.clone(),
+            stop_receiver.clone(),
             tx_acceptance_state_sender,
         )
         .await;
@@ -598,7 +600,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: Config,
-    l1_provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + Clone + 'static,
+    l1_provider: FillProvider<
+        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
+        impl Provider<Ethereum> + Clone + 'static,
+    >,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
@@ -617,13 +622,15 @@ async fn run_main_node_pipeline(
     let starting_batch_number = batcher_prev_batch_info.batch_number + 1;
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
-        config.prover_api_config.job_timeout,
+        config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
 
     let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
         config.prover_api_config.max_fris_per_snark,
         node_state_on_startup.l1_state.last_proved_batch,
+        config.prover_api_config.snark_job_timeout,
+        config.prover_api_config.max_assigned_batch_range,
     );
 
     tasks.spawn(
@@ -725,13 +732,14 @@ async fn run_main_node_pipeline(
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),
         ))
-        .pipe(L1Sender::<_, CommitCommand> {
+        .pipe(L1Sender::<_, _, CommitCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
         .pipe(snark_proving_step)
-        .pipe(L1Sender::<_, ProofCommand> {
+        .pipe(GaplessL1ProofSender::new(starting_batch_number))
+        .pipe(L1Sender::<_, _, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
             to_address: node_state_on_startup.l1_state.validator_timelock,
@@ -770,7 +778,7 @@ async fn run_en_pipeline(
     starting_block: u64,
     repositories: impl WriteRepository + Clone,
     finality: impl ReadFinality + Clone,
-    _stop_receiver: watch::Receiver<bool>,
+    stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
 ) {
     let internal_config_path = config
@@ -782,11 +790,14 @@ async fn run_en_pipeline(
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
+            record_overrides: config.sequencer_config.en_replay_record_overrides.clone(),
+            up_to_block: config.sequencer_config.en_sync_up_to_block,
             replay_download_address: config
                 .sequencer_config
                 .block_replay_download_address
                 .clone()
                 .expect("EN must have replay_download_address"),
+            stop_receiver: stop_receiver.clone(),
         })
         .pipe(Sequencer {
             block_context_provider,
@@ -939,6 +950,7 @@ fn run_fake_fri_provers(
         workers = config.fake_fri_provers.workers,
         compute_time = ?config.fake_fri_provers.compute_time,
         min_task_age = ?config.fake_fri_provers.min_age,
+        timeout_frequency = ?config.fake_fri_provers.timeout_frequency,
         "Initializing fake FRI provers"
     );
     let fake_provers_pool = FakeFriProversPool::new(
@@ -946,6 +958,7 @@ fn run_fake_fri_provers(
         config.fake_fri_provers.workers,
         config.fake_fri_provers.compute_time,
         config.fake_fri_provers.min_age,
+        config.fake_fri_provers.timeout_frequency,
     );
     tasks.spawn(
         fake_provers_pool
@@ -1062,12 +1075,20 @@ async fn find_last_matching_main_node_block(
             .get_block_by_number(block_number)?
             .map(|b| b.hash())
             .with_context(|| format!("Local node is missing block {block_number}"))?;
-        let remove_hash = main_node_client
+        if let Some(remote_block) = main_node_client
             .block_by_number(block_number.into(), false)
             .await?
-            .map(|h| h.header.hash)
-            .with_context(|| format!("Main node is missing block {block_number}"))?;
-        Ok(local_hash == remove_hash)
+        {
+            Ok(local_hash == remote_block.hash())
+        } else {
+            // Main node is missing this block in RPC, assume there is a divergence.
+            //
+            // If we happen to query main node during restart it might not have this block in RPC
+            // yet but have it in replay storage. Should still be fine to assume there is a divergence
+            // in such cases. Ideally, we should be able to query main node's replay state through
+            // interactive replay transport instead.
+            Ok(false)
+        }
     }
 
     let main_node_rpc_client =
