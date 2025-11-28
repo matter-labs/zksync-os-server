@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.12.0](https://github.com/matter-labs/zksync-os-server/compare/v0.11.1...v0.12.0) (2025-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* allow EN to sync with overriden records ([#657](https://github.com/matter-labs/zksync-os-server/issues/657))
+* Remove deprecated legacy prover API ([#674](https://github.com/matter-labs/zksync-os-server/issues/674))
+
+### Features
+
+* add internal config; use it in revm checker ([#608](https://github.com/matter-labs/zksync-os-server/issues/608)) ([13e6d18](https://github.com/matter-labs/zksync-os-server/commit/13e6d18ca67561e1c8789b91a0dadc31bd5ab781))
+* allow EN to sync with overriden records ([#657](https://github.com/matter-labs/zksync-os-server/issues/657)) ([9422a14](https://github.com/matter-labs/zksync-os-server/commit/9422a1482d82a87f25a9d3f5344299cde9821da0))
+* **db:** keep overwritten replay records ([#620](https://github.com/matter-labs/zksync-os-server/issues/620)) ([35bdab6](https://github.com/matter-labs/zksync-os-server/commit/35bdab69403d20b67a87555f81e2593f3bdd14e4))
+* **l1-sender:** send EIP-7594 blobs when Fusaka is activated ([#664](https://github.com/matter-labs/zksync-os-server/issues/664)) ([0b41a19](https://github.com/matter-labs/zksync-os-server/commit/0b41a194157a84bb3ee6c2ab1c750e34847c9529))
+* **l1-watcher:** monitor `ReportCommittedBatchRangeZKsyncOS` events ([#661](https://github.com/matter-labs/zksync-os-server/issues/661)) ([f21e876](https://github.com/matter-labs/zksync-os-server/commit/f21e876456a04458fbf54f43da4bf87058cb6d20))
+* **mempool-config:** make minimal_protocol_basefee configurable ([#671](https://github.com/matter-labs/zksync-os-server/issues/671)) ([9a65250](https://github.com/matter-labs/zksync-os-server/commit/9a65250ffdb8dd22a2cb17362ea4bbaf08ba83b3))
+* Remove deprecated legacy prover API ([#674](https://github.com/matter-labs/zksync-os-server/issues/674)) ([728c177](https://github.com/matter-labs/zksync-os-server/commit/728c177dc488198cf886907e2afd279fc5a891be))
+* **rpc:** use pubdata price factor during gas estimation ([#669](https://github.com/matter-labs/zksync-os-server/issues/669)) ([8dd8377](https://github.com/matter-labs/zksync-os-server/commit/8dd8377ea88ff41244ed57ae131348475333d16d))
+* support multiple SNARKers; enhance proving observability ([#631](https://github.com/matter-labs/zksync-os-server/issues/631)) ([8541de8](https://github.com/matter-labs/zksync-os-server/commit/8541de8ac81bd3f26b595733148221f47570dce9))
+
+
+### Bug Fixes
+
+* 2FA followup ([#662](https://github.com/matter-labs/zksync-os-server/issues/662)) ([954b322](https://github.com/matter-labs/zksync-os-server/commit/954b322b60a6b919f6b655765f4447a0b324f3fa))
+* batch verification config ([#654](https://github.com/matter-labs/zksync-os-server/issues/654)) ([941edbd](https://github.com/matter-labs/zksync-os-server/commit/941edbd64912a02320dcf7132f0357ffa052890c))
+* **en:** handle missing blocks on main node ([#677](https://github.com/matter-labs/zksync-os-server/issues/677)) ([d7e2291](https://github.com/matter-labs/zksync-os-server/commit/d7e2291e923214266aa87fd51b4ba616d35d0b6e))
+* Sealing empty blocks ([#653](https://github.com/matter-labs/zksync-os-server/issues/653)) ([fcb43d8](https://github.com/matter-labs/zksync-os-server/commit/fcb43d8072d00a576006d324d727d5ea9a1533cf))
+
 ## [0.11.1](https://github.com/matter-labs/zksync-os-server/compare/v0.11.0...v0.11.1) (2025-11-24)
 
 
