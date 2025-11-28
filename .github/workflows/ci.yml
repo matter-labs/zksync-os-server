@@ -158,7 +158,7 @@ jobs:
   #  Build prover integration tests  #
   ####################################
   build-prover-tests:
-    runs-on: matterlabs-ci-runner-high-performance
+    runs-on: matterlabs-ci-runner-ultra-performance
     container:
       image: nvidia/cuda:12.9.1-devel-ubuntu22.04
     steps:
@@ -183,9 +183,18 @@ jobs:
           repository: matter-labs/era-bellman-cuda
           ref: main
           path: bellman-cuda
+          fetch-depth: '1'
+
+      - name: Cache bellman-cuda
+        id: bellman-cuda-cache
+        uses: actions/cache@v4
+        with:
+          path: 'bellman-cuda/build'
+          key: bellman-cuda-${{ hashFiles('bellman-cuda/**') }}
 
       - name: Build bellman-cuda
         shell: 'bash -ex {0}'
+        if: steps.bellman-cuda-cache.outputs.cache-hit != 'true'
         run: |
           cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
           cmake --build bellman-cuda/build/
@@ -204,7 +213,7 @@ jobs:
           BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release -p zksync_os_integration_tests \
-            --features gpu-prover-tests --archive-file ${PROVER_GPU_TESTS}.tar.zst
+            --features gpu-prover-tests --test prover --archive-file ${PROVER_GPU_TESTS}.tar.zst
 
       - name: Upload tests
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
