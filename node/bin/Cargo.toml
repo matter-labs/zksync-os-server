@@ -48,7 +48,6 @@ zksync_os_interface.workspace = true
 
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
-zksync-os-revm.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = [
@@ -65,16 +64,13 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-itertools.workspace = true
 futures.workspace = true
-dashmap.workspace = true
 vise.workspace = true
 base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
 semver = { workspace = true, features = ["serde"] }
-backon.workspace = true
 
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
@@ -84,7 +80,6 @@ zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
 axum.workspace = true
 http.workspace = true
-pin-project.workspace = true
 async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = [
     "client",
