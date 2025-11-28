@@ -201,7 +201,6 @@ impl ProcessL1Event for BatchRangeWatcher {
             // Fetch active protocol version at the moment the batch got committed. This should work
             // for the vast majority of cases except when upgrade gets applied in the same L1 block
             // but after batch was committed.
-            // todo: validate logic above, maybe it's fine because all batches have to be executed first?
             let packed_protocol_version = self.zk_chain.get_raw_protocol_version(block_id).await?;
 
             let committed_batch = CommittedBatch {
@@ -229,5 +228,6 @@ pub struct CommittedBatch {
     pub commit_info: CommitBatchInfo,
     // todo: this should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
     pub upgrade_tx_hash: Option<B256>,
+    // todo: this should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
     pub protocol_version: ProtocolSemanticVersion,
 }
