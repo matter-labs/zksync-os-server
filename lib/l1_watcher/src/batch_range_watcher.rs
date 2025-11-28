@@ -187,22 +187,11 @@ impl ProcessL1Event for BatchRangeWatcher {
             // except when the batch got committed and executed in the same L1 block (which should
             // never happen in current implementation as commit->prove->execute operations are submitted
             // sequentially after at least 1 block confirmation).
-            let upgrade_batch_number = self
-                .zk_chain
-                .get_upgrade_batch_number(block_id)
-                .await
-                .context("failed to fetch upgrade batch number")
-                .map_err(L1WatcherError::Other)?;
+            let upgrade_batch_number = self.zk_chain.get_upgrade_batch_number(block_id).await?;
             let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
                 // If the latest upgrade transaction belongs to this batch then current upgrade tx
                 // hash must also be present on L1. Thus, we fetch it.
-                Some(
-                    self.zk_chain
-                        .get_upgrade_tx_hash(block_id)
-                        .await
-                        .context("failed to fetch upgrade tx hash")
-                        .map_err(L1WatcherError::Other)?,
-                )
+                Some(self.zk_chain.get_upgrade_tx_hash(block_id).await?)
             } else {
                 // Either latest in-progress upgrade transaction belongs to a different batch or
                 // there is none. If none, `upgrade_batch_number` would be `0` and thus never equal
@@ -213,12 +202,7 @@ impl ProcessL1Event for BatchRangeWatcher {
             // for the vast majority of cases except when upgrade gets applied in the same L1 block
             // but after batch was committed.
             // todo: validate logic above, maybe it's fine because all batches have to be executed first?
-            let packed_protocol_version = self
-                .zk_chain
-                .get_raw_protocol_version(block_id)
-                .await
-                .context("failed to fetch protocol version")
-                .map_err(L1WatcherError::Other)?;
+            let packed_protocol_version = self.zk_chain.get_raw_protocol_version(block_id).await?;
 
             let committed_batch = CommittedBatch {
                 commit_info: commit_batch_info,

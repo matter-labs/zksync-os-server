@@ -11989,6 +11989,7 @@ dependencies = [
  "backon",
  "serde",
  "structdiff",
+ "thiserror 2.0.12",
  "tracing",
  "vise",
 ]
