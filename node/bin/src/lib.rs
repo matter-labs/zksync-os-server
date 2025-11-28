@@ -726,7 +726,9 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
         .pipe(snark_proving_step)
-        .pipe(GaplessL1ProofSender::new(starting_batch_number))
+        .pipe(GaplessL1ProofSender::new(
+            node_state_on_startup.l1_state.last_executed_batch + 1,
+        ))
         .pipe(L1Sender::<_, _, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
