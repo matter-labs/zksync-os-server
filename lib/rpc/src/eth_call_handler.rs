@@ -300,7 +300,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     ) -> Result<U256, EthCallError> {
         let block_id = block_number.unwrap_or_default();
 
-        let block_context = {
+        let mut block_context = {
             let Some(resolved_block_number) = self.storage.resolve_block_number(block_id)? else {
                 return Err(EthCallError::BlockNotFound(block_id));
             };
@@ -326,6 +326,12 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     .ok_or(EthCallError::BlockNotFound(block_id))?,
             }
         };
+
+        // Overestimate pubdata price to leave some space for fluctuations. Usual Ethereum tooling
+        // assumes that gas limit stays constant in most scenarios, which is not the case in our system.
+        block_context.pubdata_price = U256::from(
+            f64::from(block_context.pubdata_price) * self.config.estimate_gas_pubdata_price_factor,
+        );
 
         // Choose storage view (with optional overrides) once and reuse it throughout.
         let base_view = self.storage.state_view_at(block_context.block_number)?;

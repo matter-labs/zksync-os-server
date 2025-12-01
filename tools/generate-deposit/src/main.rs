@@ -4,11 +4,11 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::LocalSigner;
+use clap::Parser;
 use std::str::FromStr;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-
-use clap::Parser;
+use zksync_os_server::config_constants::{BRIDGEHUB_ADDRESS, CHAIN_ID};
 use zksync_os_types::REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE;
 
 #[derive(Parser, Debug)]
@@ -16,7 +16,10 @@ use zksync_os_types::REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE;
 struct Args {
     /// Bridgehub address
     #[arg(short, long)]
-    bridgehub: Address,
+    bridgehub: Option<Address>,
+    /// L2 chain ID
+    #[arg(short = 'c', long)]
+    chain_id: Option<u64>,
     /// L1 RPC URL
     #[arg(short, long)]
     l1_rpc_url: Option<String>,
@@ -39,12 +42,12 @@ async fn main() -> anyhow::Result<()> {
         // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
         "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".to_owned()
     });
-    let bridgehub_address = args.bridgehub;
+    let bridgehub_address = args.bridgehub.unwrap_or(BRIDGEHUB_ADDRESS.parse()?);
     // Deposit 10k ETH by default
     let amount = args
         .amount
         .unwrap_or_else(|| U256::from(100u128 * 10u128.pow(18)));
-    let l2_chain_id = 270;
+    let l2_chain_id = args.chain_id.unwrap_or(CHAIN_ID);
 
     let l1_wallet = EthereumWallet::new(LocalSigner::from_str(&private_key).unwrap());
     let l1_provider = ProviderBuilder::new()

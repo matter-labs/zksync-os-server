@@ -1,7 +1,8 @@
 use std::fmt::Display;
 
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{BlockNumber, Bytes};
 use futures::{SinkExt, StreamExt, stream::BoxStream};
+use serde::{Deserialize, Serialize};
 use tokio::io::BufReader;
 use tokio::net::ToSocketAddrs;
 use tokio::{
@@ -27,14 +28,28 @@ pub async fn replay_server(
             let (recv, mut send) = socket.split();
 
             let mut reader = BufReader::new(recv);
-            skip_http_headers(&mut reader)
+            let _skipped_bytes = skip_http_headers(&mut reader)
                 .await
                 .expect("failed to skip HTTP headers");
 
-            let starting_block = match reader.read_u64().await {
-                Ok(block_number) => block_number,
+            let len = match reader.read_u32().await {
+                Ok(len) => len,
                 Err(e) => {
-                    tracing::info!("Could not read start block for replays: {}", e);
+                    tracing::info!("Could not read query len: {}", e);
+                    return;
+                }
+            };
+
+            let mut buf = vec![0u8; len as usize];
+            if let Err(e) = reader.read_exact(&mut buf).await {
+                tracing::info!("Could not read query bytes: {}", e);
+                return;
+            };
+
+            let block_replay_query: BlockReplayQuery = match serde_json::from_slice(&buf) {
+                Ok(q) => q,
+                Err(e) => {
+                    tracing::info!("Could not deserialize query: {}", e);
                     return;
                 }
             };
@@ -47,11 +62,18 @@ pub async fn replay_server(
             tracing::info!(
                 "Streaming replays to {} starting from {}",
                 send.peer_addr().unwrap(),
-                starting_block
+                block_replay_query.starting_block
             );
 
             let mut replay_sender = FramedWrite::new(send, BlockReplayEncoder::new());
-            let mut stream = block_replays.stream_from_forever(starting_block);
+            let mut stream = block_replays.stream_from_forever(
+                block_replay_query.starting_block,
+                block_replay_query
+                    .record_overrides
+                    .into_iter()
+                    .map(|(k, v)| (k, v.to_vec()))
+                    .collect(),
+            );
             loop {
                 let replay = stream.next().await.unwrap();
                 match replay_sender.send(replay).await {
@@ -68,12 +90,17 @@ pub async fn replay_server(
 
 pub async fn replay_receiver(
     starting_block: BlockNumber,
+    record_overrides: Vec<(u64, Bytes)>,
     address: impl ToSocketAddrs + Display,
 ) -> anyhow::Result<BoxStream<'static, BlockCommand>> {
-    let mut socket = connect(&address, "/block_replays").await?;
+    let query = BlockReplayQuery::new(starting_block, record_overrides);
+    let path = "/block_replays";
+    let mut socket = connect(&address, path).await?;
 
     // Instead of negotiating an upgrade, we just drop down to the TCP layer after the headers.
-    socket.write_u64(starting_block).await?;
+    let query_bytes = serde_json::to_vec(&query)?;
+    socket.write_u32(query_bytes.len().try_into()?).await?;
+    socket.write_all(&query_bytes).await?;
     let replay_version = socket.read_u32().await?;
 
     Ok(
@@ -129,5 +156,20 @@ impl codec::Encoder<ReplayRecord> for BlockReplayEncoder {
     ) -> Result<(), Self::Error> {
         self.0
             .encode(item.encode_with_current_version().into(), dst)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct BlockReplayQuery {
+    starting_block: u64,
+    record_overrides: Vec<(u64, Bytes)>,
+}
+
+impl BlockReplayQuery {
+    pub fn new(starting_block: u64, record_overrides: Vec<(u64, Bytes)>) -> Self {
+        Self {
+            starting_block,
+            record_overrides,
+        }
     }
 }

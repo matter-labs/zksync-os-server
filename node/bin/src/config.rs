@@ -1,6 +1,6 @@
 use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
-use alloy::primitives::{Address, U128};
+use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -211,10 +211,21 @@ pub struct SequencerConfig {
     /// blocking process and the overhead should be small.
     #[config(default_t = false)]
     pub revm_consistency_checker_enabled: bool,
+    /// If enabled, node will revert block with divergence detected by REVM consistency checker.
+    #[config(default_t = false)]
+    pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild options.
     #[config(nest)]
     pub block_rebuild: Option<RebuildBlocksConfig>,
+
+    /// If set, external node will sync up to and including this block number and then stop processing blocks.
+    #[config(default)]
+    pub en_sync_up_to_block: Option<u64>,
+
+    #[config(default, with = Serde![*])]
+    /// List of (block_number, db_key) pairs to override when downloading replay records.
+    pub en_replay_record_overrides: Vec<(u64, Bytes)>,
 }
 
 impl SequencerConfig {
@@ -265,6 +276,13 @@ pub struct RpcConfig {
     /// Default timeout for `eth_sendRawTransactionSync`
     #[config(default_t = 2 * TimeUnit::Seconds)]
     pub send_raw_transaction_sync_timeout: Duration,
+
+    /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
+    /// Needed to account for pubdata price market fluctuations. Setting this to `1.0` can lead to
+    /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)
+    /// because pubdata price increase in-between estimation and sequencing.
+    #[config(default_t = 1.5)]
+    pub estimate_gas_pubdata_price_factor: f64,
 }
 
 /// Only used on the Main Node.
@@ -309,6 +327,13 @@ pub struct L1SenderConfig {
     #[config(default_t = Duration::from_millis(100))]
     pub poll_interval: Duration,
 
+    /// Use Fusaka blob transaction format if the timestamp has passed.
+    ///
+    /// Defaults to `2^64-1` which is practically never. This is needed for local setup as anvil
+    /// does not support EIP-7594 yet (https://github.com/foundry-rs/foundry/issues/12222).
+    #[config(default_t = u64::MAX)]
+    pub fusaka_upgrade_timestamp: u64,
+
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -348,6 +373,10 @@ pub struct MempoolConfig {
     pub max_pending_txs: usize,
     #[config(default_t = usize::MAX)]
     pub max_pending_size: usize,
+    /// Minimal fee per gas (in WEI) for a transaction to be accepted by mempool
+    /// Defaults to `7` which is the lowest possible value of base fee under mainnet EIP-1559 params
+    #[config(default_t = 7)]
+    pub minimal_protocol_basefee: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -414,9 +443,13 @@ pub struct ProverApiConfig {
     /// however, we won't turn real FRI proofs into fake ones - even on timeout.
     pub fake_snark_provers: FakeSnarkProversConfig,
 
-    /// Timeout after which a prover job is assigned to another Fri Prover Worker.
+    /// Timeout after which a FRI prover job is assigned to another Fri Prover Worker.
+    #[config(alias = "job_timeout", default_t = Duration::from_secs(300))]
+    pub fri_job_timeout: Duration,
+
+    /// Timeout after which a SNARK prover job is assigned to another SNARK Prover Worker.
     #[config(default_t = Duration::from_secs(300))]
-    pub job_timeout: Duration,
+    pub snark_job_timeout: Duration,
 
     /// Max difference between the oldest and newest batch number being proven
     /// If the difference is larger than this, provers will not be assigned new jobs - only retries.
@@ -454,6 +487,13 @@ pub struct FakeFriProversConfig {
     /// This gives real provers a head start when picking jobs
     #[config(default_t = Duration::from_millis(3000))]
     pub min_age: Duration,
+
+    /// Probability (0.0 to 1.0) that a job will timeout/be dropped instead of submitting a proof.
+    /// 0.0 means never timeout (default behavior).
+    /// For example, 0.1 means 10% of jobs will be dropped.
+    /// Used to test queuing behavior on timeout.
+    #[config(default_t = 0.0)]
+    pub timeout_frequency: f64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -577,7 +617,7 @@ pub struct BatchVerificationConfig {
     #[config(default_t = 1)]
     pub threshold: usize,
     /// [server] Accepted signer pubkeys
-    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()])]
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited(","))]
     pub accepted_signers: Vec<String>,
     /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]
@@ -607,6 +647,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
+            estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
         }
     }
 }
@@ -638,6 +679,7 @@ impl L1SenderConfig {
             max_fee_per_blob_gas_gwei: self.max_fee_per_blob_gas_gwei,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
+            fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
             phantom_data: Default::default(),
         }
     }
@@ -675,6 +717,7 @@ impl From<MempoolConfig> for zksync_os_mempool::PoolConfig {
     fn from(c: MempoolConfig) -> Self {
         Self {
             pending_limit: SubPoolLimit::new(c.max_pending_txs, c.max_pending_size),
+            minimal_protocol_basefee: c.minimal_protocol_basefee,
             ..Default::default()
         }
     }

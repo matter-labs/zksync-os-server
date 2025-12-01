@@ -28,7 +28,7 @@ fn create_sample_request() -> BatchVerificationRequest {
             first_block_number: Some(1),
             last_block_timestamp: 1234567900,
             last_block_number: Some(2),
-            chain_id: 270,
+            chain_id: 6565,
             operator_da_input: vec![],
         },
     }

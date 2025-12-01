@@ -1,6 +1,7 @@
 use super::snark_job_manager::SnarkJobManager;
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
@@ -20,7 +21,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// - Fake provers pool
 pub struct SnarkProvingPipelineStep {
     last_proved_batch_number: u64,
-    batches_for_prove_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
+    snark_job_manager: Arc<SnarkJobManager>,
     proof_commands_receiver: mpsc::Receiver<ProofCommand>,
 }
 
@@ -28,25 +29,21 @@ impl SnarkProvingPipelineStep {
     pub fn new(
         max_fris_per_snark: usize,
         last_proved_batch_number: u64,
+        assignment_timeout: Duration,
+        max_assigned_batch_range: usize,
     ) -> (Self, Arc<SnarkJobManager>) {
-        // Create channels for SnarkJobManager
-        // IMPORTANT: capacity `max_fris_per_snark` to allow SnarkJobManager
-        //            to group multiple batches (FRI proofs) to a single SNARK
-        //            (on `pick_snark_job` request, it consumes messages from the inbound channel up until `max_fris_per_snark`)
-        let (batches_for_prove_sender, batches_for_prove_receiver) =
-            mpsc::channel::<SignedBatchEnvelope<FriProof>>(max_fris_per_snark);
-
         let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(1);
 
         let snark_job_manager = Arc::new(SnarkJobManager::new(
-            PeekableReceiver::new(batches_for_prove_receiver),
             proof_commands_sender,
             max_fris_per_snark,
+            assignment_timeout,
+            max_assigned_batch_range,
         ));
 
         let result = Self {
             last_proved_batch_number,
-            batches_for_prove_sender,
+            snark_job_manager: snark_job_manager.clone(),
             proof_commands_receiver,
         };
 
@@ -73,7 +70,7 @@ impl PipelineComponent for SnarkProvingPipelineStep {
             _ = async {
                 while let Some(batch) = input.recv().await {
                     if batch.batch_number() > self.last_proved_batch_number {
-                        let _ = self.batches_for_prove_sender.send(batch).await;
+                        let _ = self.snark_job_manager.add_job(batch).await;
                     } else {
                         let _ = output.send(L1SenderCommand::Passthrough(Box::new(batch))).await;
                     }
