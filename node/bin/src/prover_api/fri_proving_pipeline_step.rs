@@ -73,11 +73,11 @@ impl PipelineComponent for FriProvingPipelineStep {
                 while let Some(batch) = input.recv().await {
                     if batch.batch_number() > self.last_proved_batch_number {
                         tracing::info!(
-                        "Received batch for FRI proving: {:?}",
-                        batch.batch_number()
-                    );
-                    // Add job directly to FriJobManager - this will await if queue is full
-                    self.fri_job_manager.add_job(batch).await
+                            "Received batch for FRI proving: {:?}",
+                            batch.batch_number()
+                        );
+                        // Add job directly to FriJobManager - this will await if queue is full
+                        self.fri_job_manager.add_job(batch).await
                     } else {
                         // Already proven - send with fake proof to pass through the pipeline
                         let batch_with_fake_proof = batch.with_data(FriProof::Fake);
