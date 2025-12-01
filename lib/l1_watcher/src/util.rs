@@ -5,11 +5,20 @@ use alloy::sol_types::SolEvent;
 use std::sync::Arc;
 use zksync_os_contract_interface::{IExecutor, ZkChain};
 
+pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
+
 pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool>>>(
     zk_chain: Arc<ZkChain<DynProvider>>,
     start_block_number: BlockNumber,
     predicate: impl Fn(Arc<ZkChain<DynProvider>>, u64) -> Fut,
 ) -> anyhow::Result<BlockNumber> {
+    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
+        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
+        // even for recent blocks. We default to `start_block_number` in this case - `eth_getLogs`
+        // are still supported.
+        return Ok(start_block_number);
+    }
+
     let latest = zk_chain.provider().get_block_number().await?;
 
     let guarded_predicate =
@@ -100,7 +109,8 @@ pub async fn find_latest_l1_revert(
     Ok(last_block_with_revert)
 }
 
-/// Finds first L1 block that contains **non-reverted** batch commitment event on L1.
+/// Finds first L1 block that contains **non-reverted** batch commitment event on L1 matching
+/// requested batch.
 ///
 /// Returns latest L1 block is there is none.
 pub async fn find_l1_commit_block_by_batch_number(
@@ -157,4 +167,20 @@ pub async fn find_l1_commit_block_by_batch_number(
             Ok(l1_block_with_commit)
         }
     }
+}
+
+/// Finds first L1 block that contains batch execution event on L1 matching requested batch.
+///
+/// Returns latest L1 block is there is none.
+pub async fn find_l1_execute_block_by_batch_number(
+    zk_chain: ZkChain<DynProvider>,
+    batch_number: u64,
+) -> anyhow::Result<BlockNumber> {
+    // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
+    // to take L1 reverts into account here.
+    find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
+        let res = zk.get_total_batches_executed(block.into()).await?;
+        Ok(res >= batch_number)
+    })
+    .await
 }

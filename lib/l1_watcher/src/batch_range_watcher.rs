@@ -9,9 +9,6 @@ use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_contract_interface::{IExecutor, ZkChain};
 
-/// Don't try to process that many block linearly
-const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
-
 /// Discovers block ranges for batches `[last_executed_batch + 1; last_committed_batch]`. This is
 /// needed to rebuild batches correctly in Batcher during replay.
 pub struct BatchRangeWatcher {
@@ -38,20 +35,12 @@ impl BatchRangeWatcher {
             zk_chain_address = ?zk_chain.address(),
             "initializing L1 batch range watcher"
         );
-        let last_l1_block = util::find_l1_commit_block_by_batch_number(zk_chain.clone(), last_executed_batch, config.max_blocks_to_process)
-            .await
-            .or_else(|err| {
-                // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
-                // We default to `0` in this case - `eth_getLogs` are still supported.
-                // Assert that we don't fallback on longer chains (e.g. Sepolia)
-                if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
-                    anyhow::bail!(
-                        "Binary search failed with {err}. Cannot default starting block to zero for a long chain. Current L1 block number: {current_l1_block}. Limit: {MAX_L1_BLOCKS_LOOKBEHIND}."
-                    )
-                } else {
-                    Ok(0)
-                }
-            })?;
+        let last_l1_block = util::find_l1_commit_block_by_batch_number(
+            zk_chain.clone(),
+            last_executed_batch,
+            config.max_blocks_to_process,
+        )
+        .await?;
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
