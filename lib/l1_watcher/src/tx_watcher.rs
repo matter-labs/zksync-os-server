@@ -71,7 +71,7 @@ async fn find_l1_block_by_priority_id(
     zk_chain: ZkChain<DynProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
         let res = zk.get_total_priority_txs_at_block(block.into()).await?;
         Ok(res >= next_l1_priority_id)
     })

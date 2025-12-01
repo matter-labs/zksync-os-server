@@ -314,6 +314,7 @@ async fn load_genesis_upgrade_tx(
     // Find the block when the zk chain was deployed or fallback to [0; latest_block] in localhost case.
     let (from_block, to_block) = zksync_os_l1_watcher::util::find_l1_block_by_predicate(
             Arc::new(zk_chain),
+            0,
             |_zk, _block| async { Ok(true) },
         )
         .await

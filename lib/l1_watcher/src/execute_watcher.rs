@@ -75,7 +75,7 @@ async fn find_l1_execute_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
     batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
         let res = zk.get_total_batches_executed(block.into()).await?;
         Ok(res >= batch_number)
     })

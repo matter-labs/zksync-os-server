@@ -1,11 +1,10 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use alloy::sol_types::{SolCall, SolValue};
-use std::sync::Arc;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_contract_interface::{IExecutor, ZkChain};
@@ -39,7 +38,7 @@ impl BatchRangeWatcher {
             zk_chain_address = ?zk_chain.address(),
             "initializing L1 batch range watcher"
         );
-        let last_l1_block = find_l1_commit_block_by_batch_number(zk_chain.clone(), last_executed_batch)
+        let last_l1_block = util::find_l1_commit_block_by_batch_number(zk_chain.clone(), last_executed_batch, config.max_blocks_to_process)
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -73,17 +72,6 @@ impl BatchRangeWatcher {
 
         Ok(l1_watcher)
     }
-}
-
-async fn find_l1_commit_block_by_batch_number(
-    zk_chain: ZkChain<DynProvider>,
-    batch_number: u64,
-) -> anyhow::Result<BlockNumber> {
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
-        let res = zk.get_total_batches_committed(block.into()).await?;
-        Ok(res >= batch_number)
-    })
-    .await
 }
 
 #[async_trait::async_trait]

@@ -376,7 +376,7 @@ async fn find_l1_block_by_protocol_version(
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;
 
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
         let res = zk.get_raw_protocol_version(block.into()).await?;
         Ok(res >= protocol_version)
     })
