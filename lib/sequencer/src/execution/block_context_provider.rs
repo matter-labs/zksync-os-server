@@ -120,7 +120,11 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let timestamp = (millis_since_epoch() / 1000) as u64;
 
                 // Check if we peeked an upgrade transaction info.
-                let force_preimages = if let Some(Some(upgrade_tx)) = peeked_tx {
+                // It is possible that we peek an upgrade with version <= self.protocol_version
+                // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
+                let force_preimages = if let Some(Some(upgrade_tx)) = peeked_tx
+                    && upgrade_tx.protocol_version > self.protocol_version
+                {
                     tracing::info!(
                         block_number = produce_command.block_number,
                         upgrade_tx = ?upgrade_tx,
@@ -225,18 +229,24 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             }
             BlockCommand::Rebuild(rebuild) => {
                 let block_number = rebuild.replay_record.block_context.block_number;
-                // Kludge for stage env.
-                let (execution_version, protocol_version) =
-                    if self.chain_id == 2702 && (29544..=29544 + 100).contains(&block_number) {
-                        (5, ProtocolSemanticVersion::new(0, 30, 0))
-                    } else {
-                        // TODO: This is inherently wrong to `execution_version` from the record for blocks where an upgrade happened.
-                        //  If you're rebuild blocks near the upgrade consider it to be an undefined behavior.
-                        (
-                            rebuild.replay_record.block_context.execution_version,
-                            rebuild.replay_record.protocol_version,
-                        )
-                    };
+                let (execution_version, protocol_version) = (
+                    rebuild.replay_record.block_context.execution_version,
+                    rebuild.replay_record.protocol_version,
+                );
+
+                if rebuild.make_empty
+                    && rebuild
+                        .replay_record
+                        .transactions
+                        .iter()
+                        .any(|tx| matches!(tx.envelope(), ZkEnvelope::Upgrade(_)))
+                {
+                    anyhow::bail!(
+                        "Cannot make an empty block when there is an upgrade transaction in the replay record for block {}",
+                        block_number
+                    );
+                }
+
                 let block_context = BlockContext {
                     eip1559_basefee: rebuild.replay_record.block_context.eip1559_basefee,
                     native_price: rebuild.replay_record.block_context.native_price,
