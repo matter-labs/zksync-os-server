@@ -45,7 +45,6 @@ zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 zksync_os_interface.workspace = true
-
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
 
@@ -58,6 +57,7 @@ alloy = { workspace = true, default-features = false, features = [
     "rand",
 ] }
 blake2.workspace = true
+clap = { workspace = true, features = ["derive", "wrap_help"] }
 ruint.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true
@@ -74,6 +74,7 @@ semver = { workspace = true, features = ["serde"] }
 
 bincode.workspace = true
 smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
+smart-config-commands.workspace = true
 
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
