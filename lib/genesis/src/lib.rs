@@ -315,7 +315,7 @@ async fn load_genesis_upgrade_tx(
         0,
         |_zk, _block| async { Ok(true) },
     )
-        .await?;
+    .await?;
     let to_block = if from_block == 0 {
         current_l1_block
     } else {
