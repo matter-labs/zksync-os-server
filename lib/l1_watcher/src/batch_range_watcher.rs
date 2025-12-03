@@ -1,17 +1,13 @@
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, BlockNumber};
+use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use alloy::sol_types::{SolCall, SolValue};
-use std::sync::Arc;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_contract_interface::{IExecutor, ZkChain};
-
-/// Don't try to process that many block linearly
-const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
 
 /// Discovers block ranges for batches `[last_executed_batch + 1; last_committed_batch]`. This is
 /// needed to rebuild batches correctly in Batcher during replay.
@@ -39,20 +35,12 @@ impl BatchRangeWatcher {
             zk_chain_address = ?zk_chain.address(),
             "initializing L1 batch range watcher"
         );
-        let last_l1_block = find_l1_commit_block_by_batch_number(zk_chain.clone(), last_executed_batch)
-            .await
-            .or_else(|err| {
-                // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
-                // We default to `0` in this case - `eth_getLogs` are still supported.
-                // Assert that we don't fallback on longer chains (e.g. Sepolia)
-                if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
-                    anyhow::bail!(
-                        "Binary search failed with {err}. Cannot default starting block to zero for a long chain. Current L1 block number: {current_l1_block}. Limit: {MAX_L1_BLOCKS_LOOKBEHIND}."
-                    )
-                } else {
-                    Ok(0)
-                }
-            })?;
+        let last_l1_block = util::find_l1_commit_block_by_batch_number(
+            zk_chain.clone(),
+            last_executed_batch,
+            config.max_blocks_to_process,
+        )
+        .await?;
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
@@ -73,17 +61,6 @@ impl BatchRangeWatcher {
 
         Ok(l1_watcher)
     }
-}
-
-async fn find_l1_commit_block_by_batch_number(
-    zk_chain: ZkChain<DynProvider>,
-    batch_number: u64,
-) -> anyhow::Result<BlockNumber> {
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
-        let res = zk.get_total_batches_committed(block.into()).await?;
-        Ok(res >= batch_number)
-    })
-    .await
 }
 
 #[async_trait::async_trait]

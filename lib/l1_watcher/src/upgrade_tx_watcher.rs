@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::factory_deps::load_factory_deps;
+use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::dyn_abi::SolType;
@@ -15,7 +16,6 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeTransaction,
 };
-
 // TODO: disabled until bytecode supplier integration is ready
 // use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
 // use zk_os_api::helpers::set_properties_code;
@@ -295,7 +295,7 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
                 "received a protocol version that is not marked as live"
             );
             // Only allow non-live versions in localhost environment.
-            if self.provider.get_chain_id().await? != 31337 {
+            if self.provider.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
                 panic!(
                     "Received an upgrade to a non-live protocol version: {:?}",
                     request.protocol_version
@@ -376,7 +376,7 @@ async fn find_l1_block_by_protocol_version(
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;
 
-    util::find_l1_block_by_predicate(Arc::new(zk_chain), move |zk, block| async move {
+    util::find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
         let res = zk.get_raw_protocol_version(block.into()).await?;
         Ok(res >= protocol_version)
     })

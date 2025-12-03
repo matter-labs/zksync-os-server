@@ -1,12 +1,29 @@
 use alloy::primitives::BlockNumber;
 use alloy::providers::{DynProvider, Provider};
+use alloy::rpc::types::Filter;
+use alloy::sol_types::SolEvent;
 use std::sync::Arc;
-use zksync_os_contract_interface::ZkChain;
+use zksync_os_contract_interface::{IExecutor, ZkChain};
+
+pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
+
+/// Maximum number of L1 blocks that we can scan in a reasonable amount of time.
+///
+/// Rough calculations: 10min * 10 req/s * 1000 blocks/req = 600 * 10 * 1000 = 6_000_000
+const MAX_L1_BLOCKS_TO_SCAN_LINEARLY: u64 = 6_000_000;
 
 pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool>>>(
     zk_chain: Arc<ZkChain<DynProvider>>,
+    start_block_number: BlockNumber,
     predicate: impl Fn(Arc<ZkChain<DynProvider>>, u64) -> Fut,
 ) -> anyhow::Result<BlockNumber> {
+    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
+        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
+        // even for recent blocks. We default to `start_block_number` in this case - `eth_getLogs`
+        // are still supported.
+        return Ok(start_block_number);
+    }
+
     let latest = zk_chain.provider().get_block_number().await?;
 
     let guarded_predicate =
@@ -27,7 +44,7 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
     }
 
     // Binary search on [0, latest] for the first block where predicate is true.
-    let (mut lo, mut hi) = (0u64, latest);
+    let (mut lo, mut hi) = (start_block_number, latest);
     while lo < hi {
         let mid = (lo + hi) / 2;
         if guarded_predicate(zk_chain.clone(), mid).await? {
@@ -38,4 +55,163 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
     }
 
     Ok(lo)
+}
+
+/// Looks for an L1 batch revert event that happened in block range `[start_block_number; latest_block]`
+/// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
+/// if there is not any.
+///
+/// Batch `batch_number` MUST have been committed before `start_block_number`.
+async fn find_latest_l1_revert(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    start_block_number: BlockNumber,
+    max_blocks_to_scan: u64,
+) -> anyhow::Result<Option<BlockNumber>> {
+    let provider = zk_chain.provider();
+    let mut current_block = start_block_number;
+    let latest_block = provider.get_block_number().await?;
+    tracing::debug!(
+        address = %zk_chain.address(),
+        start_block_number,
+        latest_block,
+        max_blocks_to_scan,
+        "checking for revert events"
+    );
+
+    let blocks_to_scan = latest_block - start_block_number + 1;
+    if blocks_to_scan > MAX_L1_BLOCKS_TO_SCAN_LINEARLY {
+        tracing::warn!(
+            blocks_to_scan,
+            "scanning a lot of L1 blocks; last commit must have happened a long time ago"
+        );
+    }
+
+    let mut filter = Filter::new()
+        .address(*zk_chain.address())
+        .event_signature(IExecutor::BlocksRevert::SIGNATURE_HASH);
+    let mut last_block_with_revert = None;
+    while current_block < latest_block {
+        // Inspect up to `max_blocks_to_scan` L1 blocks at a time
+        let filter_to_block = latest_block.min(current_block + max_blocks_to_scan - 1);
+        filter = filter.from_block(current_block).to_block(filter_to_block);
+        let logs = provider.get_logs(&filter).await?;
+        tracing::trace!(
+            from_block = current_block,
+            to_block = filter_to_block,
+            log_count = logs.len(),
+            "fetched logs"
+        );
+        for log in logs {
+            let event = IExecutor::BlocksRevert::decode_log(&log.inner)?.data;
+            if event.totalBatchesCommitted < batch_number {
+                let l1_block = log
+                    .block_number
+                    .expect("indexed revert log without block number");
+                tracing::info!(
+                    %event.totalBatchesCommitted,
+                    l1_block,
+                    "found batch revert event on L1"
+                );
+                last_block_with_revert = Some(l1_block)
+            }
+        }
+        current_block = filter_to_block + 1;
+    }
+
+    Ok(last_block_with_revert)
+}
+
+/// Finds first L1 block that contains **non-reverted** batch commitment event on L1 matching
+/// requested batch.
+///
+/// Returns latest L1 block is there is none.
+///
+/// For any batch `B` that was reverted in tx `T` belonging to L1 block `b` the following MUST hold:
+/// `b` CAN contain commit event for `B` that happened either before `T` or after `T` but MUST NOT
+/// contain both. See comments inside the implementation for more details.
+pub async fn find_l1_commit_block_by_batch_number(
+    zk_chain: ZkChain<DynProvider>,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<BlockNumber> {
+    let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
+        let res = zk.get_total_batches_committed(block.into()).await?;
+        Ok(res >= batch_number)
+    };
+    // This predicate is not monotonic because committed batches can be reverted. Even then, this
+    // binary search will find **some** L1 block that commits our batch. If revert and another commit
+    // happen after the found L1 block, then we will find them as handled by logic in the rest of the
+    // function. If there are none, then we will not find anything and return this L1 block as a
+    // result.
+    let l1_block_with_commit =
+        find_l1_block_by_predicate(Arc::new(zk_chain.clone()), 0, is_batch_committed).await?;
+    tracing::debug!(
+        batch_number,
+        l1_block_with_commit,
+        "found first L1 block containing batch commitment"
+    );
+
+    let last_l1_block_with_revert = find_latest_l1_revert(
+        &zk_chain,
+        batch_number,
+        // Start from next block as current block might contain unrelated reverts. Note that our
+        // batch was observed as committed at the END of block `l1_block_with_commit` so any
+        // preceding reverts are irrelevant.
+        l1_block_with_commit + 1,
+        max_l1_blocks_to_scan,
+    )
+    .await?;
+    match last_l1_block_with_revert {
+        Some(last_l1_block_with_revert) => {
+            tracing::info!(
+                batch_number,
+                last_l1_block_with_revert,
+                "looking for batch commitment after last revert"
+            );
+            // Run binary search one more time but start from `last_l1_block_with_revert` now.
+            // `last_l1_block_with_revert` might contain EITHER commit event for our batch that
+            // happened BEFORE revert or AFTER revert. But it cannot contain both, otherwise L1
+            // Watcher will index reverted commit first. To mitigate this, we can make L1 Watcher
+            // interactively resistant to reverts that happened in the same block (it would watch
+            // for both `BlockCommit` and `BlocksRevert`). This scenario should not happen in the
+            // current implementation, however, and hence can be safely ignored for now.
+            let l1_block_with_commit = find_l1_block_by_predicate(
+                Arc::new(zk_chain),
+                last_l1_block_with_revert,
+                is_batch_committed,
+            )
+            .await?;
+            tracing::info!(
+                batch_number,
+                l1_block_with_commit,
+                "found non-reverted batch commitment on L1"
+            );
+            Ok(l1_block_with_commit)
+        }
+        None => {
+            tracing::info!(
+                batch_number,
+                l1_block_with_commit,
+                "no batch reverts found on L1"
+            );
+            Ok(l1_block_with_commit)
+        }
+    }
+}
+
+/// Finds first L1 block that contains batch execution event on L1 matching requested batch.
+///
+/// Returns latest L1 block is there is none.
+pub async fn find_l1_execute_block_by_batch_number(
+    zk_chain: ZkChain<DynProvider>,
+    batch_number: u64,
+) -> anyhow::Result<BlockNumber> {
+    // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
+    // to take L1 reverts into account here.
+    find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
+        let res = zk.get_total_batches_executed(block.into()).await?;
+        Ok(res >= batch_number)
+    })
+    .await
 }
