@@ -21,6 +21,7 @@ pub(crate) enum TracerMethod {
     Fault,
     Result,
     Write,
+    StorageRead,
 }
 
 impl TracerMethod {
@@ -33,6 +34,7 @@ impl TracerMethod {
             TracerMethod::Fault => "fault",
             TracerMethod::Result => "result",
             TracerMethod::Write => "write",
+            TracerMethod::StorageRead => "storage_read",
         }
     }
 }

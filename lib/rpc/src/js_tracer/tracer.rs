@@ -372,6 +372,9 @@ impl JsTracer {
             TracerMethod::Enter => self.call_enter(arg),
             TracerMethod::Exit => self.call_exit(arg),
             TracerMethod::Result => self.call_method(method, arg, true),
+            TracerMethod::StorageRead => Err(anyhow::anyhow!(
+                "Storage read is not supported by JS tracer"
+            )),
         } {
             self.record_error(method, err);
         }
@@ -667,7 +670,32 @@ impl EvmTracer for JsTracer {
         self.invoke_method(TracerMethod::Exit, &obj);
     }
 
-    fn on_storage_read(&mut self, _: bool, _: Address, _: B256, _: B256) {}
+    /// This method only performs a sanity check that the values in the overlay match the ones
+    /// from the state.
+    fn on_storage_read(&mut self, _: bool, address: Address, key: B256, value: B256) {
+        let storage_key = (address, key);
+        if let Some(entry) = self
+            .storage_overlay
+            .handle()
+            .borrow()
+            .get(&storage_key)
+            .cloned()
+        {
+            if entry.value != value {
+                tracing::error!(
+                    address = ?address,
+                    key = ?key,
+                    overlay_value = ?entry.value,
+                    actual_value = ?value,
+                    "Storage overlay/read mismatch"
+                );
+                self.record_error(
+                    TracerMethod::StorageRead,
+                    anyhow::anyhow!("Storage overlay value mismatch on read"),
+                );
+            }
+        }
+    }
 
     fn on_storage_write(&mut self, _is_transient: bool, address: Address, key: B256, value: B256) {
         {
