@@ -21,6 +21,8 @@ use zksync_os_interface::tracing::{
 use zksync_os_storage_api::ViewState;
 use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
 
+const MAX_JS_TRACER_PAYLOAD_BYTES: usize = 512 * 1024;
+
 /// JS tracer implementation
 /// Holds a Boa JS runtime and calls user-provided JS tracer methods when the hooks of zksync-os
 /// EVM tracer interface are invoked.
@@ -72,6 +74,13 @@ pub struct JsTracer {
 
 impl JsTracer {
     pub fn new(state_view: impl ViewState + 'static, js_cfg: String) -> anyhow::Result<Self> {
+        if js_cfg.len() > MAX_JS_TRACER_PAYLOAD_BYTES {
+            return Err(anyhow::anyhow!(format!(
+                "JS tracer payload exceeds limit of {} bytes",
+                MAX_JS_TRACER_PAYLOAD_BYTES
+            )));
+        }
+
         let (tracer_source, tracer_config) = extract_js_source_and_config(js_cfg)?;
 
         let mut ctx = BoaContext::default();
@@ -353,6 +362,10 @@ impl JsTracer {
     }
 
     fn invoke_method(&mut self, method: TracerMethod, arg: &JsonValue) {
+        if self.error.is_some() {
+            return;
+        }
+
         if let Err(err) = match method {
             TracerMethod::Step | TracerMethod::Fault => self.call_step_or_fault(method, arg),
             TracerMethod::Setup | TracerMethod::Write => self.call_method(method, arg, false),
@@ -544,22 +557,27 @@ impl AnyTracer for JsTracer {
 impl EvmTracer for JsTracer {
     fn on_new_execution_frame(&mut self, request: impl EvmRequest) {
         let checkpoint = self.current_overlay_checkpoint();
-        self.current_depth += 1;
-        if self.current_depth == 1 && request.modifier() == CallModifier::Constructor {
-            self.pending_create_type = Some(CreateType::Create);
-        }
 
         let call_value = request.nominal_token_value();
         if call_value != U256::ZERO {
             if let Err(err) = self.apply_balance_delta(request.caller(), U256::ZERO, call_value) {
                 tracing::error!("Caller balance change failed on call enter: {:?}", err);
                 self.record_error(TracerMethod::Enter, err);
+                self.revert_overlays_to_checkpoint(checkpoint);
+                return;
             }
 
             if let Err(err) = self.apply_balance_delta(request.callee(), call_value, U256::ZERO) {
                 tracing::error!("Callee balance change failed on call enter: {:?}", err);
                 self.record_error(TracerMethod::Enter, err);
+                self.revert_overlays_to_checkpoint(checkpoint);
+                return;
             }
+        }
+
+        self.current_depth += 1;
+        if self.current_depth == 1 && request.modifier() == CallModifier::Constructor {
+            self.pending_create_type = Some(CreateType::Create);
         }
 
         let call_type = self.consume_call_type(request.modifier());
