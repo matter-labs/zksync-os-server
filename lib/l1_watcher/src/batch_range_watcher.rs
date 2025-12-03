@@ -17,8 +17,16 @@ use zksync_os_types::ProtocolSemanticVersion;
 /// needed to rebuild batches correctly in Batcher during replay.
 pub struct BatchRangeWatcher {
     zk_chain: ZkChain<DynProvider>,
+    /// Next batch expected to be observed as committed on L1 (along with its block range). This
+    /// starts at `last_executed_batch` and progresses all the way to `last_committed_batch` (both
+    /// as observed on startup).
     next_batch_number: u64,
-    last_batch_number: u64,
+    /// Last committed batch as was observed on startup. When `next_batch_number` becomes greater
+    /// than this value, `BatchRangeWatcher` is considered to have finished executing.
+    last_committed_batch_on_startup: u64,
+    /// Commitment information for batches `[last_executed_batch; last_committed_batch]` is sent
+    /// to this channel. Once `BatchRangeWatcher` finishes running (all batches have been sent),
+    /// this end of the channel will be closed.
     batch_ranges_sender: mpsc::Sender<CommittedBatch>,
 }
 
@@ -52,7 +60,7 @@ impl BatchRangeWatcher {
         let this = Self {
             zk_chain,
             next_batch_number: last_executed_batch,
-            last_batch_number: last_committed_batch,
+            last_committed_batch_on_startup: last_committed_batch,
             batch_ranges_sender,
         };
         let l1_watcher = L1Watcher::new(
@@ -80,7 +88,10 @@ impl ProcessL1Event for BatchRangeWatcher {
     }
 
     fn should_continue(&self) -> bool {
-        self.next_batch_number <= self.last_batch_number && self.last_batch_number > 0
+        // Watch events up to last committed batch. Finish early if it's genesis batch as there will
+        // be no event.
+        self.next_batch_number <= self.last_committed_batch_on_startup
+            && self.last_committed_batch_on_startup > 0
     }
 
     async fn process_event(
@@ -100,7 +111,7 @@ impl ProcessL1Event for BatchRangeWatcher {
                 last_block_number,
                 "skipping already processed batch range",
             );
-        } else if batch_number > self.last_batch_number {
+        } else if batch_number > self.last_committed_batch_on_startup {
             // This can trigger if one L1 block has multiple events inside. But generally `Self::should_continue`
             // implementation will stop processor immediately after the last batch of interest was processed.
             tracing::trace!(batch_number, "batch is outside of range of interest");
