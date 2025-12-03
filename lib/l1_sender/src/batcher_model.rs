@@ -148,8 +148,15 @@ impl<E, S> BatchEnvelope<E, S> {
         let last_block_number = self.batch.last_block_number;
         self.latency_tracker.record_stage(stage, |duration| {
             BATCHER_METRICS.execution_stages[&stage].observe(duration);
-            BATCHER_METRICS.batch_number[&stage].set(batch_number);
-            BATCHER_METRICS.block_number[&stage].set(last_block_number);
+            if !matches!(
+                stage,
+                BatchExecutionStage::CommitL1Passthrough
+                    | BatchExecutionStage::ProveL1Passthrough
+                    | BatchExecutionStage::ExecuteL1Passthrough
+            ) {
+                BATCHER_METRICS.batch_number[&stage].set(batch_number);
+                BATCHER_METRICS.block_number[&stage].set(last_block_number);
+            }
         });
     }
 

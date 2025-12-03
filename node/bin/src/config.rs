@@ -1,6 +1,6 @@
 use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
-use alloy::primitives::{Address, U128};
+use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -218,6 +218,14 @@ pub struct SequencerConfig {
     /// Block rebuild options.
     #[config(nest)]
     pub block_rebuild: Option<RebuildBlocksConfig>,
+
+    /// If set, external node will sync up to and including this block number and then stop processing blocks.
+    #[config(default)]
+    pub en_sync_up_to_block: Option<u64>,
+
+    #[config(default, with = Serde![*])]
+    /// List of (block_number, db_key) pairs to override when downloading replay records.
+    pub en_replay_record_overrides: Vec<(u64, Bytes)>,
 }
 
 impl SequencerConfig {

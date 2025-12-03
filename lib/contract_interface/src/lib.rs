@@ -219,6 +219,7 @@ alloy::sol! {
             uint64 indexed firstBlockNumber,
             uint64 indexed lastBlockNumber
         );
+        event BlocksRevert(uint256 totalBatchesCommitted, uint256 totalBatchesVerified, uint256 totalBatchesExecuted);
 
         function commitBatchesSharedBridge(
             address _chainAddress,
