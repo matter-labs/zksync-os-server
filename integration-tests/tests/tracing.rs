@@ -605,7 +605,6 @@ async fn debug_trace_call_stack() -> anyhow::Result<()> {
         .debug_trace_call(call_request, BlockId::latest(), opts)
         .await?;
 
-    println!("{:?}", trace);
     let val = match trace {
         GethTrace::JS(value) => value
             .as_object()
@@ -614,7 +613,7 @@ async fn debug_trace_call_stack() -> anyhow::Result<()> {
             .expect("geth tracer result missing data")
             .as_array()
             .expect("tracer logs is not an array")
-            .get(0)
+            .first()
             .expect("tracer logs is empty")
             .as_object()
             .expect("tracer log entry is not an object")
