@@ -56,8 +56,8 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
 /// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
 /// if there is not any.
 ///
-/// Assumes no batch commit and revert happened in the same L1 block.
-pub async fn find_latest_l1_revert(
+/// Batch `batch_number` MUST have been committed before `start_block_number`.
+async fn find_latest_l1_revert(
     zk_chain: &ZkChain<DynProvider>,
     batch_number: u64,
     start_block_number: BlockNumber,
@@ -113,6 +113,10 @@ pub async fn find_latest_l1_revert(
 /// requested batch.
 ///
 /// Returns latest L1 block is there is none.
+///
+/// For any batch `B` that was reverted in tx `T` belonging to L1 block `b` the following MUST hold:
+/// `b` CAN contain commit event for `B` that happened either before `T` or after `T` but MUST NOT
+/// contain both. See comments inside the implementation for more details.
 pub async fn find_l1_commit_block_by_batch_number(
     zk_chain: ZkChain<DynProvider>,
     batch_number: u64,
@@ -133,7 +137,10 @@ pub async fn find_l1_commit_block_by_batch_number(
     let last_l1_block_with_revert = find_latest_l1_revert(
         &zk_chain,
         batch_number,
-        l1_block_with_commit,
+        // Start from next block as current block might contain unrelated reverts. Note that our
+        // batch was observed as committed at the END of block `l1_block_with_commit` so any
+        // preceding reverts are irrelevant.
+        l1_block_with_commit + 1,
         max_l1_blocks_to_scan,
     )
     .await?;
@@ -144,7 +151,13 @@ pub async fn find_l1_commit_block_by_batch_number(
                 last_l1_block_with_revert,
                 "looking for batch commitment after last revert"
             );
-            // Run binary search one more time but start from `last_l1_block_with_revert` now
+            // Run binary search one more time but start from `last_l1_block_with_revert` now.
+            // `last_l1_block_with_revert` might contain EITHER commit event for our batch that
+            // happened BEFORE revert or AFTER revert. But it cannot contain both, otherwise L1
+            // Watcher will index reverted commit first. To mitigate this, we can make L1 Watcher
+            // interactively resistant to reverts that happened in the same block (it would watch
+            // for both `BlockCommit` and `BlocksRevert`). This scenario should not happen in the
+            // current implementation, however, and hence can be safely ignored for now.
             let l1_block_with_commit = find_l1_block_by_predicate(
                 Arc::new(zk_chain),
                 last_l1_block_with_revert,
