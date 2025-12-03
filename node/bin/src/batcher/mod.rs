@@ -115,7 +115,7 @@ impl PipelineComponent for Batcher {
                         &prev_batch_info,
                         existing_batch,
                     )
-                        .await?,
+                    .await?,
                     true,
                 )
             } else {
