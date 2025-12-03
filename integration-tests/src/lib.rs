@@ -5,11 +5,11 @@ use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
-use alloy::signers::local::LocalSigner;
+use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -32,12 +32,23 @@ mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 31337;
-pub const BATCH_VERIFICATION_KEY_1: &str =
-    "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47";
-pub const BATCH_VERIFICATION_ADDR_1: &str = "0xdF3401331FeB729f138258bAC135359f3CBA6760";
-pub const BATCH_VERIFICATION_KEY_2: &str =
-    "0xf9306dd03807c08b646d47c739bd51e4d2a25b02bad0efb3d93f095982ac98cd";
-pub const BATCH_VERIFICATION_ADDR_2: &str = "0x7A255d9331f3D4ca05cD0f16c3BCC08D682ac62B";
+
+/// Set of private keys for batch verification participants.
+pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
+    "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47",
+    "0xf9306dd03807c08b646d47c739bd51e4d2a25b02bad0efb3d93f095982ac98cd",
+];
+/// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
+static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    BATCH_VERIFICATION_KEYS
+        .map(|key| {
+            PrivateKeySigner::from_str(key)
+                .unwrap()
+                .address()
+                .to_string()
+        })
+        .to_vec()
+});
 
 #[derive(Debug)]
 pub struct Tester {
@@ -198,14 +209,11 @@ impl Tester {
             client_enabled: false,
             connect_address: batch_verification_address.clone(),
             threshold: 1, // default to 1 of 2
-            accepted_signers: vec![
-                BATCH_VERIFICATION_ADDR_1.into(),
-                BATCH_VERIFICATION_ADDR_2.into(),
-            ],
+            accepted_signers: BATCH_VERIFICATION_ADDRESSES.clone(),
             request_timeout: Duration::from_millis(100),
             retry_delay: Duration::from_millis(10),
             total_timeout: Duration::from_secs(300),
-            signing_key: BATCH_VERIFICATION_KEY_1.into(),
+            signing_key: BATCH_VERIFICATION_KEYS[0].into(),
         };
 
         let status_server_config = StatusServerConfig {

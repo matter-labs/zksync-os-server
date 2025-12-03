@@ -8,7 +8,7 @@ use alloy::rpc::types::TransactionRequest;
 use alloy::{network::ReceiptResponse, primitives::Address};
 use backon::{ConstantBuilder, Retryable};
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
-use zksync_os_integration_tests::{BATCH_VERIFICATION_KEY_2, TesterBatchVerificationConfig};
+use zksync_os_integration_tests::{BATCH_VERIFICATION_KEYS, TesterBatchVerificationConfig};
 use zksync_os_integration_tests::{Tester, assert_traits::ReceiptAssert, contracts::EventEmitter};
 use zksync_os_server::config::Config;
 
@@ -98,6 +98,7 @@ async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
         .launch_external_node_overrides(Some(|config: &mut Config| {
             let bv_config = &mut config.batch_verification_config;
             bv_config.client_enabled = true;
+            bv_config.signing_key = BATCH_VERIFICATION_KEYS[0].into();
         }))
         .await?;
 
@@ -111,7 +112,7 @@ async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
         .launch_external_node_overrides(Some(|config: &mut Config| {
             let bv_config = &mut config.batch_verification_config;
             bv_config.client_enabled = true;
-            bv_config.signing_key = BATCH_VERIFICATION_KEY_2.to_string().into();
+            bv_config.signing_key = BATCH_VERIFICATION_KEYS[1].into();
         }))
         .await?;
 
