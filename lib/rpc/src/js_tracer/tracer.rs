@@ -58,6 +58,7 @@ pub struct JsTracer {
     storage_overlay: OverlayState<(Address, B256), B256>,
     code_overlay: OverlayState<Address, Option<Vec<u8>>>,
     balance_overlay: OverlayState<Address, BalanceDelta>,
+    selfdestruct_overlay: OverlayState<Address, ()>,
 
     // Depth tracking and per-tx result
     current_depth: u64,
@@ -88,6 +89,7 @@ impl JsTracer {
         let storage_overlay = OverlayState::<(Address, B256), B256>::new();
         let code_overlay = OverlayState::<Address, Option<Vec<u8>>>::new();
         let balance_overlay = OverlayState::<Address, BalanceDelta>::new();
+        let selfdestruct_overlay = OverlayState::<Address, ()>::new();
 
         init_host_env_in_boa_context(
             &mut ctx,
@@ -96,6 +98,7 @@ impl JsTracer {
             storage_overlay.handle(),
             code_overlay.handle(),
             balance_overlay.handle(),
+            selfdestruct_overlay.handle(),
         )?;
 
         Ok(Self {
@@ -104,6 +107,7 @@ impl JsTracer {
             storage_overlay,
             code_overlay,
             balance_overlay,
+            selfdestruct_overlay,
             current_depth: 0,
             results: Vec::new(),
             pending_step: None,
@@ -165,12 +169,14 @@ impl JsTracer {
         self.storage_overlay.commit();
         self.code_overlay.commit();
         self.balance_overlay.commit();
+        self.selfdestruct_overlay.commit();
     }
 
     fn rollback_overlays(&self) {
         self.storage_overlay.rollback();
         self.code_overlay.rollback();
         self.balance_overlay.rollback();
+        self.selfdestruct_overlay.rollback();
     }
 
     fn current_overlay_checkpoint(&self) -> OverlayCheckpoint {
@@ -178,6 +184,7 @@ impl JsTracer {
             storage: self.storage_overlay.checkpoint(),
             code: self.code_overlay.checkpoint(),
             balance: self.balance_overlay.checkpoint(),
+            selfdestruct: self.selfdestruct_overlay.checkpoint(),
         }
     }
 
@@ -185,6 +192,7 @@ impl JsTracer {
         self.storage_overlay.clear_journal();
         self.code_overlay.clear_journal();
         self.balance_overlay.clear_journal();
+        self.selfdestruct_overlay.clear_journal();
     }
 
     fn revert_overlays_to_checkpoint(&self, checkpoint: OverlayCheckpoint) {
@@ -193,6 +201,21 @@ impl JsTracer {
         self.code_overlay.revert_to_checkpoint(checkpoint.code);
         self.balance_overlay
             .revert_to_checkpoint(checkpoint.balance);
+        self.selfdestruct_overlay
+            .revert_to_checkpoint(checkpoint.selfdestruct);
+    }
+
+    fn clear_selfdestruct_marker(&self, address: Address, allow_pending: bool) {
+        let mut overlay = self.selfdestruct_overlay.borrow_mut();
+        if let Entry::Occupied(entry) = overlay.entry(address) {
+            if !allow_pending && !entry.get().committed {
+                return;
+            }
+
+            let before = entry.get().clone();
+            self.selfdestruct_overlay.record_update(address, before);
+            entry.remove_entry();
+        }
     }
 
     fn call_enter(&mut self, call_frame: &JsonValue) -> anyhow::Result<()> {
@@ -519,6 +542,10 @@ impl JsTracer {
             return Ok(());
         }
 
+        if credit > U256::ZERO {
+            self.clear_selfdestruct_marker(address, false);
+        }
+
         let mut overlay = self.balance_overlay.borrow_mut();
         match overlay.entry(address) {
             Entry::Occupied(mut occupied) => {
@@ -742,6 +769,10 @@ impl EvmTracer for JsTracer {
             slice.to_vec()
         });
 
+        if new_value.is_some() {
+            self.clear_selfdestruct_marker(address, true);
+        }
+
         let mut overlay = self.code_overlay.borrow_mut();
         match overlay.entry(address) {
             Entry::Occupied(mut entry) => {
@@ -891,19 +922,28 @@ impl EvmTracer for JsTracer {
         token_value: U256,
         frame_state: impl EvmFrameInterface,
     ) {
-        if token_value == U256::ZERO {
+        if token_value != U256::ZERO {
+            if let Err(err) =
+                self.apply_balance_delta(frame_state.address(), U256::ZERO, token_value)
+            {
+                tracing::error!("Selfdestruct balance debit failed: {:?}", err);
+                self.record_error(TracerMethod::Enter, err);
+            }
+
+            if let Err(err) = self.apply_balance_delta(beneficiary, token_value, U256::ZERO) {
+                tracing::error!("Selfdestruct beneficiary credit failed: {:?}", err);
+                self.record_error(TracerMethod::Enter, err);
+            }
+        }
+
+        let address = frame_state.address();
+        let mut overlay = self.selfdestruct_overlay.borrow_mut();
+        if overlay.contains_key(&address) {
             return;
         }
 
-        if let Err(err) = self.apply_balance_delta(frame_state.address(), U256::ZERO, token_value) {
-            tracing::error!("Caller balance change failed on call enter: {:?}", err);
-            self.record_error(TracerMethod::Enter, err);
-        }
-
-        if let Err(err) = self.apply_balance_delta(beneficiary, token_value, U256::ZERO) {
-            tracing::error!("Callee balance change failed on call enter: {:?}", err);
-            self.record_error(TracerMethod::Enter, err);
-        }
+        self.selfdestruct_overlay.record_insert(address);
+        overlay.insert(address, OverlayEntry::new_pending(()));
     }
 
     fn on_create_request(&mut self, is_create2: bool) {
