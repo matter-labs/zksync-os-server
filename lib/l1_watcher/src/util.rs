@@ -7,6 +7,11 @@ use zksync_os_contract_interface::{IExecutor, ZkChain};
 
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
 
+/// Maximum number of L1 blocks that we can scan in a reasonable amount of time.
+///
+/// Rough calculations: 10min * 10 req/s * 1000 blocks/req = 600 * 10 * 1000 = 6_000_000
+const MAX_L1_BLOCKS_TO_SCAN_LINEARLY: u64 = 6_000_000;
+
 pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool>>>(
     zk_chain: Arc<ZkChain<DynProvider>>,
     start_block_number: BlockNumber,
@@ -74,6 +79,14 @@ async fn find_latest_l1_revert(
         "checking for revert events"
     );
 
+    let blocks_to_scan = latest_block - start_block_number + 1;
+    if blocks_to_scan > MAX_L1_BLOCKS_TO_SCAN_LINEARLY {
+        tracing::warn!(
+            blocks_to_scan,
+            "scanning a lot of L1 blocks; last commit must have happened a long time ago"
+        );
+    }
+
     let mut filter = Filter::new()
         .address(*zk_chain.address())
         .event_signature(IExecutor::BlocksRevert::SIGNATURE_HASH);
@@ -126,6 +139,11 @@ pub async fn find_l1_commit_block_by_batch_number(
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)
     };
+    // This predicate is not monotonic because committed batches can be reverted. Even then, this
+    // binary search will find **some** L1 block that commits our batch. If revert and another commit
+    // happen after the found L1 block, then we will find them as handled by logic in the rest of the
+    // function. If there are none, then we will not find anything and return this L1 block as a
+    // result.
     let l1_block_with_commit =
         find_l1_block_by_predicate(Arc::new(zk_chain.clone()), 0, is_batch_committed).await?;
     tracing::debug!(
