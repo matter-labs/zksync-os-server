@@ -680,20 +680,19 @@ impl EvmTracer for JsTracer {
             .borrow()
             .get(&storage_key)
             .cloned()
+            && entry.value != value
         {
-            if entry.value != value {
-                tracing::error!(
-                    address = ?address,
-                    key = ?key,
-                    overlay_value = ?entry.value,
-                    actual_value = ?value,
-                    "Storage overlay/read mismatch"
-                );
-                self.record_error(
-                    TracerMethod::StorageRead,
-                    anyhow::anyhow!("Storage overlay value mismatch on read"),
-                );
-            }
+            tracing::error!(
+                address = ?address,
+                key = ?key,
+                overlay_value = ?entry.value,
+                actual_value = ?value,
+                "Storage overlay/read mismatch"
+            );
+            self.record_error(
+                TracerMethod::StorageRead,
+                anyhow::anyhow!("Storage overlay value mismatch on read"),
+            );
         }
     }
 
