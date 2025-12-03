@@ -26,11 +26,13 @@ pub mod dyn_wallet_provider;
 mod network;
 mod prover_tester;
 pub mod provider;
+pub mod upgrade;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 31337;
 
+#[derive(Debug)]
 pub struct Tester {
     pub l1_provider: EthDynProvider,
     pub l2_provider: EthDynProvider,
@@ -145,6 +147,8 @@ impl Tester {
         }
         let rpc_config = RpcConfig {
             address: l2_rpc_address.clone(),
+            // Override default with a higher value as the test can be slow in CI
+            send_raw_transaction_sync_timeout: Duration::from_secs(10),
             ..Default::default()
         };
         let prover_api_config = ProverApiConfig {
@@ -204,13 +208,13 @@ impl Tester {
         if enable_prover {
             let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
-                zksync_os_multivm::apps::v4::multiblock_batch_path(&rocks_db_path.join("app_bins"));
+                zksync_os_multivm::apps::v5::multiblock_batch_path(&rocks_db_path.join("app_bins"));
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
             tokio::task::spawn(async move {
                 zksync_os_prover_service::run(zksync_os_prover_service::Args {
-                    base_url,
+                    sequencer_urls: vec![base_url.parse().unwrap()],
                     app_bin_path: Some(app_bin_path),
                     circuit_limit: 10000,
                     output_dir: output_dir.to_str().unwrap().to_string(),

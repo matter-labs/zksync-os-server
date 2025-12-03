@@ -3,15 +3,16 @@ use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
+use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
     GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RollupPubdataMode, RpcConfig, SequencerConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
-use zksync_os_server::run;
 use zksync_os_server::zkstack_config::ZkStackConfig;
+use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -20,7 +21,7 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::main]
 pub async fn main() {
     // =========== load configs ===========
-    let config = build_configs();
+    let mut config = build_external_config();
 
     // =========== init observability ===========
     let logs = zksync_os_observability::Logs::new(
@@ -51,6 +52,8 @@ pub async fn main() {
         .with_opentelemetry(Some(otlp))
         .build();
     tracing::info!(?config, "Loaded config");
+
+    load_internal_config(&mut config);
 
     let prometheus: PrometheusExporterConfig =
         PrometheusExporterConfig::pull(config.observability_config.prometheus.port);
@@ -123,7 +126,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     }
 }
 
-fn build_configs() -> Config {
+fn build_external_config() -> Config {
     // todo: change with the idiomatic approach
     let mut schema = ConfigSchema::default();
     schema
@@ -175,7 +178,13 @@ fn build_configs() -> Config {
         .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
         .expect("Failed to insert batch verification config");
 
-    let repo = ConfigRepository::new(&schema).with(Environment::prefixed(""));
+    let mut env = Environment::prefixed("");
+    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
+    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
+    // an `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
+    env.coerce_json()
+        .expect("failed to coerce JSON envvar values");
+    let repo = ConfigRepository::new(&schema).with(env);
 
     let mut general_config = repo
         .single::<GeneralConfig>()
@@ -297,13 +306,6 @@ fn build_configs() -> Config {
         panic!("Operator addresses for commit, prove and execute must be different");
     }
 
-    if matches!(
-        l1_sender_config.rollup_pubdata_mode,
-        RollupPubdataMode::Blobs
-    ) {
-        panic!("Blobs mode is not supported yet");
-    }
-
     Config {
         general_config,
         genesis_config,
@@ -320,5 +322,38 @@ fn build_configs() -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
+    }
+}
+
+fn load_internal_config(config: &mut Config) {
+    let file_path = config
+        .general_config
+        .rocks_db_path
+        .join(INTERNAL_CONFIG_FILE_NAME);
+    let internal_config_manager =
+        InternalConfigManager::new(file_path).expect("Failed to create internal config manager");
+    let internal_config = internal_config_manager
+        .read_config()
+        .expect("Failed to read internal config");
+    tracing::info!(?internal_config, "Loaded internal config");
+
+    // Merging configs.
+    config
+        .rpc_config
+        .l2_signer_blacklist
+        .extend(internal_config.l2_signer_blacklist);
+    if let Some(failing_block) = internal_config.failing_block {
+        if config.sequencer_config.block_rebuild.is_some() {
+            panic!(
+                "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \
+                 Please remove one of these settings to avoid conflicts.",
+                config.sequencer_config.block_rebuild, failing_block
+            );
+        } else {
+            config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
+                from_block: failing_block,
+                blocks_to_empty: vec![failing_block],
+            });
+        }
     }
 }

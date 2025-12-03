@@ -1,3 +1,4 @@
+use crate::client::metrics::BATCH_VERIFICATION_CLIENT_METRICS;
 use crate::{
     BatchVerificationRequest, BatchVerificationRequestDecoder, BatchVerificationResponse,
     BatchVerificationResponseCodec, BatchVerificationResult,
@@ -80,6 +81,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
         input: &mut PeekableReceiver<VerificationInput>,
         latency_tracker: &ComponentStateHandle<BatchVerificationClientState>,
     ) -> anyhow::Result<()> {
+        let address = self.signer.address().to_string();
         let mut socket = connect(&self.server_address, "/batch_verification").await?;
 
         let batch_verification_version = socket.read_u32().await?;
@@ -93,7 +95,10 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
             BatchVerificationResponseCodec::new(batch_verification_version),
         );
 
-        tracing::info!("Connected to main sequencer for batch verification");
+        tracing::info!(
+            address,
+            "Connected to main sequencer for batch verification",
+        );
 
         loop {
             latency_tracker.enter_state(BatchVerificationClientState::WaitingRecv);
@@ -124,11 +129,13 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
                             latency_tracker.enter_state(BatchVerificationClientState::WaitingSend);
                             match verification_result {
                                 Ok(signature) => {
-                                    tracing::info!(batch_number, request_id, "Approved batch verification request");
+                                    tracing::info!(batch_number, request_id, address, "Approved batch verification request");
+                                    BATCH_VERIFICATION_CLIENT_METRICS.record_request_success(request_id, batch_number);
                                     writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Success(signature) }).await?;
                                 },
                                 Err(reason) => {
-                                    tracing::info!(batch_number, request_id, "Batch verification failed: {}", reason);
+                                    tracing::info!(batch_number, request_id, address, "Batch verification failed: {}", reason);
+                                    BATCH_VERIFICATION_CLIENT_METRICS.record_request_failure(request_id, batch_number);
                                     writer.send(BatchVerificationResponse { request_id, batch_number, result: BatchVerificationResult::Refused(reason.to_string()) }).await?;
                                 },
                             }
@@ -195,6 +202,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
             self.chain_id,
             self.diamond_proxy,
             request.batch_number,
+            request.pubdata_mode,
         )
         .commit_info;
 

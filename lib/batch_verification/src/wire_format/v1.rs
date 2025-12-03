@@ -13,6 +13,7 @@ pub struct BatchVerificationRequestWireFormatV1 {
     pub batch_number: u64,
     pub first_block_number: u64,
     pub last_block_number: u64,
+    pub pubdata_mode: u8,
     pub request_id: u64,
     pub commit_data: Vec<u8>,
 }

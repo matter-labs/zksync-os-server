@@ -17,6 +17,7 @@ zksync_os_pipeline.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_internal_config.workspace = true
 
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
@@ -43,3 +44,4 @@ tokio.workspace = true
 tracing.workspace = true
 vise.workspace = true
 semver.workspace = true
+serde_yaml.workspace = true

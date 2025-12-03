@@ -27,7 +27,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
         tester.l1_provider.clone(),
-        270,
+        zksync_os_server::config_constants::CHAIN_ID,
     );
     let amount = U256::from(100);
     let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;

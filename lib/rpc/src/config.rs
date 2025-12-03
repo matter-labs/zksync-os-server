@@ -1,3 +1,5 @@
+use alloy::primitives::Address;
+use std::collections::HashSet;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -25,6 +27,18 @@ pub struct RpcConfig {
 
     /// Duration since the last filter poll, after which the filter is considered stale
     pub stale_filter_ttl: Duration,
+
+    /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
+    pub l2_signer_blacklist: HashSet<Address>,
+
+    /// Default timeout for `eth_sendRawTransactionSync`
+    pub send_raw_transaction_sync_timeout: Duration,
+
+    /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
+    /// Needed to account for pubdata price market fluctuations. Setting this to `1.0` can lead to
+    /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)
+    /// because pubdata price increase in-between estimation and sequencing.
+    pub estimate_gas_pubdata_price_factor: f64,
 }
 
 impl RpcConfig {

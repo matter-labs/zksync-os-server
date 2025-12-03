@@ -39,6 +39,9 @@ pub struct BatcherSubsystemMetrics {
     #[metrics(labels = ["stage"])]
     pub batch_number: LabeledFamily<BatchExecutionStage, Gauge<u64>>,
 
+    #[metrics(unit = Unit::Seconds, buckets = Buckets::linear(60.0..=600.0, 60.0))]
+    pub time_since_last_batch: Histogram<Duration>,
+
     #[metrics(labels = ["stage"])]
     pub block_number: LabeledFamily<BatchExecutionStage, Gauge<u64>>,
 
@@ -57,5 +60,6 @@ pub struct BatcherSubsystemMetrics {
     #[metrics(buckets = Buckets::exponential(1_000.0..=1_000_000.0, 4.0))]
     pub pubdata_per_batch: Histogram<u64>,
 }
+
 #[vise::register]
 pub static BATCHER_METRICS: vise::Global<BatcherSubsystemMetrics> = vise::Global::new();

@@ -5,15 +5,20 @@ pub mod commitment;
 pub mod config;
 mod metrics;
 pub mod pipeline_component;
+pub mod upgrade_gatekeeper;
 
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderConfig;
 use crate::metrics::{L1_SENDER_METRICS, L1SenderState};
-use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::consensus::{BlobTransactionValidationError, EnvKzgSettings};
+use alloy::eips::eip7594::BlobTransactionSidecarVariant;
+use alloy::eips::{BlockId, Encodable2718};
+use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
 use alloy::providers::ext::DebugApi;
+use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
@@ -64,7 +69,10 @@ pub async fn run_l1_sender<Input: SendToL1>(
     to_address: Address,
 
     // == config ==
-    mut provider: impl Provider + WalletProvider<Wallet = EthereumWallet> + 'static,
+    mut provider: FillProvider<
+        impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>,
+        impl Provider<Ethereum>,
+    >,
     config: L1SenderConfig<Input>,
 ) -> anyhow::Result<()> {
     let latency_tracker =
@@ -122,7 +130,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
         let pending_txs: Vec<(TransactionReceiptFuture, Input)> =
             futures::stream::iter(commands.drain(..))
                 .then(|mut cmd| async {
-                    let tx_request = tx_request_with_gas_fields(
+                    let mut tx_request = tx_request_with_gas_fields(
                         &provider,
                         operator_address,
                         config.max_fee_per_gas(),
@@ -131,11 +139,49 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     .await?
                     .with_to(to_address)
                     .with_call(&cmd.solidity_call());
+
+                    if let Some(blob_sidecar) = cmd.blob_sidecar() {
+                        let fee_per_blob_gas = provider.get_blob_base_fee().await?;
+                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas();
+
+                        if fee_per_blob_gas > max_fee_per_blob_gas {
+                            tracing::warn!(
+                                max_fee_per_blob_gas,
+                                fee_per_blob_gas,
+                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
+                            );
+                        }
+                        tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
+                        tx_request.set_blob_sidecar(blob_sidecar);
+                    };
+
+                    // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an
+                    // envelope.
+                    let envelope = provider.fill(tx_request).await?.try_into_envelope()?.try_into_pooled()?;
+
+                    let pending_block = provider.get_block(BlockId::pending()).await?.expect("no pending block");
+                    // todo: make conversion unconditional (and remove respective config) once both:
+                    //       1) Fusaka upgrade is executed on mainnet
+                    //       2) anvil supports EIP-7594 blobs (see https://github.com/foundry-rs/foundry/issues/12222)
+                    let tx = if config.fusaka_upgrade_timestamp <= pending_block.header.timestamp {
+                        // Convert the envelope into an EIP-7594 transaction by converting the sidecar
+                        envelope.try_map_eip4844(|tx| {
+                            tx.try_map_sidecar(|sidecar| {
+                                Ok::<_, BlobTransactionValidationError>(
+                                    BlobTransactionSidecarVariant::Eip7594(sidecar.try_into_7594(EnvKzgSettings::Default.get())?)
+                                )
+                            })
+                        })?
+                    } else {
+                        // Keep the regular EIP-4844 sidecar
+                        envelope.map_eip4844(|tx| tx.map_sidecar(BlobTransactionSidecarVariant::Eip4844))
+                    };
+
                     // We don't wait for receipt here, instead we register an alloy watcher that
                     // polls for the receipt in the background. This future resolves when the watcher
                     // finds it.
                     let receipt_fut = provider
-                        .send_transaction(tx_request)
+                        .send_raw_transaction(&tx.encoded_2718())
                         .await?
                         // We are being optimistic with our transaction inclusion here. But, even if
                         // reorg happens and transaction will not be included in the new fork (very-very

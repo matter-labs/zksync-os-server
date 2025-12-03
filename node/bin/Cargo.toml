@@ -37,9 +37,10 @@ zksync_os_gas_adjuster.workspace = true
 zksync_os_batch_verification.workspace = true
 zksync_os_socket.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_internal_config.workspace = true
 
-zk_os_forward_system_0_0_26.workspace = true
-zk_ee_0_0_26.workspace = true
+zk_os_forward_system_0_1_0.workspace = true
+zk_ee_0_1_0.workspace = true
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
@@ -76,7 +77,7 @@ semver = { workspace = true, features = ["serde"] }
 backon.workspace = true
 
 bincode.workspace = true
-smart-config = { workspace = true, features = ["primitive-types"] }
+smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
 
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
@@ -88,5 +89,6 @@ async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = [
     "client",
 ] }
+rand.workspace = true
 
 sentry.workspace = true

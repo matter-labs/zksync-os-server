@@ -110,6 +110,50 @@ alloy::sol! {
     #[sol(rpc)]
     interface IChainTypeManager {
         address public validatorTimelockPostV29;
+
+        enum Action {
+            Add,
+            Replace,
+            Remove
+        }
+
+        struct FacetCut {
+            address facet;
+            Action action;
+            bool isFreezable;
+            bytes4[] selectors;
+        }
+
+        struct DiamondCutData {
+            FacetCut[] facetCuts;
+            address initAddress;
+            bytes initCalldata;
+        }
+
+        struct VerifierParams {
+            bytes32 recursionNodeLevelVkHash;
+            bytes32 recursionLeafLevelVkHash;
+            bytes32 recursionCircuitsSetVksHash;
+        }
+
+        struct ProposedUpgrade {
+            L2CanonicalTransaction l2ProtocolUpgradeTx;
+            bytes32 bootloaderHash;
+            bytes32 defaultAccountHash;
+            bytes32 evmEmulatorHash;
+            address verifier;
+            VerifierParams verifierParams;
+            bytes l1ContractsUpgradeCalldata;
+            bytes postUpgradeCalldata;
+            uint256 upgradeTimestamp;
+            uint256 newProtocolVersion;
+        }
+
+        /// Defines an upgrade from version A to version B
+        event NewProtocolVersion(uint256 indexed oldProtocolVersion, uint256 indexed newProtocolVersion);
+
+        /// Provides an actual data for the upgrade execution.
+        event NewUpgradeCutData(uint256 indexed protocolVersion, DiamondCutData diamondCutData);
     }
 
     // `IZKChain.sol`
@@ -121,6 +165,18 @@ alloy::sol! {
         function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
+        function getAdmin() external view returns (address);
+        function getChainTypeManager() external view returns (address);
+        function getProtocolVersion() external view returns (uint256);
+    }
+
+    // Taken from `common/Config.sol`
+    enum L2DACommitmentScheme {
+        NONE,
+        EMPTY_NO_DA,
+        PUBDATA_KECCAK256,
+        BLOBS_AND_PUBDATA_KECCAK256,
+        BLOBS_ZKSYNC_OS
     }
 
     // Taken from `IExecutor.sol`
@@ -144,16 +200,23 @@ alloy::sol! {
             bytes32 priorityOperationsHash;
             bytes32 dependencyRootsRollingHash;
             bytes32 l2LogsTreeRoot;
-            address l2DaValidator;
+            L2DACommitmentScheme daCommitmentScheme;
             bytes32 daCommitment;
             uint64 firstBlockTimestamp;
+            uint64 firstBlockNumber;
             uint64 lastBlockTimestamp;
+            uint64 lastBlockNumber;
             uint256 chainId;
             bytes operatorDAInput;
         }
 
         event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
         event BlockExecution(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
+        event ReportCommittedBatchRangeZKsyncOS(
+            uint64 indexed batchNumber,
+            uint64 indexed firstBlockNumber,
+            uint64 indexed lastBlockNumber
+        );
 
         function commitBatchesSharedBridge(
             address _chainAddress,
@@ -185,6 +248,25 @@ alloy::sol! {
        );
     }
 
+    // taken from v29 version of `IExecutor.sol`
+    // We need this to make the server work with the v29 version of contracts during the upgrade, and it can be removed after
+    interface IExecutorV29 {
+        struct CommitBatchInfoZKsyncOS {
+            uint64 batchNumber;
+            bytes32 newStateCommitment;
+            uint256 numberOfLayer1Txs;
+            bytes32 priorityOperationsHash;
+            bytes32 dependencyRootsRollingHash;
+            bytes32 l2LogsTreeRoot;
+            address l2DaValidator;
+            bytes32 daCommitment;
+            uint64 firstBlockTimestamp;
+            uint64 lastBlockTimestamp;
+            uint256 chainId;
+            bytes operatorDAInput;
+        }
+    }
+
     // `IL1GenesisUpgrade.sol`
     interface IL1GenesisUpgrade {
         event GenesisUpgrade(
@@ -193,6 +275,16 @@ alloy::sol! {
             uint256 indexed _protocolVersion,
             bytes[] _factoryDeps
         );
+    }
+
+    // `IChainAdmin.sol`
+    interface IChainAdmin {
+        event UpdateUpgradeTimestamp(uint256 indexed protocolVersion, uint256 upgradeTimestamp);
+    }
+
+    // `BytecodeSupplier.sol`
+    interface IBytecodeSupplier {
+        event BytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
     }
 }
 
@@ -406,5 +498,28 @@ impl<P: Provider> ZkChain<P> {
             .await?;
 
         Ok(!code.0.is_empty())
+    }
+
+    /// Returns the current admin of the chain.
+    pub async fn get_admin(&self) -> alloy::contract::Result<Address> {
+        self.instance.getAdmin().call().await
+    }
+
+    /// Returns the current CTM for the chain.
+    pub async fn get_chain_type_manager(&self) -> alloy::contract::Result<Address> {
+        self.instance.getChainTypeManager().call().await
+    }
+
+    /// Returns the current protocol version of the chain.
+    /// Returned value is the raw (U256) representation.
+    pub async fn get_raw_protocol_version(
+        &self,
+        block_id: BlockId,
+    ) -> alloy::contract::Result<U256> {
+        self.instance
+            .getProtocolVersion()
+            .block(block_id)
+            .call()
+            .await
     }
 }

@@ -8,13 +8,14 @@ use crate::debug_impl::DebugError;
 use crate::eth_call_handler::EthCallError;
 use crate::eth_filter_impl::EthFilterError;
 use crate::eth_impl::EthError;
-use crate::tx_handler::EthSendRawTransactionError;
+use crate::tx_handler::{EthSendRawTransactionError, EthSendRawTransactionSyncError};
 use crate::zks_impl::ZksError;
 use alloy::primitives::Bytes;
 use alloy::rpc::types::error::EthRpcErrorCode;
 use alloy::sol_types::{ContractError, RevertReason};
 use jsonrpsee::core::RpcResult;
 use std::fmt;
+use std::fmt::Display;
 
 /// Helper trait to easily convert various `Result` types into [`RpcResult`]
 pub trait ToRpcResult<Ok, Err>: Sized {
@@ -52,6 +53,23 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 revert.output.as_ref().map(|out| out.as_ref()),
             ),
             err => internal_rpc_err(err.to_string()),
+        })
+    }
+}
+
+impl<Ok> ToRpcResult<Ok, EthSendRawTransactionSyncError>
+    for Result<Ok, EthSendRawTransactionSyncError>
+{
+    fn to_rpc_result(self) -> RpcResult<Ok>
+    where
+        EthSendRawTransactionSyncError: Display,
+    {
+        self.map_err(|err| match err {
+            err @ EthSendRawTransactionSyncError::Regular(_) => internal_rpc_err(err.to_string()),
+            err @ EthSendRawTransactionSyncError::Timeout(_) => {
+                // Code 4 is used as per EIP-7966 (see https://eips.ethereum.org/EIPS/eip-7966)
+                rpc_error_with_code(4, err.to_string())
+            }
         })
     }
 }

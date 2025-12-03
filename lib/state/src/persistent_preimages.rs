@@ -1,6 +1,5 @@
 use crate::metrics::PREIMAGES_METRICS;
 use alloy::primitives::B256;
-use zksync_os_genesis::Genesis;
 use zksync_os_interface::traits::PreimageSource;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
@@ -36,22 +35,8 @@ impl PreimagesCF {
 }
 
 impl PersistentPreimages {
-    pub async fn new(rocks: RocksDB<PreimagesCF>, genesis: &Genesis) -> Self {
-        let genesis_needed = rocksdb_block_number(&rocks).is_none();
-        let this = Self { rocks };
-        if genesis_needed {
-            let force_deploy_preimages = genesis.genesis_upgrade_tx().await.force_deploy_preimages;
-            let iter = genesis
-                .state()
-                .await
-                .preimages
-                .iter()
-                .chain(force_deploy_preimages.iter())
-                .map(|(k, v)| (*k, v));
-            this.add(0, iter);
-        }
-
-        this
+    pub async fn new(rocks: RocksDB<PreimagesCF>) -> Self {
+        Self { rocks }
     }
 
     pub fn rocksdb_block_number(&self) -> u64 {

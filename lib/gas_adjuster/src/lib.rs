@@ -5,6 +5,7 @@ use alloy::providers::{DynProvider, Provider};
 use metrics::METRICS;
 use std::time::Duration;
 use tokio::sync::watch;
+use zksync_os_types::PubdataMode;
 
 mod metrics;
 mod statistics;
@@ -21,13 +22,6 @@ pub struct GasAdjuster {
     config: GasAdjusterConfig,
     provider: DynProvider,
     pubdata_price_sender: watch::Sender<Option<u128>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum PubdataMode {
-    Blobs,
-    Calldata,
-    Validium,
 }
 
 #[derive(Debug)]

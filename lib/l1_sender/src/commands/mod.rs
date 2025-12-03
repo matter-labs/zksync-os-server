@@ -1,5 +1,6 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
+use alloy::consensus::BlobTransactionSidecar;
 use alloy::sol_types::SolCall;
 use itertools::Itertools;
 use std::fmt::Display;
@@ -16,6 +17,22 @@ pub enum L1SenderCommand<Command: SendToL1> {
     Passthrough(Box<SignedBatchEnvelope<FriProof>>),
 }
 
+impl<C: SendToL1> L1SenderCommand<C> {
+    pub fn first_batch_number(&self) -> u64 {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref()[0].batch_number(),
+            Self::Passthrough(envelope) => envelope.batch_number(),
+        }
+    }
+
+    pub fn batch_count(&self) -> usize {
+        match self {
+            Self::SendToL1(cmd) => cmd.as_ref().len(),
+            Self::Passthrough(_) => 1,
+        }
+    }
+}
+
 pub trait SendToL1:
     Into<Vec<SignedBatchEnvelope<FriProof>>>
     + AsRef<[SignedBatchEnvelope<FriProof>]>
@@ -27,6 +44,10 @@ pub trait SendToL1:
     const MINED_STAGE: BatchExecutionStage;
     const PASSTHROUGH_STAGE: BatchExecutionStage;
     fn solidity_call(&self) -> impl SolCall;
+
+    fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
+        None
+    }
 
     /// Only used for logging - as we send commands in bulk, it's natural to print a single range
     /// for the whole group, e.g. "1-3, 4, 5-6" instead of "1, 2, 3, 4, 5, 6"

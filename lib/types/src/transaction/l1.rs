@@ -15,12 +15,33 @@ use std::hash::Hash;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::L2CanonicalTransaction;
 
+use crate::ProtocolSemanticVersion;
+
 pub type L1TxSerialId = u64;
 pub type L1PriorityTx = L1Tx<L1PriorityTxType>;
 pub type L1PriorityEnvelope = L1Envelope<L1PriorityTxType>;
 
 pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
 pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
+
+/// Upgrade transaction with metadata fetched from L1.
+/// Important: `UpgradeTransaction` as a structure is not expected to be widely
+/// exposed within the system.
+/// From the sequencer step onwards, upgrade tx should be represented as
+/// `L1PriorityEnvelope` or `ZkTransaction` only.
+#[derive(Debug, Clone)]
+pub struct UpgradeTransaction {
+    /// Instruction for the sequencer to NOT execute the upgrade transaction
+    /// until the given timestamp.
+    /// Represents a timestamp in seconds since UNIX_EPOCH
+    pub timestamp: u64,
+    /// Which protocol version will be used after the upgrade transaction is executed.
+    pub protocol_version: ProtocolSemanticVersion,
+    /// The L2 upgrade transaction itself.
+    pub tx: Option<L1UpgradeEnvelope>,
+    /// Preimages (e.g. force deployments) for the upgrade transaction (if any).
+    pub force_preimages: Vec<(B256, Vec<u8>)>,
+}
 
 // The L1->L2 transactions are required to have the following gas per pubdata byte.
 pub const REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE: u64 = 800;

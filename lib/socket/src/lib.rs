@@ -57,9 +57,10 @@ use tokio::io::AsyncBufReadExt;
 
 pub async fn skip_http_headers<R: AsyncBufRead + Unpin>(
     reader: &mut R,
-) -> Result<(), std::io::Error> {
+) -> Result<Vec<u8>, std::io::Error> {
     // Detects two consecutive line endings, which may be \r\n or \n.
     let mut empty_line = false;
+    let mut skipped = Vec::new();
     loop {
         let buf = reader.fill_buf().await?;
         if buf.is_empty() {
@@ -70,10 +71,11 @@ pub async fn skip_http_headers<R: AsyncBufRead + Unpin>(
         }
 
         for (i, &byte) in buf.iter().enumerate() {
+            skipped.push(byte);
             if byte == b'\n' {
                 if empty_line {
                     reader.consume(i + 1);
-                    return Ok(());
+                    return Ok(skipped);
                 }
                 empty_line = true;
             } else if byte != b'\r' {

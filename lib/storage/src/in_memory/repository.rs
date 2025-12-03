@@ -1,8 +1,9 @@
 use crate::metrics::REPOSITORIES_METRICS;
 use alloy::consensus::{Sealed, Transaction};
 use alloy::eips::Encodable2718;
-use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
+use alloy::primitives::{Address, BlockHash, BlockNumber, Bloom, TxHash, TxNonce};
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use zksync_os_interface::types::{BlockOutput, ExecutionResult};
@@ -65,7 +66,7 @@ impl RepositoryInMemory {
         &self,
         mut block_output: BlockOutput,
         transactions: Vec<ZkTransaction>,
-    ) -> (Arc<RepositoryBlock>, Vec<(B256, Arc<StoredTxData>)>) {
+    ) -> (Arc<RepositoryBlock>, HashMap<TxHash, Arc<StoredTxData>>) {
         let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
         let tx_count = transactions.len();
@@ -81,7 +82,7 @@ impl RepositoryInMemory {
         let mut log_index = 0;
         let mut cumulative_gas_used = 0;
         let mut block_bloom = Bloom::default();
-        let mut stored_txs = Vec::new();
+        let mut stored_txs = HashMap::new();
         let hash = BlockHash::from(block_output.header.hash());
         let sealed_block_output = Sealed::new_unchecked(block_output, hash);
         for (tx_index, tx) in transactions.into_iter().enumerate() {
@@ -96,7 +97,7 @@ impl RepositoryInMemory {
             log_index += stored_tx.receipt.logs().len() as u64;
             cumulative_gas_used += stored_tx.meta.gas_used;
             block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-            stored_txs.push((tx_hash, stored_tx));
+            stored_txs.insert(tx_hash, stored_tx);
         }
         let (block_output, hash) = sealed_block_output.into_parts();
         let header = {
@@ -119,7 +120,8 @@ impl RepositoryInMemory {
         // Add data to repositories.
         let transaction_receipts_latency_observer =
             REPOSITORIES_METRICS.insert_block[&"transaction_receipts"].start();
-        self.transaction_receipt_repository.insert(&stored_txs);
+        self.transaction_receipt_repository
+            .insert(stored_txs.iter());
         let transaction_receipts_latency = transaction_receipts_latency_observer.observe();
 
         let block_receipt_latency_observer =
@@ -294,7 +296,10 @@ impl TransactionReceiptRepository {
 
     /// Inserts data for multiple txs. If a data for the same hash
     /// already exists, it will be overwritten.
-    pub fn insert(&self, txs: &[(TxHash, Arc<StoredTxData>)]) {
+    pub fn insert<'a>(
+        &'a self,
+        txs: impl IntoIterator<Item = (&'a TxHash, &'a Arc<StoredTxData>)>,
+    ) {
         for (tx_hash, data) in txs {
             let sender = data.tx.signer();
             let nonce = data.tx.nonce();
