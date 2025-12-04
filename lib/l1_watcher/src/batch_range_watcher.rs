@@ -164,7 +164,7 @@ impl ProcessL1Event for BatchRangeWatcher {
             );
 
             // L1 block where this batch got committed.
-            let block_id =
+            let l1_block_id =
                 BlockId::number(log.block_number.expect("indexed log without block number"));
             // To recreate batch's commitment (and hence it's `StoredBatchInfo` form) we need to
             // know any potential upgrade transaction hash that was applied in this batch.
@@ -175,11 +175,11 @@ impl ProcessL1Event for BatchRangeWatcher {
             // except when the batch got committed and executed in the same L1 block (which should
             // never happen in current implementation as commit->prove->execute operations are submitted
             // sequentially after at least 1 block confirmation).
-            let upgrade_batch_number = self.zk_chain.get_upgrade_batch_number(block_id).await?;
+            let upgrade_batch_number = self.zk_chain.get_upgrade_batch_number(l1_block_id).await?;
             let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
                 // If the latest upgrade transaction belongs to this batch then current upgrade tx
                 // hash must also be present on L1. Thus, we fetch it.
-                Some(self.zk_chain.get_upgrade_tx_hash(block_id).await?)
+                Some(self.zk_chain.get_upgrade_tx_hash(l1_block_id).await?)
             } else {
                 // Either latest in-progress upgrade transaction belongs to a different batch or
                 // there is none. If none, `upgrade_batch_number` would be `0` and thus never equal
@@ -189,7 +189,8 @@ impl ProcessL1Event for BatchRangeWatcher {
             // Fetch active protocol version at the moment the batch got committed. This should work
             // for the vast majority of cases except when upgrade gets applied in the same L1 block
             // but after batch was committed.
-            let packed_protocol_version = self.zk_chain.get_raw_protocol_version(block_id).await?;
+            let packed_protocol_version =
+                self.zk_chain.get_raw_protocol_version(l1_block_id).await?;
 
             let committed_batch = CommittedBatch {
                 commit_info: commit_batch_info,
