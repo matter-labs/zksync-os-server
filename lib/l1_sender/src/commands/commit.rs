@@ -29,6 +29,7 @@ impl SendToL1 for CommitCommand {
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;
 
     fn solidity_call(&self) -> impl SolCall {
+        // todo: encode through `CommitCalldata` instead
         IExecutor::commitBatchesSharedBridgeCall::new((
             self.input.batch.batch_info.chain_address,
             U256::from(self.input.batch_number()),

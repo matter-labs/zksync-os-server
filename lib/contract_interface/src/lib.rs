@@ -1,3 +1,4 @@
+pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
 pub mod models;
