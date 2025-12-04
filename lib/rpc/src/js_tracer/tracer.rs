@@ -965,11 +965,16 @@ impl EvmTracer for JsTracer {
 
         let address = frame_state.address();
         let mut overlay = self.selfdestruct_overlay.borrow_mut();
-        // if the entry is vacant - no action
-        if let Entry::Occupied(mut entry) = overlay.entry(address) {
-            let before = entry.get().clone();
-            self.selfdestruct_overlay.record_update(address, before);
-            entry.get_mut().value = true;
+        match overlay.entry(address) {
+            Entry::Occupied(mut entry) => {
+                let before = entry.get().clone();
+                self.selfdestruct_overlay.record_update(address, before);
+                entry.get_mut().value = true;
+            }
+            Entry::Vacant(vacant) => {
+                self.selfdestruct_overlay.record_insert(address);
+                vacant.insert(OverlayEntry::new_pending(true));
+            }
         }
     }
 
