@@ -508,6 +508,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.native_price_override,
         pubdata_price_receiver,
         pending_block_context_sender,
+        config.l1_sender_config.pubdata_mode,
     );
 
     // ========== Start L1 Upgrade Watcher ===========
