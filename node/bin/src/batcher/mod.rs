@@ -14,7 +14,7 @@ use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
-use zksync_os_l1_watcher::CommittedBatch;
+use zksync_os_l1_watcher::{CommittedBatch, StoredBatchData};
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -29,16 +29,9 @@ pub mod util;
 
 /// Set of fields to define batcher's behavior on startup (when to replay, when to produce, etc.)
 pub struct BatcherStartupConfig {
-    /// Last committed block on L1. Blocks below this are part of already-committed batches.
-    /// Blocks before this one (inclusive)
-    /// need to be recreated and matched with what we have in persistence.
-    /// Blocks after this will be created anew.
-    /// Note that there may have been batches created for even never blocks,
-    /// but we don't consider them final before they are committed and lose them on block restart.
-    pub last_committed_block: u64,
-    /// Info for the genesis batch. Only used when there have been no executed batches on L1.
+    /// Info for the latest executed batch - the batch that was emitted just before the first batch we'll process.
     /// Required to set correct StoredBatchInfo when committing/proving/executing blocks on L1.
-    pub genesis_batch_info: StoredBatchInfo,
+    pub last_executed_batch_data: StoredBatchData,
     /// Last block number already known to this node. On startup, we'll replay all blocks until and including
     /// this - in other words, there will be no arbitrary delays until this block is passed through Batcher.
     /// We do not seal batches by timeout until this block is reached.
@@ -78,36 +71,18 @@ impl PipelineComponent for Batcher {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("batcher", GenericComponentState::WaitingRecv);
 
-        // First batch in the channel, if present, is always last executed batch. If it is missing
-        // (channel is empty), then there are no executed batches on L1 yet, and we should start from
-        // genesis.
-        let (mut prev_batch_info, first_expected_block) = match self.committed_batches.recv().await
-        {
-            None => {
-                tracing::info!("no committed batches yet; defaulting to genesis");
-                (self.startup_config.genesis_batch_info.clone(), 1)
-            }
-            Some(last_executed_batch) => {
-                tracing::info!(
-                    ?last_executed_batch,
-                    "using last executed batch as starting point"
-                );
-                let last_executed_block_number =
-                    last_executed_batch.commit_info.last_block_number.unwrap();
-                // todo: stop using this struct once fully migrated from S3
-                let last_executed_batch_info = BatchInfo {
-                    commit_info: last_executed_batch.commit_info,
-                    chain_address: Default::default(),
-                    upgrade_tx_hash: last_executed_batch.upgrade_tx_hash,
-                    blob_sidecar: None,
-                };
-
-                (
-                    last_executed_batch_info.into_stored(&last_executed_batch.protocol_version),
-                    last_executed_block_number + 1,
-                )
-            }
-        };
+        // We use last executed batch as the starting point. Next immediate batch we process will be
+        // `last_executed_batch + 1`.
+        let mut prev_batch_info = self
+            .startup_config
+            .last_executed_batch_data
+            .batch_info
+            .clone();
+        let first_expected_block = self
+            .startup_config
+            .last_executed_batch_data
+            .last_block_number
+            + 1;
 
         // We might receive some blocks that belong to already executed batches. We can skip these
         // as there is no need to perform any L1 operations on them.
@@ -294,6 +269,7 @@ impl Batcher {
                             // arm the timer after we process the block number that's more or equal
                             // than last persisted one - we don't want to seal on timeout if we know that there are still pending blocks in the inbound channel
                             if deadline.is_none() {
+                                // todo: this logic is not needed anymore?
                                 if block_number >= self.startup_config.last_persisted_block {
                                     deadline = Some(Box::pin(tokio::time::sleep(self.batcher_config.batch_timeout)));
                                 } else {
