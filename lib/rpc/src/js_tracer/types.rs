@@ -111,7 +111,6 @@ impl BalanceDelta {
 }
 
 pub type BalanceOverlay = HashMap<Address, OverlayEntry<BalanceDelta>>;
-pub type SelfdestructOverlay = HashMap<Address, OverlayEntry<()>>;
 
 pub(crate) struct StepCtx {
     pub opcode: u8,

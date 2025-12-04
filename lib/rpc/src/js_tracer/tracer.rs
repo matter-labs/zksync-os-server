@@ -58,7 +58,7 @@ pub struct JsTracer {
     storage_overlay: OverlayState<(Address, B256), B256>,
     code_overlay: OverlayState<Address, Option<Vec<u8>>>,
     balance_overlay: OverlayState<Address, BalanceDelta>,
-    selfdestruct_overlay: OverlayState<Address, ()>,
+    selfdestruct_overlay: OverlayState<Address, bool>, // bool marks if the contract was selfdestucted
 
     // Depth tracking and per-tx result
     current_depth: u64,
@@ -89,7 +89,7 @@ impl JsTracer {
         let storage_overlay = OverlayState::<(Address, B256), B256>::new();
         let code_overlay = OverlayState::<Address, Option<Vec<u8>>>::new();
         let balance_overlay = OverlayState::<Address, BalanceDelta>::new();
-        let selfdestruct_overlay = OverlayState::<Address, ()>::new();
+        let selfdestruct_overlay = OverlayState::<Address, bool>::new();
 
         init_host_env_in_boa_context(
             &mut ctx,
@@ -98,7 +98,6 @@ impl JsTracer {
             storage_overlay.handle(),
             code_overlay.handle(),
             balance_overlay.handle(),
-            selfdestruct_overlay.handle(),
         )?;
 
         Ok(Self {
@@ -205,16 +204,47 @@ impl JsTracer {
             .revert_to_checkpoint(checkpoint.selfdestruct);
     }
 
-    fn clear_selfdestruct_marker(&self, address: Address, allow_pending: bool) {
+    fn mark_contract_deployed(&self, address: Address) {
+        if address == Address::ZERO {
+            return;
+        }
+
         let mut overlay = self.selfdestruct_overlay.borrow_mut();
-        if let Entry::Occupied(entry) = overlay.entry(address) {
-            if !allow_pending && !entry.get().committed {
-                return;
+        if let Entry::Vacant(vacant) = overlay.entry(address) {
+            self.selfdestruct_overlay.record_insert(address);
+            vacant.insert(OverlayEntry::new_pending(false));
+        }
+    }
+
+    fn apply_pending_selfdestructs(&mut self) {
+        let entries: Vec<(Address, bool)> = self
+            .selfdestruct_overlay
+            .handle()
+            .borrow()
+            .iter()
+            .map(|(address, entry)| (*address, entry.value))
+            .collect();
+
+        for (address, should_destroy) in entries {
+            if should_destroy {
+                let keys: Vec<_> = self
+                    .storage_overlay
+                    .handle()
+                    .borrow()
+                    .keys()
+                    .filter(|(addr, _)| *addr == address)
+                    .cloned()
+                    .collect();
+                let mut storage_overlay = self.storage_overlay.borrow_mut();
+                for key in keys {
+                    storage_overlay.remove(&key);
+                }
+
+                self.code_overlay.borrow_mut().remove(&address);
+                self.balance_overlay.borrow_mut().remove(&address);
             }
 
-            let before = entry.get().clone();
-            self.selfdestruct_overlay.record_update(address, before);
-            entry.remove_entry();
+            self.selfdestruct_overlay.borrow_mut().remove(&address);
         }
     }
 
@@ -542,10 +572,6 @@ impl JsTracer {
             return Ok(());
         }
 
-        if credit > U256::ZERO {
-            self.clear_selfdestruct_marker(address, false);
-        }
-
         let mut overlay = self.balance_overlay.borrow_mut();
         match overlay.entry(address) {
             Entry::Occupied(mut occupied) => {
@@ -770,7 +796,7 @@ impl EvmTracer for JsTracer {
         });
 
         if new_value.is_some() {
-            self.clear_selfdestruct_marker(address, true);
+            self.mark_contract_deployed(address);
         }
 
         let mut overlay = self.code_overlay.borrow_mut();
@@ -849,6 +875,7 @@ impl EvmTracer for JsTracer {
         if tx_failed {
             self.rollback_overlays();
         } else {
+            self.apply_pending_selfdestructs();
             self.commit_overlays();
         }
 
@@ -938,12 +965,12 @@ impl EvmTracer for JsTracer {
 
         let address = frame_state.address();
         let mut overlay = self.selfdestruct_overlay.borrow_mut();
-        if overlay.contains_key(&address) {
-            return;
+        // if the entry is vacant - no action
+        if let Entry::Occupied(mut entry) = overlay.entry(address) {
+            let before = entry.get().clone();
+            self.selfdestruct_overlay.record_update(address, before);
+            entry.get_mut().value = true;
         }
-
-        self.selfdestruct_overlay.record_insert(address);
-        overlay.insert(address, OverlayEntry::new_pending(()));
     }
 
     fn on_create_request(&mut self, is_create2: bool) {
