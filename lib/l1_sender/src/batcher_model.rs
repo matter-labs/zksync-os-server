@@ -1,5 +1,4 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
-use crate::commitment::BatchInfo;
 use alloy::primitives::Bytes;
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
-use zksync_os_batch_types::BatchSignatureSet;
+use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_types::PubdataMode;
