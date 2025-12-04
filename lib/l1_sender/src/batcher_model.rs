@@ -174,6 +174,8 @@ pub type ProverInput = Vec<u32>;
 pub enum FriProof {
     // Fake proof for testing purposes
     Fake,
+    // Marker for batches that were already proven on L1, so we don't need to prove them again
+    AlreadySubmittedToL1,
     Real(RealFriProof),
 }
 
@@ -206,7 +208,7 @@ impl FriProof {
     pub fn proof(&self) -> Option<&[u8]> {
         match self {
             FriProof::Real(real) => Some(real.proof()),
-            FriProof::Fake => None,
+            FriProof::Fake | FriProof::AlreadySubmittedToL1 => None,
         }
     }
 }
@@ -224,6 +226,7 @@ impl Debug for FriProof {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             FriProof::Fake => write!(f, "Fake"),
+            FriProof::AlreadySubmittedToL1 => write!(f, "AlreadySubmittedToL1"),
             FriProof::Real(_) => write!(
                 f,
                 "Real(proving_execution_version={:?}, len: {:?})",

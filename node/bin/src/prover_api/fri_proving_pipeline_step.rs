@@ -80,7 +80,7 @@ impl PipelineComponent for FriProvingPipelineStep {
                         self.fri_job_manager.add_job(batch).await
                     } else {
                         // Already proven - send with fake proof to pass through the pipeline
-                        let batch_with_fake_proof = batch.with_data(FriProof::Fake);
+                        let batch_with_fake_proof = batch.with_data(FriProof::AlreadySubmittedToL1);
                         let _ = output.send(batch_with_fake_proof).await;
                     }
                 }

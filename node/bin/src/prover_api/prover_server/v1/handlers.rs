@@ -148,6 +148,15 @@ pub(super) async fn pick_snark_job(
                         );
                         None
                     }
+                    FriProof::AlreadySubmittedToL1 => {
+                        tracing::warn!(
+                            "SNARK pick returned already submitted to L1 FRI at batch {} (range {}-{})",
+                            fri_job.batch_number,
+                            from,
+                            to
+                        );
+                        None
+                    }
                 })
                 .collect();
 
@@ -270,6 +279,14 @@ pub(super) async fn peek_snark_job(
                             format!("FRI proof for batch {batch_number} is fake"),
                         )
                             .into_response();
+                    }
+                    FriProof::AlreadySubmittedToL1 => {
+                        tracing::warn!(
+                            "Requested FRI proof for batch {} is already submitted to L1 (range {}-{})",
+                            batch_number,
+                            from_batch_number,
+                            to_batch_number
+                        );
                     }
                 };
             }
