@@ -42,6 +42,7 @@ use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::network::{Ethereum, EthereumWallet};
+use alloy::primitives::BlockNumber;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, ProviderBuilder, WalletProvider};
 use anyhow::{Context, Result};
@@ -61,13 +62,13 @@ use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_l1_sender::batcher_model::BatchMetadata;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    BatchRangeWatcher, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
+    BatchRangeWatcher, BatchRangeWatcherInit, CommittedBatch, L1CommitWatcher, L1ExecuteWatcher,
+    L1TxWatcher, L1UpgradeTxWatcher, StoredBatchData,
 };
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
@@ -84,8 +85,8 @@ use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadBatch, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory,
-    WriteReplay, WriteRepository, WriteState,
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteReplay,
+    WriteRepository, WriteState,
 };
 use zksync_os_types::{PubdataMode, TransactionAcceptanceState, UpgradeTransaction};
 
@@ -155,12 +156,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
 
-    // Channel between L1Watcher and Sequencer
+    // Channel between L1TxWatcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
 
     // Channel between L1UpgradeWatcher and Sequencer
     let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
         tokio::sync::mpsc::channel(5);
+
+    // Channel between BatchRangeWatcher and Batcher
+    let (batch_ranges_sender, batch_ranges_for_batcher) = tokio::sync::mpsc::channel(5);
 
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
@@ -275,45 +279,27 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     });
 
     // `starting_block` - the block number to go through the pipeline.
-    // `batcher_prev_batch_info` - to be used by batcher to (re)build its first batch.
-    let (starting_block, batcher_prev_batch_info) =
-        if node_startup_state.l1_state.last_committed_batch > 0 {
-            let last_matching_block =
-                if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
-                    find_last_matching_main_node_block(&repositories, main_node_rpc_url)
-                        .await
-                        .expect("Failed to find last matching block with main node")
-                } else {
-                    node_startup_state.repositories_persisted_block
-                };
-            // Some batches committed - starting from an already committed batch
-            let starting_batch = determine_starting_batch(
-                &config,
-                &node_startup_state,
-                &state,
-                &batch_storage,
-                &finality_storage,
-                last_matching_block,
-            )
-            .await;
-            (
-                starting_batch.first_block_number,
-                starting_batch.previous_stored_batch_info,
-            )
-        } else {
-            // No batches committed - starting from block/batch 1.
-            (
-                1,
-                genesis_stored_batch_info(&repositories, &tree_db, &genesis).await,
-            )
-        };
+    let starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
+        let last_matching_block =
+            if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
+                find_last_matching_main_node_block(&repositories, main_node_rpc_url)
+                    .await
+                    .expect("Failed to find last matching block with main node")
+            } else {
+                node_startup_state.repositories_persisted_block
+            };
+        // Some batches committed - starting from an already committed batch
+        determine_starting_block(&config, &node_startup_state, &state, last_matching_block)
+    } else {
+        // No batches committed - starting from block/batch 1.
+        1
+    };
 
     tracing::info!(
         config.general_config.min_blocks_to_replay,
         config.general_config.force_starting_block_number,
         ?node_startup_state,
         starting_block,
-        starting_batch_number = batcher_prev_batch_info.batch_number + 1,
         blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
         "Node state on startup"
     );
@@ -363,17 +349,35 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(report_exit("L1 execute watcher")),
     );
 
+    let BatchRangeWatcherInit {
+        l1_watcher: batch_range_watcher,
+        last_executed_batch_data,
+    } = BatchRangeWatcher::create_watcher(
+        config.l1_watcher_config.clone().into(),
+        node_startup_state.l1_state.diamond_proxy.clone(),
+        node_startup_state.l1_state.last_executed_batch,
+        node_startup_state.l1_state.last_committed_batch,
+        batch_ranges_sender,
+    )
+    .await
+    .expect("failed to start L1 batch range watcher");
+    let last_executed_batch_data = match last_executed_batch_data {
+        Some(last_executed_batch_data) => last_executed_batch_data,
+        None => {
+            // Fallback to genesis if there is none on L1
+            let batch_info = genesis_stored_batch_info(&repositories, &tree_db, &genesis).await;
+            StoredBatchData {
+                batch_info,
+                first_block_number: 0,
+                last_block_number: 0,
+            }
+        }
+    };
+
     tasks.spawn(
-        BatchRangeWatcher::create_watcher(
-            config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy.clone(),
-            node_startup_state.l1_state.last_executed_batch,
-            node_startup_state.l1_state.last_committed_batch,
-        )
-        .await
-        .expect("failed to start L1 batch range watcher")
-        .run()
-        .map(report_exit("L1 batch range watcher")),
+        batch_range_watcher
+            .run()
+            .map(report_exit("L1 batch range watcher")),
     );
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
@@ -569,7 +573,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             stop_receiver.clone(),
             tx_acceptance_state_sender,
-            batcher_prev_batch_info,
+            batch_ranges_for_batcher,
+            last_executed_batch_data,
         )
         .await;
     } else {
@@ -618,9 +623,9 @@ async fn run_main_node_pipeline(
     chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
-    batcher_prev_batch_info: StoredBatchInfo,
+    batch_ranges_for_batcher: tokio::sync::mpsc::Receiver<CommittedBatch>,
+    last_executed_batch_data: StoredBatchData,
 ) {
-    let starting_batch_number = batcher_prev_batch_info.batch_number + 1;
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
         config.prover_api_config.fri_job_timeout,
@@ -709,16 +714,15 @@ async fn run_main_node_pipeline(
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
-                prev_batch_info: batcher_prev_batch_info,
-                last_committed_block: node_state_on_startup.last_l1_committed_block,
+                last_executed_batch_data,
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
             chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
-            batch_storage: batch_storage.clone(),
             pubdata_mode: config.l1_sender_config.pubdata_mode,
+            committed_batches: batch_ranges_for_batcher,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
@@ -726,7 +730,7 @@ async fn run_main_node_pipeline(
         ))
         .pipe(fri_proving_step)
         .pipe(GaplessCommitter {
-            next_expected_batch_number: starting_batch_number,
+            next_expected_batch_number: node_state_on_startup.l1_state.last_executed_batch + 1,
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage: batch_storage.clone(),
         })
@@ -739,7 +743,9 @@ async fn run_main_node_pipeline(
             to_address: node_state_on_startup.l1_state.validator_timelock,
         })
         .pipe(snark_proving_step)
-        .pipe(GaplessL1ProofSender::new(starting_batch_number))
+        .pipe(GaplessL1ProofSender::new(
+            node_state_on_startup.l1_state.last_executed_batch + 1,
+        ))
         .pipe(L1Sender::<_, _, ProofCommand> {
             provider: l1_provider.clone(),
             config: config.l1_sender_config.clone().into(),
@@ -968,18 +974,15 @@ fn run_fake_fri_provers(
     );
 }
 
-/// Determines the batch for node to start from.
-/// This batch is guaranteed to be already committed on L1.
+/// Determines the block for node to start from.
 ///
 /// Panics if no batches are committed to L1 yet.
-async fn determine_starting_batch(
+fn determine_starting_block(
     config: &Config,
     node_startup_state: &NodeStateOnStartup,
     state: &impl ReadStateHistory,
-    batch_storage: &ProofStorage,
-    finality_storage: &Finality,
-    last_matching_block: u64,
-) -> BatchMetadata {
+    last_matching_block: BlockNumber,
+) -> BlockNumber {
     assert!(
         node_startup_state.l1_state.last_committed_batch > 0,
         "No batches committed to L1 yet - start with block/batch 1"
@@ -998,9 +1001,6 @@ async fn determine_starting_batch(
                 .saturating_sub(config.general_config.min_blocks_to_replay as u64),
             // We need to replay old unexecuted blocks to rebuild and execute the batches they are in
             node_startup_state.last_l1_executed_block + 1,
-            // We want to replay at least one block that is already committed -
-            // this way we can always get previous_batch_info from storage
-            node_startup_state.last_l1_committed_block,
             // Repositories' persistence may have fallen behind - we need to replay blocks to rebuild it
             node_startup_state.repositories_persisted_block + 1,
             // In the current tree implementation this will always be ahead of `last_l1_executed_block`,
@@ -1034,20 +1034,7 @@ async fn determine_starting_batch(
         (last_matching_block + 1).min(want_to_start_from)
     };
 
-    let starting_batch_number = batch_storage
-        .get_batch_by_block_number(desired_starting_block, finality_storage)
-        .await
-        .expect("Failed to get batch for desired_starting_block")
-        .expect("desired_starting_block is committed, but corresponding batch number is not found");
-
-    let starting_batch = batch_storage
-        .get_batch_with_proof(starting_batch_number)
-        .await
-        .expect("Failed to get last committed block from proof storage")
-        .expect("Committed batch is not present in proof storage")
-        .batch;
-
-    if starting_batch.first_block_number < state.block_range_available().start() + 1 {
+    if desired_starting_block < state.block_range_available().start() + 1 {
         // This may only happen with Compacted State. This means that the block we want to rerun was already compacted.
         // This can be fixed by manually removing the storage persistence - which will force the node to start from block 1.
 
@@ -1059,7 +1046,7 @@ async fn determine_starting_batch(
         );
     }
 
-    starting_batch
+    desired_starting_block
 }
 
 /// Finds the last block number where the local node's block hash matches the main node's block hash.

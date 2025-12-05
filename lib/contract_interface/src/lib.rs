@@ -1,3 +1,4 @@
+pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
 pub mod models;
@@ -10,7 +11,7 @@ use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, B256, U256};
+use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::providers::Provider;
 
 alloy::sol! {
@@ -168,6 +169,8 @@ alloy::sol! {
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
+        function getL2SystemContractsUpgradeTxHash() external view returns (bytes32);
+        function getL2SystemContractsUpgradeBatchNumber() external view returns (uint256);
     }
 
     // Taken from `common/Config.sol`
@@ -431,63 +434,60 @@ impl<P: Provider> ZkChain<P> {
         self.instance.provider()
     }
 
-    pub async fn stored_batch_hash(&self, batch_number: u64) -> alloy::contract::Result<B256> {
+    pub async fn stored_batch_hash(&self, batch_number: u64) -> Result<B256> {
         self.instance
             .storedBatchHash(U256::from(batch_number))
             .call()
             .await
+            .enrich("storedBatchHash", None)
     }
 
-    pub async fn get_total_batches_committed(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<u64> {
+    pub async fn get_total_batches_committed(&self, block_id: BlockId) -> Result<u64> {
         self.instance
             .getTotalBatchesCommitted()
             .block(block_id)
             .call()
             .await
             .map(|n| n.saturating_to())
+            .enrich("getTotalBatchesCommitted", Some(block_id))
     }
 
-    pub async fn get_total_batches_proved(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<u64> {
+    pub async fn get_total_batches_proved(&self, block_id: BlockId) -> Result<u64> {
         self.instance
             .getTotalBatchesVerified()
             .block(block_id)
             .call()
             .await
             .map(|n| n.saturating_to())
+            .enrich("getTotalBatchesVerified", Some(block_id))
     }
 
-    pub async fn get_total_batches_executed(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<u64> {
+    pub async fn get_total_batches_executed(&self, block_id: BlockId) -> Result<u64> {
         self.instance
             .getTotalBatchesExecuted()
             .block(block_id)
             .call()
             .await
             .map(|n| n.saturating_to())
+            .enrich("getTotalBatchesExecuted", Some(block_id))
     }
 
-    pub async fn get_total_priority_txs_at_block(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<u64> {
+    pub async fn get_total_priority_txs_at_block(&self, block_id: BlockId) -> Result<u64> {
         self.instance
             .getTotalPriorityTxs()
             .block(block_id)
             .call()
             .await
             .map(|n| n.saturating_to())
+            .enrich("getTotalPriorityTxs", Some(block_id))
     }
 
-    pub async fn get_pubdata_pricing_mode(&self) -> alloy::contract::Result<PubdataPricingMode> {
-        self.instance.getPubdataPricingMode().call().await
+    pub async fn get_pubdata_pricing_mode(&self) -> Result<PubdataPricingMode> {
+        self.instance
+            .getPubdataPricingMode()
+            .call()
+            .await
+            .enrich("getPubdataPricingMode", None)
     }
 
     /// Returns true iff the contract has non-empty code at `block_id`.
@@ -502,25 +502,78 @@ impl<P: Provider> ZkChain<P> {
     }
 
     /// Returns the current admin of the chain.
-    pub async fn get_admin(&self) -> alloy::contract::Result<Address> {
-        self.instance.getAdmin().call().await
+    pub async fn get_admin(&self) -> Result<Address> {
+        self.instance
+            .getAdmin()
+            .call()
+            .await
+            .enrich("getAdmin", None)
     }
 
     /// Returns the current CTM for the chain.
-    pub async fn get_chain_type_manager(&self) -> alloy::contract::Result<Address> {
-        self.instance.getChainTypeManager().call().await
+    pub async fn get_chain_type_manager(&self) -> Result<Address> {
+        self.instance
+            .getChainTypeManager()
+            .call()
+            .await
+            .enrich("getChainTypeManager", None)
     }
 
     /// Returns the current protocol version of the chain.
     /// Returned value is the raw (U256) representation.
-    pub async fn get_raw_protocol_version(
-        &self,
-        block_id: BlockId,
-    ) -> alloy::contract::Result<U256> {
+    pub async fn get_raw_protocol_version(&self, block_id: BlockId) -> Result<U256> {
         self.instance
             .getProtocolVersion()
             .block(block_id)
             .call()
             .await
+            .enrich("getProtocolVersion", Some(block_id))
+    }
+
+    /// Returns current upgrade transaction waiting to be executed. Zeroed out if not present.
+    pub async fn get_upgrade_tx_hash(&self, block_id: BlockId) -> Result<TxHash> {
+        self.instance
+            .getL2SystemContractsUpgradeTxHash()
+            .block(block_id)
+            .call()
+            .await
+            .enrich("getL2SystemContractsUpgradeTxHash", Some(block_id))
+    }
+
+    /// Returns batch number that contains current upgrade transaction. Returns `0` if not present.
+    pub async fn get_upgrade_batch_number(&self, block_id: BlockId) -> Result<u64> {
+        self.instance
+            .getL2SystemContractsUpgradeBatchNumber()
+            .block(block_id)
+            .call()
+            .await
+            .map(|n| n.saturating_to())
+            .enrich("getL2SystemContractsUpgradeBatchNumber", Some(block_id))
+    }
+}
+
+/// Enriched error when interacting with contracts.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed to call `{1}`: {0}")]
+    Call(Box<alloy::contract::Error>, String),
+    #[error("failed to call `{1}` at block id `{2}`: {0}")]
+    CallAtBlock(Box<alloy::contract::Error>, String, BlockId),
+}
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+trait Enrich {
+    type Output;
+    fn enrich(self, function_name: &str, block_id: Option<BlockId>) -> Result<Self::Output>;
+}
+
+impl<T> Enrich for alloy::contract::Result<T> {
+    type Output = T;
+    fn enrich(self, function_name: &str, block_id: Option<BlockId>) -> Result<Self::Output> {
+        self.map_err(|e| match block_id {
+            None => Error::Call(Box::new(e), function_name.to_string()),
+            Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
+        })
     }
 }

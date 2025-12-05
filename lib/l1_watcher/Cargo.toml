@@ -13,7 +13,7 @@ categories.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
-
+zksync_os_batch_types.workspace = true
 
 # Needed to recalculate the bytecode hashes during upgrade tx processing
 zk_os_api.workspace = true
@@ -28,3 +28,4 @@ vise.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+futures.workspace = true

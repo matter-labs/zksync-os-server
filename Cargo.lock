@@ -11938,10 +11938,19 @@ name = "zksync_os_batch_types"
 version = "0.12.0-non-semver-compat"
 dependencies = [
  "alloy",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
+ "blake2 0.10.6",
+ "ruint",
  "serde",
  "thiserror 2.0.12",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
  "zksync_os_contract_interface",
+ "zksync_os_interface",
  "zksync_os_merkle_tree",
+ "zksync_os_mini_merkle_tree",
+ "zksync_os_types",
 ]
 
 [[package]]
@@ -11989,6 +11998,7 @@ dependencies = [
  "backon",
  "serde",
  "structdiff",
+ "thiserror 2.0.12",
  "tracing",
  "vise",
 ]
@@ -12171,6 +12181,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
+ "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -12178,6 +12189,7 @@ dependencies = [
  "tracing",
  "vise",
  "zksync_os_api",
+ "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_storage_api",
  "zksync_os_types",
