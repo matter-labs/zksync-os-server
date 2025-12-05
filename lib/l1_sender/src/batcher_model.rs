@@ -1,5 +1,4 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
-use crate::commitment::BatchInfo;
 use alloy::primitives::Bytes;
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
-use zksync_os_batch_types::BatchSignatureSet;
+use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_types::PubdataMode;
@@ -148,8 +147,15 @@ impl<E, S> BatchEnvelope<E, S> {
         let last_block_number = self.batch.last_block_number;
         self.latency_tracker.record_stage(stage, |duration| {
             BATCHER_METRICS.execution_stages[&stage].observe(duration);
-            BATCHER_METRICS.batch_number[&stage].set(batch_number);
-            BATCHER_METRICS.block_number[&stage].set(last_block_number);
+            if !matches!(
+                stage,
+                BatchExecutionStage::CommitL1Passthrough
+                    | BatchExecutionStage::ProveL1Passthrough
+                    | BatchExecutionStage::ExecuteL1Passthrough
+            ) {
+                BATCHER_METRICS.batch_number[&stage].set(batch_number);
+                BATCHER_METRICS.block_number[&stage].set(last_block_number);
+            }
         });
     }
 

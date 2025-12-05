@@ -1,11 +1,11 @@
 use alloy::primitives::Address;
+use zksync_os_batch_types::BatchInfo;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
-use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ExecutionVersion, ProvingVersion, PubdataMode};
 

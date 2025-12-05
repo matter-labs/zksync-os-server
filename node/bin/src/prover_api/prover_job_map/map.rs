@@ -451,11 +451,11 @@ mod tests {
     use crate::prover_api::metrics::ProverStage;
     use alloy::primitives::{Address, B256};
     use std::time::Duration;
+    use zksync_os_batch_types::BatchInfo;
     use zksync_os_contract_interface::models::{
         CommitBatchInfo, DACommitmentScheme, StoredBatchInfo,
     };
     use zksync_os_l1_sender::batcher_model::{BatchForSigning, BatchMetadata};
-    use zksync_os_l1_sender::commitment::BatchInfo;
     use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
 
     fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {

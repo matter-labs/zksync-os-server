@@ -94,8 +94,7 @@ pub async fn replay_receiver(
     address: impl ToSocketAddrs + Display,
 ) -> anyhow::Result<BoxStream<'static, BlockCommand>> {
     let query = BlockReplayQuery::new(starting_block, record_overrides);
-    let path = "/block_replays";
-    let mut socket = connect(&address, path).await?;
+    let mut socket = connect(&address, "/block_replays").await?;
 
     // Instead of negotiating an upgrade, we just drop down to the TCP layer after the headers.
     let query_bytes = serde_json::to_vec(&query)?;
