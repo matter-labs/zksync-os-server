@@ -450,24 +450,34 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     const BYTES_USED_PER_BLOB: u64 = (FIELD_ELEMENTS_PER_BLOB - 1) * 31;
                     // Amount of native resource spent per pubdata byte (assuming blob is fully filled).
                     const NATIVE_PER_BLOB_BYTE: u64 = NATIVE_PER_BLOB / BYTES_USED_PER_BLOB;
+                    // Default blob fill ratio to be used before `blob_fill_ratio_provider` is initialized.
+                    const DEFAULT_FILL_RATIO: Ratio<u64> = Ratio::new_raw(1, 2);
 
                     let base_pubdata_price = U256::from(
                         pubdata_price_provider
                             .borrow()
                             .expect("Pubdata price must be available"),
                     );
+                    let native_overhead = native_price * U256::from(NATIVE_PER_BLOB_BYTE);
                     // Final pubdata price is base price + overhead depending on native price.
-                    let mut pubdata_price =
-                        base_pubdata_price + native_price * U256::from(NATIVE_PER_BLOB_BYTE);
+                    let mut pubdata_price = base_pubdata_price + native_overhead;
 
                     // By default, we assume that blobs are half-filled.
                     let fill_ratio =
-                        (*blob_fill_ratio_provider.borrow()).unwrap_or_else(|| Ratio::new(1, 2));
+                        (*blob_fill_ratio_provider.borrow()).unwrap_or(DEFAULT_FILL_RATIO);
                     // Adjust pubdata price according to blob fill ratio.
                     // More filled blobs => less pubdata price (since less overhead per byte).
                     // pubdata_price := pubdata_price / ratio = pubdata_price * denom / numer
                     pubdata_price *= U256::from(*fill_ratio.denom());
                     pubdata_price /= U256::from(*fill_ratio.numer());
+
+                    tracing::debug!(
+                        desired_pubdata_price = ?pubdata_price,
+                        ?base_pubdata_price,
+                        ?native_overhead,
+                        ?fill_ratio,
+                        "Calculated desired pubdata price for blobs"
+                    );
 
                     pubdata_price
                 }
@@ -481,9 +491,20 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
 
         // Limit pubdata price increase to 1.5x per block.
         let pubdata_price = if let Some(prev_pubdata_price) = previous_block_pubdata_price
-            && !prev_pubdata_price.is_zero()
+            && prev_pubdata_price > U256::ONE
         {
-            desired_pubdata_price.min(prev_pubdata_price * U256::from(3) / U256::from(2))
+            const MAX_INCREASE_RATIO: Ratio<u64> = Ratio::new_raw(3, 2);
+            let capped_price = prev_pubdata_price * U256::from(*MAX_INCREASE_RATIO.numer())
+                / U256::from(*MAX_INCREASE_RATIO.denom());
+            if capped_price < desired_pubdata_price {
+                tracing::debug!(
+                    ?capped_price,
+                    ?prev_pubdata_price,
+                    ?desired_pubdata_price,
+                    "Capping pubdata price to {MAX_INCREASE_RATIO:?} * prev_pubdata_price",
+                );
+            }
+            desired_pubdata_price.min(capped_price)
         } else {
             desired_pubdata_price
         };

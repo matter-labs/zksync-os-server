@@ -458,8 +458,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     tracing::info!("Initializing pubdata price provider");
+    // Channels for GasAdjuster->BlockContextProvider communication.
     let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
     let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
+    // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
     let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
     if config.sequencer_config.is_main_node() {
         let gas_adjuster_config = gas_adjuster_config(
