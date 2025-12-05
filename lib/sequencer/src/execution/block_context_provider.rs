@@ -6,6 +6,7 @@ use alloy::consensus::{Block, BlockBody, Header};
 use alloy::eips::eip4844::FIELD_ELEMENTS_PER_BLOB;
 use alloy::primitives::{Address, BlockHash, TxHash, U128, U256};
 use anyhow::Context as _;
+use num::ToPrimitive;
 use num::rational::Ratio;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
@@ -478,6 +479,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                         ?fill_ratio,
                         "Calculated desired pubdata price for blobs"
                     );
+                    if let Some(r) = fill_ratio.to_f64() {
+                        EXECUTION_METRICS.blob_fill_ratio.set(r);
+                    }
 
                     pubdata_price
                 }
@@ -508,6 +512,10 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         } else {
             desired_pubdata_price
         };
+
+        if let Ok(p) = pubdata_price.try_into() {
+            EXECUTION_METRICS.pubdata_price.set(p);
+        }
 
         FeeParams {
             eip1559_basefee,
