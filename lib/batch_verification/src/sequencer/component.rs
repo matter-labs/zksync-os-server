@@ -454,14 +454,14 @@ mod tests {
     use super::*;
     use crate::BatchVerificationResult;
     use crate::tests::{dummy_batch_envelope, dummy_commit_batch_info};
-    use alloy::primitives::{Address, B256};
+    use alloy::primitives::Address;
     use alloy::signers::local::PrivateKeySigner;
     use secrecy::SecretString;
     use tokio::sync::mpsc;
     use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
-    use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme};
+    use zksync_os_contract_interface::models::CommitBatchInfo;
     use zksync_os_l1_sender::batcher_model::{
-        BatchEnvelope, BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
+        BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
     };
 
     const DUMMY_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
@@ -582,8 +582,11 @@ mod tests {
 
         let out = output_rx.recv().await.expect("expected output batch");
         match out.signature_data {
-            BatchSignatureData::NotNeeded => {} // TODO actually we added a new type for batches that don't need signing
-            _ => panic!("expected NotNeeded signature data"),
+            BatchSignatureData::AlreadyCommitted => {}
+            _ => panic!(
+                "expected NotNeeded signature data, got: {:?}",
+                out.signature_data
+            ),
         }
 
         assert!(output_rx.recv().await.is_none());

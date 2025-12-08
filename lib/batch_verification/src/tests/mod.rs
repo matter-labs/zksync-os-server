@@ -1,11 +1,11 @@
 use alloy::primitives::{Address, B256};
 /// This module is for sharing various testing utilities and helpers.
 use tokio::sync::watch;
+use zksync_os_batch_types::BatchInfo;
 use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme, StoredBatchInfo};
 use zksync_os_l1_sender::batcher_model::{BatchEnvelope, BatchMetadata, MissingSignature};
-use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_storage_api::{FinalityStatus, ReadFinality};
-use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
+use zksync_os_types::ProtocolSemanticVersion;
 
 pub struct DummyFinality {
     status: FinalityStatus,

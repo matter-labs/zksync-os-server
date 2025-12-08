@@ -90,11 +90,19 @@ impl Tester {
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
         // Due to type inference issue, we need to specify None type here and this whole function if a de-facto helper for this
-        self.launch_external_node_overrides(None::<fn(&mut Config)>)
+        self.launch_external_node_inner(None::<fn(&mut Config)>)
             .await
     }
 
     pub async fn launch_external_node_overrides(
+        &self,
+        config_overrides: impl FnOnce(&mut Config),
+    ) -> anyhow::Result<Self> {
+        self.launch_external_node_inner(Some(config_overrides))
+            .await
+    }
+
+    async fn launch_external_node_inner(
         &self,
         config_overrides: Option<impl FnOnce(&mut Config)>,
     ) -> anyhow::Result<Self> {
@@ -210,8 +218,8 @@ impl Tester {
             connect_address: batch_verification_address.clone(),
             threshold: 1, // default to 1 of 2
             accepted_signers: BATCH_VERIFICATION_ADDRESSES.clone(),
-            request_timeout: Duration::from_millis(100),
-            retry_delay: Duration::from_millis(10),
+            request_timeout: Duration::from_millis(500),
+            retry_delay: Duration::from_secs(1),
             total_timeout: Duration::from_secs(300),
             signing_key: BATCH_VERIFICATION_KEYS[0].into(),
         };
@@ -354,18 +362,11 @@ impl Tester {
     }
 }
 
-pub struct TesterBatchVerificationConfig {
-    pub threshold: usize,
-    pub request_timeout: Duration,
-    pub retry_delay: Duration,
-    pub total_timeout: Duration,
-}
-
 #[derive(Default)]
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
-    batch_verification: Option<TesterBatchVerificationConfig>,
+    batch_verification_threshold: Option<usize>,
 }
 
 impl TesterBuilder {
@@ -380,11 +381,8 @@ impl TesterBuilder {
         self
     }
 
-    pub fn batch_verification(
-        mut self,
-        batch_verification_config: TesterBatchVerificationConfig,
-    ) -> Self {
-        self.batch_verification = Some(batch_verification_config);
+    pub fn batch_verification(mut self, threshold: usize) -> Self {
+        self.batch_verification_threshold = Some(threshold);
         self
     }
 
@@ -406,13 +404,9 @@ impl TesterBuilder {
             if let Some(block_time) = self.block_time {
                 config.sequencer_config.block_time = block_time;
             }
-            if let Some(batch_verification) = self.batch_verification {
+            if let Some(batch_verification_threshold) = self.batch_verification_threshold {
                 config.batch_verification_config.server_enabled = true;
-                config.batch_verification_config.threshold = batch_verification.threshold;
-                config.batch_verification_config.request_timeout =
-                    batch_verification.request_timeout;
-                config.batch_verification_config.retry_delay = batch_verification.retry_delay;
-                config.batch_verification_config.total_timeout = batch_verification.total_timeout;
+                config.batch_verification_config.threshold = batch_verification_threshold;
             }
         };
 
