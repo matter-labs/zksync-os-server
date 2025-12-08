@@ -173,15 +173,17 @@ opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry-appender-tracing = "0.31.1"
 
 # Reth dependencies
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-trie-common = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.7.0" }
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "vb-initial-version" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+
+# todo: start using tags once everything is merged to `main`
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "di/revm-v31.0.2" }
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.12.0-non-semver-compat", path = "lib/contract_interface" }
