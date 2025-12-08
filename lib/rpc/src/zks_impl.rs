@@ -42,40 +42,31 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         let Some(tx_meta) = self.storage.repository().get_transaction_meta(tx_hash)? else {
             return Ok(None);
         };
-        let Some(batch_number) = self
-            .storage
-            .batch()
-            .get_batch_by_block_number(tx_meta.block_number, self.storage.finality())
-            .await?
-        else {
-            return Err(ZksError::NotBatchedYet);
-        };
-        let Some((from_block, to_block)) = self
-            .storage
-            .batch()
-            .get_batch_range_by_number(batch_number)
-            .await?
-        else {
-            // This should never happen
-            tracing::error!(
-                block_number = tx_meta.block_number,
-                batch_number,
-                "block was included in a batch that could not be found"
-            );
-            return Err(ZksError::NotBatchedYet);
-        };
+        let block_number = tx_meta.block_number;
         // Reading from proof storage can return "dirty" data (i.e., not the one that will be
-        // finalized on L1). To avoid this, we assert that the batch has been executed as there is
+        // finalized on L1). To avoid this, we assert that the block has been executed as there is
         // no use case for fetching non-executed proofs.
         if self
             .storage
             .finality()
             .get_finality_status()
             .last_executed_block
-            < batch_number
+            < block_number
         {
             return Err(ZksError::NotExecutedYet);
         }
+        let batch_number = self
+            .storage
+            .batch()
+            .get_batch_by_block_number(block_number, self.storage.finality())
+            .await?
+            .expect("executed block does not belong to a batch");
+        let (from_block, to_block) = self
+            .storage
+            .batch()
+            .get_batch_range_by_number(batch_number)
+            .await?
+            .expect("executed batch has unknown block range");
         let mut batch_index = None;
         let mut merkle_tree_leaves = vec![];
         for block in from_block..=to_block {
@@ -176,8 +167,6 @@ pub type ZksResult<Ok> = Result<Ok, ZksError>;
 /// General `zks` namespace errors
 #[derive(Debug, thiserror::Error)]
 pub enum ZksError {
-    #[error("transaction has not been included in an L1 batch yet")]
-    NotBatchedYet,
     #[error("L1 batch containing the transaction has not been executed yet")]
     NotExecutedYet,
     /// Historical block could not be found on this node (e.g., pruned).

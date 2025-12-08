@@ -172,8 +172,6 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          cache_shared_key: 'build-format-and-lint'
 
       - name: Run anvil L1
         run: anvil --load-state ./zkos-l1-state.json --port 8545 &
@@ -194,6 +192,22 @@ jobs:
             sleep 3
           done
           echo "Sequencer is up and running."
+
+      - name: Checkout solidity tests
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: antonbaliasnikov/solidity-tester
+          ref: main # use latest main branch to get test updates on early stages
+          path: solidity-tester
+
+      - name: Install NodeJS
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Run tests
+        working-directory: solidity-tester
+        run: cargo nextest run
 
       - name: Checkout tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

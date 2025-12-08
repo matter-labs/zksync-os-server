@@ -3,6 +3,7 @@ use alloy::primitives::BlockNumber;
 use futures::Stream;
 use futures::stream::{BoxStream, StreamExt};
 use pin_project::pin_project;
+use std::collections::HashMap;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::time::{Instant, Sleep};
@@ -34,14 +35,23 @@ pub trait ReadReplay: Send + Sync + 'static {
     ///   for the same block number; see its documentation for the full list of requirements
     fn get_context(&self, block_number: BlockNumber) -> Option<BlockContext>;
 
+    fn get_replay_record(&self, block_number: BlockNumber) -> Option<ReplayRecord> {
+        self.get_replay_record_by_key(block_number, None)
+    }
+
     /// Get full data needed to replay a block by its number.
+    /// If `db_key` is provided, it is used to override the default database key
     ///
     /// This method:
     /// * MUST be thread-safe
     /// * MUST return `Some(_)` for all block numbers in range `[0; latest_record()]`
     /// * MUST return the same value for any block number once it returns `Some(_)` at least once
     /// * MAY return `Some(_)` for block numbers after latest
-    fn get_replay_record(&self, block_number: BlockNumber) -> Option<ReplayRecord>;
+    fn get_replay_record_by_key(
+        &self,
+        block_number: BlockNumber,
+        db_key: Option<Vec<u8>>,
+    ) -> Option<ReplayRecord>;
 
     /// Returns the latest (greatest) record's block number.
     ///
@@ -77,9 +87,13 @@ pub trait ReadReplayExt: ReadReplay {
         Box::pin(stream)
     }
 
-    /// Streams all replay records with block_number ≥ `start`, in ascending block order. On reaching
-    /// the latest stored record continuously waits for new records to appear. Used to send blocks to ENs.
-    fn stream_from_forever(&self, start: BlockNumber) -> BoxStream<ReplayRecord>
+    /// Streams replay records with block_number ≥ `start`, in ascending block order.
+    /// On reaching the latest stored record continuously waits for new records to appear. Used to send blocks to ENs.
+    fn stream_from_forever(
+        &self,
+        start: BlockNumber,
+        db_key_overrides: HashMap<BlockNumber, Vec<u8>>,
+    ) -> BoxStream<ReplayRecord>
     where
         Self: Clone,
     {
@@ -87,6 +101,7 @@ pub trait ReadReplayExt: ReadReplay {
         struct BlockStream<Replay: ReadReplay> {
             replays: Replay,
             current_block: BlockNumber,
+            db_key_overrides: HashMap<BlockNumber, Vec<u8>>,
             #[pin]
             sleep: Sleep,
         }
@@ -98,7 +113,11 @@ pub trait ReadReplayExt: ReadReplay {
                 cx: &mut std::task::Context<'_>,
             ) -> Poll<Option<Self::Item>> {
                 let mut this = self.project();
-                if let Some(record) = this.replays.get_replay_record(*this.current_block) {
+                let db_key = this.db_key_overrides.get(this.current_block).cloned();
+                if let Some(record) = this
+                    .replays
+                    .get_replay_record_by_key(*this.current_block, db_key)
+                {
                     *this.current_block += 1;
                     Poll::Ready(Some(record))
                 } else {
@@ -115,6 +134,7 @@ pub trait ReadReplayExt: ReadReplay {
         Box::pin(BlockStream {
             replays: self.clone(),
             current_block: start,
+            db_key_overrides,
             sleep: tokio::time::sleep(Duration::from_millis(50)),
         })
     }
