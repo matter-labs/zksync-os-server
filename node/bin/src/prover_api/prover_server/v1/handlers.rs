@@ -123,7 +123,7 @@ pub(super) async fn pick_snark_job(
     State(state): State<AppState>,
 ) -> Response {
     let start = Instant::now();
-    tracing::debug!(
+    tracing::trace!(
         "Received SNARK job pick request from prover with ID: {}",
         query.id
     );
