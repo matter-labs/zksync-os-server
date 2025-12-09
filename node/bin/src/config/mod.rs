@@ -1,10 +1,14 @@
+pub use self::cli::ConfigArgs;
 use crate::command_source::RebuildOptions;
 use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
-use smart_config::{DescribeConfig, DeserializeConfig, Serde, de::Delimited};
+use smart_config::{
+    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, ParseErrors,
+    Serde, de::Delimited,
+};
 use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
@@ -16,6 +20,8 @@ use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_types::PubdataMode;
+
+mod cli;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -37,6 +43,99 @@ pub struct Config {
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
+}
+
+impl Config {
+    pub fn schema() -> ConfigSchema {
+        let mut schema = ConfigSchema::default();
+        schema
+            .insert(&GeneralConfig::DESCRIPTION, "general")
+            .expect("Failed to insert general config");
+        schema
+            .insert(&GenesisConfig::DESCRIPTION, "genesis")
+            .expect("Failed to insert genesis config");
+        schema
+            .insert(&RpcConfig::DESCRIPTION, "rpc")
+            .expect("Failed to insert rpc config");
+        schema
+            .insert(&MempoolConfig::DESCRIPTION, "mempool")
+            .expect("Failed to insert mempool config");
+        schema
+            .insert(&TxValidatorConfig::DESCRIPTION, "tx_validator")
+            .expect("Failed to insert tx_validator config");
+        schema
+            .insert(&SequencerConfig::DESCRIPTION, "sequencer")
+            .expect("Failed to insert sequencer config");
+        schema
+            .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
+            .expect("Failed to insert l1_sender config");
+        schema
+            .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
+            .expect("Failed to insert l1_watcher config");
+        schema
+            .insert(&BatcherConfig::DESCRIPTION, "batcher")
+            .expect("Failed to insert batcher config");
+        schema
+            .insert(
+                &ProverInputGeneratorConfig::DESCRIPTION,
+                "prover_input_generator",
+            )
+            .expect("Failed to insert prover_input_generator config");
+        schema
+            .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
+            .expect("Failed to insert prover api config");
+        schema
+            .insert(&StatusServerConfig::DESCRIPTION, "status_server")
+            .expect("Failed to insert status server config");
+        schema
+            .insert(&ObservabilityConfig::DESCRIPTION, "observability")
+            .expect("Failed to insert observability config");
+        schema
+            .insert(&GasAdjusterConfig::DESCRIPTION, "gas_adjuster")
+            .expect("Failed to insert gas adjuster config");
+        schema
+            .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
+            .expect("Failed to insert batch verification config");
+        schema
+    }
+
+    pub fn observability(sources: ConfigSources) -> anyhow::Result<ObservabilityConfig> {
+        let schema = ConfigSchema::new(&ObservabilityConfig::DESCRIPTION, "observability");
+        let repo = ConfigRepository::new(&schema).with_all(sources);
+        repo.single()?.parse().map_err(log_all_errors)
+    }
+}
+
+fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
+    const MAX_DISPLAYED_ERRORS: usize = 5;
+
+    let mut displayed_errors = String::new();
+    let mut error_count = 0;
+    for (i, err) in errors.iter().enumerate() {
+        tracing::error!(
+            path = err.path(),
+            origin = %err.origin(),
+            config = err.config().ty.name_in_code(),
+            param = err.param().map(|param| param.rust_field_name),
+            "{}",
+            err.inner()
+        );
+
+        if i < MAX_DISPLAYED_ERRORS {
+            displayed_errors += &format!("{}. {err}\n", i + 1);
+        }
+        error_count += 1;
+    }
+
+    let maybe_truncation_message = if error_count > MAX_DISPLAYED_ERRORS {
+        format!("; showing first {MAX_DISPLAYED_ERRORS} (all errors are logged at ERROR level)")
+    } else {
+        String::new()
+    };
+
+    anyhow::anyhow!(
+        "failed parsing config param(s): {error_count} error(s) in total{maybe_truncation_message}\n{displayed_errors}"
+    )
 }
 
 /// "Umbrella" config for the node.
