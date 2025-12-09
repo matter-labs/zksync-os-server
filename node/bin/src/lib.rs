@@ -748,6 +748,7 @@ async fn run_main_node_pipeline(
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
+            node_state_on_startup.l1_state.batch_verification,
             node_state_on_startup.l1_state.last_committed_batch,
         ))
         .pipe(fri_proving_step)
@@ -859,6 +860,7 @@ async fn run_en_pipeline(
                 config.batch_verification_config.signing_key.clone(),
                 chain_id,
                 *node_state_on_startup.l1_state.diamond_proxy.address(),
+                node_state_on_startup.l1_state.batch_verification,
                 config.batch_verification_config.connect_address,
             ),
             NoOpSink::new(),

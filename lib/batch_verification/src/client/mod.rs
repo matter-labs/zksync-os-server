@@ -19,6 +19,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::io::{ReaderStream, StreamReader};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::{BatchInfo, BatchSignature};
+use zksync_os_contract_interface::l1_discovery::BatchVerificationL1;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::ComponentStateHandle;
@@ -65,6 +66,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
         private_key: SecretString,
         chain_id: u64,
         diamond_proxy: Address,
+        _l1_state: BatchVerificationL1, //TODO use this
         server_address: String,
     ) -> Self {
         Self {

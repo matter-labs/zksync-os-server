@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
+use zksync_os_contract_interface::l1_discovery::BatchVerificationL1;
 use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
@@ -35,7 +36,11 @@ pub struct BatchVerificationPipelineStep<E> {
 }
 
 impl<E> BatchVerificationPipelineStep<E> {
-    pub fn new(config: BatchVerificationConfig, last_committed_batch_number: u64) -> Self {
+    pub fn new(
+        config: BatchVerificationConfig,
+        _l1_state: BatchVerificationL1, //TODO use this
+        last_committed_batch_number: u64,
+    ) -> Self {
         Self {
             config,
             last_committed_batch_number,
