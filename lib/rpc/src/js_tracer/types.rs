@@ -74,6 +74,12 @@ pub struct BalanceDelta {
     pub removed: U256,
 }
 
+#[derive(Clone, Default, Debug)]
+pub struct SelfdestructEntry {
+    pub is_deployed_in_current_tx: bool,
+    pub is_marked_for_selfdestruct: bool,
+}
+
 impl BalanceDelta {
     pub fn credit(&mut self, amount: U256) -> anyhow::Result<()> {
         if amount == U256::ZERO {

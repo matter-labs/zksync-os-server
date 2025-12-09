@@ -1,3 +1,4 @@
+use crate::js_tracer::types::SelfdestructEntry;
 use crate::js_tracer::{
     host::init_host_env_in_boa_context,
     types::{
@@ -58,7 +59,7 @@ pub struct JsTracer {
     storage_overlay: OverlayState<(Address, B256), B256>,
     code_overlay: OverlayState<Address, Option<Vec<u8>>>,
     balance_overlay: OverlayState<Address, BalanceDelta>,
-    selfdestruct_overlay: OverlayState<Address, bool>, // bool marks if the contract was selfdestucted
+    selfdestruct_overlay: OverlayState<Address, SelfdestructEntry>,
 
     // Depth tracking and per-tx result
     current_depth: u64,
@@ -89,7 +90,7 @@ impl JsTracer {
         let storage_overlay = OverlayState::<(Address, B256), B256>::new();
         let code_overlay = OverlayState::<Address, Option<Vec<u8>>>::new();
         let balance_overlay = OverlayState::<Address, BalanceDelta>::new();
-        let selfdestruct_overlay = OverlayState::<Address, bool>::new();
+        let selfdestruct_overlay = OverlayState::<Address, SelfdestructEntry>::new();
 
         init_host_env_in_boa_context(
             &mut ctx,
@@ -210,9 +211,19 @@ impl JsTracer {
         }
 
         let mut overlay = self.selfdestruct_overlay.borrow_mut();
-        if let Entry::Vacant(vacant) = overlay.entry(address) {
-            self.selfdestruct_overlay.record_insert(address);
-            vacant.insert(OverlayEntry::new_pending(false));
+        match overlay.entry(address) {
+            Entry::Occupied(mut occupied) => {
+                let before = occupied.get().clone();
+                self.selfdestruct_overlay.record_update(address, before);
+                occupied.get_mut().value.is_deployed_in_current_tx = true;
+            }
+            Entry::Vacant(vacant) => {
+                self.selfdestruct_overlay.record_insert(address);
+                vacant.insert(OverlayEntry::new_pending(SelfdestructEntry {
+                    is_deployed_in_current_tx: true,
+                    is_marked_for_selfdestruct: false,
+                }));
+            }
         }
     }
 
@@ -222,7 +233,12 @@ impl JsTracer {
             .handle()
             .borrow()
             .iter()
-            .map(|(address, entry)| (*address, entry.value))
+            .map(|(address, entry)| {
+                (
+                    *address,
+                    entry.value.is_marked_for_selfdestruct && entry.value.is_deployed_in_current_tx,
+                )
+            })
             .collect();
 
         for (address, should_destroy) in entries {
@@ -969,11 +985,14 @@ impl EvmTracer for JsTracer {
             Entry::Occupied(mut entry) => {
                 let before = entry.get().clone();
                 self.selfdestruct_overlay.record_update(address, before);
-                entry.get_mut().value = true;
+                entry.get_mut().value.is_marked_for_selfdestruct = true;
             }
             Entry::Vacant(vacant) => {
                 self.selfdestruct_overlay.record_insert(address);
-                vacant.insert(OverlayEntry::new_pending(true));
+                vacant.insert(OverlayEntry::new_pending(SelfdestructEntry {
+                    is_deployed_in_current_tx: false,
+                    is_marked_for_selfdestruct: true,
+                }));
             }
         }
     }
