@@ -122,7 +122,7 @@ pub fn zk_tx_into_revm_tx(
         .gas_used_override(Some(gas_used))
         .force_fail(!execution_status)
         .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {:?}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {e:?}"))
         .unwrap()
 }
 

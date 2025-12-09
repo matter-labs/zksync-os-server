@@ -96,6 +96,7 @@ zk_os_forward_system = { package = "forward_system", git = "https://github.com/m
 zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
 
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
@@ -164,6 +165,8 @@ url = "2.5.7"
 num_enum = "0.7.2"
 metrics = "0.24.2"
 chrono = { version = "0.4", default-features = false }
+boa_engine = { version = "0.21.0" }
+boa_gc = { version = "0.21.0" }
 structdiff = { version = "0.7.3", features = ["debug_diffs"] }
 
 tracing-opentelemetry = "0.32.0"

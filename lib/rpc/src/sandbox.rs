@@ -419,7 +419,7 @@ impl EvmTracer for CallTracer {
 }
 
 /// Returns a non-empty revert reason if the output is a revert/error.
-fn maybe_revert_reason(output: &[u8]) -> Option<String> {
+pub(crate) fn maybe_revert_reason(output: &[u8]) -> Option<String> {
     let reason = match GenericRevertReason::decode(output)? {
         GenericRevertReason::ContractError(err) => {
             match err {
@@ -440,7 +440,7 @@ fn maybe_revert_reason(output: &[u8]) -> Option<String> {
 /// Converts [`EvmError`] to a geth-style error message (if possible).
 ///
 /// See https://github.com/ethereum/go-ethereum/blob/9ce40d19a8240844be24b9692c639dff45d13d68/core/vm/errors.go#L26-L45
-fn fmt_error_msg(error: &EvmError) -> String {
+pub(crate) fn fmt_error_msg(error: &EvmError) -> String {
     match error {
         // todo: missing `ErrGasUintOverflow`: likely not propagated during tx decoding
         EvmError::Revert => "execution reverted".to_string(),
