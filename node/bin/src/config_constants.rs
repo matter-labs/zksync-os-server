@@ -5,26 +5,26 @@
 
 /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
 /// other contracts should be discoverable through it.
-pub const BRIDGEHUB_ADDRESS: &str = "0x478d18c02398450654b1c38fe1877df8efae0195";
+pub const BRIDGEHUB_ADDRESS: &str = "0xaab95dfc116d9d9d9dd931cda1fd4142db135365";
 
 /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
 /// so it has to be provided explicitly.
-pub const BYTECODE_SUPPLIER_ADDRESS: &str = "0x47c79beabd1c446f34105eb6118592690c8d16c5";
+pub const BYTECODE_SUPPLIER_ADDRESS: &str = "0xa1c853945dd5ba2771e4b947a1bfabf4022e59dd";
 
 /// Chain ID of the chain node operates on.
-pub const CHAIN_ID: u64 = 270;
+pub const CHAIN_ID: u64 = 6565;
 
 /// Private key to commit batches to L1
 /// Must be consistent with the operator key set on the contract (permissioned!)
 #[rustfmt::skip]
-pub const OPERATOR_COMMIT_PK: &str = "0x460b1f64640c14663c0a02343bd392b3623b96aff3befe29ab927f424506fd6f";
+pub const OPERATOR_COMMIT_PK: &str = "0x60f5d79b63d706198ef2734d40936763f58ca2df8b13aa55d10ca14d8836e607";
 
 /// Private key to use to submit proofs to L1
 /// Can be arbitrary funded address - proof submission is permissionless.
 #[rustfmt::skip]
-pub const OPERATOR_PROVE_PK: &str = "0x4b65165743a97917aa0c3e1c9cc13fdcfa2eeec2a1905252c971a7c4a7ddad54";
+pub const OPERATOR_PROVE_PK: &str = "0x9b78be0f3813a582b7c8a5443e2706ac9edf648112a3863469412e5753cf75a1";
 
 /// Private key to use to execute batches on L1
 /// Can be arbitrary funded address - execute submission is permissionless.
 #[rustfmt::skip]
-pub const OPERATOR_EXECUTE_PK: &str = "0x1cb8ee657618adac65d54d2716dabb44a6dd446887a4835b498362b88acecf8c";
+pub const OPERATOR_EXECUTE_PK: &str = "0xad1e8868ce3dad0ea5989dafc4ca51a119ed9bd38048b6f1a09f80979dae3c6d";

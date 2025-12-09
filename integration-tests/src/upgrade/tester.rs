@@ -102,7 +102,10 @@ impl UpgradeTester {
             let current_l2_block = self.tester.l2_zk_provider.get_block_number().await?;
             self.tester
                 .l2_zk_provider
-                .wait_finalized_with_timeout(current_l2_block, Duration::from_secs(60))
+                .wait_finalized_with_timeout(
+                    current_l2_block,
+                    crate::assert_traits::DEFAULT_TIMEOUT,
+                )
                 .await?;
             tracing::info!("Current L2 block is finalized, proceeding with patch upgrade");
         } else {
@@ -131,7 +134,10 @@ impl UpgradeTester {
                 .await?;
             self.tester
                 .l2_zk_provider
-                .wait_finalized_with_timeout(tx.block_number.unwrap(), Duration::from_secs(60))
+                .wait_finalized_with_timeout(
+                    tx.block_number.unwrap(),
+                    crate::assert_traits::DEFAULT_TIMEOUT,
+                )
                 .await?;
         } else {
             self.wait_for_upgrade_finalization(upgrade_contract.upgrade_tx_l2_hash())
@@ -237,7 +243,7 @@ impl UpgradeTester {
         // The genesis transaction has to be in the first block, so we wait for block 1 to be finalized.
         self.tester
             .l2_zk_provider
-            .wait_finalized_with_timeout(1, Duration::from_secs(60))
+            .wait_finalized_with_timeout(1, crate::assert_traits::DEFAULT_TIMEOUT)
             .await?;
         Ok(())
     }
@@ -255,7 +261,10 @@ impl UpgradeTester {
             .expect("Upgrade tx can't be in the first block");
         self.tester
             .l2_zk_provider
-            .wait_finalized_with_timeout(block_before_upgrade, Duration::from_secs(60))
+            .wait_finalized_with_timeout(
+                block_before_upgrade,
+                crate::assert_traits::DEFAULT_TIMEOUT,
+            )
             .await
             .context("Block before upgrade transaction was not finalized")?;
         Ok(())
@@ -271,7 +280,10 @@ impl UpgradeTester {
         let upgrade_block_number = pending_tx.block_number.expect("Upgrade tx must be mined");
         self.tester
             .l2_zk_provider
-            .wait_finalized_with_timeout(upgrade_block_number, Duration::from_secs(60))
+            .wait_finalized_with_timeout(
+                upgrade_block_number,
+                crate::assert_traits::DEFAULT_TIMEOUT,
+            )
             .await
             .context("Block before upgrade transaction was not finalized")?;
         Ok(())

@@ -17,3 +17,4 @@ serde.workspace = true
 tracing.workspace = true
 vise.workspace = true
 structdiff.workspace = true
+thiserror.workspace = true

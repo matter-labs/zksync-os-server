@@ -306,30 +306,21 @@ async fn build_genesis(
 async fn load_genesis_upgrade_tx(
     zk_chain: ZkChain<DynProvider>,
 ) -> anyhow::Result<GenesisUpgradeTxInfo> {
-    const MAX_L1_BLOCKS_LOOKBEHIND: u64 = 100_000;
-
     let zk_chain_address = *zk_chain.address();
     let provider = zk_chain.provider().clone();
     let current_l1_block = zk_chain.provider().get_block_number().await?;
     // Find the block when the zk chain was deployed or fallback to [0; latest_block] in localhost case.
-    let (from_block, to_block) = zksync_os_l1_watcher::util::find_l1_block_by_predicate(
-            Arc::new(zk_chain),
-            |_zk, _block| async { Ok(true) },
-        )
-        .await
-        .map(|b| (b, b))
-        .or_else(|err| {
-            // This may error on Anvil with `--load-state` - as it doesn't support requests even for recent blocks.
-            // We default to `[0; latest_block]` in this case - `eth_getLogs` are still supported.
-            // Assert that we don't fallback on longer chains (e.g. Sepolia)
-            if current_l1_block > MAX_L1_BLOCKS_LOOKBEHIND {
-                anyhow::bail!(
-                    "Binary search failed with {err}. Cannot default starting block to zero for a long chain. Current L1 block number: {current_l1_block}. Limit: {MAX_L1_BLOCKS_LOOKBEHIND}."
-                )
-            } else {
-                Ok((0, current_l1_block))
-            }
-        })?;
+    let from_block = zksync_os_l1_watcher::util::find_l1_block_by_predicate(
+        Arc::new(zk_chain),
+        0,
+        |_zk, _block| async { Ok(true) },
+    )
+    .await?;
+    let to_block = if from_block == 0 {
+        current_l1_block
+    } else {
+        from_block
+    };
     let event_sig = GenesisUpgrade::SIGNATURE_HASH;
     let filter = Filter::new()
         .from_block(from_block)

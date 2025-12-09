@@ -5,18 +5,19 @@ use crate::utils::LockedPort;
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
-use alloy::signers::local::LocalSigner;
+use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
-    Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig, GenesisConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
+    BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
+    GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    StatusServerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
 
@@ -31,6 +32,23 @@ mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
 const L1_CHAIN_ID: u64 = 31337;
+
+/// Set of private keys for batch verification participants.
+pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
+    "0x7094f4b57ed88624583f68d2f241858f7dafb6d2558bc22d18991690d36b4e47",
+    "0xf9306dd03807c08b646d47c739bd51e4d2a25b02bad0efb3d93f095982ac98cd",
+];
+/// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
+static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    BATCH_VERIFICATION_KEYS
+        .map(|key| {
+            PrivateKeySigner::from_str(key)
+                .unwrap()
+                .address()
+                .to_string()
+        })
+        .to_vec()
+});
 
 #[derive(Debug)]
 pub struct Tester {
@@ -58,6 +76,7 @@ pub struct Tester {
     l1_address: String,
     replay_url: String,
     l2_rpc_address: String,
+    batch_verification_address: String,
 }
 
 impl Tester {
@@ -70,13 +89,39 @@ impl Tester {
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
+        // Due to type inference issue, we need to specify None type here and this whole function if a de-facto helper for this
+        self.launch_external_node_inner(None::<fn(&mut Config)>)
+            .await
+    }
+
+    pub async fn launch_external_node_overrides(
+        &self,
+        config_overrides: impl FnOnce(&mut Config),
+    ) -> anyhow::Result<Self> {
+        self.launch_external_node_inner(Some(config_overrides))
+            .await
+    }
+
+    async fn launch_external_node_inner(
+        &self,
+        config_overrides: Option<impl FnOnce(&mut Config)>,
+    ) -> anyhow::Result<Self> {
+        let overrides_fun = |config: &mut Config| {
+            config.sequencer_config.block_replay_download_address = Some(self.replay_url.clone());
+            config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
+            config.batch_verification_config.connect_address =
+                self.batch_verification_address.clone();
+            if let Some(f) = config_overrides {
+                f(config)
+            }
+        };
+
         Self::launch_node(
             self.l1_address.clone(),
             self.l1_provider.clone(),
             self.l1_wallet.clone(),
             false,
-            Some((self.replay_url.clone(), self.l2_rpc_address.clone())),
-            None,
+            Some(overrides_fun),
             Some(self.main_node_tempdir.clone()),
         )
         .await
@@ -87,8 +132,7 @@ impl Tester {
         l1_provider: EthDynProvider,
         l1_wallet: EthereumWallet,
         enable_prover: bool,
-        main_node_replay_and_rpc_urls: Option<(String, String)>,
-        block_time: Option<Duration>,
+        config_overrides: Option<impl FnOnce(&mut Config)>,
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
     ) -> anyhow::Result<Self> {
         (|| async {
@@ -111,11 +155,14 @@ impl Tester {
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
         let replay_locked_port = LockedPort::acquire_unused().await?;
         let status_locked_port = LockedPort::acquire_unused().await?;
+        let batch_verification_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
+        let batch_verification_address =
+            format!("localhost:{}", batch_verification_locked_port.port);
         let replay_url = format!("localhost:{}", replay_locked_port.port);
 
         let tempdir = tempfile::tempdir()?;
@@ -131,20 +178,13 @@ impl Tester {
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
             l1_rpc_url: l1_address.clone(),
-            main_node_rpc_url: main_node_replay_and_rpc_urls.clone().map(|(_, rpc)| rpc),
             ..Default::default()
         };
-        let mut sequencer_config = SequencerConfig {
+        let sequencer_config = SequencerConfig {
             block_replay_server_address: replay_address.clone(),
-            block_replay_download_address: main_node_replay_and_rpc_urls
-                .clone()
-                .map(|(replay, _)| replay),
             fee_collector_address: Address::random(),
             ..Default::default()
         };
-        if let Some(block_time) = block_time {
-            sequencer_config.block_time = block_time;
-        }
         let rpc_config = RpcConfig {
             address: l2_rpc_address.clone(),
             // Override default with a higher value as the test can be slow in CI
@@ -171,11 +211,24 @@ impl Tester {
             ..Default::default()
         };
 
+        let batch_verification_config = BatchVerificationConfig {
+            server_enabled: false,
+            listen_address: batch_verification_address.clone(),
+            client_enabled: false,
+            connect_address: batch_verification_address.clone(),
+            threshold: 1, // default to 1 of 2
+            accepted_signers: BATCH_VERIFICATION_ADDRESSES.clone(),
+            request_timeout: Duration::from_millis(500),
+            retry_delay: Duration::from_secs(1),
+            total_timeout: Duration::from_secs(300),
+            signing_key: BATCH_VERIFICATION_KEYS[0].into(),
+        };
+
         let status_server_config = StatusServerConfig {
             address: status_address,
         };
 
-        let config = Config {
+        let mut config = Config {
             general_config,
             genesis_config: GenesisConfig {
                 genesis_input_path: Some(
@@ -198,8 +251,12 @@ impl Tester {
             status_server_config,
             observability_config: Default::default(),
             gas_adjuster_config: Default::default(),
-            batch_verification_config: Default::default(),
+            batch_verification_config,
         };
+        if let Some(f) = config_overrides {
+            f(&mut config)
+        }
+
         let main_task = tokio::task::spawn(async move {
             zksync_os_server::run::<FullDiffsState>(stop_receiver, config).await;
         });
@@ -297,6 +354,7 @@ impl Tester {
             main_task,
             l1_address,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
+            batch_verification_address,
             replay_url,
             tempdir: tempdir.clone(),
             main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
@@ -308,6 +366,7 @@ impl Tester {
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
+    batch_verification_threshold: Option<usize>,
 }
 
 impl TesterBuilder {
@@ -319,6 +378,11 @@ impl TesterBuilder {
 
     pub fn block_time(mut self, block_time: Duration) -> Self {
         self.block_time = Some(block_time);
+        self
+    }
+
+    pub fn batch_verification(mut self, threshold: usize) -> Self {
+        self.batch_verification_threshold = Some(threshold);
         self
     }
 
@@ -336,13 +400,22 @@ impl TesterBuilder {
 
         let l1_wallet = l1_provider.wallet().clone();
 
+        let overrides_fun = move |config: &mut Config| {
+            if let Some(block_time) = self.block_time {
+                config.sequencer_config.block_time = block_time;
+            }
+            if let Some(batch_verification_threshold) = self.batch_verification_threshold {
+                config.batch_verification_config.server_enabled = true;
+                config.batch_verification_config.threshold = batch_verification_threshold;
+            }
+        };
+
         Tester::launch_node(
             l1_address,
             EthDynProvider::new(l1_provider),
             l1_wallet,
             self.enable_prover,
-            None,
-            self.block_time,
+            Some(overrides_fun),
             None,
         )
         .await

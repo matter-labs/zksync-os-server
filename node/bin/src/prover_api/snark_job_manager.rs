@@ -97,7 +97,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
-        proving_version: Option<ProvingVersion>,
+        proving_version: ProvingVersion,
         payload: Vec<u8>,
         prover_id: String,
     ) -> anyhow::Result<()> {
@@ -121,32 +121,16 @@ impl SnarkJobManager {
         // Prover should generate the proof with VK received from server. These must always match.
         // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
         //
-        // This should never happen, but we double-check to guarantee it's the case
-        //
-        // NOTE: Checking only if prover provided VK version - legacy clients may not provide it
-        if let Some(proving_version) = proving_version {
-            let server_vk = consumed_batches_proven[0]
-                .batch
-                .verification_key_hash()
-                .expect("verification key hash must be present as it was set by server");
-            let prover_vk = proving_version.vk_hash();
-            anyhow::ensure!(
-                server_vk == prover_vk,
-                "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
-            );
-        }
-
-        // get verification key, if available, otherwise fallback
-        let proving_version = if let Some(proving_version) = proving_version {
-            proving_version
-        } else {
-            consumed_batches_proven[0]
-                .data
-                .proving_execution_version()
-                .unwrap_or(2)
-                .try_into()
-                .expect("execution version must exist as it was set by server")
-        };
+        // This should never happen, but we double-check to guarantee it's the case.
+        let server_vk = consumed_batches_proven[0]
+            .batch
+            .verification_key_hash()
+            .expect("verification key hash must be present as it was set by server");
+        let prover_vk = proving_version.vk_hash();
+        anyhow::ensure!(
+            server_vk == prover_vk,
+            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
+        );
 
         let consumed_batches_proven: Vec<_> = consumed_batches_proven
             .into_iter()

@@ -1,6 +1,5 @@
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
-use crate::prover_api::proof_storage::ProofStorage;
 use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -8,13 +7,14 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
-use zksync_os_batch_types::BlockMerkleTreeData;
+use zksync_os_batch_types::{BatchInfo, BlockMerkleTreeData};
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{
-    BatchEnvelope, BatchForSigning, FriProof, MissingSignature, ProverInput, SignedBatchEnvelope,
+    BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
+use zksync_os_l1_watcher::{CommittedBatch, StoredBatchData};
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
@@ -29,16 +29,9 @@ pub mod util;
 
 /// Set of fields to define batcher's behavior on startup (when to replay, when to produce, etc.)
 pub struct BatcherStartupConfig {
-    /// Last committed block on L1. Blocks below this are part of already-committed batches.
-    /// Blocks before this one (inclusive)
-    /// need to be recreated and matched with what we have in persistence.
-    /// Blocks after this will be created anew.
-    /// Note that there may have been batches created for even never blocks,
-    /// but we don't consider them final before they are committed and lose them on block restart.
-    pub last_committed_block: u64,
-    /// Info for the previous batch - the batch that was emitted just before the first block we'll process.
+    /// Info for the latest executed batch - the batch that was emitted just before the first batch we'll process.
     /// Required to set correct StoredBatchInfo when committing/proving/executing blocks on L1.
-    pub prev_batch_info: StoredBatchInfo,
+    pub last_executed_batch_data: StoredBatchData,
     /// Last block number already known to this node. On startup, we'll replay all blocks until and including
     /// this - in other words, there will be no arbitrary delays until this block is passed through Batcher.
     /// We do not seal batches by timeout until this block is reached.
@@ -55,8 +48,8 @@ pub struct Batcher {
     pub chain_address: Address,
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
-    pub batch_storage: ProofStorage,
     pub pubdata_mode: PubdataMode,
+    pub committed_batches: mpsc::Receiver<CommittedBatch>,
 }
 
 #[async_trait]
@@ -78,7 +71,38 @@ impl PipelineComponent for Batcher {
         let latency_tracker = ComponentStateReporter::global()
             .handle_for("batcher", GenericComponentState::WaitingRecv);
 
-        let mut prev_batch_info = self.startup_config.prev_batch_info.clone();
+        // We use last executed batch as the starting point. Next immediate batch we process will be
+        // `last_executed_batch + 1`.
+        let mut prev_batch_info = self
+            .startup_config
+            .last_executed_batch_data
+            .batch_info
+            .clone();
+        let first_expected_block = self
+            .startup_config
+            .last_executed_batch_data
+            .last_block_number
+            + 1;
+
+        // We might receive some blocks that belong to already executed batches. We can skip these
+        // as there is no need to perform any L1 operations on them.
+        loop {
+            let next_block_number = input
+                .peek_recv(|(_, replay_record, _, _)| replay_record.block_context.block_number)
+                .await
+                .context("batcher inbound channel unexpectedly closed")?;
+            if next_block_number >= first_expected_block {
+                break;
+            }
+            tracing::debug!(
+                block_number = next_block_number,
+                "skipping already executed block"
+            );
+            input
+                .recv()
+                .await
+                .expect("impossible: missing an already peeked batch");
+        }
 
         // Only used for metrics/logs
         let mut last_created_batch_at: Option<Instant> = None;
@@ -93,37 +117,31 @@ impl PipelineComponent for Batcher {
                 .context("batcher inbound channel unexpectedly closed")?;
             latency_tracker.enter_state(GenericComponentState::Processing);
 
-            // Reuse batch range from S3 even if it wasn't committed yet. Otherwise, there is a risk
-            // of a race condition where we will end up with diverging S3 and L1 batch ranges.
-            let (batch_envelope, recreated) = if let Some(existing_batch) = self
-                .batch_storage
-                .get_batch_with_proof(prev_batch_info.batch_number + 1)
-                .await?
-            {
+            let batch_envelope;
+            let recreated;
+            if let Some(committed_batch) = self.committed_batches.recv().await {
                 // Validate that the existing batch's first block matches the next block in the stream
                 anyhow::ensure!(
-                    existing_batch.batch.first_block_number == next_block_number,
+                    committed_batch.commit_info.first_block_number.unwrap() == next_block_number,
                     "Existing batch first block ({}) does not match next block in stream ({})",
-                    existing_batch.batch.first_block_number,
+                    committed_batch.commit_info.first_block_number.unwrap(),
                     next_block_number
                 );
 
-                (
-                    self.recreate_existing_batch(
+                batch_envelope = self
+                    .recreate_existing_batch(
                         &mut input,
                         &latency_tracker,
                         &prev_batch_info,
-                        existing_batch,
+                        committed_batch,
                     )
-                    .await?,
-                    true,
-                )
+                    .await?;
+                recreated = true;
             } else {
-                (
-                    self.create_batch(&mut input, &latency_tracker, &prev_batch_info)
-                        .await?,
-                    false,
-                )
+                batch_envelope = self
+                    .create_batch(&mut input, &latency_tracker, &prev_batch_info)
+                    .await?;
+                recreated = false;
             };
 
             let time_since_last_batch =
@@ -300,21 +318,22 @@ impl Batcher {
         )>,
         latency_tracker: &ComponentStateHandle<GenericComponentState>,
         prev_batch_info: &StoredBatchInfo,
-        existing_batch: SignedBatchEnvelope<FriProof>,
+        existing_batch: CommittedBatch,
     ) -> anyhow::Result<BatchForSigning<ProverInput>> {
-        let batch_number = existing_batch.batch_number();
+        let batch_number = existing_batch.commit_info.batch_number;
 
         tracing::info!(
             batch_number,
-            first_block = existing_batch.batch.first_block_number,
-            last_block = existing_batch.batch.last_block_number,
+            first_block = existing_batch.commit_info.first_block_number,
+            last_block = existing_batch.commit_info.last_block_number,
             "Recreating existing batch"
         );
 
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
 
-        let expected_block_count =
-            existing_batch.batch.last_block_number - existing_batch.batch.first_block_number + 1;
+        let expected_block_count = existing_batch.commit_info.last_block_number.unwrap()
+            - existing_batch.commit_info.first_block_number.unwrap()
+            + 1;
         // Collect all blocks in this batch
         while blocks.len() < expected_block_count as usize {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -340,7 +359,8 @@ impl Batcher {
         }
         let last_block_number = blocks.last().unwrap().0.header.number;
         assert_eq!(
-            last_block_number, existing_batch.batch.last_block_number,
+            last_block_number,
+            existing_batch.commit_info.last_block_number.unwrap(),
             "Block number mismatch in last block of a rebuilt batch"
         );
 
@@ -351,7 +371,8 @@ impl Batcher {
             batch_number,
             self.chain_id,
             self.chain_address,
-            existing_batch.batch.pubdata_mode,
+            // Assume pubdata mode does not change
+            self.pubdata_mode,
         )?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
@@ -361,11 +382,16 @@ impl Batcher {
                 .batch_info
                 .clone()
                 .into_stored(&rebuilt_batch.batch.protocol_version);
-            let stored_stored_batch_info = existing_batch
-                .batch
-                .batch_info
-                .clone()
-                .into_stored(&existing_batch.batch.protocol_version);
+
+            // todo: stop using this struct once fully migrated from S3
+            let batch_info = BatchInfo {
+                commit_info: existing_batch.commit_info,
+                chain_address: Default::default(),
+                upgrade_tx_hash: existing_batch.upgrade_tx_hash,
+                blob_sidecar: None,
+            };
+
+            let stored_stored_batch_info = batch_info.into_stored(&existing_batch.protocol_version);
 
             anyhow::ensure!(
                 rebuilt_stored_batch_info.hash() == stored_stored_batch_info.hash(),
