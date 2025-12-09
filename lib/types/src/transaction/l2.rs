@@ -1,12 +1,12 @@
 use alloy::consensus::crypto::RecoveryError;
 use alloy::consensus::private::alloy_primitives;
-use alloy::consensus::transaction::{Recovered, RlpEcdsaEncodableTx, SignerRecoverable};
+use alloy::consensus::transaction::{Recovered, RlpEcdsaEncodableTx, SignerRecoverable, TxHashRef};
 use alloy::consensus::{
     EthereumTypedTransaction, SignableTransaction, Signed, TransactionEnvelope, TxEip1559,
     TxEip2930, TxEip4844Variant, TxEip7702, TxLegacy,
 };
 use alloy::eips::eip7594::BlobTransactionSidecarVariant;
-use alloy::primitives::{B256, Signature};
+use alloy::primitives::{B256, Signature, TxHash};
 use std::fmt;
 
 /// L2 transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth we
@@ -310,6 +310,28 @@ impl<T: reth_primitives_traits::InMemorySize> reth_primitives_traits::InMemorySi
     }
 }
 
+impl<T> TxHashRef for L2EnvelopeInner<T>
+where
+    Self: Clone
+        + Eq
+        + PartialEq
+        + alloy::eips::Decodable2718
+        + alloy::rlp::Decodable
+        + reth_primitives_traits::InMemorySize
+        + reth_primitives_traits::MaybeSerde,
+    T: RlpEcdsaEncodableTx + SignableTransaction<Signature> + Unpin,
+{
+    fn tx_hash(&self) -> &TxHash {
+        match self {
+            Self::Legacy(tx) => tx.hash(),
+            Self::Eip2930(tx) => tx.hash(),
+            Self::Eip1559(tx) => tx.hash(),
+            Self::Eip7702(tx) => tx.hash(),
+            Self::Eip4844(tx) => tx.hash(),
+        }
+    }
+}
+
 #[cfg(feature = "reth")]
 impl<T> reth_primitives_traits::SignedTransaction for L2EnvelopeInner<T>
 where
@@ -322,15 +344,6 @@ where
         + reth_primitives_traits::MaybeSerde
         + reth_primitives_traits::InMemorySize,
 {
-    fn tx_hash(&self) -> &alloy::primitives::TxHash {
-        match self {
-            Self::Legacy(tx) => tx.hash(),
-            Self::Eip2930(tx) => tx.hash(),
-            Self::Eip1559(tx) => tx.hash(),
-            Self::Eip7702(tx) => tx.hash(),
-            Self::Eip4844(tx) => tx.hash(),
-        }
-    }
 }
 
 #[allow(clippy::derivable_impls)]
