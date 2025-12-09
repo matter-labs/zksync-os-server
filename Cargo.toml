@@ -115,7 +115,7 @@ futures = "0.3"
 vise = "0.3.0"
 vise-exporter = "0.3.0"
 bincode = { version = "2.0.1", features = ["serde"] }
-smart-config = "=0.4.0-pre"
+smart-config = "=0.4.0-pre.1"
 thiserror = "2.0.12"
 clap = "4.2.2"
 insta = "1.29.0"

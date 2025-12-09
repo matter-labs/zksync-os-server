@@ -458,7 +458,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
             config.l1_sender_config.pubdata_mode,
-            config.l1_sender_config.max_priority_fee_per_gas_gwei,
+            config.l1_sender_config.max_priority_fee_per_gas_wei(),
         );
         let gas_adjuster = GasAdjuster::new(
             l1_provider.clone().erased(),
