@@ -14,10 +14,9 @@ use structdiff::StructDiff;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use zksync_os_batch_types::BatchSignature;
 use zksync_os_batch_types::BlockMerkleTreeData;
+use zksync_os_batch_types::{BatchInfo, BatchSignature};
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_l1_sender::commitment::BatchInfo;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_observability::ComponentStateReporter;
@@ -39,7 +38,7 @@ pub struct BatchVerificationClient<Finality> {
     diamond_proxy: Address,
     server_address: String,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality>,
+    block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
 }
 
 #[derive(Debug, thiserror::Error)]

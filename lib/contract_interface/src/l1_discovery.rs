@@ -123,7 +123,7 @@ impl L1State {
 /// Waits until provided function returns consistent values for both `latest` and `pending` block ids.
 async fn wait_to_finalize<
     T: PartialEq + tracing::Value + Display,
-    Fut: Future<Output = alloy::contract::Result<T>>,
+    Fut: Future<Output = crate::Result<T>>,
 >(
     f: impl Fn(BlockId) -> Fut,
 ) -> anyhow::Result<T> {

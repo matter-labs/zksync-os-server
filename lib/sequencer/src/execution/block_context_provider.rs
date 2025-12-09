@@ -3,6 +3,7 @@ use crate::model::blocks::{
     BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
 };
 use alloy::consensus::{Block, BlockBody, Header};
+use alloy::eips::eip4844::FIELD_ELEMENTS_PER_BLOB;
 use alloy::primitives::{Address, BlockHash, TxHash, U128, U256};
 use anyhow::Context as _;
 use reth_execution_types::ChangedAccount;
@@ -15,8 +16,8 @@ use zksync_os_mempool::{
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, UpgradeTransaction,
-    ZkEnvelope,
+    ExecutionVersion, L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, PubdataMode,
+    UpgradeTransaction, ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -49,6 +50,7 @@ pub struct BlockContextProvider<Mempool> {
     native_price_override: Option<U256>,
     pubdata_price_provider: watch::Receiver<Option<u128>>,
     pending_block_context_sender: watch::Sender<Option<BlockContext>>,
+    pubdata_mode: PubdataMode,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
@@ -71,6 +73,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         native_price_override: Option<U128>,
         pubdata_price_provider: watch::Receiver<Option<u128>>,
         pending_block_context_sender: watch::Sender<Option<BlockContext>>,
+        pubdata_mode: PubdataMode,
     ) -> Self {
         Self {
             next_l1_priority_id,
@@ -90,6 +93,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             native_price_override: native_price_override.map(U256::from),
             pubdata_price_provider,
             pending_block_context_sender,
+            pubdata_mode,
         }
     }
 
@@ -152,21 +156,21 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     .try_into()
                     .context("Cannot instantiate a block for unsupported execution version")?;
 
-                const NATIVE_PRICE: u128 = 1_000_000;
-                const NATIVE_PER_GAS: u128 = 100;
-                let eip1559_basefee = NATIVE_PRICE * NATIVE_PER_GAS;
+                let FeeParams {
+                    eip1559_basefee,
+                    native_price,
+                    pubdata_price,
+                } = Self::produce_fee_params(
+                    self.base_fee_override,
+                    self.native_price_override,
+                    self.pubdata_price_override,
+                    self.pubdata_mode,
+                    &self.pubdata_price_provider,
+                );
                 let block_context = BlockContext {
-                    eip1559_basefee: self
-                        .base_fee_override
-                        .unwrap_or(U256::from(eip1559_basefee)),
-                    native_price: self
-                        .native_price_override
-                        .unwrap_or(U256::from(NATIVE_PRICE)),
-                    pubdata_price: self.pubdata_price_override.unwrap_or(U256::from(
-                        self.pubdata_price_provider
-                            .borrow()
-                            .expect("Pubdata price must be available"),
-                    )),
+                    eip1559_basefee,
+                    native_price,
+                    pubdata_price,
                     block_number: produce_command.block_number,
                     timestamp,
                     chain_id: self.chain_id,
@@ -407,6 +411,64 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 update_kind: PoolUpdateKind::Commit,
             });
     }
+
+    fn produce_fee_params(
+        base_fee_override: Option<U256>,
+        native_price_override: Option<U256>,
+        pubdata_price_override: Option<U256>,
+        pubdata_mode: PubdataMode,
+        pubdata_price_provider: &watch::Receiver<Option<u128>>,
+    ) -> FeeParams {
+        const NATIVE_PRICE: u128 = 1_000_000;
+        const NATIVE_PER_GAS: u128 = 100;
+
+        let eip1559_basefee =
+            base_fee_override.unwrap_or(U256::from(NATIVE_PRICE) * U256::from(NATIVE_PER_GAS));
+
+        let native_price = native_price_override.unwrap_or(U256::from(NATIVE_PRICE));
+
+        let pubdata_price = match pubdata_mode {
+            PubdataMode::Blobs => {
+                if let Some(pubdata_price_override) = pubdata_price_override {
+                    pubdata_price_override
+                } else {
+                    // TODO(698): Import constants from zksync-os when available.
+                    // Amount of native resource spent per blob.
+                    const NATIVE_PER_BLOB: u64 = 50_000_000;
+                    // Effective number of bytes stored in a blob for `SimpleCoder`.
+                    const BYTES_USED_PER_BLOB: u64 = (FIELD_ELEMENTS_PER_BLOB - 1) * 31;
+                    // Amount of native resource spent per pubdata byte (assuming blob is fully filled).
+                    const NATIVE_PER_BLOB_BYTE: u64 = NATIVE_PER_BLOB / BYTES_USED_PER_BLOB;
+
+                    let base_pubdata_price = U256::from(
+                        pubdata_price_provider
+                            .borrow()
+                            .expect("Pubdata price must be available"),
+                    );
+                    // Final pubdata price is base price + overhead depending on native price.
+                    base_pubdata_price + native_price * U256::from(NATIVE_PER_BLOB_BYTE)
+                }
+            }
+            _ => pubdata_price_override.unwrap_or(U256::from(
+                pubdata_price_provider
+                    .borrow()
+                    .expect("Pubdata price must be available"),
+            )),
+        };
+
+        FeeParams {
+            eip1559_basefee,
+            native_price,
+            pubdata_price,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FeeParams {
+    eip1559_basefee: U256,
+    native_price: U256,
+    pubdata_price: U256,
 }
 
 pub fn millis_since_epoch() -> u128 {

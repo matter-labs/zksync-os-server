@@ -20,3 +20,6 @@ pub use config::BatchVerificationConfig;
 
 mod sequencer;
 pub use sequencer::component::BatchVerificationPipelineStep;
+
+#[cfg(test)]
+mod tests;

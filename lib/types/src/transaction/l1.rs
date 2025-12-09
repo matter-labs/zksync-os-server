@@ -29,7 +29,7 @@ pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
 /// exposed within the system.
 /// From the sequencer step onwards, upgrade tx should be represented as
 /// `L1PriorityEnvelope` or `ZkTransaction` only.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UpgradeTransaction {
     /// Instruction for the sequencer to NOT execute the upgrade transaction
     /// until the given timestamp.
@@ -41,6 +41,25 @@ pub struct UpgradeTransaction {
     pub tx: Option<L1UpgradeEnvelope>,
     /// Preimages (e.g. force deployments) for the upgrade transaction (if any).
     pub force_preimages: Vec<(B256, Vec<u8>)>,
+}
+
+// UpgradeTransaction has huge content. Especially force_preimage values and upgrade transaction input field. Display only some hashes.
+impl Debug for UpgradeTransaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpgradeTransaction")
+            .field("timestamp", &self.timestamp)
+            .field("protocol_version", &self.protocol_version)
+            .field("tx_hash", &self.tx.as_ref().map(|tx| tx.hash()))
+            .field(
+                "force_preimages_hashes",
+                &self
+                    .force_preimages
+                    .iter()
+                    .map(|(hash, _)| hash)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 // The L1->L2 transactions are required to have the following gas per pubdata byte.

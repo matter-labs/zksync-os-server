@@ -37,10 +37,18 @@ impl L1Watcher {
 impl L1Watcher {
     pub async fn run(mut self) -> Result<(), L1WatcherError> {
         let mut timer = tokio::time::interval(self.poll_interval);
-        loop {
+        while self.processor.should_continue() {
             timer.tick().await;
             self.poll().await?;
         }
+        tracing::info!(
+            event_name = &self.processor.name(),
+            "finished processing events"
+        );
+        // Drop processor to close potential channels and free up resources
+        drop(self.processor);
+
+        futures::future::pending().await
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {
@@ -115,6 +123,8 @@ pub enum L1WatcherError {
     Batch(anyhow::Error),
     #[error(transparent)]
     Convert(anyhow::Error),
+    #[error(transparent)]
+    Contract(#[from] zksync_os_contract_interface::Error),
     #[error(transparent)]
     Other(anyhow::Error),
     #[error("output has been closed")]
