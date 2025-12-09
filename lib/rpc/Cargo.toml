@@ -21,6 +21,7 @@ zk_os_basic_system.workspace = true
 
 zksync_os_evm_errors.workspace = true
 zksync_os_interface.workspace = true
+zk_os_evm_interpreter.workspace = true
 zk_os_api.workspace = true
 zk_ee.workspace = true
 
@@ -32,6 +33,7 @@ futures.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
 ruint.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -40,3 +42,6 @@ vise.workspace = true
 tower.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 hyper.workspace = true
+
+boa_engine.workspace = true
+boa_gc.workspace = true

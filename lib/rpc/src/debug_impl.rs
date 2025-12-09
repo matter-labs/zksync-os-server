@@ -5,7 +5,7 @@ use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::genesis::ChainConfig;
 use alloy::primitives::{B256, BlockHash, Bytes, TxHash};
 use alloy::rpc::types::trace::geth::{
-    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
+    CallConfig, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
     GethDebugTracingOptions, GethTrace, TraceResult,
 };
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
@@ -27,9 +27,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             eth_call_handler,
         }
     }
-}
 
-impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
     fn debug_trace_block_by_id_impl(
         &self,
         block_id: BlockId,
@@ -40,13 +38,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         let Some(tracer) = opts.tracer else {
             return Err(DebugError::UnsupportedDefaultTracer);
         };
-        if tracer != GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer) {
-            return Err(DebugError::UnsupportedTracer(tracer));
-        }
-        let call_config = opts
-            .tracer_config
-            .into_call_config()
-            .map_err(|_| DebugError::InvalidTracerConfig)?;
+
         let Some(block) = self.storage.get_block_by_id(block_id)? else {
             return Err(DebugError::BlockNotFound);
         };
@@ -77,18 +69,45 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
             txs.push(tx);
         }
         let prev_state_view = self.storage.state_view_at(block.number - 1)?;
-        match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
-            Ok(calls) => Ok(calls
-                .into_iter()
-                .zip(&block.body.transactions)
-                .map(|(call, tx_hash)| {
-                    TraceResult::new_success(GethTrace::CallTracer(call), Some(*tx_hash))
-                })
-                .collect()),
-            Err(err) => {
-                tracing::error!(?err, "Failed to trace transaction");
-                Err(DebugError::InternalError)
+        match tracer {
+            GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer) => {
+                let call_config = opts
+                    .tracer_config
+                    .clone()
+                    .into_call_config()
+                    .map_err(|_| DebugError::InvalidTracerConfig)?;
+
+                match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
+                    Ok(calls) => Ok(calls
+                        .into_iter()
+                        .zip(&block.body.transactions)
+                        .map(|(call, tx_hash)| {
+                            TraceResult::new_success(GethTrace::CallTracer(call), Some(*tx_hash))
+                        })
+                        .collect()),
+                    Err(err) => {
+                        tracing::error!(?err, "Failed to trace transaction");
+                        Err(DebugError::InternalError)
+                    }
+                }
             }
+            GethDebugTracerType::JsTracer(js) => {
+                match crate::js_tracer::tracer::trace_block(txs, block_context, prev_state_view, js)
+                {
+                    Ok(outputs) => Ok(outputs
+                        .into_iter()
+                        .zip(&block.body.transactions)
+                        .map(|(value, tx_hash)| {
+                            TraceResult::new_success(GethTrace::JS(value), Some(*tx_hash))
+                        })
+                        .collect()),
+                    Err(err) => {
+                        tracing::error!(?err, "Failed to trace transaction with JS tracer");
+                        Err(DebugError::InternalError)
+                    }
+                }
+            }
+            other => Err(DebugError::UnsupportedTracer(other)),
         }
     }
 
@@ -141,20 +160,37 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         let Some(tracer) = tracing_options.tracer else {
             return Err(DebugError::UnsupportedDefaultTracer);
         };
-        if tracer != GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer) {
-            return Err(DebugError::UnsupportedTracer(tracer));
+        match (tracer, state_overrides, block_overrides) {
+            (
+                GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer),
+                state_overrides,
+                block_overrides,
+            ) => {
+                let call_config: CallConfig = tracing_options
+                    .tracer_config
+                    .into_call_config()
+                    .map_err(|_| DebugError::InvalidTracerConfig)?;
+                Ok(self.eth_call_handler.call_trace_impl(
+                    request,
+                    block_id,
+                    call_config,
+                    state_overrides,
+                    block_overrides.map(Box::new),
+                )?)
+            }
+            (GethDebugTracerType::JsTracer(js_cfg), state_overrides, block_overrides) => {
+                let value = self.eth_call_handler.call_js_tracer_impl(
+                    request,
+                    block_id,
+                    js_cfg,
+                    state_overrides,
+                    block_overrides.map(Box::new),
+                )?;
+
+                Ok(GethTrace::JS(value))
+            }
+            (other, ..) => Err(DebugError::UnsupportedTracer(other)),
         }
-        let call_config = tracing_options
-            .tracer_config
-            .into_call_config()
-            .map_err(|_| DebugError::InvalidTracerConfig)?;
-        Ok(self.eth_call_handler.call_trace_impl(
-            request,
-            block_id,
-            call_config,
-            state_overrides,
-            block_overrides.map(Box::new),
-        )?)
     }
 }
 

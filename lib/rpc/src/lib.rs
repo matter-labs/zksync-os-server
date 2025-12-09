@@ -16,6 +16,7 @@ mod result;
 mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
+pub mod js_tracer;
 mod monitoring_middleware;
 mod net_impl;
 mod sandbox;
