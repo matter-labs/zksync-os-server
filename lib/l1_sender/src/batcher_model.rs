@@ -80,6 +80,9 @@ pub enum BatchSignatureData {
     Signed {
         signatures: BatchSignatureSet,
     },
+    /// Batch was already committed, but is going through pipeline the second time.
+    /// We do not need to have signatures for it now
+    AlreadyCommitted,
     // default to allow deserializing of older objects
     /// Batch signatures are not enabled
     #[default]

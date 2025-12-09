@@ -38,7 +38,7 @@ pub struct BatchVerificationClient<Finality> {
     diamond_proxy: Address,
     server_address: String,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality>,
+    block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
 }
 
 #[derive(Debug, thiserror::Error)]
