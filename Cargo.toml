@@ -186,8 +186,7 @@ reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3"
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 
-# todo: start using tags once everything is merged to `main`
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "main" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.1" }
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.12.0-non-semver-compat", path = "lib/contract_interface" }
