@@ -1,13 +1,12 @@
 pub use self::cli::ConfigArgs;
 use crate::command_source::RebuildOptions;
-use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{
-    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, ParseErrors,
-    Serde, de::Delimited,
+    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
+    ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
@@ -406,17 +405,17 @@ pub struct L1SenderConfig {
     #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_EXECUTE_PK))]
     pub operator_execute_pk: SecretString,
 
-    /// Max fee per gas we are willing to spend (in gwei).
-    #[config(default_t = 101)]
-    pub max_fee_per_gas_gwei: u64,
+    /// Max fee per gas we are willing to spend.
+    #[config(default_t = 100 * EtherUnit::Gwei)]
+    pub max_fee_per_gas: EtherAmount,
 
-    /// Max priority fee per gas we are willing to spend (in gwei).
-    #[config(default_t = 2)]
-    pub max_priority_fee_per_gas_gwei: u64,
+    /// Max priority fee per gas we are willing to spend.
+    #[config(default_t = 1 * EtherUnit::Gwei)]
+    pub max_priority_fee_per_gas: EtherAmount,
 
-    /// Max fee per blob gas we are willing to spend (in gwei).
-    #[config(default_t = 1)]
-    pub max_fee_per_blob_gas_gwei: u64,
+    /// Max fee per blob gas we are willing to spend.
+    #[config(default_t = 1 * EtherUnit::Gwei)]
+    pub max_fee_per_blob_gas: EtherAmount,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -773,9 +772,9 @@ impl L1SenderConfig {
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_pk,
-            max_fee_per_gas_gwei: self.max_fee_per_gas_gwei,
-            max_priority_fee_per_gas_gwei: self.max_priority_fee_per_gas_gwei,
-            max_fee_per_blob_gas_gwei: self.max_fee_per_blob_gas_gwei,
+            max_fee_per_gas_wei: self.max_fee_per_gas.0,
+            max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
+            max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
@@ -859,14 +858,13 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
 pub fn gas_adjuster_config(
     c: GasAdjusterConfig,
     pubdata_mode: PubdataMode,
-    max_priority_fee_per_gas_gwei: u64,
+    max_priority_fee_per_gas_wei: u128,
 ) -> zksync_os_gas_adjuster::GasAdjusterConfig {
-    let max_priority_fee_per_gas = max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128);
     zksync_os_gas_adjuster::GasAdjusterConfig {
         pubdata_mode,
         max_base_fee_samples: c.max_base_fee_samples,
         num_samples_for_blob_base_fee_estimate: c.num_samples_for_blob_base_fee_estimate,
-        max_priority_fee_per_gas,
+        max_priority_fee_per_gas: max_priority_fee_per_gas_wei,
         poll_period: c.poll_period,
         pubdata_pricing_multiplier: c.pubdata_pricing_multiplier,
     }
