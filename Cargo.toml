@@ -30,7 +30,8 @@ members = [
     "lib/batch_verification",
     "lib/batch_types",
     "lib/socket",
-    "lib/internal_config"
+    "lib/internal_config",
+    "lib/network",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -185,6 +186,9 @@ reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.1" }
 
@@ -218,6 +222,7 @@ zksync_os_batch_verification = { version = "=0.12.0-non-semver-compat", path = "
 zksync_os_batch_types = { version = "=0.12.0-non-semver-compat", path = "lib/batch_types" }
 zksync_os_socket = { version = "=0.12.0-non-semver-compat", path = "lib/socket" }
 zksync_os_internal_config = { version = "=0.12.0-non-semver-compat", path = "lib/internal_config" }
+zksync_os_network = { version = "=0.12.0-non-semver-compat", path = "lib/network" }
 
 zksync_os_server = { version = "=0.12.0-non-semver-compat", path = "node/bin" }
 

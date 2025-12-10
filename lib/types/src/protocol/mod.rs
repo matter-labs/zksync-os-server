@@ -1,7 +1,8 @@
-use std::{fmt, ops::Deref, str::FromStr};
-
 use alloy::primitives::U256;
+use alloy::primitives::bytes::BufMut;
+use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
+use std::{fmt, ops::Deref, str::FromStr};
 
 mod execution_version;
 mod proving_version;
@@ -139,6 +140,48 @@ impl FromStr for ProtocolSemanticVersion {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let version = semver::Version::parse(s)?;
         Ok(Self(version))
+    }
+}
+
+#[derive(RlpEncodable, RlpDecodable)]
+struct EncodableSemanticVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl From<&ProtocolSemanticVersion> for EncodableSemanticVersion {
+    fn from(value: &ProtocolSemanticVersion) -> Self {
+        assert!(
+            value.build.is_empty(),
+            "ProtocolSemanticVersion is not supposed to have build metadata"
+        );
+        assert!(
+            value.pre.is_empty(),
+            "ProtocolSemanticVersion is not supposed to have prerelease identifier"
+        );
+        Self {
+            major: value.major,
+            minor: value.minor,
+            patch: value.patch,
+        }
+    }
+}
+
+impl Encodable for ProtocolSemanticVersion {
+    fn encode(&self, out: &mut dyn BufMut) {
+        EncodableSemanticVersion::from(self).encode(out);
+    }
+
+    fn length(&self) -> usize {
+        EncodableSemanticVersion::from(self).length()
+    }
+}
+
+impl Decodable for ProtocolSemanticVersion {
+    fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+        let encodable = EncodableSemanticVersion::decode(buf)?;
+        Ok(Self::new(encodable.major, encodable.minor, encodable.patch))
     }
 }
 

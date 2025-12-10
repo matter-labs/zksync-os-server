@@ -4,6 +4,7 @@ use futures::Stream;
 use futures::stream::{BoxStream, StreamExt};
 use pin_project::pin_project;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::time::{Instant, Sleep};
@@ -25,7 +26,7 @@ use zksync_os_interface::types::BlockContext;
 /// This is left ambiguous on purpose to allow both in-memory and persistent implementations, hence
 /// any specific implementation SHOULD declare if it satisfies requirements for a longer period of
 /// time.
-pub trait ReadReplay: Send + Sync + 'static {
+pub trait ReadReplay: Debug + Send + Sync + Unpin + 'static {
     /// Get block's execution context. Meant to be used in situations where the full block data is
     /// not needed.
     ///
