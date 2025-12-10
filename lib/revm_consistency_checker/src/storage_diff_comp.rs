@@ -81,7 +81,7 @@ impl CompareReport {
 
     /// Print a structured summary via `tracing`
     /// - INFO when everything matches
-    /// - WARN + DEBUG details when mismatches exist
+    /// - WARN + INFO details when mismatches exist
     pub fn log_tracing(&self, max_show: usize) {
         if self.is_empty() {
             tracing::info!(
@@ -99,11 +99,11 @@ impl CompareReport {
         );
 
         // STORAGE
-        tracing::debug!(total = self.storage.len(), "=== STORAGE DIFFS ===");
+        tracing::info!(total = self.storage.len(), "=== STORAGE DIFFS ===");
         for m in self.storage.iter().take(max_show) {
             match (m.revm_value, m.zk_value) {
                 (Some(r), Some(z)) if r != z => {
-                    tracing::debug!(
+                    tracing::info!(
                         addr = ?m.addr,
                         slot = ?m.slot,
                         revm = ?r,
@@ -112,7 +112,7 @@ impl CompareReport {
                     );
                 }
                 (Some(r), None) => {
-                    tracing::debug!(
+                    tracing::info!(
                         addr = ?m.addr,
                         slot = ?m.slot,
                         revm = ?r,
@@ -121,7 +121,7 @@ impl CompareReport {
                     );
                 }
                 (None, Some(z)) => {
-                    tracing::debug!(
+                    tracing::info!(
                         addr = ?m.addr,
                         slot = ?m.slot,
                         revm = "none",
@@ -133,28 +133,28 @@ impl CompareReport {
             }
         }
         if self.storage.len() > max_show {
-            tracing::debug!(
+            tracing::info!(
                 remaining = self.storage.len() - max_show,
                 "additional storage mismatches not shown"
             );
         }
 
         // ACCOUNTS
-        tracing::debug!(total = self.accounts.len(), "=== ACCOUNT DIFFS ===");
+        tracing::info!(total = self.accounts.len(), "=== ACCOUNT DIFFS ===");
         for m in self.accounts.iter().take(max_show) {
             // Header per account
-            tracing::debug!(addr = ?m.addr, "account mismatch");
+            tracing::info!(addr = ?m.addr, "account mismatch");
 
             if let Some(p) = m.nonce {
                 match (p.revm, p.zk) {
                     (Some(r), Some(z)) if r != z => {
-                        tracing::debug!(addr = ?m.addr, revm = r, zk = z, "nonce mismatch");
+                        tracing::info!(addr = ?m.addr, revm = r, zk = z, "nonce mismatch");
                     }
                     (Some(r), None) => {
-                        tracing::debug!(addr = ?m.addr, revm = r, zk = "none", "nonce missing in zksync");
+                        tracing::info!(addr = ?m.addr, revm = r, zk = "none", "nonce missing in zksync");
                     }
                     (None, Some(z)) => {
-                        tracing::debug!(addr = ?m.addr, revm = "none", zk = z, "nonce missing in revm");
+                        tracing::info!(addr = ?m.addr, revm = "none", zk = z, "nonce missing in revm");
                     }
                     _ => {}
                 }
@@ -162,13 +162,13 @@ impl CompareReport {
             if let Some(p) = m.balance {
                 match (p.revm, p.zk) {
                     (Some(r), Some(z)) if r != z => {
-                        tracing::debug!(addr = ?m.addr, revm = ?r, zk = ?z, "balance mismatch");
+                        tracing::info!(addr = ?m.addr, revm = ?r, zk = ?z, "balance mismatch");
                     }
                     (Some(r), None) => {
-                        tracing::debug!(addr = ?m.addr, revm = ?r, zk = "none", "balance missing in zksync");
+                        tracing::info!(addr = ?m.addr, revm = ?r, zk = "none", "balance missing in zksync");
                     }
                     (None, Some(z)) => {
-                        tracing::debug!(addr = ?m.addr, revm = "none", zk = ?z, "balance missing in revm");
+                        tracing::info!(addr = ?m.addr, revm = "none", zk = ?z, "balance missing in revm");
                     }
                     _ => {}
                 }
@@ -176,20 +176,20 @@ impl CompareReport {
             if let Some(p) = m.bytecode_hash {
                 match (p.revm, p.zk) {
                     (Some(r), Some(z)) if !code_hash_equivalent(r, z) => {
-                        tracing::debug!(addr = ?m.addr, revm = ?r, zk = ?z, "bytecode hash mismatch");
+                        tracing::info!(addr = ?m.addr, revm = ?r, zk = ?z, "bytecode hash mismatch");
                     }
                     (Some(r), None) => {
-                        tracing::debug!(addr = ?m.addr, revm = ?r, zk = "none", "codehash missing in zksync");
+                        tracing::info!(addr = ?m.addr, revm = ?r, zk = "none", "codehash missing in zksync");
                     }
                     (None, Some(z)) => {
-                        tracing::debug!(addr = ?m.addr, revm = "none", zk = ?z, "codehash missing in revm");
+                        tracing::info!(addr = ?m.addr, revm = "none", zk = ?z, "codehash missing in revm");
                     }
                     _ => {}
                 }
             }
         }
         if self.accounts.len() > max_show {
-            tracing::debug!(
+            tracing::info!(
                 remaining = self.accounts.len() - max_show,
                 "additional account mismatches not shown"
             );
