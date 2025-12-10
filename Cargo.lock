@@ -10058,9 +10058,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config"
-version = "0.4.0-pre"
+version = "0.4.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc2d4564b7a55dcf808e6c95051fcf433c0c1f1898af9621f7644f0c0af3114e"
+checksum = "ad33fa97d9532efcaa05b94334c3a568a589456ceddf08b5ec046f942b1e0878"
 dependencies = [
  "alloy",
  "anyhow",
@@ -10076,9 +10076,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-commands"
-version = "0.4.0-pre"
+version = "0.4.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51f4b028f80f6667d297c09a2c781f7f4a565c3bcdb783203553b12a6cb0d99c"
+checksum = "84492474ef191819b3e0783c953058dfc322c72370db339b79c3c386f75fac1b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -10089,9 +10089,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-derive"
-version = "0.4.0-pre"
+version = "0.4.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1634024848ad2d76c65a88ddc7b17de8ca323100b3e77d9ee94b103fc5efe65"
+checksum = "c72fbbe7ee7d4b154a0c07e66c46cee67d44d8d49c480aed33f5e7da099f5a70"
 dependencies = [
  "proc-macro2 1.0.95",
  "quote 1.0.42",
@@ -12471,7 +12471,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-revm?branch=di%2Frevm-v31.0.2#88b6909a8c991f05898248a6b14d8736410fffb1"
+source = "git+https://github.com/matter-labs/zksync-os-revm?branch=main#a686621c51fcb62d729cdaa475b9794920091a44"
 dependencies = [
  "auto_impl",
  "revm",
