@@ -163,13 +163,11 @@ where
                     .iter()
                     .zip(&block_output.tx_results)
                     .map(|(transaction, tx_output_raw)| {
-                        let tx_output = tx_output_raw.as_ref().expect("block_output of a sealed block must not contain invalid transactions");
+                        let tx_output = tx_output_raw.as_ref().expect(
+                            "block_output of a sealed block must not contain invalid transactions",
+                        );
 
-                        zk_tx_into_revm_tx(
-                            transaction,
-                            tx_output.gas_used,
-                            tx_output.is_success(),
-                        )
+                        zk_tx_into_revm_tx(transaction, tx_output.gas_used, tx_output.is_success())
                     });
 
                 evm.transact_many_commit(revm_txs)?;
