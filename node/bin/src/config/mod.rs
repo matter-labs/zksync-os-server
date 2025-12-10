@@ -1,13 +1,12 @@
 pub use self::cli::ConfigArgs;
 use crate::command_source::RebuildOptions;
-use alloy::consensus::constants::GWEI_TO_WEI;
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
 use smart_config::{
-    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, ParseErrors,
-    Serde, de::Delimited, EtherAmount
+    ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
+    ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::HashSet;
 use std::{path::PathBuf, time::Duration};
@@ -406,32 +405,17 @@ pub struct L1SenderConfig {
     #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_EXECUTE_PK))]
     pub operator_execute_pk: SecretString,
 
-    /// Deprecated in favor of `max_fee_per_gas`. Will be removed in an upcoming release.
-    /// Max fee per gas we are willing to spend (in gwei).
-    #[config(default_t = 100)]
-    pub max_fee_per_gas_gwei: u64,
-
-    /// Deprecated in favor of `max_priority_fee_per_gas`. Will be removed in an upcoming release.
-    /// Max priority fee per gas we are willing to spend (in gwei).
-    #[config(default_t = 1)]
-    pub max_priority_fee_per_gas_gwei: u64,
-
-    /// Deprecated in favor of `max_fee_per_blob_gas`. Will be removed in an upcoming release.
-    /// Max fee per blob gas we are willing to spend (in gwei).
-    #[config(default_t = 1)]
-    pub max_fee_per_blob_gas_gwei: u64,
-
     /// Max fee per gas we are willing to spend.
-    #[config(default_t = None)]
-    pub max_fee_per_gas: Option<EtherAmount>,
+    #[config(default_t = 100 * EtherUnit::Gwei)]
+    pub max_fee_per_gas: EtherAmount,
 
     /// Max priority fee per gas we are willing to spend.
-    #[config(default_t = None)]
-    pub max_priority_fee_per_gas: Option<EtherAmount>,
+    #[config(default_t = 1 * EtherUnit::Gwei)]
+    pub max_priority_fee_per_gas: EtherAmount,
 
     /// Max fee per blob gas we are willing to spend.
-    #[config(default_t = None)]
-    pub max_fee_per_blob_gas: Option<EtherAmount>,
+    #[config(default_t = 1 * EtherUnit::Gwei)]
+    pub max_fee_per_blob_gas: EtherAmount,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -459,32 +443,6 @@ pub struct L1SenderConfig {
     #[config(default_t = PubdataMode::Blobs)]
     #[config(with = Serde![str])]
     pub pubdata_mode: PubdataMode,
-}
-
-impl L1SenderConfig {
-    pub fn max_fee_per_gas_wei(&self) -> u128 {
-        if let Some(max_fee_per_gas) = self.max_fee_per_gas {
-            max_fee_per_gas.0
-        } else {
-            self.max_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128)
-        }
-    }
-
-    pub fn max_priority_fee_per_gas_wei(&self) -> u128 {
-        if let Some(max_priority_fee_per_gas) = self.max_priority_fee_per_gas {
-            max_priority_fee_per_gas.0
-        } else {
-            self.max_priority_fee_per_gas_gwei as u128 * (GWEI_TO_WEI as u128)
-        }
-    }
-
-    pub fn max_fee_per_blob_gas_wei(&self) -> u128 {
-        if let Some(max_fee_per_blob_gas) = self.max_fee_per_blob_gas {
-            max_fee_per_blob_gas.0
-        } else {
-            self.max_fee_per_blob_gas_gwei as u128 * (GWEI_TO_WEI as u128)
-        }
-    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -814,9 +772,9 @@ impl L1SenderConfig {
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_pk,
-            max_fee_per_gas_wei: self.max_fee_per_gas_wei(),
-            max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas_wei(),
-            max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas_wei(),
+            max_fee_per_gas_wei: self.max_fee_per_gas.0,
+            max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
+            max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
