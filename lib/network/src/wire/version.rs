@@ -14,6 +14,8 @@ pub struct ParseVersionError(String);
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ZksVersion {
+    /// The `zks` protocol version 0. Only used for testing.
+    Zks0 = 0,
     /// The `zks` protocol version 1.
     Zks1 = 1,
 }
@@ -23,7 +25,7 @@ impl ZksVersion {
     pub const LATEST: Self = Self::Zks1;
 
     /// All known zks versions
-    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks1];
+    pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1];
 }
 
 /// RLP encodes `ZksVersion` as a single byte.
@@ -108,6 +110,7 @@ impl From<ZksVersion> for &'static str {
     #[inline]
     fn from(v: ZksVersion) -> &'static str {
         match v {
+            ZksVersion::Zks0 => "0",
             ZksVersion::Zks1 => "1",
         }
     }
@@ -121,6 +124,7 @@ mod tests {
 
     #[test]
     fn test_zks_version_try_from_str() {
+        assert_eq!(ZksVersion::Zks0, ZksVersion::try_from("0").unwrap());
         assert_eq!(ZksVersion::Zks1, ZksVersion::try_from("1").unwrap());
         assert_eq!(
             Err(ParseVersionError("2".to_string())),
@@ -130,6 +134,7 @@ mod tests {
 
     #[test]
     fn test_zks_version_from_str() {
+        assert_eq!(ZksVersion::Zks0, "0".parse().unwrap());
         assert_eq!(ZksVersion::Zks1, "1".parse().unwrap());
         assert_eq!(
             Err(ParseVersionError("2".to_string())),
@@ -139,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_zks_version_rlp_encode() {
-        let versions = [ZksVersion::Zks1];
+        let versions = [ZksVersion::Zks0, ZksVersion::Zks1];
 
         for version in versions {
             let mut encoded = BytesMut::new();
@@ -152,8 +157,8 @@ mod tests {
     #[test]
     fn test_zks_version_rlp_decode() {
         let test_cases = [
+            (0_u8, Ok(ZksVersion::Zks0)),
             (1_u8, Ok(ZksVersion::Zks1)),
-            (0_u8, Err(RlpError::Custom("invalid zks version"))),
             (2_u8, Err(RlpError::Custom("invalid zks version"))),
         ];
 

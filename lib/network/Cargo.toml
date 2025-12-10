@@ -25,6 +25,7 @@ alloy = { workspace = true, default-features = false, features = [
 ] }
 alloy-rlp.workspace = true
 futures.workspace = true
+semver.workspace = true
 serde.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
@@ -33,3 +34,9 @@ tracing.workspace = true
 reth-network.workspace = true
 reth-network-peers.workspace = true
 reth-eth-wire.workspace = true
+
+[dev-dependencies]
+test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
+
+reth-network = { workspace = true, features = ["test-utils"] }
+reth-provider = { workspace = true, features = ["test-utils"] }

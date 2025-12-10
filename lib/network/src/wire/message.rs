@@ -3,12 +3,18 @@
 //!
 //! Examples include creating, encoding, and decoding protocol messages.
 
+use crate::wire;
+use crate::wire::replays::{AnyReplayRecord, RecordOverride};
 use crate::wire::{BlockReplays, GetBlockReplays, ZksVersion};
+use alloy::primitives::BlockNumber;
 use alloy::primitives::bytes::{Buf, BufMut, BytesMut};
 use alloy_rlp::{Decodable, Encodable, Error as RlpError};
 use reth_eth_wire::protocol::Protocol;
 use reth_network::types::Capability;
+use std::fmt::Debug;
 use zksync_os_storage_api::ReplayRecord;
+
+pub const ZKS_PROTOCOL: &str = "zks";
 
 /// Represents a message in the zks wire protocol, versions 1-1.
 ///
@@ -18,25 +24,46 @@ use zksync_os_storage_api::ReplayRecord;
 /// both sides MAY send the request. The rest of the connection MUST consist of indefinite number of
 /// [`BlockReplays`] messages.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ZksMessage {
+pub enum ZksMessage<P: AnyZksProtocol> {
     /// Represents a `GetBlockReplays` streaming request.
     GetBlockReplays(GetBlockReplays),
     /// Represents a `BlockReplays` streaming response (one of many).
-    BlockReplays(BlockReplays),
+    BlockReplays(BlockReplays<P::Record>),
 }
 
-impl ZksMessage {
+pub trait AnyZksProtocol: Debug + Send + Sync + Clone + 'static {
+    type Record: AnyReplayRecord;
+
+    const VERSION: ZksVersion;
+}
+
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV0;
+
+impl AnyZksProtocol for ZksProtocolV0 {
+    type Record = wire::replays::v0::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks0;
+}
+
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV1;
+
+impl AnyZksProtocol for ZksProtocolV1 {
+    type Record = wire::replays::v1::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks1;
+}
+
+impl<P: AnyZksProtocol> ZksMessage<P> {
     /// Returns the capability for the zks protocol.
     pub const fn capability() -> Capability {
-        Capability::new_static("zks", ZksVersion::LATEST as usize)
+        Capability::new_static(ZKS_PROTOCOL, P::VERSION as usize)
     }
 
     /// Returns the protocol for the zks protocol.
     pub const fn protocol() -> Protocol {
-        Protocol::new(
-            Self::capability(),
-            ZksMessageId::message_count(ZksVersion::LATEST),
-        )
+        Protocol::new(Self::capability(), ZksMessageId::message_count(P::VERSION))
     }
 
     /// Returns the message's ID.
@@ -45,6 +72,16 @@ impl ZksMessage {
             ZksMessage::GetBlockReplays(_) => ZksMessageId::GetBlockReplays,
             ZksMessage::BlockReplays(_) => ZksMessageId::BlockReplays,
         }
+    }
+
+    pub fn get_block_replays(
+        starting_block: BlockNumber,
+        record_overrides: Vec<RecordOverride>,
+    ) -> Self {
+        Self::GetBlockReplays(GetBlockReplays {
+            starting_block,
+            record_overrides,
+        })
     }
 
     pub fn block_replays(records: Vec<ReplayRecord>) -> Self {
@@ -63,12 +100,14 @@ impl ZksMessage {
         let message_type = ZksMessageId::decode(buf)?;
         Ok(match message_type {
             ZksMessageId::GetBlockReplays => Self::GetBlockReplays(GetBlockReplays::decode(buf)?),
-            ZksMessageId::BlockReplays => Self::BlockReplays(BlockReplays::decode(buf)?),
+            ZksMessageId::BlockReplays => {
+                Self::BlockReplays(BlockReplays::<P::Record>::decode(buf)?)
+            }
         })
     }
 }
 
-impl Encodable for ZksMessage {
+impl<P: AnyZksProtocol> Encodable for ZksMessage<P> {
     fn encode(&self, out: &mut dyn BufMut) {
         self.message_id().encode(out);
         match self {
@@ -106,6 +145,7 @@ impl ZksMessageId {
     /// Returns the max value for the given version.
     pub const fn max(version: ZksVersion) -> u8 {
         match version {
+            ZksVersion::Zks0 => Self::BlockReplays as u8,
             ZksVersion::Zks1 => Self::BlockReplays as u8,
         }
     }

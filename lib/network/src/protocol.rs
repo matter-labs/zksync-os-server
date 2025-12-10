@@ -1,7 +1,8 @@
 //! An RLPX subprotocol for ZKsync OS functionality.
 
 use crate::wire::GetBlockReplays;
-use crate::wire::message::ZksMessage;
+use crate::wire::message::{AnyZksProtocol, ZKS_PROTOCOL, ZksMessage};
+use crate::wire::replays::AnyReplayRecord;
 use alloy::primitives::BlockNumber;
 use alloy::primitives::bytes::BytesMut;
 use futures::{Stream, StreamExt};
@@ -11,16 +12,17 @@ use reth_eth_wire::protocol::Protocol;
 use reth_network::Direction;
 use reth_network::protocol::{ConnectionHandler, OnNotSupported, ProtocolHandler};
 use reth_network_peers::PeerId;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use zksync_os_storage_api::ReadReplay;
+use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 
 #[derive(Debug, Clone)]
-pub struct ZksProtocolHandler<Replay: Clone> {
+pub struct ZksProtocolHandler<P: AnyZksProtocol, Replay: Clone> {
     /// The maximum number of active connections.
     pub max_active_connections: u64,
     /// Storage to serve block replay records from.
@@ -29,9 +31,13 @@ pub struct ZksProtocolHandler<Replay: Clone> {
     pub to_request_blocks: bool,
     /// Current state of the protocol.
     pub state: ProtocolState,
+    pub replay_sender: mpsc::UnboundedSender<ReplayRecord>,
+    pub _phantom: PhantomData<P>,
 }
 
-impl<Replay: ReadReplay + Clone> ProtocolHandler for ZksProtocolHandler<Replay> {
+impl<P: AnyZksProtocol, Replay: ReadReplay + Clone> ProtocolHandler
+    for ZksProtocolHandler<P, Replay>
+{
     type ConnectionHandler = Self;
 
     fn on_incoming(&self, socket_addr: SocketAddr) -> Option<Self::ConnectionHandler> {
@@ -112,20 +118,28 @@ pub enum ProtocolEvent {
     },
 }
 
-impl<Replay: ReadReplay + Clone> ConnectionHandler for ZksProtocolHandler<Replay> {
-    type Connection = ZksConnection<Replay>;
+impl<P: AnyZksProtocol, Replay: ReadReplay + Clone> ConnectionHandler
+    for ZksProtocolHandler<P, Replay>
+{
+    type Connection = ZksConnection<P, Replay>;
 
     fn protocol(&self) -> Protocol {
-        ZksMessage::protocol()
+        ZksMessage::<P>::protocol()
     }
 
     fn on_unsupported_by_peer(
         self,
-        _supported: &SharedCapabilities,
+        supported: &SharedCapabilities,
         _direction: Direction,
         _peer_id: PeerId,
     ) -> OnNotSupported {
-        OnNotSupported::Disconnect
+        if supported.iter_caps().any(|c| c.name() == ZKS_PROTOCOL) {
+            // Keep connection alive if there is at least one other common zks protocol version
+            OnNotSupported::KeepAlive
+        } else {
+            // Disconnect otherwise
+            OnNotSupported::Disconnect
+        }
     }
 
     fn into_connection(
@@ -149,27 +163,26 @@ impl<Replay: ReadReplay + Clone> ConnectionHandler for ZksProtocolHandler<Replay
             peer_id,
             conn,
             request_to_send: self.to_request_blocks.then(|| {
-                ZksMessage::GetBlockReplays(GetBlockReplays {
-                    starting_block: self.replay.latest_record() + 1,
-                    // todo: populate with real values
-                    record_overrides: vec![],
-                })
+                // todo: populate with real values
+                ZksMessage::<P>::get_block_replays(self.replay.latest_record() + 1, vec![])
             }),
             response_state: None,
             replay: self.replay.clone(),
+            replay_sender: self.replay_sender.clone(),
             terminated: false,
         }
     }
 }
 
-pub struct ZksConnection<Replay> {
+pub struct ZksConnection<P: AnyZksProtocol, Replay> {
     /// Peer ID.
     peer_id: PeerId,
     /// Protocol connection.
     conn: ProtocolConnection,
-    request_to_send: Option<ZksMessage>,
+    request_to_send: Option<ZksMessage<P>>,
     response_state: Option<ResponseState>,
     replay: Replay,
+    replay_sender: mpsc::UnboundedSender<ReplayRecord>,
     /// Flag indicating whether this stream has previously been terminated.
     terminated: bool,
 }
@@ -180,7 +193,7 @@ struct ResponseState {
     request: GetBlockReplays,
 }
 
-impl<Replay: ReadReplay> Stream for ZksConnection<Replay> {
+impl<P: AnyZksProtocol, Replay: ReadReplay> Stream for ZksConnection<P, Replay> {
     type Item = BytesMut;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -203,11 +216,11 @@ impl<Replay: ReadReplay> Stream for ZksConnection<Replay> {
                     .get_replay_record(response_state.next_block_number)
             {
                 response_state.next_block_number += 1;
-                return Poll::Ready(Some(ZksMessage::block_replays(vec![record]).encoded()));
+                return Poll::Ready(Some(ZksMessage::<P>::block_replays(vec![record]).encoded()));
             }
             if let Poll::Ready(maybe_msg) = this.conn.poll_next_unpin(cx) {
                 let Some(next) = maybe_msg else { break };
-                let msg = match ZksMessage::decode_message(&mut &next[..]) {
+                let msg = match ZksMessage::<P>::decode_message(&mut &next[..]) {
                     Ok(msg) => {
                         tracing::trace!(%peer_id, ?msg, "processing peer message");
                         msg
@@ -232,10 +245,13 @@ impl<Replay: ReadReplay> Stream for ZksConnection<Replay> {
                     ZksMessage::BlockReplays(message) => {
                         for record in message.records {
                             tracing::info!(
-                                %peer_id, block_number = record.block_context.block_number,
+                                %peer_id, block_number = record.block_number(),
                                 "received block replay"
                             );
-                            // todo: propagate new records to sequencer
+                            if this.replay_sender.send(record.into()).is_err() {
+                                tracing::trace!(%peer_id, "network replay channel is closed");
+                                break;
+                            }
                         }
                     }
                 }
