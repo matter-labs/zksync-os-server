@@ -268,6 +268,14 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         .published_preimages
         .extend(command.force_preimages.iter().map(|(k, v)| (*k, v.clone())));
 
+    // Remove failed transactions from output.tx_results.
+    // Note: Rejected transactions don't affect the VM state or output,
+    // yet they are still returned in output.tx_results.
+    // This results in an inconsistency - transaction exists in output, but doesn't exist in
+    // replay_record.transactions.
+    // Here, we manually remove all such tx_results from VM output.
+    output.tx_results.retain(|tx| tx.is_ok());
+
     EXECUTION_METRICS
         .storage_writes_per_block
         .observe(output.storage_writes.len() as u64);

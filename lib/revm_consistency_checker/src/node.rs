@@ -162,17 +162,12 @@ where
                     .transactions
                     .iter()
                     .zip(&block_output.tx_results)
-                    .filter_map(|(transaction, tx_output_raw)| {
-                        let tx_output = match tx_output_raw {
-                            Ok(tx_output) => tx_output,
-                            _ => return None, // Skip invalid transaction as they are not included in the batch
-                        };
+                    .map(|(transaction, tx_output_raw)| {
+                        let tx_output = tx_output_raw.as_ref().expect(
+                            "block_output of a sealed block must not contain invalid transactions",
+                        );
 
-                        Some(zk_tx_into_revm_tx(
-                            transaction,
-                            tx_output.gas_used,
-                            tx_output.is_success(),
-                        ))
+                        zk_tx_into_revm_tx(transaction, tx_output.gas_used, tx_output.is_success())
                     });
 
                 evm.transact_many_commit(revm_txs)?;
