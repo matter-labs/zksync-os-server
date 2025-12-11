@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig, GeneralConfig,
@@ -61,7 +62,7 @@ pub async fn main() {
         .map(|sentry_url| {
             zksync_os_observability::Sentry::new(&sentry_url)
                 .expect("Failed to create Sentry config")
-                .with_node_version(Some(zksync_os_server::metadata::NODE_VERSION.to_string()))
+                .with_node_version(Some(NODE_VERSION.to_string()))
                 .with_environment(observability_config.sentry.environment.clone())
         });
     let otlp = zksync_os_observability::OpenTelemetry::new(

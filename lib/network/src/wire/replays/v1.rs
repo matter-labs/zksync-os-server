@@ -16,9 +16,6 @@ pub struct ReplayRecord {
     pub starting_l1_priority_id: L1TxSerialId,
     pub transactions: Vec<ZkEnvelope>,
     pub previous_block_timestamp: u64,
-    // todo: rethink whether we need this at all?
-    // /// Version of the node that created this replay record.
-    // pub node_version: semver::Version,
     pub protocol_version: ProtocolSemanticVersion,
     pub block_output_hash: B256,
     pub force_preimages: Vec<ForcedPreimage>,

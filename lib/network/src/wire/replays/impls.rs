@@ -9,6 +9,7 @@ use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
 use zksync_os_interface::types::BlockContext as InterfaceBlockContext;
 use zksync_os_interface::types::BlockHashes as InterfaceBlockHashes;
+use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 use zksync_os_types::ProtocolSemanticVersion;
 
@@ -139,8 +140,8 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
                 .map(|tx| tx.try_into_recovered())
                 .collect::<Result<Vec<_>, _>>()?,
             previous_block_timestamp: value.previous_block_timestamp,
-            // todo: real logic?
-            node_version: semver::Version::new(0, 0, 0),
+            // Stamp replay record with this node's version
+            node_version: NODE_SEMVER_VERSION.clone(),
             protocol_version: value.protocol_version,
             block_output_hash: value.block_output_hash,
             force_preimages: value

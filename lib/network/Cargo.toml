@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 zksync_os_storage_api.workspace = true
 zksync_os_types = { workspace = true, features = ["reth"] }
+zksync_os_metadata.workspace = true
 
 zksync_os_interface.workspace = true
 
