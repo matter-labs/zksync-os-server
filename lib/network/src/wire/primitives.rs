@@ -11,6 +11,8 @@ pub struct ForcedPreimage {
     pub preimage: Bytes,
 }
 
+/// Represents 256 consecutive block hashes. It should not be necessary to transport all of them over
+/// network but this is kept for now as a short-cut.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlockHashes(pub [U256; 256]);
 

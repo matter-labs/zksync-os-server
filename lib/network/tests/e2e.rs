@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_network::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
-use zksync_os_network::wire::message::{ZksProtocolV0, ZksProtocolV1};
+use zksync_os_network::version::{ZksProtocolV0, ZksProtocolV1};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::ProtocolSemanticVersion;
 

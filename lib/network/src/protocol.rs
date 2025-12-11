@@ -1,7 +1,8 @@
 //! An RLPX subprotocol for ZKsync OS functionality.
 
+use crate::version::AnyZksProtocolVersion;
 use crate::wire::GetBlockReplays;
-use crate::wire::message::{AnyZksProtocol, ZKS_PROTOCOL, ZksMessage};
+use crate::wire::message::{ZKS_PROTOCOL, ZksMessage};
 use crate::wire::replays::AnyReplayRecord;
 use alloy::primitives::BlockNumber;
 use alloy::primitives::bytes::BytesMut;
@@ -22,7 +23,7 @@ use tokio::sync::mpsc;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 
 #[derive(Debug, Clone)]
-pub struct ZksProtocolHandler<P: AnyZksProtocol, Replay: Clone> {
+pub struct ZksProtocolHandler<P: AnyZksProtocolVersion, Replay: Clone> {
     /// The maximum number of active connections.
     pub max_active_connections: u64,
     /// Storage to serve block replay records from.
@@ -35,7 +36,7 @@ pub struct ZksProtocolHandler<P: AnyZksProtocol, Replay: Clone> {
     pub _phantom: PhantomData<P>,
 }
 
-impl<P: AnyZksProtocol, Replay: ReadReplay + Clone> ProtocolHandler
+impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ProtocolHandler
     for ZksProtocolHandler<P, Replay>
 {
     type ConnectionHandler = Self;
@@ -118,7 +119,7 @@ pub enum ProtocolEvent {
     },
 }
 
-impl<P: AnyZksProtocol, Replay: ReadReplay + Clone> ConnectionHandler
+impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ConnectionHandler
     for ZksProtocolHandler<P, Replay>
 {
     type Connection = ZksConnection<P, Replay>;
@@ -174,7 +175,7 @@ impl<P: AnyZksProtocol, Replay: ReadReplay + Clone> ConnectionHandler
     }
 }
 
-pub struct ZksConnection<P: AnyZksProtocol, Replay> {
+pub struct ZksConnection<P: AnyZksProtocolVersion, Replay> {
     /// Peer ID.
     peer_id: PeerId,
     /// Protocol connection.
@@ -193,7 +194,7 @@ struct ResponseState {
     request: GetBlockReplays,
 }
 
-impl<P: AnyZksProtocol, Replay: ReadReplay> Stream for ZksConnection<P, Replay> {
+impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, Replay> {
     type Item = BytesMut;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

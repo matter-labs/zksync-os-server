@@ -1,9 +1,41 @@
 //! Support for representing the version of the `zks` protocol
 
+use crate::wire::replays::{AnyReplayRecord, v0, v1};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use core::str::FromStr;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
+
+/// Any protocol version along with its pinned wire formats.
+pub trait AnyZksProtocolVersion: Debug + Send + Sync + Clone + 'static {
+    /// Wire format for replay record.
+    type Record: AnyReplayRecord;
+
+    /// Version number matching this protocol version.
+    const VERSION: ZksVersion;
+}
+
+/// Protocol version 0 is very bare-bones and used purely for testing.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV0;
+
+impl AnyZksProtocolVersion for ZksProtocolV0 {
+    type Record = v0::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks0;
+}
+
+/// Protocol version 1 is the initial implementation that supports `GetBlockReplays` and `BlockReplays`
+/// message types.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV1;
+
+impl AnyZksProtocolVersion for ZksProtocolV1 {
+    type Record = v1::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks1;
+}
 
 /// Error thrown when failed to parse a valid [`ZksVersion`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

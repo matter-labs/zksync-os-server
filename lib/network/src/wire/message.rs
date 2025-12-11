@@ -3,9 +3,9 @@
 //!
 //! Examples include creating, encoding, and decoding protocol messages.
 
-use crate::wire;
-use crate::wire::replays::{AnyReplayRecord, RecordOverride};
-use crate::wire::{BlockReplays, GetBlockReplays, ZksVersion};
+use crate::version::{AnyZksProtocolVersion, ZksVersion};
+use crate::wire::replays::RecordOverride;
+use crate::wire::{BlockReplays, GetBlockReplays};
 use alloy::primitives::BlockNumber;
 use alloy::primitives::bytes::{Buf, BufMut, BytesMut};
 use alloy_rlp::{Decodable, Encodable, Error as RlpError};
@@ -24,38 +24,14 @@ pub const ZKS_PROTOCOL: &str = "zks";
 /// both sides MAY send the request. The rest of the connection MUST consist of indefinite number of
 /// [`BlockReplays`] messages.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ZksMessage<P: AnyZksProtocol> {
+pub enum ZksMessage<P: AnyZksProtocolVersion> {
     /// Represents a `GetBlockReplays` streaming request.
     GetBlockReplays(GetBlockReplays),
     /// Represents a `BlockReplays` streaming response (one of many).
     BlockReplays(BlockReplays<P::Record>),
 }
 
-pub trait AnyZksProtocol: Debug + Send + Sync + Clone + 'static {
-    type Record: AnyReplayRecord;
-
-    const VERSION: ZksVersion;
-}
-
-#[derive(Debug, Clone)]
-pub struct ZksProtocolV0;
-
-impl AnyZksProtocol for ZksProtocolV0 {
-    type Record = wire::replays::v0::ReplayRecord;
-
-    const VERSION: ZksVersion = ZksVersion::Zks0;
-}
-
-#[derive(Debug, Clone)]
-pub struct ZksProtocolV1;
-
-impl AnyZksProtocol for ZksProtocolV1 {
-    type Record = wire::replays::v1::ReplayRecord;
-
-    const VERSION: ZksVersion = ZksVersion::Zks1;
-}
-
-impl<P: AnyZksProtocol> ZksMessage<P> {
+impl<P: AnyZksProtocolVersion> ZksMessage<P> {
     /// Returns the capability for the zks protocol.
     pub const fn capability() -> Capability {
         Capability::new_static(ZKS_PROTOCOL, P::VERSION as usize)
@@ -107,7 +83,7 @@ impl<P: AnyZksProtocol> ZksMessage<P> {
     }
 }
 
-impl<P: AnyZksProtocol> Encodable for ZksMessage<P> {
+impl<P: AnyZksProtocolVersion> Encodable for ZksMessage<P> {
     fn encode(&self, out: &mut dyn BufMut) {
         self.message_id().encode(out);
         match self {
