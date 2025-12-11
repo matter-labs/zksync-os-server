@@ -248,7 +248,14 @@ impl<P: AnyZksProtocol, Replay: ReadReplay> Stream for ZksConnection<P, Replay> 
                                 %peer_id, block_number = record.block_number(),
                                 "received block replay"
                             );
-                            if this.replay_sender.send(record.into()).is_err() {
+                            let record = match record.try_into() {
+                                Ok(record) => record,
+                                Err(error) => {
+                                    tracing::trace!(%peer_id, %error, "failed to recover replay block");
+                                    break;
+                                }
+                            };
+                            if this.replay_sender.send(record).is_err() {
                                 tracing::trace!(%peer_id, "network replay channel is closed");
                                 break;
                             }

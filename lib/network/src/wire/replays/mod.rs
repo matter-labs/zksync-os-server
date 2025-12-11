@@ -4,6 +4,7 @@ pub mod v0;
 pub mod v1;
 
 use crate::wire::{BlockHashes, ForcedPreimage};
+use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
 use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
@@ -48,7 +49,7 @@ impl<T: AnyReplayRecord> BlockReplays<T> {
 
 pub trait AnyReplayRecord:
     From<StorageReplayRecord>
-    + Into<StorageReplayRecord>
+    + TryInto<StorageReplayRecord, Error = RecoveryError>
     + Encodable
     + Decodable
     + Debug
@@ -136,16 +137,18 @@ impl From<v1::BlockContext> for InterfaceBlockContext {
     }
 }
 
-impl From<v1::ReplayRecord> for StorageReplayRecord {
-    fn from(value: v1::ReplayRecord) -> Self {
-        Self {
+impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
+    type Error = RecoveryError;
+
+    fn try_from(value: v1::ReplayRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             block_context: value.block_context.into(),
             starting_l1_priority_id: value.starting_l1_priority_id,
             transactions: value
                 .transactions
                 .into_iter()
-                .map(|tx| tx.try_into_recovered().expect("todo"))
-                .collect(),
+                .map(|tx| tx.try_into_recovered())
+                .collect::<Result<Vec<_>, _>>()?,
             previous_block_timestamp: value.previous_block_timestamp,
             // todo: real logic?
             node_version: semver::Version::new(0, 0, 0),
@@ -156,7 +159,7 @@ impl From<v1::ReplayRecord> for StorageReplayRecord {
                 .into_iter()
                 .map(|p| (p.hash, p.preimage.to_vec()))
                 .collect(),
-        }
+        })
     }
 }
 
@@ -168,13 +171,15 @@ impl From<StorageReplayRecord> for v0::ReplayRecord {
     }
 }
 
-impl From<v0::ReplayRecord> for StorageReplayRecord {
-    fn from(value: v0::ReplayRecord) -> Self {
+impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
+    type Error = RecoveryError;
+
+    fn try_from(value: v0::ReplayRecord) -> Result<Self, Self::Error> {
         let block_context = InterfaceBlockContext {
             block_number: value.block_number,
             ..Default::default()
         };
-        Self {
+        Ok(Self {
             block_context,
             starting_l1_priority_id: 0,
             transactions: vec![],
@@ -183,6 +188,6 @@ impl From<v0::ReplayRecord> for StorageReplayRecord {
             protocol_version: ProtocolSemanticVersion::new(0, 0, 0),
             block_output_hash: Default::default(),
             force_preimages: vec![],
-        }
+        })
     }
 }
