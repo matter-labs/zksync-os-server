@@ -8,6 +8,7 @@ use std::fmt::Display;
 pub mod commit;
 pub mod execute;
 pub mod prove;
+pub mod signed_commit;
 
 /// Batches that are already committed/proved may also go through the pipeline.
 /// For such batches, a Passthrough variant is generated.

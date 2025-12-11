@@ -9,7 +9,7 @@ use zksync_os_contract_interface::{IExecutor, IExecutorV29};
 
 #[derive(Debug)]
 pub struct CommitCommand {
-    input: SignedBatchEnvelope<FriProof>,
+    pub(super) input: SignedBatchEnvelope<FriProof>,
 }
 
 impl CommitCommand {
@@ -71,7 +71,7 @@ impl Display for CommitCommand {
 impl CommitCommand {
     /// `commitBatchesSharedBridge` expects the rest of calldata to be of very specific form. This
     /// function makes sure last committed batch and new batch are encoded correctly.
-    fn to_calldata_suffix(&self) -> Vec<u8> {
+    pub(super) fn to_calldata_suffix(&self) -> Vec<u8> {
         let stored_batch_info =
             IExecutor::StoredBatchInfo::from(&self.input.batch.previous_stored_batch_info);
 

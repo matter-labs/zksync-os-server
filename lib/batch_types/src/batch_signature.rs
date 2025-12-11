@@ -39,6 +39,10 @@ impl BatchSignatureSet {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn to_vec(&self) -> &Vec<ValidatedBatchSignature> {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
