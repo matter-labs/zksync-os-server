@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use alloy::primitives::bytes::BufMut;
-use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+use alloy_rlp::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::{fmt, ops::Deref, str::FromStr};
 
@@ -143,46 +143,31 @@ impl FromStr for ProtocolSemanticVersion {
     }
 }
 
-/// A version of [`ProtocolSemanticVersion`] that is used purely to derive [`Encodable`]/[`Decodable`].
-#[derive(RlpEncodable, RlpDecodable)]
-struct EncodableSemanticVersion {
-    major: u64,
-    minor: u64,
-    patch: u64,
-}
-
-impl From<&ProtocolSemanticVersion> for EncodableSemanticVersion {
-    fn from(value: &ProtocolSemanticVersion) -> Self {
+impl Encodable for ProtocolSemanticVersion {
+    fn encode(&self, out: &mut dyn BufMut) {
         assert!(
-            value.build.is_empty(),
+            self.build.is_empty(),
             "ProtocolSemanticVersion is not supposed to have build metadata"
         );
         assert!(
-            value.pre.is_empty(),
+            self.pre.is_empty(),
             "ProtocolSemanticVersion is not supposed to have prerelease identifier"
         );
-        Self {
-            major: value.major,
-            minor: value.minor,
-            patch: value.patch,
-        }
-    }
-}
-
-impl Encodable for ProtocolSemanticVersion {
-    fn encode(&self, out: &mut dyn BufMut) {
-        EncodableSemanticVersion::from(self).encode(out);
+        vec![self.major, self.minor, self.patch].encode(out);
     }
 
     fn length(&self) -> usize {
-        EncodableSemanticVersion::from(self).length()
+        vec![self.major, self.minor, self.patch].length()
     }
 }
 
 impl Decodable for ProtocolSemanticVersion {
     fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
-        let encodable = EncodableSemanticVersion::decode(buf)?;
-        Ok(Self::new(encodable.major, encodable.minor, encodable.patch))
+        let vec: Vec<u64> = Vec::decode(buf)?;
+        let array: [u64; 3] = vec
+            .try_into()
+            .map_err(|_| alloy::rlp::Error::Custom("expected array of length 3"))?;
+        Ok(Self::new(array[0], array[1], array[2]))
     }
 }
 
