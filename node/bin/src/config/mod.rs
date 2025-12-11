@@ -483,6 +483,10 @@ pub struct TxValidatorConfig {
     /// Max input size of a transaction to be accepted by mempool
     #[config(default_t = 128 * 1024 * 1024)]
     pub max_input_bytes: usize,
+
+    /// Max fee limit for a tx to be accepted by mempool. Defaults to 1e18
+    #[config(default_t = 1_000_000_000_000_000_000)]
+    pub tx_fee_cap: u128,
 }
 
 /// Only used on the Main Node.
@@ -825,6 +829,7 @@ impl From<TxValidatorConfig> for zksync_os_mempool::TxValidatorConfig {
     fn from(c: TxValidatorConfig) -> Self {
         Self {
             max_input_bytes: c.max_input_bytes,
+            tx_fee_cap: c.tx_fee_cap,
         }
     }
 }
