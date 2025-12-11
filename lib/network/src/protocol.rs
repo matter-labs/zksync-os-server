@@ -163,8 +163,10 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ConnectionHandler
         ZksConnection {
             peer_id,
             conn,
+            // todo: only request blocks if the peer is main node
+            //       otherwise we can import incorrect blocks from diverged EN
             request_to_send: self.to_request_blocks.then(|| {
-                // todo: populate with real values
+                // todo: support record_overrides
                 ZksMessage::<P>::get_block_replays(self.replay.latest_record() + 1, vec![])
             }),
             response_state: None,

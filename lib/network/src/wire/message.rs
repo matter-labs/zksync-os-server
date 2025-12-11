@@ -109,7 +109,6 @@ pub enum ZksMessageId {
     GetBlockReplays = 0x00,
     /// Block replays message.
     BlockReplays = 0x01,
-    // todo: consider `Other` variant
 }
 
 impl ZksMessageId {
