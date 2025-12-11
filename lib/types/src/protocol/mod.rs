@@ -143,6 +143,7 @@ impl FromStr for ProtocolSemanticVersion {
     }
 }
 
+/// A version of [`ProtocolSemanticVersion`] that is used purely to derive [`Encodable`]/[`Decodable`].
 #[derive(RlpEncodable, RlpDecodable)]
 struct EncodableSemanticVersion {
     major: u64,
