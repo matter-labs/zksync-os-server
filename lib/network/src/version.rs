@@ -95,6 +95,7 @@ impl TryFrom<&str> for ZksVersion {
     #[inline]
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
+            "0" => Ok(Self::Zks0),
             "1" => Ok(Self::Zks1),
             _ => Err(ParseVersionError(s.to_string())),
         }
@@ -116,6 +117,7 @@ impl TryFrom<u8> for ZksVersion {
     #[inline]
     fn try_from(u: u8) -> Result<Self, Self::Error> {
         match u {
+            0 => Ok(Self::Zks0),
             1 => Ok(Self::Zks1),
             _ => Err(ParseVersionError(u.to_string())),
         }
@@ -176,7 +178,8 @@ mod tests {
 
     #[test]
     fn test_zks_version_rlp_encode() {
-        let versions = [ZksVersion::Zks0, ZksVersion::Zks1];
+        // Version 0 is purposefully left out as it encodes to 0x80 (prefix for 0-length string)
+        let versions = [ZksVersion::Zks1];
 
         for version in versions {
             let mut encoded = BytesMut::new();

@@ -4,6 +4,7 @@ use reth_provider::test_utils::MockEthProvider;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockContext;
+use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use zksync_os_network::version::{ZksProtocolV0, ZksProtocolV1};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
@@ -39,9 +40,9 @@ fn dummy_record(block_number: BlockNumber) -> ReplayRecord {
         42,
         vec![],
         24,
-        // Important that this is set to 0.0.0 as v1 does not transport node version over the network
-        // and 0.0.0 is the fallback value.
-        semver::Version::new(0, 0, 0),
+        // Important that this is set to `NODE_SEMVER_VERSION` as v1 does not transport node version
+        // over the network. Instead, receiver stamps all records with its current node version.
+        NODE_SEMVER_VERSION.clone(),
         ProtocolSemanticVersion::new(4, 5, 6),
         B256::random(),
         vec![],
