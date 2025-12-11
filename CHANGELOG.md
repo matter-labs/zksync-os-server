@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.12.1](https://github.com/matter-labs/zksync-os-server/compare/v0.12.0...v0.12.1) (2025-12-11)
+
+
+### Features
+
+* **batcher:** re-create batches using L1 watcher's data ([#672](https://github.com/matter-labs/zksync-os-server/issues/672)) ([11fefc4](https://github.com/matter-labs/zksync-os-server/commit/11fefc41c7c55f88b40ecab5e31464ef1e68e8e4))
+* blob computation overhead for pubdata price ([#693](https://github.com/matter-labs/zksync-os-server/issues/693)) ([bf69d65](https://github.com/matter-labs/zksync-os-server/commit/bf69d65f29b0a6bf4a38093a6f26fea1dad97167))
+* **config:** Add config command ([#697](https://github.com/matter-labs/zksync-os-server/issues/697)) ([cd8a611](https://github.com/matter-labs/zksync-os-server/commit/cd8a61186406aaf940510ce948aefd21fc1a6c22))
+* **config:** use EtherAmount for fee-related configs ([#676](https://github.com/matter-labs/zksync-os-server/issues/676)) ([28c27b1](https://github.com/matter-labs/zksync-os-server/commit/28c27b1a215898bcd7aa27437bcce641eb88636c))
+* Don't report Passthrough in batch_number metrics ([#683](https://github.com/matter-labs/zksync-os-server/issues/683)) ([7719fb3](https://github.com/matter-labs/zksync-os-server/commit/7719fb34a6047e98596b26ffcb2abc12917a97e0))
+* JS tracer ([#569](https://github.com/matter-labs/zksync-os-server/issues/569)) ([c991043](https://github.com/matter-labs/zksync-os-server/commit/c99104389a790f29237fe7c880d01d67c9319032))
+* remove failed transcations from block_output.tx_results ([#714](https://github.com/matter-labs/zksync-os-server/issues/714)) ([23b5323](https://github.com/matter-labs/zksync-os-server/commit/23b5323d0ce6911ded4bb5566b0f93fcc61f696a))
+* upgrade reth to 1.9.3/revm to 31.0.2 ([#709](https://github.com/matter-labs/zksync-os-server/issues/709)) ([521d473](https://github.com/matter-labs/zksync-os-server/commit/521d473854423e01dbf011efda04f007e9156e7a))
+
+
+### Bug Fixes
+
+* **l1-watcher:** handle L1 reverts during state recovery ([#692](https://github.com/matter-labs/zksync-os-server/issues/692)) ([d915174](https://github.com/matter-labs/zksync-os-server/commit/d9151748ada061800611eac8e89a6843c2c57875))
+* **rpc:** move executed block check earlier in `zks_getL2ToL1LogProof` ([#704](https://github.com/matter-labs/zksync-os-server/issues/704)) ([117faa8](https://github.com/matter-labs/zksync-os-server/commit/117faa85db69889ff76bffe781fa4ed754d2a6e7))
+* state tracking for sequencer ([#715](https://github.com/matter-labs/zksync-os-server/issues/715)) ([01c3a6b](https://github.com/matter-labs/zksync-os-server/commit/01c3a6bb93795a9ce3542e32d59d3a1c53ed55ff))
+* upgrade issues in block context provider ([#666](https://github.com/matter-labs/zksync-os-server/issues/666)) ([e80cb85](https://github.com/matter-labs/zksync-os-server/commit/e80cb8539e5a986516a8b01e7a1d0aaa9ec1e9ac))
+
 ## [0.12.0](https://github.com/matter-labs/zksync-os-server/compare/v0.11.1...v0.12.0) (2025-11-28)
 
 
