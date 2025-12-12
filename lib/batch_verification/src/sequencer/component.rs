@@ -4,12 +4,13 @@ use crate::config::BatchVerificationConfig;
 use crate::{BatchVerificationResponse, BatchVerificationResult};
 use alloy::primitives::Address;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use futures::FutureExt;
 use futures::future::select_all;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
@@ -62,7 +63,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
             // Stores response channels for each request ID to route responses
             // depending on request id. Allows collect_batch_verification_signatures
             // to be run concurrently. Unimplemented currently.
-            let response_channels = Arc::new(DashMap::new());
+            let response_channels = Arc::new(RwLock::new(HashMap::new()));
 
             let server_for_fut = server.clone();
             let server_address = self.config.listen_address.clone();
@@ -108,7 +109,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
 /// -> response_channels -> BatchVerifier::collect_batch_verification_signatures
 async fn run_batch_response_processor(
     mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
-    response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+    response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
 ) -> anyhow::Result<()> {
     let latency_tracker = ComponentStateReporter::global().handle_for(
         "batch_response_processor",
@@ -119,7 +120,7 @@ async fn run_batch_response_processor(
         let request_id = response.request_id;
 
         // Route response to the appropriate channel
-        if let Some(sender) = response_channels.get(&request_id) {
+        if let Some(sender) = response_channels.read().await.get(&request_id) {
             tracing::debug!(request_id, "Received batch verification response");
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Err(e) = sender.send(response).await {
@@ -147,7 +148,7 @@ struct BatchVerifier {
     accepted_signers: Vec<Address>,
     request_id_counter: AtomicU64,
     server: Arc<BatchVerificationServer>,
-    response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+    response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
     last_committed_batch_number: u64,
 }
 
@@ -183,7 +184,7 @@ impl BatchVerificationError {
 impl BatchVerifier {
     pub fn new(
         config: BatchVerificationConfig,
-        response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+        response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
         server: Arc<BatchVerificationServer>,
         last_committed_batch_number: u64,
     ) -> Self {
@@ -316,7 +317,10 @@ impl BatchVerifier {
             mpsc::channel::<BatchVerificationResponse>(self.config.threshold);
 
         // Register the channel for this request_id
-        self.response_channels.insert(request_id, response_sender);
+        self.response_channels
+            .write()
+            .await
+            .insert(request_id, response_sender);
 
         // Send verification request to all connected clients
         self.server
@@ -393,7 +397,7 @@ impl BatchVerifier {
         );
 
         // Cleanup: remove the channel for this request_id
-        self.response_channels.remove(&request_id);
+        self.response_channels.write().await.remove(&request_id);
 
         Ok(responses)
     }
@@ -506,7 +510,7 @@ mod tests {
         let config = test_config(accepted_signers);
         let (server, _rx) = BatchVerificationServer::new();
         let server = Arc::new(server);
-        let response_channels = Arc::new(DashMap::new());
+        let response_channels = Arc::new(RwLock::new(HashMap::new()));
         BatchVerifier::new(config, response_channels, server, 0)
     }
 
@@ -555,7 +559,7 @@ mod tests {
         let config = test_config(accepted);
         let (server, _rx_server) = BatchVerificationServer::new();
         let server = Arc::new(server);
-        let response_channels = Arc::new(DashMap::new());
+        let response_channels = Arc::new(RwLock::new(HashMap::new()));
         let last_committed_batch_number = 10;
         let verifier = BatchVerifier::new(
             config,
@@ -608,7 +612,7 @@ mod tests {
         // succeeds with threshold = 1 and to observe the outgoing request.
         let mut request_rx = server.subscribe_for_tests();
         let server = Arc::new(server);
-        let response_channels = Arc::new(DashMap::new());
+        let response_channels = Arc::new(RwLock::new(HashMap::new()));
         let last_committed_batch_number = 0; // so no skipping - all batches need signing
         let verifier = BatchVerifier::new(
             config,
@@ -628,12 +632,17 @@ mod tests {
                 .expect("server should send a verification request");
             let request_id = request.request_id;
 
-            let sender = response_channels_cloned
-                .get(&request_id)
-                .expect("sender should be available");
             let mut response = response;
             response.request_id = request_id;
-            let _ = sender.send(response).await;
+
+            response_channels_cloned
+                .read()
+                .await
+                .get(&request_id)
+                .expect("sender should be available")
+                .send(response)
+                .await
+                .expect("Failed to send");
         });
 
         // Wire up the pipeline: one input batch that must be signed, and an
