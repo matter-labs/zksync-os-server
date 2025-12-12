@@ -1,4 +1,4 @@
-use crate::types::L2ToL1LogProof;
+use crate::types::{BlockMetadata, L2ToL1LogProof};
 use alloy::primitives::{Address, TxHash};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
@@ -20,4 +20,10 @@ pub trait ZksApi {
 
     #[method(name = "getGenesis")]
     async fn get_genesis(&self) -> RpcResult<GenesisInput>;
+
+    #[method(name = "getBlockMetadataByNumber")]
+    async fn get_block_metadata_by_number(
+        &self,
+        block_number: u64,
+    ) -> RpcResult<Option<BlockMetadata>>;
 }
