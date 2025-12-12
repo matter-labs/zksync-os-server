@@ -1,5 +1,5 @@
 use crate::types::{BlockMetadata, L2ToL1LogProof};
-use alloy::primitives::{Address, B256, TxHash};
+use alloy::primitives::{Address, TxHash};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
