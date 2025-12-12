@@ -1,20 +1,45 @@
 use crate::batcher_metrics::BatchExecutionStage;
-use crate::batcher_model::{FriProof, SignedBatchEnvelope};
+use crate::batcher_model::{BatchSignatureData, FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::primitives::U256;
+use alloy::primitives::{Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
-use zksync_os_contract_interface::{IExecutor, IExecutorV29};
+use zksync_os_batch_types::BatchSignatureSet;
+use zksync_os_contract_interface::l1_discovery::BatchVerificationL1;
+use zksync_os_contract_interface::{IExecutor, IExecutorV29, IMultisigCommitter};
 
 #[derive(Debug)]
 pub struct CommitCommand {
     pub(super) input: SignedBatchEnvelope<FriProof>,
+    pub(super) signatures: Option<BatchSignatureSet>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BatchVerificationError {
+    #[error("Batch was not signed")]
+    BatchNotSigned,
 }
 
 impl CommitCommand {
-    pub fn new(input: SignedBatchEnvelope<FriProof>) -> Self {
-        Self { input }
+    pub fn try_new(
+        l1_config: &BatchVerificationL1,
+        input: SignedBatchEnvelope<FriProof>,
+    ) -> Result<Self, BatchVerificationError> {
+        match l1_config {
+            BatchVerificationL1::Disabled => Ok(Self {
+                input,
+                signatures: None,
+            }),
+            BatchVerificationL1::Enabled(_) => match input.signature_data.clone() {
+                BatchSignatureData::Signed { signatures } => Ok(Self {
+                    input,
+                    signatures: Some(signatures),
+                }),
+                _ => Err(BatchVerificationError::BatchNotSigned),
+            },
+        }
+        //TODO SIGNATURES l1_config CHECK
     }
 
     pub(crate) fn input(&self) -> &SignedBatchEnvelope<FriProof> {
@@ -28,14 +53,40 @@ impl SendToL1 for CommitCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;
 
-    fn solidity_call(&self) -> impl SolCall {
-        // todo: encode through `CommitCalldata` instead
-        IExecutor::commitBatchesSharedBridgeCall::new((
-            self.input.batch.batch_info.chain_address,
-            U256::from(self.input.batch_number()),
-            U256::from(self.input.batch_number()),
-            self.to_calldata_suffix().into(),
-        ))
+    fn solidity_call(&self) -> Bytes {
+        if let Some(signatures_set) = &self.signatures {
+            let mut signatures = signatures_set.to_vec().clone();
+            signatures.sort_by(|a, b| a.signer().cmp(b.signer()));
+            let (signers, signatures): (Vec<_>, Vec<Bytes>) = signatures
+                .into_iter()
+                .map(|s| {
+                    let signer = *s.signer();
+                    let signature_bytes: Bytes = s.signature().clone().into_raw().to_vec().into();
+                    (signer, signature_bytes)
+                })
+                .unzip();
+
+            IMultisigCommitter::commitBatchesMultisigCall::new((
+                self.input.batch.batch_info.chain_address,
+                U256::from(self.input.batch_number()),
+                U256::from(self.input.batch_number()),
+                self.to_calldata_suffix().into(),
+                signers,
+                signatures,
+            ))
+            .abi_encode()
+            .into()
+        } else {
+            // todo: encode through `CommitCalldata` instead
+            IExecutor::commitBatchesSharedBridgeCall::new((
+                self.input.batch.batch_info.chain_address,
+                U256::from(self.input.batch_number()),
+                U256::from(self.input.batch_number()),
+                self.to_calldata_suffix().into(),
+            ))
+            .abi_encode()
+            .into()
+        }
     }
 
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
@@ -63,7 +114,21 @@ impl From<CommitCommand> for Vec<SignedBatchEnvelope<FriProof>> {
 
 impl Display for CommitCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "commit batch {}", self.input.batch_number())?;
+        if let Some(signatures_set) = &self.signatures {
+            write!(
+                f,
+                "signed commit batch {}, signatures: {}",
+                self.input.batch_number(),
+                signatures_set
+                    .to_vec()
+                    .iter()
+                    .map(|s| s.signer().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )?;
+        } else {
+            write!(f, "commit batch {}", self.input.batch_number())?;
+        }
         Ok(())
     }
 }

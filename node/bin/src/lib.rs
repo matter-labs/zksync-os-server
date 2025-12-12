@@ -748,7 +748,7 @@ async fn run_main_node_pipeline(
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
-            node_state_on_startup.l1_state.batch_verification,
+            node_state_on_startup.l1_state.batch_verification.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
         ))
         .pipe(fri_proving_step)
@@ -756,6 +756,7 @@ async fn run_main_node_pipeline(
             next_expected_batch_number: node_state_on_startup.l1_state.last_executed_batch + 1,
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage: batch_storage.clone(),
+            batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),
