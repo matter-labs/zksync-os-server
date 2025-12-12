@@ -7,7 +7,7 @@ use jsonrpsee::core::RpcResult;
 use std::sync::Arc;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
-use zksync_os_rpc_api::{types::L2ToL1LogProof, zks::ZksApiServer};
+use zksync_os_rpc_api::{types::BlockMetadata, types::L2ToL1LogProof, zks::ZksApiServer};
 use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
@@ -134,6 +134,28 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             id: l1_log_index as u32,
         }))
     }
+
+    async fn get_block_metadata_by_number_imp(
+        &self,
+        block_number: u64,
+    ) -> ZksResult<Option<BlockMetadata>> {
+        let Some(block) = self
+            .storage
+            .replay_storage()
+            .get_replay_record(block_number)
+        else {
+            return Ok(None);
+        };
+
+        let pubdata_price_per_byte = block.block_context.pubdata_price;
+        let native_price = block.block_context.native_price;
+        let execution_version = block.block_context.execution_version;
+        Ok(Some(BlockMetadata {
+            pubdata_price_per_byte,
+            native_price,
+            execution_version,
+        }))
+    }
 }
 
 #[async_trait]
@@ -157,6 +179,15 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
             .genesis_input()
             .await
             .map_err(ZksError::GenesisSource)
+            .to_rpc_result()
+    }
+
+    async fn get_block_metadata_by_number(
+        &self,
+        block_number: u64,
+    ) -> RpcResult<Option<BlockMetadata>> {
+        self.get_block_metadata_by_number_imp(block_number)
+            .await
             .to_rpc_result()
     }
 }

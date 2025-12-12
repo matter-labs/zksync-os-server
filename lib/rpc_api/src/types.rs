@@ -41,3 +41,11 @@ pub struct L2ToL1LogProof {
     /// The root of the tree.
     pub root: B256,
 }
+
+/// ZKsync-specific block metadata struct.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BlockMetadata {
+    pub pubdata_price_per_byte: U256,
+    pub native_price: U256,
+    pub execution_version: u32,
+}
