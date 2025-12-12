@@ -41,6 +41,7 @@ pub fn call_trace_simulate(
     call_config: CallConfig,
 ) -> anyhow::Result<CallFrame> {
     let mut tracer = CallTracer::new_with_config(
+        vec![tx.clone()],
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
     );
@@ -71,6 +72,7 @@ pub fn call_trace(
     call_config: CallConfig,
 ) -> anyhow::Result<Vec<CallFrame>> {
     let mut tracer = CallTracer::new_with_config(
+        txs.clone(),
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
     );
@@ -92,6 +94,7 @@ pub fn call_trace(
 
 #[derive(Default)]
 pub struct CallTracer {
+    input_transactions: Vec<ZkTransaction>,
     transactions: Vec<CallFrame>,
     unfinished_calls: Vec<CallFrame>,
     finished_calls: Vec<CallFrame>,
@@ -109,8 +112,13 @@ enum CreateType {
 }
 
 impl CallTracer {
-    pub fn new_with_config(collect_logs: bool, only_top_call: bool) -> Self {
+    pub fn new_with_config(
+        input_transactions: Vec<ZkTransaction>,
+        collect_logs: bool,
+        only_top_call: bool,
+    ) -> Self {
         Self {
+            input_transactions,
             transactions: vec![],
             unfinished_calls: vec![],
             finished_calls: vec![],
@@ -256,13 +264,37 @@ impl EvmTracer for CallTracer {
     fn finish_tx(&mut self) {
         assert_eq!(self.current_call_depth, 0);
         assert!(self.unfinished_calls.is_empty());
-        assert_eq!(self.finished_calls.len(), 1);
 
         // Sanity check
         assert!(self.create_operation_requested.is_none());
 
-        self.transactions
-            .push(self.finished_calls.pop().expect("Should exist"));
+        if let Some(top_level_call) = self.finished_calls.pop() {
+            self.transactions.push(top_level_call);
+        } else {
+            // We can have some edge cases when tx fails before any call frame is created
+            // In this case currently we populate minimal call frame info from the input tx data
+            let empty_tx = self.input_transactions.get(self.transactions.len());
+            if let Some(tx) = empty_tx {
+                self.transactions.push(CallFrame {
+                    from: tx.signer(),
+                    gas: U256::from(tx.gas_limit()),
+                    gas_used: U256::from(tx.gas_limit()),
+                    to: tx.to(),
+                    input: tx.input().clone(),
+                    output: None,
+                    error: Some("transaction failed before execution".to_string()),
+                    revert_reason: None,
+                    calls: vec![],
+                    logs: vec![],
+                    value: Some(tx.value()), // Can't have STATICCALL here
+                    typ: if tx.to().is_some() {
+                        "CALL".to_string()
+                    } else {
+                        "CREATE".to_string()
+                    },
+                });
+            }
+        }
     }
 
     fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
