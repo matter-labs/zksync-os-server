@@ -54,7 +54,17 @@ impl CommitCommand {
                     signatures: Some(filtered_signatures),
                 })
             }
-            (BatchVerificationL1::Enabled(_), _) => Err(BatchVerificationError::BatchNotSigned),
+            (BatchVerificationL1::Enabled(l1_config), _) => {
+                // actually if threshold is 0 its still ok without signing enabled
+                if l1_config.threshold == 0 {
+                    Ok(Self {
+                        input,
+                        signatures: None,
+                    })
+                } else {
+                    Err(BatchVerificationError::BatchNotSigned)
+                }
+            }
         }
     }
 
