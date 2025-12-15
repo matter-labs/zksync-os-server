@@ -19,27 +19,43 @@ pub struct CommitCommand {
 pub enum BatchVerificationError {
     #[error("Batch was not signed")]
     BatchNotSigned,
+    #[error("Not enough signatures, we have {} but need {}", .0, .1)]
+    NotEnoughSignatures(u64, u64),
 }
 
 impl CommitCommand {
+    /// This function should not error normally, however if the signatures
+    /// attached to batch do not allow for submission to L1 it will error
+    /// instead of causing a reverted transaction.
     pub fn try_new(
         l1_config: &BatchVerificationL1,
         input: SignedBatchEnvelope<FriProof>,
     ) -> Result<Self, BatchVerificationError> {
-        match l1_config {
-            BatchVerificationL1::Disabled => Ok(Self {
+        match (l1_config, input.signature_data.clone()) {
+            (BatchVerificationL1::Disabled, _) => Ok(Self {
                 input,
                 signatures: None,
             }),
-            BatchVerificationL1::Enabled(_) => match input.signature_data.clone() {
-                BatchSignatureData::Signed { signatures } => Ok(Self {
+            (
+                BatchVerificationL1::Enabled(l1_config),
+                BatchSignatureData::Signed { signatures },
+            ) => {
+                let allowed_signers = &l1_config.validators;
+                let filtered_signatures = signatures.filter(allowed_signers);
+                // edge case: if threshold is 0 it is safe to submit 0 signatures
+                if u64::try_from(filtered_signatures.len()).unwrap() < l1_config.threshold {
+                    return Err(BatchVerificationError::NotEnoughSignatures(
+                        u64::try_from(filtered_signatures.len()).unwrap(), //its fairly safe to convert usize into u64
+                        l1_config.threshold,
+                    ));
+                }
+                Ok(Self {
                     input,
-                    signatures: Some(signatures),
-                }),
-                _ => Err(BatchVerificationError::BatchNotSigned),
-            },
+                    signatures: Some(filtered_signatures),
+                })
+            }
+            (BatchVerificationL1::Enabled(_), _) => Err(BatchVerificationError::BatchNotSigned),
         }
-        //TODO SIGNATURES l1_config CHECK
     }
 
     pub(crate) fn input(&self) -> &SignedBatchEnvelope<FriProof> {

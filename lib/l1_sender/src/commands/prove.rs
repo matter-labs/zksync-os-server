@@ -2,6 +2,7 @@ use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
 use crate::commands::SendToL1;
 use alloy::primitives::{B256, Bytes, U256, keccak256};
+use alloy::sol_types::SolCall;
 use std::collections::HashMap;
 use std::fmt::Display;
 use zksync_os_contract_interface::IExecutor;

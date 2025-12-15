@@ -43,6 +43,12 @@ impl BatchSignatureSet {
     pub fn to_vec(&self) -> &Vec<ValidatedBatchSignature> {
         &self.0
     }
+
+    /// Remove signatures not found on allowed list
+    pub fn filter(mut self, allowed_signers: &[Address]) -> Self {
+        self.0.retain(|s| allowed_signers.contains(&s.signer));
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
