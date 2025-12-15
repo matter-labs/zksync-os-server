@@ -1,8 +1,9 @@
-use crate::IExecutor;
 use crate::models::{CommitBatchInfo, StoredBatchInfo};
+use crate::{IExecutor, IExecutorV29};
 use alloy::primitives::Address;
 use alloy::sol_types::{SolCall, SolValue};
 
+const V29_ENCODING_VERSION: u8 = 2;
 const V30_ENCODING_VERSION: u8 = 3;
 
 pub struct CommitCalldata {
@@ -41,5 +42,45 @@ impl CommitCalldata {
             stored_batch_info,
             commit_batch_info,
         })
+    }
+}
+
+/// This function encodes only the last argument for commitBatchesSharedBridgeCall!
+/// Implemented outside of struct to allow only passing necessary arguments
+pub fn encode_commit_batch_data(
+    prev_batch_info: &StoredBatchInfo,
+    commit_info: CommitBatchInfo,
+    protocol_version_minor: u64,
+) -> Vec<u8> {
+    let stored_batch_info = IExecutor::StoredBatchInfo::from(prev_batch_info);
+    match protocol_version_minor {
+        29 => {
+            let commit_batch_info = IExecutorV29::CommitBatchInfoZKsyncOS::from(commit_info);
+            tracing::debug!(
+                last_batch_hash = ?prev_batch_info.hash(),
+                last_batch_number = ?prev_batch_info.batch_number,
+                new_batch_number = ?commit_batch_info.batchNumber,
+                "preparing commit calldata"
+            );
+            let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+            // Prefixed by current encoding version as expected by protocol
+            [[V29_ENCODING_VERSION].to_vec(), encoded_data].concat()
+        }
+        // 31 needed for upgrade integration test
+        30 | 31 => {
+            let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(commit_info.clone());
+            tracing::debug!(
+                last_batch_hash = ?prev_batch_info.hash(),
+                last_batch_number = ?prev_batch_info.batch_number,
+                new_batch_number = ?commit_batch_info.batchNumber,
+                "preparing commit calldata"
+            );
+            let encoded_data = (stored_batch_info, vec![commit_batch_info]).abi_encode_params();
+
+            // Prefixed by current encoding version as expected by protocol
+            [[V30_ENCODING_VERSION].to_vec(), encoded_data].concat()
+        }
+        _ => panic!("Unsupported protocol version: {protocol_version_minor}"),
     }
 }

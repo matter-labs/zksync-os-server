@@ -857,12 +857,11 @@ async fn run_en_pipeline(
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationClient::new(
-                finality.clone(),
-                config.batch_verification_config.signing_key.clone(),
                 chain_id,
-                *node_state_on_startup.l1_state.diamond_proxy.address(),
-                node_state_on_startup.l1_state.batch_verification,
                 config.batch_verification_config.connect_address,
+                config.batch_verification_config.signing_key.clone(),
+                finality.clone(),
+                node_state_on_startup.l1_state.clone(),
             ),
             NoOpSink::new(),
         )

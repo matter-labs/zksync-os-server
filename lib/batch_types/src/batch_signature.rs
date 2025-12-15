@@ -1,10 +1,15 @@
-use alloy::primitives::{Address, Signature as AlloySignature, SignatureError};
+use alloy::primitives::{
+    Address, B256, Signature as AlloySignature, SignatureError, U256, keccak256,
+};
 use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol_types::SolValue;
+use alloy::sol_types::{SolValue, eip712_domain};
 use serde::{Deserialize, Serialize};
-use zksync_os_contract_interface::IExecutor::CommitBatchInfoZKsyncOS;
-use zksync_os_contract_interface::models::CommitBatchInfo;
+use zksync_os_contract_interface::calldata::encode_commit_batch_data;
+use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_types::ProtocolSemanticVersion;
+
+use crate::BatchInfo;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchSignatureSet(Vec<ValidatedBatchSignature>);
@@ -55,23 +60,47 @@ impl BatchSignatureSet {
 pub struct BatchSignature(AlloySignature);
 
 impl BatchSignature {
-    pub async fn sign_batch(batch_info: &CommitBatchInfo, private_key: &PrivateKeySigner) -> Self {
-        let encoded = encode_batch_for_signing(batch_info);
-        let signature = private_key.sign_message(&encoded).await.unwrap();
+    /// Sign a batch for `commitBatchesMultisig`
+    pub async fn sign_batch(
+        prev_batch_info: &StoredBatchInfo,
+        batch_info: &BatchInfo,
+        l1_chain_id: u64,
+        multisig_committer: Address,
+        protocol_version: &ProtocolSemanticVersion,
+        private_key: &PrivateKeySigner,
+    ) -> Self {
+        let digest = eip712_multisig_digest(
+            prev_batch_info,
+            batch_info,
+            l1_chain_id,
+            multisig_committer,
+            protocol_version,
+        );
+        let signature = private_key.sign_hash(&digest).await.unwrap();
         BatchSignature(signature)
     }
 
     pub fn verify_signature(
         self,
-        batch_info: &CommitBatchInfo,
+        prev_batch_info: &StoredBatchInfo,
+        batch_info: &BatchInfo,
+        l1_chain_id: u64,
+        multisig_committer: Address,
+        protocol_version: &ProtocolSemanticVersion,
     ) -> Result<ValidatedBatchSignature, SignatureError> {
-        let encoded = encode_batch_for_signing(batch_info);
         Ok(ValidatedBatchSignature {
-            signer: self.0.recover_address_from_msg(encoded)?,
+            signer: self
+                .0
+                .recover_address_from_prehash(&eip712_multisig_digest(
+                    prev_batch_info,
+                    batch_info,
+                    l1_chain_id,
+                    multisig_committer,
+                    protocol_version,
+                ))?,
             signature: self,
         })
     }
-
     pub fn into_raw(self) -> [u8; 65] {
         self.0.as_bytes()
     }
@@ -82,9 +111,54 @@ impl BatchSignature {
     }
 }
 
-fn encode_batch_for_signing(batch_info: &CommitBatchInfo) -> Vec<u8> {
-    let alloy_batch_info = CommitBatchInfoZKsyncOS::from(batch_info.clone());
-    alloy_batch_info.abi_encode_params()
+/// Compute the full EIP-712 digest used by the `MultisigCommitter` contract
+/// for the `commitBatchesMultisig` typed data, based on the given batch info
+/// and L1 domain parameters.
+fn eip712_multisig_digest(
+    prev_batch_info: &StoredBatchInfo,
+    batch_info: &BatchInfo,
+    l1_chain_id: u64,
+    multisig_committer: Address,
+    protocol_version: &ProtocolSemanticVersion,
+) -> B256 {
+    const TYPEHASH_BYTES: &[u8] = b"CommitBatchesMultisig(address chainAddress,uint256 processBatchFrom,uint256 processBatchTo,bytes batchData)";
+    let typehash = keccak256(TYPEHASH_BYTES);
+
+    let batch_data = encode_commit_batch_data(
+        prev_batch_info,
+        batch_info.commit_info.clone(),
+        protocol_version.minor,
+    );
+
+    let batch_data_hash = keccak256(batch_data);
+
+    let encoded = (
+        typehash,
+        batch_info.chain_address,
+        U256::from(batch_info.batch_number), // processBatchFrom
+        U256::from(batch_info.batch_number), // processBatchTo
+        batch_data_hash,
+    )
+        .abi_encode_params();
+
+    let struct_hash = keccak256(encoded);
+
+    let domain = eip712_domain! {
+        name: "MultisigCommitter",
+        version: "1",
+        chain_id: l1_chain_id,
+        verifying_contract: multisig_committer,
+    };
+    let domain_separator = domain.separator();
+
+    keccak256(
+        [
+            &[0x19, 0x01],
+            domain_separator.as_slice(),
+            struct_hash.as_slice(),
+        ]
+        .concat(),
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

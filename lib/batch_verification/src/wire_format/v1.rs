@@ -16,6 +16,7 @@ pub struct BatchVerificationRequestWireFormatV1 {
     pub pubdata_mode: u8,
     pub request_id: u64,
     pub commit_data: Vec<u8>,
+    pub prev_commit_data: Vec<u8>,
 }
 
 #[derive(Encode, Decode)]
