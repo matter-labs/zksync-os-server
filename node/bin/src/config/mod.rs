@@ -6,18 +6,20 @@ use crate::{
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
-use smart_config::value::SecretString;
+use smart_config::value::{ExposeSecret, SecretString};
 use smart_config::{
     ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
+use zksync_os_network::SecretKey;
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
@@ -31,6 +33,7 @@ mod cli;
 #[derive(Debug)]
 pub struct Config {
     pub general_config: GeneralConfig,
+    pub network_config: NetworkConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
     pub mempool_config: MempoolConfig,
@@ -53,6 +56,9 @@ impl Config {
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
+        schema
+            .insert(&NetworkConfig::DESCRIPTION, "network")
+            .expect("Failed to insert network config");
         schema
             .insert(&GenesisConfig::DESCRIPTION, "genesis")
             .expect("Failed to insert genesis config");
@@ -202,6 +208,33 @@ pub struct GeneralConfig {
     /// Disables all HTTP APIs except JSON RPC.
     #[config(default_t = false)]
     pub sandbox: bool,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct NetworkConfig {
+    /// Whether devp2p-based networking should be enabled.
+    #[config(default_t = false)]
+    pub enabled: bool,
+    /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
+    /// handshake.
+    #[config(default_t = SecretString::from("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349"))]
+    pub secret_key: SecretString,
+    /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    #[config(default_t = 3060)]
+    pub port: u16,
+    /// All boot nodes to start network discovery with. Expected format is
+    /// `enode://<node ID>@<IP address>:<port>`.
+    #[config(
+        default_t = vec![
+            "enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060".into()
+        ],
+        with = Delimited(",")
+    )]
+    pub boot_nodes: Vec<String>,
+    /// Maximum number of active connections with other peers.
+    #[config(default_t = 10)]
+    pub max_active_connections: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -749,6 +782,18 @@ pub struct BatchVerificationConfig {
     // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
     #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
     pub signing_key: SecretString,
+}
+
+impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
+    fn from(value: NetworkConfig) -> Self {
+        Self {
+            secret_key: SecretKey::from_str(value.secret_key.expose_secret())
+                .expect("network secret key is malformed"),
+            port: value.port,
+            boot_nodes: zksync_os_network::parse_nodes(value.boot_nodes),
+            max_active_connections: value.max_active_connections,
+        }
+    }
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {

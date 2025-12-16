@@ -233,6 +233,7 @@ impl Tester {
         let default_config = get_default_config();
         let mut config = Config {
             general_config,
+            network_config: Default::default(),
             genesis_config: default_config.genesis_config.clone(),
             rpc_config,
             mempool_config: Default::default(),

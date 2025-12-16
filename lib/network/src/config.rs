@@ -1,0 +1,15 @@
+use reth_network::config::SecretKey;
+use reth_network_peers::NodeRecord;
+
+pub struct NetworkConfig {
+    /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
+    /// handshake.
+    pub secret_key: SecretKey,
+    /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    pub port: u16,
+    /// All boot nodes to start network discovery with. Expected format is
+    /// `enode://<node ID>@<IP address>:<port>`.
+    pub boot_nodes: Vec<NodeRecord>,
+    /// Maximum number of active connections with other peers.
+    pub max_active_connections: usize,
+}

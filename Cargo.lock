@@ -15042,21 +15042,15 @@ name = "zksync_os_mempool"
 version = "0.13.0-non-semver-compat"
 dependencies = [
  "alloy",
- "anyhow",
  "auto_impl",
- "dashmap",
  "futures",
  "metrics",
- "reth-chainspec",
  "reth-primitives-traits",
- "reth-revm",
- "reth-storage-api",
  "reth-transaction-pool",
- "reth-trie-common",
  "tokio",
  "tracing",
  "vise",
- "zksync_os_api",
+ "zksync_os_reth_compat",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15140,10 +15134,13 @@ dependencies = [
  "alloy-rlp",
  "assert_matches",
  "futures",
+ "reth-chainspec",
+ "reth-discv5",
  "reth-eth-wire",
  "reth-network",
  "reth-network-peers",
  "reth-provider",
+ "secrecy",
  "semver 1.0.26",
  "test-log",
  "thiserror 2.0.17",
@@ -15151,6 +15148,7 @@ dependencies = [
  "tracing",
  "zksync_os_interface",
  "zksync_os_metadata",
+ "zksync_os_reth_compat",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15256,6 +15254,20 @@ dependencies = [
  "zksync_os_fri_prover",
  "zksync_os_snark_prover",
  "zksync_sequencer_proof_client",
+]
+
+[[package]]
+name = "zksync_os_reth_compat"
+version = "0.13.0-non-semver-compat"
+dependencies = [
+ "alloy",
+ "reth-chainspec",
+ "reth-primitives-traits",
+ "reth-revm",
+ "reth-storage-api",
+ "reth-trie-common",
+ "zksync_os_api",
+ "zksync_os_storage_api",
 ]
 
 [[package]]
@@ -15499,6 +15511,7 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_priority_tree",
+ "zksync_os_reth_compat",
  "zksync_os_revm_consistency_checker",
  "zksync_os_rocksdb",
  "zksync_os_rpc",

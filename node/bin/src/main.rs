@@ -15,8 +15,9 @@ use zksync_os_server::{
     config::{
         BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
         GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
-        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+        NetworkConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig,
+        RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+        TxValidatorConfig,
     },
     config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
 };
@@ -202,6 +203,12 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse general config");
 
+    let network_config = repo
+        .single::<NetworkConfig>()
+        .expect("Failed to load network config")
+        .parse()
+        .expect("Failed to parse network config");
+
     let mut genesis_config = repo
         .single::<GenesisConfig>()
         .expect("Failed to load genesis config")
@@ -318,6 +325,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
     Config {
         general_config,
+        network_config,
         genesis_config,
         rpc_config,
         mempool_config,
