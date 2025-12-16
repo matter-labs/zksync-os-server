@@ -14,8 +14,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
-use zksync_os_contract_interface::l1_discovery::BatchVerificationL1;
-use zksync_os_contract_interface::models::CommitBatchInfo;
+use zksync_os_contract_interface::l1_discovery::{BatchVerificationL1, L1State};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
@@ -31,19 +30,46 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
 }
 pub struct BatchVerificationPipelineStep<E> {
     config: BatchVerificationConfig,
+    threshold: u64,
+    validators: Vec<Address>,
     last_committed_batch_number: u64,
+    l1_state: L1State,
     _phantom: std::marker::PhantomData<E>,
 }
 
 impl<E> BatchVerificationPipelineStep<E> {
     pub fn new(
         config: BatchVerificationConfig,
-        _l1_state: BatchVerificationL1, //TODO use this
+        l1_state: L1State,
         last_committed_batch_number: u64,
     ) -> Self {
+        let config_validators = config
+            .accepted_signers
+            .clone()
+            .into_iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        // If on L1 batch verifiers re configured, we use that configuration instead
+        let (threshold, validators) = match l1_state.batch_verification.clone() {
+            BatchVerificationL1::Enabled(l1_config) => {
+                if !l1_config.validators.is_empty() || l1_config.threshold > 0 {
+                    (
+                        config.threshold.max(l1_config.threshold),
+                        l1_config.validators,
+                    )
+                } else {
+                    (config.threshold, config_validators)
+                }
+            }
+            BatchVerificationL1::Disabled => (config.threshold, config_validators),
+        };
+
         Self {
             config,
+            threshold,
+            validators,
             last_committed_batch_number,
+            l1_state,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -85,8 +111,12 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
 
             let verifier = BatchVerifier::new(
                 self.config,
+                self.validators,
+                self.threshold,
                 response_channels,
                 server,
+                self.l1_state.l1_chain_id,
+                self.l1_state.validator_timelock,
                 self.last_committed_batch_number,
             );
             let verifier_fut = verifier
@@ -151,9 +181,12 @@ async fn run_batch_response_processor(
 struct BatchVerifier {
     config: BatchVerificationConfig,
     accepted_signers: Vec<Address>,
+    threshold: u64,
     request_id_counter: AtomicU64,
     server: Arc<BatchVerificationServer>,
     response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
+    l1_chain_id: u64,
+    multisig_committer: Address,
     last_committed_batch_number: u64,
 }
 
@@ -162,7 +195,7 @@ enum BatchVerificationError {
     #[error("Timeout")]
     Timeout,
     #[error("Not enough signers: {0} < {1}")]
-    NotEnoughSigners(usize, usize),
+    NotEnoughSigners(u64, u64),
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -189,22 +222,23 @@ impl BatchVerificationError {
 impl BatchVerifier {
     pub fn new(
         config: BatchVerificationConfig,
+        accepted_signers: Vec<Address>,
+        threshold: u64,
         response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
         server: Arc<BatchVerificationServer>,
+        l1_chain_id: u64,
+        multisig_committer: Address,
         last_committed_batch_number: u64,
     ) -> Self {
-        let accepted_signers = config
-            .accepted_signers
-            .clone()
-            .into_iter()
-            .map(|s| s.parse().unwrap())
-            .collect();
         Self {
             config,
             request_id_counter: AtomicU64::new(1),
             response_channels,
             server,
             accepted_signers,
+            threshold,
+            l1_chain_id,
+            multisig_committer,
             last_committed_batch_number,
         }
     }
@@ -319,7 +353,7 @@ impl BatchVerifier {
 
         // Create a channel for collecting responses for this request
         let (response_sender, mut response_receiver) =
-            mpsc::channel::<BatchVerificationResponse>(self.config.threshold);
+            mpsc::channel::<BatchVerificationResponse>(self.threshold.try_into().unwrap());
 
         // Register the channel for this request_id
         self.response_channels
@@ -329,10 +363,8 @@ impl BatchVerifier {
 
         // Send verification request to all connected clients
         self.server
-            .send_verification_request(batch_envelope, request_id, self.config.threshold)
+            .send_verification_request(batch_envelope, request_id, self.threshold)
             .await?;
-
-        let commit_data = batch_envelope.batch.batch_info.commit_info.clone();
 
         // Collect responses with timeout
         let mut responses = BatchSignatureSet::new();
@@ -357,7 +389,7 @@ impl BatchVerifier {
                 };
 
             let Some(validated_signature) =
-                self.process_response(&commit_data, request_id, response)
+                self.process_response(batch_envelope, request_id, response)
             else {
                 continue;
             };
@@ -385,10 +417,10 @@ impl BatchVerifier {
                 response_latency_ms = latency.as_millis() as u64,
                 "Validated response {} of {}",
                 responses.len(),
-                self.config.threshold
+                self.threshold
             );
 
-            if responses.len() >= self.config.threshold {
+            if u64::try_from(responses.len()).unwrap() >= self.threshold {
                 break;
             }
         }
@@ -410,9 +442,9 @@ impl BatchVerifier {
     /// Processes BatchVerificationResponse, on any error logs and returns None
     /// - extracts & validates signature
     /// - checks against list of accepted signers
-    fn process_response(
+    fn process_response<E>(
         &self,
-        commit_data: &CommitBatchInfo,
+        batch_envelope: &BatchForSigning<E>,
         request_id: u64,
         response: BatchVerificationResponse,
     ) -> Option<ValidatedBatchSignature> {
@@ -426,7 +458,7 @@ impl BatchVerifier {
                 ..
             } => {
                 tracing::info!(
-                    batch_number = commit_data.batch_number,
+                    batch_number = batch_envelope.batch_number(),
                     request_id = request_id,
                     "Verification refused: {}",
                     reason
@@ -435,9 +467,15 @@ impl BatchVerifier {
             }
         };
 
-        let Ok(validated_signature) = signature.verify_signature(commit_data) else {
+        let Ok(validated_signature) = signature.verify_signature(
+            &batch_envelope.batch.previous_stored_batch_info,
+            &batch_envelope.batch.batch_info,
+            self.l1_chain_id,
+            self.multisig_committer,
+            &batch_envelope.batch.protocol_version,
+        ) else {
             tracing::warn!(
-                batch_number = commit_data.batch_number,
+                batch_number = batch_envelope.batch_number(),
                 request_id = request_id,
                 "Invalid signature",
             );
@@ -446,7 +484,7 @@ impl BatchVerifier {
 
         if !self.accepted_signers.contains(validated_signature.signer()) {
             tracing::warn!(
-                batch_number = commit_data.batch_number,
+                batch_number = batch_envelope.batch_number(),
                 request_id = request_id,
                 signer = validated_signature.signer().to_string(),
                 "Signature from unknown signer",

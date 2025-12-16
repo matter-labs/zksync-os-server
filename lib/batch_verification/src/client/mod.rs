@@ -244,7 +244,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
         let signature = BatchSignature::sign_batch(
             &request.prev_commit_data,
             &batch_info,
-            self.chain_id,
+            self.l1_state.l1_chain_id,
             self.l1_state.validator_timelock,
             &blocks.first().unwrap().1.protocol_version,
             &self.signer,

@@ -4,6 +4,7 @@ use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::DynProvider;
+use alloy::providers::Provider;
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::{Debug, Display};
@@ -31,6 +32,7 @@ pub struct L1State {
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
     pub da_input_mode: BatchDaInputMode,
+    pub l1_chain_id: u64,
 }
 
 impl L1State {
@@ -86,6 +88,8 @@ impl L1State {
             None => BatchVerificationL1::Disabled,
         };
 
+        let l1_chain_id = diamond_proxy.provider().get_chain_id().await?;
+
         Ok(Self {
             bridgehub,
             diamond_proxy,
@@ -95,6 +99,7 @@ impl L1State {
             last_proved_batch,
             last_executed_batch,
             da_input_mode,
+            l1_chain_id,
         })
     }
 
@@ -129,6 +134,7 @@ impl L1State {
             validator_timelock: this.validator_timelock,
             batch_verification: this.batch_verification,
             last_committed_batch,
+            l1_chain_id: this.l1_chain_id,
             last_proved_batch,
             last_executed_batch,
             da_input_mode: this.da_input_mode,
