@@ -156,13 +156,15 @@ impl L1UpgradeTxWatcher {
             );
         }
         if upgrade_cut_data_logs.len() > 1 {
-            anyhow::bail!(
-                "multiple upgrade cuts found for the suggested protocol version: {}",
-                protocol_version
+            tracing::warn!(
+                %protocol_version,
+                "multiple upgrade cuts found for the suggested protocol version; picking the most recent one"
             );
         }
-        let raw_diamond_cut: Log<NewUpgradeCutData> =
-            upgrade_cut_data_logs[0].log_decode().unwrap();
+        // Safe unwrap because of checks above
+        // `last()` because, even though we scan backwards, each scan returns a list of ascending result
+        let upgrade_cut_data = upgrade_cut_data_logs.last().unwrap();
+        let raw_diamond_cut: Log<NewUpgradeCutData> = upgrade_cut_data.log_decode()?;
         let diamond_cut_data = raw_diamond_cut.inner.data.diamondCutData;
         let proposed_upgrade =
             ProposedUpgrade::abi_decode(&diamond_cut_data.initCalldata[4..]).unwrap(); // TODO: we're in fact parsing `upgrade(..)` signature here
