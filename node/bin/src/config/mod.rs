@@ -44,6 +44,8 @@ pub struct Config {
     pub batch_verification_config: BatchVerificationConfig,
 }
 
+pub const DEFAULT_ROCKS_DB_PATH: &str = "./db/node1";
+
 impl Config {
     pub fn schema() -> ConfigSchema {
         let mut schema = ConfigSchema::default();
@@ -162,7 +164,7 @@ pub struct GeneralConfig {
     pub force_starting_block_number: Option<u64>,
 
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
-    #[config(default_t = "./db/node1".into())]
+    #[config(default_t = DEFAULT_ROCKS_DB_PATH.into())]
     pub rocks_db_path: PathBuf,
 
     /// State backend to use. When changed, a replay of all blocks may be needed.

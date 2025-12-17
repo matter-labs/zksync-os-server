@@ -1,16 +1,18 @@
 use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment};
-use std::time::Duration;
+use std::{path::Path, time::Duration};
+use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig, GeneralConfig,
-    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, DEFAULT_ROCKS_DB_PATH,
+    GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
+    MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig,
+    RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+    TxValidatorConfig,
 };
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -28,6 +30,9 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
+    /// Enables sandbox mode (uses a temporary RocksDB directory that is removed on shutdown).
+    #[arg(long)]
+    sandbox: bool,
     #[command(subcommand)]
     cmd: Option<CliCommand>,
 }
@@ -90,6 +95,12 @@ pub async fn main() {
     }
 
     let mut config = build_external_config(config_repo);
+    let sandbox_guard = if opt.sandbox {
+        // Creates a temporary directory for RocksDB and switches to it.
+        enable_sandbox_mode(&mut config)
+    } else {
+        None
+    };
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     let prometheus: PrometheusExporterConfig =
@@ -137,6 +148,11 @@ pub async fn main() {
             }
         },
     };
+    if sandbox_guard.is_some() {
+        tracing::info!("Exiting sandbox mode, cleaning up temporary directories");
+        // Drop sandbox tempdir (if any) before exiting to ensure cleanup happens eagerly.
+        drop(sandbox_guard);
+    }
 }
 
 async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
@@ -301,6 +317,27 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         gas_adjuster_config,
         batch_verification_config,
     }
+}
+
+fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
+    let original_path = config.general_config.rocks_db_path.clone();
+    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH)
+        || std::env::var_os("GENERAL_ROCKS_DB_PATH").is_some()
+    {
+        tracing::warn!(
+            original_path = %original_path.display(),
+            "general_rocks_db_path parameter is ignored in sandbox mode"
+        );
+    }
+
+    let tempdir =
+        tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
+    config.general_config.rocks_db_path = tempdir.path().to_path_buf();
+    tracing::info!(
+        path = %config.general_config.rocks_db_path.display(),
+        "Sandbox mode enabled. Using temporary RocksDB directory"
+    );
+    Some(tempdir)
 }
 
 fn load_internal_config(config: &mut Config) {
