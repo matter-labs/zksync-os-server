@@ -383,6 +383,11 @@ impl EvmTracer for CallTracer {
 
     /// Opcode failed for some reason. Note: call frame ends immediately
     fn on_opcode_error(&mut self, error: &EvmError, _frame_state: impl EvmFrameInterface) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            // Ignore errors in subcalls if only the top call should be traced
+            return;
+        }
+
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
@@ -395,6 +400,11 @@ impl EvmTracer for CallTracer {
     /// Special cases, when error happens in frame before any opcode is executed (unfortunately we can't provide access to state)
     /// Note: call frame ends immediately
     fn on_call_error(&mut self, error: &EvmError) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            // Ignore errors in subcalls if only the top call should be traced
+            return;
+        }
+
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
