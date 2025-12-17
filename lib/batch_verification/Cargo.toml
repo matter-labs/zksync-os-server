@@ -42,3 +42,5 @@ dashmap.workspace = true
 structdiff.workspace = true
 secrecy.workspace = true
 vise.workspace = true
+reqwest.workspace = true
+axum.workspace = true
