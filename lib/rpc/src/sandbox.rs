@@ -237,6 +237,15 @@ impl EvmTracer for CallTracer {
                         // Clear `to` field as no contract was created
                         finished_call.to = None;
                     }
+
+                    if self.current_call_depth == 1 {
+                        // Add error info to the top-level call
+
+                        // Note: we can't distinguish runtime resources exhaustion from fatal internal errors here.
+                        // Tracer should not be used if VM panics.
+                        finished_call.error =
+                            Some("ZKsync OS: out of execution resources or pubdata".to_string());
+                    }
                 }
             }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
