@@ -77,7 +77,7 @@ impl BatchVerificationServer {
                 request
                     .into_body()
                     .into_data_stream()
-                    .map_err(|e| std::io::Error::other(e)),
+                    .map_err(std::io::Error::other),
             );
             let mut reader = FramedRead::new(reader, BatchVerificationResponseDecoder::new());
 
