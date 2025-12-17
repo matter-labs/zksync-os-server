@@ -87,7 +87,7 @@ impl PipelineComponent for ExternalNodeCommandSource {
         let mut stream = replay_receiver(
             self.starting_block,
             self.record_overrides,
-            self.replay_download_address.clone(),
+            &self.replay_download_address,
         )
         .await
         .map_err(|err| {

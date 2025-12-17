@@ -163,7 +163,7 @@ impl Tester {
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let batch_verification_address =
             format!("localhost:{}", batch_verification_locked_port.port);
-        let replay_url = format!("localhost:{}", replay_locked_port.port);
+        let replay_url = format!("http://localhost:{}", replay_locked_port.port);
 
         let tempdir = tempfile::tempdir()?;
         let rocks_db_path = tempdir.path().join("rocksdb");
