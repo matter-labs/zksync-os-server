@@ -318,9 +318,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
 fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
-    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH)
-        || std::env::var_os("GENERAL_ROCKS_DB_PATH").is_some()
-    {
+    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
         tracing::warn!(
             original_path = %original_path.display(),
             "general_rocks_db_path parameter is ignored in sandbox mode"
