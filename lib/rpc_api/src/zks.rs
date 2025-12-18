@@ -11,6 +11,9 @@ pub trait ZksApi {
     #[method(name = "getBridgehubContract")]
     async fn get_bridgehub_contract(&self) -> RpcResult<Address>;
 
+    #[method(name = "getBytecodeSupplierContract")]
+    async fn get_bytecode_supplier_contract(&self) -> RpcResult<Address>;
+
     #[method(name = "getL2ToL1LogProof")]
     async fn get_l2_to_l1_log_proof(
         &self,

@@ -7,10 +7,12 @@ use zksync_os_genesis::{FileGenesisInputSource, GenesisInputSource};
 use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_rpc_api::zks::ZksApiClient;
 
+/// Returns
+/// (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source)
 pub async fn load_remote_config(
     main_node_rpc_url: &str,
     en_local_genesis_config: &GenesisConfig,
-) -> anyhow::Result<(Address, u64, Arc<dyn GenesisInputSource>)> {
+) -> anyhow::Result<(Address, Address, u64, Arc<dyn GenesisInputSource>)> {
     let main_node_rpc_client =
         jsonrpsee::http_client::HttpClientBuilder::new().build(main_node_rpc_url)?;
 
@@ -21,6 +23,32 @@ pub async fn load_remote_config(
             "Bridgehub address mismatch: remote = {remote_bridgehub_address}, local = {local_bridgehub_address}",
         );
     }
+
+    let bytecode_supplier_address = match main_node_rpc_client
+        .get_bytecode_supplier_contract()
+        .await
+    {
+        Ok(result) => {
+            if let Some(local_bytecode_supplier_address) =
+                en_local_genesis_config.bytecode_supplier_address
+            {
+                anyhow::ensure!(
+                    result == local_bytecode_supplier_address,
+                    "Bytecode Supplier address mismatch: remote = {result}, local = {local_bytecode_supplier_address}",
+                );
+            }
+            result
+        }
+        // todo: remove when `main_node_rpc_client.get_bytecode_supplier_contract()` is deployed everywhere
+        Err(_) => {
+            tracing::info!(
+                "Cannot read bytecode supplier contract address from the Main Node. This is expected if Main Node runs an older version. Using local config value instead..."
+            );
+            en_local_genesis_config
+                .bytecode_supplier_address
+                .context("`genesis_bytecode_supplier_address` config must be provided when running against an older version of Main Node (`main_node_rpc_client.get_bytecode_supplier_contract()` is not available)")?
+        }
+    };
 
     let remote_chain_id: u64 = u64::from_be_bytes(
         main_node_rpc_client
@@ -54,6 +82,7 @@ pub async fn load_remote_config(
 
     Ok((
         remote_bridgehub_address,
+        bytecode_supplier_address,
         remote_chain_id,
         genesis_input_source,
     ))
