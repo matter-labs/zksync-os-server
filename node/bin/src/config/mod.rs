@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-use crate::command_source::RebuildOptions;
+use crate::{command_source::RebuildOptions, config_constants::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
@@ -162,7 +162,7 @@ pub struct GeneralConfig {
     pub force_starting_block_number: Option<u64>,
 
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
-    #[config(default_t = "./db/node1".into())]
+    #[config(default_t = DEFAULT_ROCKS_DB_PATH.into())]
     pub rocks_db_path: PathBuf,
 
     /// State backend to use. When changed, a replay of all blocks may be needed.

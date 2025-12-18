@@ -3,6 +3,9 @@
 //! as it is used to be automatically updated.
 //! Please, use #[rustfmt::skip] if a constant is formatted to occupy two lines.
 
+/// Default path to RocksDB storage.
+pub const DEFAULT_ROCKS_DB_PATH: &str = "./db/node1";
+
 /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
 /// other contracts should be discoverable through it.
 pub const BRIDGEHUB_ADDRESS: &str = "0xaab95dfc116d9d9d9dd931cda1fd4142db135365";

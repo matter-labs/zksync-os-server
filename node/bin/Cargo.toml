@@ -88,3 +88,4 @@ jsonrpsee = { workspace = true, default-features = false, features = [
 rand.workspace = true
 
 sentry.workspace = true
+tempfile.workspace = true

@@ -13204,6 +13204,7 @@ dependencies = [
  "serde_yaml",
  "smart-config",
  "smart-config-commands",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
