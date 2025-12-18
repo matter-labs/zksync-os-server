@@ -186,7 +186,7 @@ reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3"
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.1" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.2" }
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.12.1-non-semver-compat", path = "lib/contract_interface" }
