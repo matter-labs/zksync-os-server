@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-use crate::command_source::RebuildOptions;
+use crate::{command_source::RebuildOptions, config_constants::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
@@ -43,8 +43,6 @@ pub struct Config {
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
 }
-
-pub const DEFAULT_ROCKS_DB_PATH: &str = "./db/node1";
 
 impl Config {
     pub fn schema() -> ConfigSchema {

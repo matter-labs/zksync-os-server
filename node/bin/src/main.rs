@@ -6,13 +6,14 @@ use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_observability::prometheus::PrometheusExporterConfig;
-use zksync_os_server::config::{
-    BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, DEFAULT_ROCKS_DB_PATH,
-    GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-    MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig,
-    RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
-    TxValidatorConfig,
+use zksync_os_observability::prometheus::PrometheusExporterConfig;use zksync_os_server::{
+    config::{
+        BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
+        GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
+        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
+        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    },
+    config_constants::DEFAULT_ROCKS_DB_PATH,
 };
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -95,7 +96,7 @@ pub async fn main() {
     }
 
     let mut config = build_external_config(config_repo);
-    let sandbox_guard = if opt.sandbox {
+    let _sandbox_guard = if opt.sandbox {
         // Creates a temporary directory for RocksDB and switches to it.
         enable_sandbox_mode(&mut config)
     } else {
@@ -148,11 +149,6 @@ pub async fn main() {
             }
         },
     };
-    if sandbox_guard.is_some() {
-        tracing::info!("Exiting sandbox mode, cleaning up temporary directories");
-        // Drop sandbox tempdir (if any) before exiting to ensure cleanup happens eagerly.
-        drop(sandbox_guard);
-    }
 }
 
 async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
