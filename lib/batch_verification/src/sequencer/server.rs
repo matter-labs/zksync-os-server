@@ -9,12 +9,16 @@ use axum::http::Request;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::{io::AsyncWriteExt, net::TcpListener};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::io::{ReaderStream, StreamReader};
+use tower::ServiceExt;
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
 
 /// Accepts connections from batch verification clients. Crafts and sends
@@ -53,8 +57,30 @@ impl BatchVerificationServer {
         let app = Router::new()
             .route("/batch_verification", post(Self::handle_batch_verification))
             .with_state(self);
-        axum::serve(listener, app).await?;
-        Ok(())
+
+        loop {
+            let (stream, client_addr) = listener.accept().await?;
+            let app = app.clone();
+
+            tokio::spawn(async move {
+                let stream = TokioIo::new(stream);
+
+                let service = hyper::service::service_fn(move |req| app.clone().oneshot(req));
+
+                let mut builder = server::conn::auto::Builder::new(TokioExecutor::new());
+                builder.http1().keep_alive(false);
+                builder
+                    .http2()
+                    .keep_alive_interval(None)
+                    .keep_alive_timeout(Duration::from_secs(12 * 60 * 60)) // 12 hours
+                    .max_send_buf_size(16 * 1024); // 16KB buffer
+                let conn = builder.serve_connection(stream, service);
+
+                if let Err(e) = conn.await {
+                    tracing::info!(%client_addr, "connection error: {}", e);
+                }
+            });
+        }
     }
 
     async fn handle_batch_verification(
