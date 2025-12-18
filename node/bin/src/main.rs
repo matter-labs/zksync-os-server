@@ -6,7 +6,10 @@ use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
-use zksync_os_observability::prometheus::PrometheusExporterConfig;use zksync_os_server::{
+use zksync_os_observability::prometheus::PrometheusExporterConfig;
+use zksync_os_server::zkstack_config::ZkStackConfig;
+use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
+use zksync_os_server::{
     config::{
         BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
         GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
@@ -15,8 +18,6 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;use zksync_os_
     },
     config_constants::DEFAULT_ROCKS_DB_PATH,
 };
-use zksync_os_server::zkstack_config::ZkStackConfig;
-use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
