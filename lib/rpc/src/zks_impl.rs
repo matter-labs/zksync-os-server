@@ -15,6 +15,7 @@ const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
 
 pub struct ZksNamespace<RpcStorage> {
     bridgehub_address: Address,
+    bytecode_supplier_address: Address,
     storage: RpcStorage,
     genesis_input_source: Arc<dyn GenesisInputSource>,
 }
@@ -22,11 +23,13 @@ pub struct ZksNamespace<RpcStorage> {
 impl<RpcStorage> ZksNamespace<RpcStorage> {
     pub fn new(
         bridgehub_address: Address,
+        bytecode_supplier_address: Address,
         storage: RpcStorage,
         genesis_input_source: Arc<dyn GenesisInputSource>,
     ) -> Self {
         Self {
             bridgehub_address,
+            bytecode_supplier_address,
             storage,
             genesis_input_source,
         }
@@ -162,6 +165,10 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
 impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
     async fn get_bridgehub_contract(&self) -> RpcResult<Address> {
         Ok(self.bridgehub_address)
+    }
+
+    async fn get_bytecode_supplier_contract(&self) -> RpcResult<Address> {
+        Ok(self.bytecode_supplier_address)
     }
 
     async fn get_l2_to_l1_log_proof(

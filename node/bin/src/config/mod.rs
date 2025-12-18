@@ -206,8 +206,8 @@ pub struct GenesisConfig {
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(default_t = crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap())]
-    pub bytecode_supplier_address: Address,
+    #[config(default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
+    pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
