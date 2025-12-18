@@ -598,6 +598,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage,
             stop_receiver.clone(),
             tx_acceptance_state_sender,
+            chain_id,
         )
         .await;
     };
@@ -792,6 +793,7 @@ async fn run_en_pipeline(
     finality: impl ReadFinality + Clone,
     stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
+    chain_id: u64,
 ) {
     let internal_config_path = config
         .general_config
@@ -839,7 +841,7 @@ async fn run_en_pipeline(
             BatchVerificationClient::new(
                 finality.clone(),
                 config.batch_verification_config.signing_key.clone(),
-                config.genesis_config.chain_id.unwrap(),
+                chain_id,
                 *node_state_on_startup.l1_state.diamond_proxy.address(),
                 config.batch_verification_config.connect_address,
             ),
