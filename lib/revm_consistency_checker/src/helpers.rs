@@ -104,12 +104,8 @@ pub fn zk_tx_into_revm_tx(
         .nonce(tx.nonce())
         .access_list(access_list)
         .tx_type(Some(tx.tx_type().ty()))
+        .chain_id(chain_id)
         .blob_hashes(vec![]); // ZkSync transactions don't use blobs yet
-
-    // Add optional fields
-    if let Some(chain) = chain_id {
-        tx_env_builder = tx_env_builder.chain_id(Some(chain));
-    }
 
     if let Some(priority_fee) = gas_priority_fee {
         tx_env_builder = tx_env_builder.gas_priority_fee(Some(priority_fee));
