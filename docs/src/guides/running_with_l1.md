@@ -1,5 +1,7 @@
 # Running with L1
 
+IMPORTANT: THIS GUIDE IS OUTDATED. PLEASE USE [generate L1 state guide](./generate_l1_state.md) INSTEAD.
+USE THIS GUIDE ONLY AS A GENERAL REFERENCE, BRANCHES AND VERSIONS MIGHT ARE OUTDATED.
 
 ## Simplest (no contract changes etc)
 If you're not doing any contract changes, and simply want to hook up to L1, start anvil with pre-created state.
