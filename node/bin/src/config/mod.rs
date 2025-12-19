@@ -186,6 +186,13 @@ pub struct GeneralConfig {
     /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
+
+    /// Whether to run the priority tree component.
+    /// Required for Main Node (will panic if false on Main Node).
+    /// Optional for External Nodes - if disabled on EN, the priority tree will need to be rebuilt
+    /// from scratch before turning this EN into a Main Node.
+    #[config(default_t = true)]
+    pub run_priority_tree: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
