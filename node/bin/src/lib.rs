@@ -108,6 +108,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "external_node"
     };
 
+    // Priority tree is required for main node
+    if config.sequencer_config.is_main_node() && !config.general_config.run_priority_tree {
+        panic!("`general_run_priority_tree` must be true for Main Node");
+    }
+
     let process_started_at = Instant::now();
     GENERAL_METRICS.process_started_at[&(NODE_VERSION, role)].set(
         SystemTime::now()
@@ -850,28 +855,30 @@ async fn run_en_pipeline(
         .spawn(tasks);
 
     // Run Priority Tree tasks for EN - not part of the pipeline.
-    let priority_tree_en_step = PriorityTreeENStep::new(
-        block_replay_storage,
-        Path::new(
-            &config
-                .general_config
-                .rocks_db_path
-                .join(PRIORITY_TREE_DB_NAME),
-        ),
-        batch_storage,
-        finality.clone(),
-        node_state_on_startup
-            .last_l1_executed_block
-            .min(node_state_on_startup.block_replay_storage_last_block),
-    )
-    .await
-    .unwrap();
+    if config.general_config.run_priority_tree {
+        let priority_tree_en_step = PriorityTreeENStep::new(
+            block_replay_storage,
+            Path::new(
+                &config
+                    .general_config
+                    .rocks_db_path
+                    .join(PRIORITY_TREE_DB_NAME),
+            ),
+            batch_storage,
+            finality.clone(),
+            node_state_on_startup
+                .last_l1_executed_block
+                .min(node_state_on_startup.block_replay_storage_last_block),
+        )
+        .await
+        .unwrap();
 
-    tasks.spawn(
-        priority_tree_en_step
-            .run()
-            .map(report_exit("priority_tree_en")),
-    );
+        tasks.spawn(
+            priority_tree_en_step
+                .run()
+                .map(report_exit("priority_tree_en")),
+        );
+    }
     tasks.spawn(
         clear_failing_block_config_task(finality, internal_config_manager)
             .map(report_exit("clear_failing_block_config_task")),
