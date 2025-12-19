@@ -55,9 +55,15 @@ pip install -r ./scripts_python/requirements.txt
 Inside `zksync-os-workflows` repo, run:
 ```shell
 WORKSPACE=${PWD} \
-  REPO_DIR=/path/to/zksync-os-server \
-  ERA_CONTRACTS_PATH=/path/to/era-contracts \
-  ZKSYNC_ERA_PATH=/path/to/zksync-era \
+  REPO_DIR=../zksync-os-server \
+  ERA_CONTRACTS_PATH=../era-contracts \
+  ZKSYNC_ERA_PATH=../zksync-era \
   ZKSYNC_OS_EXECUTION_VERSION=5 \
-    ./scripts/python/update_state.py
+    ./scripts_python/update_state.py
 ```
+
+**Forge/cast requirements:**
+Currently the script requires concrete version of forge/cast (0.0.4) - this is due to the current version of contracts (v29/v30) still using
+old compiler, and new compiler resulting in different hashes.
+
+If you run locally, and don't care about contract hash matches, you can comment it out in the script, and use any version of forge/cast.
