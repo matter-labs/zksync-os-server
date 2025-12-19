@@ -7,8 +7,6 @@ THIS GUIDE IS A DRAFT VERSION FOR THE NEW TOOLING AND WILL BE SIGNIFICANTLY UPDA
 Make sure you have the following tools installed:
 * `anvil` v1.3.4 -> incredibly important to have exactly this `anvil` version, otherwise the state file won't load
 * `forge` and `cast` v0.0.4 -> incredibly important to have exactly these versions, otherwise contracts won't deploy correctly
-* `perl` v5
-* `yq` v4.x
 * `git`
 * `cargo`
 * `yarn`
