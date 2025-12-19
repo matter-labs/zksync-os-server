@@ -57,7 +57,7 @@ WORKSPACE=${PWD} \
   ERA_CONTRACTS_PATH=../era-contracts \
   ZKSYNC_ERA_PATH=../zksync-era \
   ZKSYNC_OS_EXECUTION_VERSION=5 \
-    ./scripts_python/update_state.py
+    ./scripts_python/update_server.py
 ```
 
 **Forge/cast requirements:**
