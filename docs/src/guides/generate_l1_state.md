@@ -41,6 +41,15 @@ source venv/bin/activate
 pip install -r ./scripts_python/requirements.txt
 ```
 
+If pyyaml installation fails due to cython, run:
+
+```shell
+pip install setuptools
+pip install "cython<3"
+pip install --no-build-isolation pyyaml==6.0
+pip install -r ./scripts_python/requirements.txt
+```
+
 ## Re-generate L1 state and genesis
 
 Inside `zksync-os-workflows` repo, run:
