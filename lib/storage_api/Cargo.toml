@@ -34,3 +34,4 @@ semver = { workspace = true, features = ["serde"] }
 async-trait.workspace = true
 anyhow.workspace = true
 pin-project.workspace = true
+auto_impl.workspace = true
