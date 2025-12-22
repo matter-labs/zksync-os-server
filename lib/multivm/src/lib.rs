@@ -88,7 +88,12 @@ pub fn run_block<
     }
 }
 
-pub fn simulate_tx<Storage: ReadStorage, PreimgSrc: PreimageSource, Tracer: AnyTracer, Validator: AnyTxValidator, >(
+pub fn simulate_tx<
+    Storage: ReadStorage,
+    PreimgSrc: PreimageSource,
+    Tracer: AnyTracer,
+    Validator: AnyTxValidator,
+>(
     transaction: EncodedTx,
     block_context: BlockContext,
     storage: Storage,
