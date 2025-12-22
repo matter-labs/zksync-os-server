@@ -41,12 +41,16 @@ zksync_os_internal_config.workspace = true
 
 zk_os_forward_system_0_1_0.workspace = true
 zk_ee_0_1_0.workspace = true
+zk_os_forward_system_0_2_4.workspace = true
+zk_ee_0_2_4.workspace = true
 zk_os_forward_system.workspace = true
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
+execution_utils_0_5_1.workspace = true
 full_statement_verifier.workspace = true
+full_statement_verifier_0_5_1.workspace = true
 
 anyhow.workspace = true
 alloy = { workspace = true, default-features = false, features = [

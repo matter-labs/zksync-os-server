@@ -226,27 +226,61 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        // Deserialize the proof
-        let program_proof =
-            bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
-                .map_err(|err| {
-                    tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
-                    SubmitError::DeserializationFailed(err)
-                })?
-                .0;
+        // TODO: This match is needed for the transition period.
+        // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
+        // Once all networks are protocol upgraded, the code below can be removed.
+        let proving_version = batch_metadata
+            .proving_version()
+            // should be safe to unwrap, as it's been checked before this call
+            .expect("invalid proving version");
+        let result = match proving_version {
+            ProvingVersion::V1
+            | ProvingVersion::V2
+            | ProvingVersion::V3
+            | ProvingVersion::V4
+            | ProvingVersion::V5 => {
+                tracing::debug!("Using 0.5.1 proof verifier for batch {}", batch_number);
+                let program_proof =
+                    bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
+                        .map_err(|err| {
+                            tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
+                            SubmitError::DeserializationFailed(err)
+                        })?
+                        .0;
+                fri_proof_verifier::verify_fri_proof_0_5_1(
+                    batch_metadata.previous_stored_batch_info.state_commitment,
+                    batch_metadata
+                        .batch_info
+                        .clone()
+                        .into_stored(&batch_metadata.protocol_version),
+                    program_proof,
+                )
+            }
+            ProvingVersion::V6 => {
+                tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
+                let program_proof =
+                    bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
+                        .map_err(|err| {
+                            tracing::warn!(batch_number, ?err, "Failed to deserialize proof");
+                            SubmitError::DeserializationFailed(err)
+                        })?
+                        .0;
+                fri_proof_verifier::verify_fri_proof(
+                    batch_metadata.previous_stored_batch_info.state_commitment,
+                    batch_metadata
+                        .batch_info
+                        .clone()
+                        .into_stored(&batch_metadata.protocol_version),
+                    program_proof,
+                )
+            }
+        };
 
-        // Verify the proof
         if let Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
             proof_final_register_values,
-        }) = fri_proof_verifier::verify_fri_proof(
-            batch_metadata.previous_stored_batch_info.state_commitment,
-            batch_metadata
-                .batch_info
-                .clone()
-                .into_stored(&batch_metadata.protocol_version),
-            program_proof,
-        ) {
+        }) = result
+        {
             tracing::warn!(
                 batch_number,
                 expected = ?expected_hash_u32s,

@@ -142,6 +142,7 @@ impl ProofCommand {
             None => 0,
             Some(4) => 4,
             Some(5) => 5,
+            Some(6) => 6,
             Some(execution_version) => panic!(
                 "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
             ),
