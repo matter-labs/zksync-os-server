@@ -75,6 +75,8 @@ impl<E> BatchVerificationPipelineStep<E> {
     }
 }
 
+type ResponseChannelsMapArc = Arc<RwLock<HashMap<u64, Sender<BatchVerificationResponse>>>>;
+
 #[async_trait]
 impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineStep<E> {
     type Input = BatchForSigning<E>;
@@ -109,16 +111,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
                     .boxed()
                     .map(report_exit("Batch response processor"));
 
-            let verifier = BatchVerifier::new(
-                self.config,
-                self.validators,
-                self.threshold,
-                response_channels,
-                server,
-                self.l1_state.l1_chain_id,
-                self.l1_state.validator_timelock,
-                self.last_committed_batch_number,
-            );
+            let verifier = BatchVerifier::new(&self, response_channels, server);
             let verifier_fut = verifier
                 .run(input, output)
                 .boxed()
@@ -144,7 +137,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
 /// -> response_channels -> BatchVerifier::collect_batch_verification_signatures
 async fn run_batch_response_processor(
     mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
-    response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
+    response_channels: ResponseChannelsMapArc,
 ) -> anyhow::Result<()> {
     let latency_tracker = ComponentStateReporter::global().handle_for(
         "batch_response_processor",
@@ -184,7 +177,7 @@ struct BatchVerifier {
     threshold: u64,
     request_id_counter: AtomicU64,
     server: Arc<BatchVerificationServer>,
-    response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
+    response_channels: ResponseChannelsMapArc,
     l1_chain_id: u64,
     multisig_committer: Address,
     last_committed_batch_number: u64,
@@ -220,26 +213,21 @@ impl BatchVerificationError {
 }
 
 impl BatchVerifier {
-    pub fn new(
-        config: BatchVerificationConfig,
-        accepted_signers: Vec<Address>,
-        threshold: u64,
-        response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
+    pub fn new<E>(
+        component: &BatchVerificationPipelineStep<E>,
+        response_channels: ResponseChannelsMapArc,
         server: Arc<BatchVerificationServer>,
-        l1_chain_id: u64,
-        multisig_committer: Address,
-        last_committed_batch_number: u64,
     ) -> Self {
         Self {
-            config,
+            config: component.config.clone(),
+            accepted_signers: component.validators.clone(),
+            threshold: component.threshold,
             request_id_counter: AtomicU64::new(1),
             response_channels,
             server,
-            accepted_signers,
-            threshold,
-            l1_chain_id,
-            multisig_committer,
-            last_committed_batch_number,
+            l1_chain_id: component.l1_state.l1_chain_id,
+            multisig_committer: component.l1_state.validator_timelock,
+            last_committed_batch_number: component.last_committed_batch_number,
         }
     }
 
@@ -561,10 +549,7 @@ mod tests {
     fn make_verifier(
         accepted_signers: Vec<String>,
         last_committed_batch_number: u64,
-    ) -> (
-        BatchVerifier,
-        Arc<RwLock<HashMap<u64, Sender<BatchVerificationResponse>>>>,
-    ) {
+    ) -> (BatchVerifier, ResponseChannelsMapArc) {
         let config = test_config(accepted_signers.clone());
         let (server, _rx) = BatchVerificationServer::new();
         let server = Arc::new(server);
@@ -574,16 +559,17 @@ mod tests {
             .map(|s| s.parse().unwrap())
             .collect();
         let threshold = config.threshold;
-        let verifier = BatchVerifier::new(
+        let verifier = BatchVerifier {
             config,
-            accepted_signers_addrs,
+            accepted_signers: accepted_signers_addrs,
             threshold,
-            response_channels.clone(),
+            response_channels: response_channels.clone(),
             server,
-            CHAIN_ID,
-            MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
+            l1_chain_id: CHAIN_ID,
+            multisig_committer: MULTISIG_COMMITTER_DUMMY.parse().unwrap(),
             last_committed_batch_number,
-        );
+            request_id_counter: AtomicU64::new(1),
+        };
         (verifier, response_channels)
     }
 

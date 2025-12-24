@@ -72,13 +72,13 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
     ) -> Self {
         let signer = PrivateKeySigner::from_str(private_key.expose_secret())
             .expect("Invalid batch verification private key");
-        if let BatchVerificationL1::Enabled(l1_config) = l1_state.batch_verification.clone() {
-            if !l1_config.validators.contains(&signer.address()) {
-                tracing::warn!(
-                    "Your address {} is not authorized to verify batches on L1",
-                    signer.address()
-                );
-            }
+        if let BatchVerificationL1::Enabled(l1_config) = l1_state.batch_verification.clone()
+            && !l1_config.validators.contains(&signer.address())
+        {
+            tracing::warn!(
+                "Your address {} is not authorized to verify batches on L1",
+                signer.address()
+            );
         }
 
         Self {
