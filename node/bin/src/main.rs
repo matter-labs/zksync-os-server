@@ -13,7 +13,7 @@ use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_server::{
     config::{
-        BatchVerificationConfig, BatcherConfig, ChainsConfig, Config, ConfigArgs,
+        BatchVerificationConfig, BatcherConfig, ChainConfig, ChainsConfig, Config, ConfigArgs,
         GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
         MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig,
         RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
@@ -120,11 +120,37 @@ pub async fn main() {
     if opt.sandbox {
         config.general_config.sandbox = true;
     }
-    let sandbox_mode_enabled = config.general_config.sandbox;
+    tracing::info!(?config, "Loaded config");
+    load_internal_config(&mut config);
 
-    let (_sandbox_guard, prometheus) = if sandbox_mode_enabled {
+    let mut configs_to_run = if let Some(chains) = &config.chains {
+        chains
+            .iter()
+            .map(|chain| get_chain_config(&config, &chain))
+            .collect()
+    } else {
+        vec![config.clone()]
+    };
+
+    // =========== Use temporary directory for state in the sandbox mode ===========
+    // =========== Init observability ===========
+    let (_sandbox_guard, prometheus) = if config.general_config.sandbox {
+        let sandbox_guard = create_sandbox_base_dir(&config);
+        let sandbox_base_dir = sandbox_guard.path().to_path_buf();
+
+        for cfg in configs_to_run.iter_mut() {
+            let chain_id = cfg
+                .genesis_config
+                .chain_id
+                .expect("chain_id must be set for sandbox config");
+            let node_dir = sandbox_base_dir.join(chain_id.to_string());
+            cfg.general_config.rocks_db_path = node_dir.clone();
+            cfg.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
+                file_backed_base_path: node_dir.join("shared"),
+            };
+        }
         tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
-        (Some(create_sandbox_base_dir(&config)), None)
+        (Some(sandbox_guard), None)
     } else {
         (
             None,
@@ -133,46 +159,6 @@ pub async fn main() {
             )),
         )
     };
-    tracing::info!(?config, "Loaded config");
-    load_internal_config(&mut config);
-
-    let mut configs_to_run = if let Some(chains) = &config.chains {
-        chains
-            .iter()
-            .map(|chain| {
-                get_chain_config(
-                    &config,
-                    &chain.rpc_address,
-                    chain.chain_id,
-                    chain.operator_commit_pk.as_str(),
-                    chain.operator_prove_pk.as_str(),
-                    chain.operator_execute_pk.as_str(),
-                )
-            })
-            .collect()
-    } else {
-        vec![config]
-    };
-
-    // =========== Use temporary directory for state in the sandbox mode ===========
-    if sandbox_mode_enabled {
-        let sandbox_base_dir = _sandbox_guard.as_ref().map(|dir| dir.path().to_path_buf());
-        let base_dir = sandbox_base_dir
-            .as_ref()
-            .expect("sandbox directory must exist when sandbox mode is enabled");
-
-        for cfg in configs_to_run.iter_mut() {
-            let chain_id = cfg
-                .genesis_config
-                .chain_id
-                .expect("chain_id must be set for sandbox config");
-            let node_dir = base_dir.join(chain_id.to_string());
-            cfg.general_config.rocks_db_path = node_dir.clone();
-            cfg.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
-                file_backed_base_path: node_dir.join("shared"),
-            };
-        }
-    }
 
     // =========== init interruption channel ===========
 
@@ -377,15 +363,19 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 
     // Validate that operator keys are different
-    if l1_sender_config.operator_commit_pk.expose_secret()
-        == l1_sender_config.operator_prove_pk.expose_secret()
-        || l1_sender_config.operator_prove_pk.expose_secret()
-            == l1_sender_config.operator_execute_pk.expose_secret()
-        || l1_sender_config.operator_execute_pk.expose_secret()
-            == l1_sender_config.operator_commit_pk.expose_secret()
-    {
-        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
-        panic!("Operator addresses for commit, prove and execute must be different");
+    ensure_different_operator_addresses(
+        &l1_sender_config.operator_commit_pk,
+        &l1_sender_config.operator_prove_pk,
+        &l1_sender_config.operator_execute_pk,
+    );
+    if let Some(chains) = &chains_config.chains {
+        for chain in chains {
+            ensure_different_operator_addresses(
+                &chain.operator_commit_pk,
+                &chain.operator_prove_pk,
+                &chain.operator_execute_pk,
+            );
+        }
     }
 
     Config {
@@ -408,20 +398,13 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 }
 
-fn get_chain_config(
-    base_config: &Config,
-    rpc_address: &str,
-    chain_id: u64,
-    operator_commit_pk: &str,
-    operator_prove_pk: &str,
-    operator_execute_pk: &str,
-) -> Config {
+fn get_chain_config(base_config: &Config, chain_config: &ChainConfig) -> Config {
     let mut config = base_config.clone();
-    config.rpc_config.address = rpc_address.to_string();
-    config.genesis_config.chain_id = Some(chain_id);
-    config.l1_sender_config.operator_commit_pk = SecretString::from(operator_commit_pk);
-    config.l1_sender_config.operator_prove_pk = SecretString::from(operator_prove_pk);
-    config.l1_sender_config.operator_execute_pk = SecretString::from(operator_execute_pk);
+    config.rpc_config.address = chain_config.rpc_address.to_string();
+    config.genesis_config.chain_id = Some(chain_config.chain_id);
+    config.l1_sender_config.operator_commit_pk = chain_config.operator_commit_pk.clone();
+    config.l1_sender_config.operator_prove_pk = chain_config.operator_prove_pk.clone();
+    config.l1_sender_config.operator_execute_pk = chain_config.operator_execute_pk.clone();
     config
 }
 
@@ -441,6 +424,26 @@ fn create_sandbox_base_dir(config: &Config) -> TempDir {
         "Sandbox mode enabled. Using temporary RocksDB directory"
     );
     tempdir
+}
+
+/// Validates that operator keys for commit, prove and execute are different.
+fn ensure_different_operator_addresses(
+    operator_commit_pk: &SecretString,
+    operator_prove_pk: &SecretString,
+    operator_execute_pk: &SecretString,
+) {
+    use std::collections::HashSet;
+
+    let keys: HashSet<&str> = HashSet::from([
+        operator_commit_pk.expose_secret(),
+        operator_prove_pk.expose_secret(),
+        operator_execute_pk.expose_secret(),
+    ]);
+
+    if keys.len() != 3 {
+        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
+        panic!("Operator addresses for commit, prove and execute must be different");
+    }
 }
 
 fn load_internal_config(config: &mut Config) {
