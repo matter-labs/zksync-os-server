@@ -858,6 +858,7 @@ async fn run_en_pipeline(
             config.batch_verification_config.client_enabled,
             BatchVerificationClient::new(
                 chain_id,
+                *node_state_on_startup.l1_state.diamond_proxy.address(),
                 config.batch_verification_config.connect_address,
                 config.batch_verification_config.signing_key.clone(),
                 finality.clone(),
