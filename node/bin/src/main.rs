@@ -1,20 +1,23 @@
 use clap::{Parser, Subcommand};
-use smart_config::value::ExposeSecret;
-use smart_config::{ConfigRepository, ConfigSources, Environment};
-use std::{path::Path, time::Duration};
+use smart_config::value::{ExposeSecret, SecretString};
+use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
+use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_server::{
     config::{
-        BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
-        GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
-        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+        BatchVerificationConfig, BatcherConfig, ChainsConfig, Config, ConfigArgs,
+        GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
+        MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig,
+        RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
+        TxValidatorConfig,
     },
     config_constants::DEFAULT_ROCKS_DB_PATH,
 };
@@ -35,6 +38,11 @@ struct Cli {
     /// Enables sandbox mode (uses a temporary RocksDB directory that is removed on shutdown).
     #[arg(long)]
     sandbox: bool,
+
+    /// Path to a JSON config file.
+    #[arg(long)]
+    config: Option<String>,
+
     #[command(subcommand)]
     cmd: Option<CliCommand>,
 }
@@ -46,6 +54,17 @@ pub async fn main() {
     // =========== load configs ===========
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
+
+    // Process the config file if provided
+    if let Some(config_path) = &opt.config {
+        let config_contents =
+            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+        let config_json: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&config_contents)
+                .expect("Failed to parse config file from provided path");
+        config_sources.push(Json::new(config_path, config_json));
+    }
+
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
     // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
@@ -97,16 +116,63 @@ pub async fn main() {
     }
 
     let mut config = build_external_config(config_repo);
-    let _sandbox_guard = if opt.sandbox {
-        // Creates a temporary directory for RocksDB and switches to it.
-        enable_sandbox_mode(&mut config)
+    // Respect sandbox flag from CLI
+    if opt.sandbox {
+        config.general_config.sandbox = true;
+    }
+    let sandbox_mode_enabled = config.general_config.sandbox;
+
+    let (_sandbox_guard, prometheus) = if sandbox_mode_enabled {
+        tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
+        (Some(create_sandbox_base_dir(&config)), None)
     } else {
-        None
+        (
+            None,
+            Some(PrometheusExporterConfig::pull(
+                config.observability_config.prometheus.port,
+            )),
+        )
     };
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
-    let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(config.observability_config.prometheus.port);
+
+    let mut configs_to_run = if let Some(chains) = &config.chains {
+        chains
+            .iter()
+            .map(|chain| {
+                get_chain_config(
+                    &config,
+                    &chain.rpc_address,
+                    chain.chain_id,
+                    chain.operator_commit_pk.as_str(),
+                    chain.operator_prove_pk.as_str(),
+                    chain.operator_execute_pk.as_str(),
+                )
+            })
+            .collect()
+    } else {
+        vec![config]
+    };
+
+    // =========== Use temporary directory for state in the sandbox mode ===========
+    if sandbox_mode_enabled {
+        let sandbox_base_dir = _sandbox_guard.as_ref().map(|dir| dir.path().to_path_buf());
+        let base_dir = sandbox_base_dir
+            .as_ref()
+            .expect("sandbox directory must exist when sandbox mode is enabled");
+
+        for cfg in configs_to_run.iter_mut() {
+            let chain_id = cfg
+                .genesis_config
+                .chain_id
+                .expect("chain_id must be set for sandbox config");
+            let node_dir = base_dir.join(chain_id.to_string());
+            cfg.general_config.rocks_db_path = node_dir.clone();
+            cfg.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
+                file_backed_base_path: node_dir.join("shared"),
+            };
+        }
+    }
 
     // =========== init interruption channel ===========
 
@@ -114,15 +180,34 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
-
     let main_task = async move {
-        match config.general_config.state_backend {
-            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
-            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+        let mut nodes = JoinSet::new();
+        for node_config in configs_to_run {
+            let stop_clone = main_stop.clone();
+            nodes.spawn(async move {
+                match node_config.general_config.state_backend {
+                    StateBackendConfig::FullDiffs => {
+                        run::<FullDiffsState>(stop_clone, node_config).await
+                    }
+                    StateBackendConfig::Compacted => {
+                        run::<StateHandle>(stop_clone, node_config).await
+                    }
+                }
+            });
         }
+
+        nodes.join_next().await
     };
 
     let stop_receiver_copy = stop_receiver.clone();
+    let prometheus_task = async {
+        if let Some(prometheus_config) = prometheus {
+            prometheus_config.run(stop_receiver).await
+        } else {
+            // no-op for the sandbox mode
+            future::pending::<anyhow::Result<()>>().await
+        }
+    };
 
     tokio::select! {
         _ = main_task => {
@@ -135,7 +220,7 @@ pub async fn main() {
             }
         },
         _ = handle_delayed_termination(stop_sender) => {},
-        res = prometheus.run(stop_receiver) => {
+        res = prometheus_task => {
             match res {
                 Ok(_) => {
                     if *stop_receiver_copy.borrow() {
@@ -177,6 +262,12 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
 }
 
 fn build_external_config(repo: ConfigRepository<'_>) -> Config {
+    let chains_config = repo
+        .single::<ChainsConfig>()
+        .expect("Failed to load chains config")
+        .parse()
+        .expect("Failed to parse chains config");
+
     let mut general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
@@ -313,10 +404,28 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
+        chains: chains_config.chains,
     }
 }
 
-fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
+fn get_chain_config(
+    base_config: &Config,
+    rpc_address: &str,
+    chain_id: u64,
+    operator_commit_pk: &str,
+    operator_prove_pk: &str,
+    operator_execute_pk: &str,
+) -> Config {
+    let mut config = base_config.clone();
+    config.rpc_config.address = rpc_address.to_string();
+    config.genesis_config.chain_id = Some(chain_id);
+    config.l1_sender_config.operator_commit_pk = SecretString::from(operator_commit_pk);
+    config.l1_sender_config.operator_prove_pk = SecretString::from(operator_prove_pk);
+    config.l1_sender_config.operator_execute_pk = SecretString::from(operator_execute_pk);
+    config
+}
+
+fn create_sandbox_base_dir(config: &Config) -> TempDir {
     let original_path = config.general_config.rocks_db_path.clone();
     if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
         tracing::warn!(
@@ -327,12 +436,11 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
 
     let tempdir =
         tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
-    config.general_config.rocks_db_path = tempdir.path().to_path_buf();
     tracing::info!(
-        path = %config.general_config.rocks_db_path.display(),
+        path = %tempdir.path().display(),
         "Sandbox mode enabled. Using temporary RocksDB directory"
     );
-    Some(tempdir)
+    tempdir
 }
 
 fn load_internal_config(config: &mut Config) {

@@ -25,7 +25,7 @@ mod cli;
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
 /// Default values are provided for local setup.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub general_config: GeneralConfig,
     pub genesis_config: GenesisConfig,
@@ -42,11 +42,15 @@ pub struct Config {
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
+    pub chains: Option<Vec<ChainConfig>>,
 }
 
 impl Config {
     pub fn schema() -> ConfigSchema {
         let mut schema = ConfigSchema::default();
+        schema
+            .insert(&ChainsConfig::DESCRIPTION, "")
+            .expect("Failed to insert chains config");
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
@@ -103,6 +107,36 @@ impl Config {
         let repo = ConfigRepository::new(&schema).with_all(sources);
         repo.single()?.parse().map_err(log_all_errors)
     }
+}
+
+/// Config for multiple chains. Used for multi-chain setups.
+#[derive(Clone, Debug, Deserialize, Serialize, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ChainsConfig {
+    /// Optional list of chain settings.
+    #[config(with = Serde![*])]
+    pub chains: Option<Vec<ChainConfig>>,
+}
+
+/// Config for a single chain. Used for multi-chain setups.
+#[derive(Clone, Debug, Serialize, Deserialize, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ChainConfig {
+    /// RPC address of the chain.
+    #[config(default)]
+    pub rpc_address: String,
+    /// Chain ID of the chain.
+    #[config(default)]
+    pub chain_id: u64,
+    /// Private key to commit batches to L1
+    #[config(default)]
+    pub operator_commit_pk: String,
+    /// Private key to use to submit proofs to L1
+    #[config(default)]
+    pub operator_prove_pk: String,
+    /// Private key to use to execute batches on L1
+    #[config(default)]
+    pub operator_execute_pk: String,
 }
 
 fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
@@ -186,6 +220,12 @@ pub struct GeneralConfig {
     /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
+
+    /// Enables sandbox mode that isolates RocksDB into a temporary directory.
+    /// The directory is removed once the process shuts down.
+    /// Disables all HTTP APIs except JSON RPC.
+    #[config(default_t = false)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
