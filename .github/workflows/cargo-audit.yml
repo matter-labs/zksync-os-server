@@ -34,7 +34,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # todo - remove after `tracing-subscriber` is `>=0.3.20` in all dependencies
-          ignore: 'RUSTSEC-2025-0055'
+          # ruint package has a vuln in reciprocal_mg10 function we do not use
+          ignore: "RUSTSEC-2025-0055,RUSTSEC-2025-0137"
 
   cargo-deny:
     runs-on: ubuntu-latest
