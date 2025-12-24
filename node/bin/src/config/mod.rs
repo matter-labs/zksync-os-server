@@ -221,6 +221,13 @@ pub struct GeneralConfig {
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
 
+    /// Whether to run the priority tree component.
+    /// Required for Main Node (will panic if false on Main Node).
+    /// Optional for External Nodes - if disabled on EN, the priority tree will need to be rebuilt
+    /// from scratch before turning this EN into a Main Node.
+    #[config(default_t = true)]
+    pub run_priority_tree: bool,
+
     /// Enables sandbox mode that isolates RocksDB into a temporary directory.
     /// The directory is removed once the process shuts down.
     /// Disables all HTTP APIs except JSON RPC.
@@ -246,8 +253,8 @@ pub struct GenesisConfig {
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(default_t = crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap())]
-    pub bytecode_supplier_address: Address,
+    #[config(default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
+    pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
@@ -710,6 +717,8 @@ pub struct GasAdjusterConfig {
     pub max_base_fee_samples: usize,
     #[config(default_t = 100)]
     pub num_samples_for_blob_base_fee_estimate: usize,
+    #[config(default_t = 100)]
+    pub max_blob_fill_ratio_samples: usize,
     #[config(default_t = 13 * TimeUnit::Seconds)]
     pub poll_period: Duration,
     #[config(default_t = 1.0)]
@@ -904,6 +913,7 @@ pub fn gas_adjuster_config(
         pubdata_mode,
         max_base_fee_samples: c.max_base_fee_samples,
         num_samples_for_blob_base_fee_estimate: c.num_samples_for_blob_base_fee_estimate,
+        max_blob_fill_ratio_samples: c.max_blob_fill_ratio_samples,
         max_priority_fee_per_gas: max_priority_fee_per_gas_wei,
         poll_period: c.poll_period,
         pubdata_pricing_multiplier: c.pubdata_pricing_multiplier,

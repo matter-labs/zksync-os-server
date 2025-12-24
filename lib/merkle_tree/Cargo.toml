@@ -28,6 +28,9 @@ zk_ee_0_1_0.workspace = true
 zk_os_basic_system_0_1_0.workspace = true
 zk_os_forward_system.workspace = true
 zk_os_basic_system.workspace = true
+zk_os_forward_system_0_2_4.workspace = true
+zk_ee_0_2_4.workspace = true
+zk_os_basic_system_0_2_4.workspace = true
 zk_ee.workspace = true
 tokio.workspace = true
 

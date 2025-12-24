@@ -76,7 +76,7 @@ pub struct Tester {
     l1_address: String,
     replay_url: String,
     l2_rpc_address: String,
-    batch_verification_address: String,
+    batch_verification_url: String,
 }
 
 impl Tester {
@@ -109,8 +109,7 @@ impl Tester {
         let overrides_fun = |config: &mut Config| {
             config.sequencer_config.block_replay_download_address = Some(self.replay_url.clone());
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
-            config.batch_verification_config.connect_address =
-                self.batch_verification_address.clone();
+            config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
                 f(config)
             }
@@ -161,9 +160,10 @@ impl Tester {
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
         let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
-        let batch_verification_address =
-            format!("localhost:{}", batch_verification_locked_port.port);
-        let replay_url = format!("localhost:{}", replay_locked_port.port);
+        let batch_verification_address = format!("0.0.0.0:{}", batch_verification_locked_port.port);
+        let batch_verification_url =
+            format!("http://localhost:{}", batch_verification_locked_port.port);
+        let replay_url = format!("http://localhost:{}", replay_locked_port.port);
 
         let tempdir = tempfile::tempdir()?;
         let rocks_db_path = tempdir.path().join("rocksdb");
@@ -215,7 +215,7 @@ impl Tester {
             server_enabled: false,
             listen_address: batch_verification_address.clone(),
             client_enabled: false,
-            connect_address: batch_verification_address.clone(),
+            connect_address: batch_verification_url.clone(),
             threshold: 1, // default to 1 of 2
             accepted_signers: BATCH_VERIFICATION_ADDRESSES.clone(),
             request_timeout: Duration::from_millis(500),
@@ -265,7 +265,7 @@ impl Tester {
         if enable_prover {
             let base_url = format!("http://localhost:{}", prover_api_locked_port.port);
             let app_bin_path =
-                zksync_os_multivm::apps::v5::multiblock_batch_path(&rocks_db_path.join("app_bins"));
+                zksync_os_multivm::apps::v6::multiblock_batch_path(&rocks_db_path.join("app_bins"));
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
@@ -354,7 +354,7 @@ impl Tester {
             main_task,
             l1_address,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
-            batch_verification_address,
+            batch_verification_url,
             replay_url,
             tempdir: tempdir.clone(),
             main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
