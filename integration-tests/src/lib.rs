@@ -366,7 +366,7 @@ impl Tester {
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
-    batch_verification_threshold: Option<usize>,
+    batch_verification_threshold: Option<u64>,
 }
 
 impl TesterBuilder {
@@ -381,7 +381,7 @@ impl TesterBuilder {
         self
     }
 
-    pub fn batch_verification(mut self, threshold: usize) -> Self {
+    pub fn batch_verification(mut self, threshold: u64) -> Self {
         self.batch_verification_threshold = Some(threshold);
         self
     }
