@@ -11,7 +11,7 @@ use alloy::consensus::crypto::RecoveryError;
 use alloy::consensus::transaction::{Recovered, SignerRecoverable};
 use alloy::consensus::{Transaction, TransactionEnvelope};
 use alloy::eips::Encodable2718;
-use alloy::primitives::{Address, B256, TxNonce};
+use alloy::primitives::{Address, B256, Bytes, TxNonce, U256};
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
@@ -127,6 +127,14 @@ impl ZkTransaction {
 
     pub fn to(&self) -> Option<Address> {
         self.inner.to()
+    }
+
+    pub fn value(&self) -> U256 {
+        self.inner.value()
+    }
+
+    pub fn input(&self) -> &Bytes {
+        self.inner.input()
     }
 
     pub fn gas_limit(&self) -> u64 {

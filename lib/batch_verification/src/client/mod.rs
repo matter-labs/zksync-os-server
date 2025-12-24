@@ -5,8 +5,10 @@ use crate::{
 };
 use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
+use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, TryStreamExt};
+use reqwest::Body;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use std::time::Duration;
@@ -14,6 +16,7 @@ use structdiff::StructDiff;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite};
+use tokio_util::io::{ReaderStream, StreamReader};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::{BatchInfo, BatchSignature};
 use zksync_os_interface::types::BlockOutput;
@@ -23,7 +26,6 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_observability::GenericComponentState;
 use zksync_os_observability::StateLabel;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_socket::connect;
 use zksync_os_storage_api::ReadFinality;
 use zksync_os_storage_api::ReplayRecord;
 
@@ -38,7 +40,7 @@ pub struct BatchVerificationClient<Finality> {
     diamond_proxy: Address,
     server_address: String,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality>,
+    block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -80,17 +82,30 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
         input: &mut PeekableReceiver<VerificationInput>,
         latency_tracker: &ComponentStateHandle<BatchVerificationClientState>,
     ) -> anyhow::Result<()> {
-        let address = self.signer.address().to_string();
-        let mut socket = connect(&self.server_address, "/batch_verification").await?;
+        let client = reqwest::Client::new();
+        let (tx, rx) = tokio::io::duplex(16 * 1024);
 
-        let batch_verification_version = socket.read_u32().await?;
-        let (recv, send) = socket.split();
+        let address = self.signer.address().to_string();
+        let response = client
+            .post(format!("{}/batch_verification", self.server_address))
+            .body(Body::wrap_stream(ReaderStream::new(rx)))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let text = response.text().await?;
+            return Err(anyhow!("request failed: {text}"));
+        }
+
+        let stream = response.bytes_stream();
+        let stream = stream.map_err(std::io::Error::other);
+        let mut reader = StreamReader::new(stream);
+        let batch_verification_version = reader.read_u32().await?;
         let mut reader = FramedRead::new(
-            recv,
+            reader,
             BatchVerificationRequestDecoder::new(batch_verification_version),
         );
         let mut writer = FramedWrite::new(
-            send,
+            tx,
             BatchVerificationResponseCodec::new(batch_verification_version),
         );
 

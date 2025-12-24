@@ -4,12 +4,13 @@ use crate::config::BatchVerificationConfig;
 use crate::{BatchVerificationResponse, BatchVerificationResult};
 use alloy::primitives::Address;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use futures::FutureExt;
 use futures::future::select_all;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
@@ -62,7 +63,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
             // Stores response channels for each request ID to route responses
             // depending on request id. Allows collect_batch_verification_signatures
             // to be run concurrently. Unimplemented currently.
-            let response_channels = Arc::new(DashMap::new());
+            let response_channels = Arc::new(RwLock::new(HashMap::new()));
 
             let server_for_fut = server.clone();
             let server_address = self.config.listen_address.clone();
@@ -108,7 +109,7 @@ impl<E: Send + Sync + 'static> PipelineComponent for BatchVerificationPipelineSt
 /// -> response_channels -> BatchVerifier::collect_batch_verification_signatures
 async fn run_batch_response_processor(
     mut response_receiver: mpsc::Receiver<BatchVerificationResponse>,
-    response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+    response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
 ) -> anyhow::Result<()> {
     let latency_tracker = ComponentStateReporter::global().handle_for(
         "batch_response_processor",
@@ -119,7 +120,7 @@ async fn run_batch_response_processor(
         let request_id = response.request_id;
 
         // Route response to the appropriate channel
-        if let Some(sender) = response_channels.get(&request_id) {
+        if let Some(sender) = response_channels.read().await.get(&request_id) {
             tracing::debug!(request_id, "Received batch verification response");
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
             if let Err(e) = sender.send(response).await {
@@ -147,7 +148,7 @@ struct BatchVerifier {
     accepted_signers: Vec<Address>,
     request_id_counter: AtomicU64,
     server: Arc<BatchVerificationServer>,
-    response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+    response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
     last_committed_batch_number: u64,
 }
 
@@ -183,7 +184,7 @@ impl BatchVerificationError {
 impl BatchVerifier {
     pub fn new(
         config: BatchVerificationConfig,
-        response_channels: Arc<DashMap<u64, mpsc::Sender<BatchVerificationResponse>>>,
+        response_channels: Arc<RwLock<HashMap<u64, mpsc::Sender<BatchVerificationResponse>>>>,
         server: Arc<BatchVerificationServer>,
         last_committed_batch_number: u64,
     ) -> Self {
@@ -230,7 +231,7 @@ impl BatchVerifier {
                 singed_batcher_sender
                     .send(
                         batch_envelope
-                            .with_signatures(BatchSignatureData::NotNeeded)
+                            .with_signatures(BatchSignatureData::AlreadyCommitted)
                             .with_stage(BatchExecutionStage::BatchSigned),
                     )
                     .await
@@ -316,7 +317,10 @@ impl BatchVerifier {
             mpsc::channel::<BatchVerificationResponse>(self.config.threshold);
 
         // Register the channel for this request_id
-        self.response_channels.insert(request_id, response_sender);
+        self.response_channels
+            .write()
+            .await
+            .insert(request_id, response_sender);
 
         // Send verification request to all connected clients
         self.server
@@ -393,7 +397,7 @@ impl BatchVerifier {
         );
 
         // Cleanup: remove the channel for this request_id
-        self.response_channels.remove(&request_id);
+        self.response_channels.write().await.remove(&request_id);
 
         Ok(responses)
     }
@@ -446,5 +450,226 @@ impl BatchVerifier {
         }
 
         Some(validated_signature)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BatchVerificationResult;
+    use crate::tests::{dummy_batch_envelope, dummy_commit_batch_info};
+    use alloy::primitives::Address;
+    use alloy::signers::local::PrivateKeySigner;
+    use secrecy::SecretString;
+    use tokio::sync::mpsc;
+    use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
+    use zksync_os_contract_interface::models::CommitBatchInfo;
+    use zksync_os_l1_sender::batcher_model::{
+        BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
+    };
+
+    const DUMMY_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
+
+    fn test_config(accepted_signers: Vec<String>) -> BatchVerificationConfig {
+        BatchVerificationConfig {
+            server_enabled: true,
+            listen_address: "127.0.0.1:0".to_string(),
+            client_enabled: false,
+            connect_address: String::new(),
+            threshold: 1,
+            accepted_signers,
+            request_timeout: Duration::from_secs(5),
+            retry_delay: Duration::from_millis(10),
+            total_timeout: Duration::from_secs(10),
+            // address 0x1DAeC5f53D365f4BBdA2d05Ed4FbE095b24AE15d
+            signing_key: SecretString::new(
+                "0xa4cabe6332985182371b02c0b117d9e83c8d608714b63f71fb000178ef25fa65".into(),
+            ),
+        }
+    }
+
+    async fn make_success_response(
+        request_id: u64,
+        commit_info: &CommitBatchInfo,
+    ) -> (BatchVerificationResponse, Address) {
+        let signer = PrivateKeySigner::random();
+        let addr = signer.address();
+        let sig = BatchSignature::sign_batch(commit_info, &signer).await;
+
+        (
+            BatchVerificationResponse {
+                request_id,
+                batch_number: commit_info.batch_number,
+                result: BatchVerificationResult::Success(sig),
+            },
+            addr,
+        )
+    }
+
+    fn make_verifier(accepted_signers: Vec<String>) -> BatchVerifier {
+        let config = test_config(accepted_signers);
+        let (server, _rx) = BatchVerificationServer::new();
+        let server = Arc::new(server);
+        let response_channels = Arc::new(RwLock::new(HashMap::new()));
+        BatchVerifier::new(config, response_channels, server, 0)
+    }
+
+    #[tokio::test]
+    async fn process_response_refused_returns_none() {
+        let commit_info = dummy_commit_batch_info(1, 1, 2);
+        let verifier = make_verifier(Vec::new());
+
+        let response = BatchVerificationResponse {
+            request_id: 1,
+            batch_number: commit_info.batch_number,
+            result: BatchVerificationResult::Refused("reason".to_string()),
+        };
+
+        let result = verifier.process_response(&commit_info, 1, response);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn process_response_unauthorized_signer_returns_none() {
+        let commit_info = dummy_commit_batch_info(1, 1, 2);
+        let (response, _addr) = make_success_response(1, &commit_info).await;
+
+        let verifier = make_verifier(vec![DUMMY_ADDRESS.to_string()]);
+
+        let result = verifier.process_response(&commit_info, 1, response);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn process_response_success_known_signer_returns_some() {
+        let commit_info = dummy_commit_batch_info(1, 1, 2);
+        let (response, addr) = make_success_response(1, &commit_info).await;
+        let accepted = vec![DUMMY_ADDRESS.to_string(), addr.to_string()];
+        let verifier = make_verifier(accepted);
+
+        let result = verifier.process_response(&commit_info, 1, response);
+        let validated: ValidatedBatchSignature =
+            result.expect("expected Some(validated signature)");
+        assert_eq!(validated.signer(), &addr);
+    }
+
+    #[tokio::test]
+    async fn run_skips_already_committed_batches_and_forwards_them() {
+        let accepted = Vec::new();
+        let config = test_config(accepted);
+        let (server, _rx_server) = BatchVerificationServer::new();
+        let server = Arc::new(server);
+        let response_channels = Arc::new(RwLock::new(HashMap::new()));
+        let last_committed_batch_number = 10;
+        let verifier = BatchVerifier::new(
+            config,
+            response_channels,
+            server,
+            last_committed_batch_number,
+        );
+
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
+        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+
+        // batch with number 5 < 10, so it does not need to go through signing and should be forwarded as is
+        let batch = dummy_batch_envelope(5, 30, 35);
+        input_tx.send(batch).await.expect("failed to send batch");
+        drop(input_tx);
+
+        let run_handle = tokio::spawn(async move {
+            verifier
+                .run(peekable, output_tx)
+                .await
+                .expect("run should succeed");
+        });
+
+        let out = output_rx.recv().await.expect("expected output batch");
+        match out.signature_data {
+            BatchSignatureData::AlreadyCommitted => {}
+            _ => panic!(
+                "expected NotNeeded signature data, got: {:?}",
+                out.signature_data
+            ),
+        }
+
+        assert!(output_rx.recv().await.is_none());
+        run_handle
+            .await
+            .expect("run task should complete, because input was closed");
+    }
+
+    #[tokio::test]
+    async fn run_performs_signing_and_includes_signature() {
+        // Prepare commit info and a valid signature from an accepted signer.
+        let batch = dummy_batch_envelope(3, 10, 15);
+        let commit_info = batch.batch.batch_info.commit_info.clone();
+        let (response, addr) = make_success_response(1, &commit_info).await;
+        let config = test_config(vec![addr.to_string()]);
+
+        let (server, _rx_server) = BatchVerificationServer::new();
+        // Ensure there is at least one subscriber so that send_verification_request
+        // succeeds with threshold = 1 and to observe the outgoing request.
+        let mut request_rx = server.subscribe_for_tests();
+        let server = Arc::new(server);
+        let response_channels = Arc::new(RwLock::new(HashMap::new()));
+        let last_committed_batch_number = 0; // so no skipping - all batches need signing
+        let verifier = BatchVerifier::new(
+            config,
+            response_channels.clone(),
+            server,
+            last_committed_batch_number,
+        );
+
+        // Spawn a helper task that waits for the outgoing verification request
+        // via `request_rx`, then injects the prepared successful response for
+        // the observed request_id.
+        let response_channels_cloned = response_channels.clone();
+        tokio::spawn(async move {
+            let request = request_rx
+                .recv()
+                .await
+                .expect("server should send a verification request");
+            let request_id = request.request_id;
+
+            let mut response = response;
+            response.request_id = request_id;
+
+            response_channels_cloned
+                .read()
+                .await
+                .get(&request_id)
+                .expect("sender should be available")
+                .send(response)
+                .await
+                .expect("Failed to send");
+        });
+
+        // Wire up the pipeline: one input batch that must be signed, and an
+        // output channel where we expect a signed batch.
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
+        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+
+        input_tx.send(batch).await.expect("failed to send batch");
+        drop(input_tx);
+
+        let run_handle = tokio::spawn(async move {
+            verifier
+                .run(peekable, output_tx)
+                .await
+                .expect("run should succeed");
+        });
+
+        let out = output_rx.recv().await.expect("expected output batch");
+        match out.signature_data {
+            BatchSignatureData::Signed { signatures } => {
+                assert_eq!(signatures.len(), 1);
+            }
+            _ => panic!("expected Signed signature data"),
+        }
+
+        assert!(output_rx.recv().await.is_none());
+        run_handle.await.expect("run task should complete");
     }
 }

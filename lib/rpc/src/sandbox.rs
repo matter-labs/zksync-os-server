@@ -41,6 +41,7 @@ pub fn call_trace_simulate(
     call_config: CallConfig,
 ) -> anyhow::Result<CallFrame> {
     let mut tracer = CallTracer::new_with_config(
+        vec![tx.clone()],
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
     );
@@ -71,6 +72,7 @@ pub fn call_trace(
     call_config: CallConfig,
 ) -> anyhow::Result<Vec<CallFrame>> {
     let mut tracer = CallTracer::new_with_config(
+        txs.clone(),
         call_config.with_log.unwrap_or_default(),
         call_config.only_top_call.unwrap_or_default(),
     );
@@ -92,6 +94,7 @@ pub fn call_trace(
 
 #[derive(Default)]
 pub struct CallTracer {
+    input_transactions: Vec<ZkTransaction>,
     transactions: Vec<CallFrame>,
     unfinished_calls: Vec<CallFrame>,
     finished_calls: Vec<CallFrame>,
@@ -109,8 +112,13 @@ enum CreateType {
 }
 
 impl CallTracer {
-    pub fn new_with_config(collect_logs: bool, only_top_call: bool) -> Self {
+    pub fn new_with_config(
+        input_transactions: Vec<ZkTransaction>,
+        collect_logs: bool,
+        only_top_call: bool,
+    ) -> Self {
         Self {
+            input_transactions,
             transactions: vec![],
             unfinished_calls: vec![],
             finished_calls: vec![],
@@ -229,6 +237,15 @@ impl EvmTracer for CallTracer {
                         // Clear `to` field as no contract was created
                         finished_call.to = None;
                     }
+
+                    if self.current_call_depth == 1 {
+                        // Add error info to the top-level call
+
+                        // Note: we can't distinguish runtime resources exhaustion from fatal internal errors here.
+                        // Tracer should not be used if VM panics.
+                        finished_call.error =
+                            Some("ZKsync OS: out of execution resources or pubdata".to_string());
+                    }
                 }
             }
             if let Some(parent_call) = self.unfinished_calls.last_mut() {
@@ -256,13 +273,37 @@ impl EvmTracer for CallTracer {
     fn finish_tx(&mut self) {
         assert_eq!(self.current_call_depth, 0);
         assert!(self.unfinished_calls.is_empty());
-        assert_eq!(self.finished_calls.len(), 1);
 
         // Sanity check
         assert!(self.create_operation_requested.is_none());
 
-        self.transactions
-            .push(self.finished_calls.pop().expect("Should exist"));
+        if let Some(top_level_call) = self.finished_calls.pop() {
+            self.transactions.push(top_level_call);
+        } else {
+            // We can have some edge cases when tx fails before any call frame is created
+            // In this case currently we populate minimal call frame info from the input tx data
+            let empty_tx = self.input_transactions.get(self.transactions.len());
+            if let Some(tx) = empty_tx {
+                self.transactions.push(CallFrame {
+                    from: tx.signer(),
+                    gas: U256::from(tx.gas_limit()),
+                    gas_used: U256::from(tx.gas_limit()),
+                    to: tx.to(),
+                    input: tx.input().clone(),
+                    output: None,
+                    error: Some("transaction failed before execution".to_string()),
+                    revert_reason: None,
+                    calls: vec![],
+                    logs: vec![],
+                    value: Some(tx.value()), // Can't have STATICCALL here
+                    typ: if tx.to().is_some() {
+                        "CALL".to_string()
+                    } else {
+                        "CREATE".to_string()
+                    },
+                });
+            }
+        }
     }
 
     fn on_event(&mut self, address: Address, topics: Vec<B256>, data: &[u8]) {
@@ -351,6 +392,11 @@ impl EvmTracer for CallTracer {
 
     /// Opcode failed for some reason. Note: call frame ends immediately
     fn on_opcode_error(&mut self, error: &EvmError, _frame_state: impl EvmFrameInterface) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            // Ignore errors in subcalls if only the top call should be traced
+            return;
+        }
+
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
@@ -363,6 +409,11 @@ impl EvmTracer for CallTracer {
     /// Special cases, when error happens in frame before any opcode is executed (unfortunately we can't provide access to state)
     /// Note: call frame ends immediately
     fn on_call_error(&mut self, error: &EvmError) {
+        if self.only_top_call && self.current_call_depth > 1 {
+            // Ignore errors in subcalls if only the top call should be traced
+            return;
+        }
+
         let current_call = self.unfinished_calls.last_mut().expect("Should exist");
         current_call.error = Some(fmt_error_msg(error));
 
@@ -419,7 +470,7 @@ impl EvmTracer for CallTracer {
 }
 
 /// Returns a non-empty revert reason if the output is a revert/error.
-fn maybe_revert_reason(output: &[u8]) -> Option<String> {
+pub(crate) fn maybe_revert_reason(output: &[u8]) -> Option<String> {
     let reason = match GenericRevertReason::decode(output)? {
         GenericRevertReason::ContractError(err) => {
             match err {
@@ -440,7 +491,7 @@ fn maybe_revert_reason(output: &[u8]) -> Option<String> {
 /// Converts [`EvmError`] to a geth-style error message (if possible).
 ///
 /// See https://github.com/ethereum/go-ethereum/blob/9ce40d19a8240844be24b9692c639dff45d13d68/core/vm/errors.go#L26-L45
-fn fmt_error_msg(error: &EvmError) -> String {
+pub(crate) fn fmt_error_msg(error: &EvmError) -> String {
     match error {
         // todo: missing `ErrGasUintOverflow`: likely not propagated during tx decoding
         EvmError::Revert => "execution reverted".to_string(),

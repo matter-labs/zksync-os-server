@@ -74,6 +74,7 @@ impl Logs {
             zksync_os_sequencer=DEBUG,\
             zksync_os_priority_tree=DEBUG,\
             zksync_os_merkle_tree=DEBUG,\
+            zksync_os_revm_consistency_checker=DEBUG,\
             "
             .to_string()
         };

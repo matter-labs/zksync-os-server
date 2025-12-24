@@ -29,9 +29,10 @@ pub enum SequencerState {
 impl StateLabel for SequencerState {
     fn generic(&self) -> GenericComponentState {
         match self {
-            Self::WaitingForCommand | Self::WaitingForTx | Self::ConfiguredBlockLimitReached => {
-                GenericComponentState::WaitingRecv
-            }
+            Self::WaitingForCommand
+            | Self::WaitingForTx
+            | Self::ConfiguredBlockLimitReached
+            | Self::BlockContextTxs => GenericComponentState::WaitingRecv,
             Self::WaitingSend => GenericComponentState::WaitingSend,
             _ => GenericComponentState::Processing,
         }

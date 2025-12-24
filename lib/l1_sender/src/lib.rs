@@ -132,8 +132,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     let mut tx_request = tx_request_with_gas_fields(
                         &provider,
                         operator_address,
-                        config.max_fee_per_gas(),
-                        config.max_priority_fee_per_gas(),
+                        config.max_fee_per_gas_wei,
+                        config.max_priority_fee_per_gas_wei,
                     )
                     .await?
                     .with_to(to_address)
@@ -141,7 +141,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
 
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         let fee_per_blob_gas = provider.get_blob_base_fee().await?;
-                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas();
+                        let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
 
                         if fee_per_blob_gas > max_fee_per_blob_gas {
                             tracing::warn!(

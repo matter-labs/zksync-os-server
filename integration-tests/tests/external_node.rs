@@ -7,7 +7,111 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use alloy::{network::ReceiptResponse, primitives::Address};
 use backon::{ConstantBuilder, Retryable};
+use zksync_os_integration_tests::BATCH_VERIFICATION_KEYS;
+use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{Tester, assert_traits::ReceiptAssert, contracts::EventEmitter};
+use zksync_os_server::config::Config;
+
+#[test_log::test(tokio::test)]
+async fn batch_verification_works() -> anyhow::Result<()> {
+    let builder = Tester::builder().batch_verification(1);
+    let main_node = builder.build().await?;
+
+    let _en1 = main_node
+        .launch_external_node_overrides(|config: &mut Config| {
+            let bv_config = &mut config.batch_verification_config;
+            bv_config.client_enabled = true;
+        })
+        .await?;
+
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Check batch is eventually finalized
+    main_node
+        .l2_zk_provider
+        .wait_finalized_with_timeout(
+            deploy_tx_receipt.block_number.unwrap(),
+            Duration::from_secs(60),
+        )
+        .await?;
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn batch_verification_without_enough_ens() -> anyhow::Result<()> {
+    let builder = Tester::builder().batch_verification(2);
+    let main_node = builder.build().await?;
+
+    let _en1 = main_node
+        .launch_external_node_overrides(|config: &mut Config| {
+            let bv_config = &mut config.batch_verification_config;
+            bv_config.client_enabled = true;
+        })
+        .await?;
+
+    // Do some random transaction
+    let _deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // First block should not get finalized because EN with 2FA is needed.
+    main_node
+        .l2_zk_provider
+        .wait_not_finalized(1, Duration::from_secs(60))
+        .await?;
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
+    let builder = Tester::builder().batch_verification(2);
+    let main_node = builder.build().await?;
+
+    let _en1 = main_node
+        .launch_external_node_overrides(|config: &mut Config| {
+            let bv_config = &mut config.batch_verification_config;
+            bv_config.client_enabled = true;
+            bv_config.signing_key = BATCH_VERIFICATION_KEYS[0].into();
+        })
+        .await?;
+
+    // First block should not get finalized because 2 EN with 2FA are needed.
+    main_node
+        .l2_zk_provider
+        .wait_not_finalized(1, Duration::from_secs(60))
+        .await?;
+
+    let _en2 = main_node
+        .launch_external_node_overrides(|config: &mut Config| {
+            let bv_config = &mut config.batch_verification_config;
+            bv_config.client_enabled = true;
+            bv_config.signing_key = BATCH_VERIFICATION_KEYS[1].into();
+        })
+        .await?;
+
+    // Do some random transaction
+    let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    // Should finalize everything because we have enough ENs now
+    main_node
+        .l2_zk_provider
+        .wait_finalized_with_timeout(
+            deploy_tx_receipt.block_number.unwrap(),
+            Duration::from_secs(60),
+        )
+        .await?;
+    Ok(())
+}
 
 #[test_log::test(tokio::test)]
 async fn transaction_replay() -> anyhow::Result<()> {

@@ -1,35 +1,67 @@
+use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
-use smart_config::{ConfigRepository, ConfigSchema, DescribeConfig, Environment};
-use std::time::Duration;
+use smart_config::{ConfigRepository, ConfigSources, Environment};
+use std::{path::Path, time::Duration};
+use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
-use zksync_os_server::config::{
-    BatchVerificationConfig, BatcherConfig, Config, GasAdjusterConfig, GeneralConfig,
-    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
-    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
-};
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
+use zksync_os_server::{
+    config::{
+        BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
+        GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
+        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
+        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    },
+    config_constants::DEFAULT_ROCKS_DB_PATH,
+};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    /// Configuration-related tools.
+    Config(ConfigArgs),
+}
+
+#[derive(Debug, Parser)]
+#[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
+struct Cli {
+    /// Enables sandbox mode (uses a temporary RocksDB directory that is removed on shutdown).
+    #[arg(long)]
+    sandbox: bool,
+    #[command(subcommand)]
+    cmd: Option<CliCommand>,
+}
+
 #[tokio::main]
 pub async fn main() {
+    let opt = Cli::parse();
+
     // =========== load configs ===========
-    let mut config = build_external_config();
+    let config_schema = Config::schema();
+    let mut config_sources = ConfigSources::default();
+    let mut env = Environment::prefixed("");
+    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
+    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
+    // and `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
+    env.coerce_json()
+        .expect("failed to coerce JSON envvar values");
+    config_sources.push(env);
 
     // =========== init observability ===========
+    let observability_config =
+        Config::observability(config_sources.clone()).expect("failed parsing observability config");
     let logs = zksync_os_observability::Logs::new(
-        config.observability_config.log.format,
-        config.observability_config.log.use_color,
+        observability_config.log.format,
+        observability_config.log.use_color,
     );
-    let sentry = config
-        .observability_config
+    let sentry = observability_config
         .sentry
         .dsn_url
         .clone()
@@ -37,12 +69,12 @@ pub async fn main() {
             zksync_os_observability::Sentry::new(&sentry_url)
                 .expect("Failed to create Sentry config")
                 .with_node_version(Some(zksync_os_server::metadata::NODE_VERSION.to_string()))
-                .with_environment(config.observability_config.sentry.environment.clone())
+                .with_environment(observability_config.sentry.environment.clone())
         });
     let otlp = zksync_os_observability::OpenTelemetry::new(
-        config.observability_config.otlp.level,
-        config.observability_config.otlp.tracing_endpoint.clone(),
-        config.observability_config.otlp.logging_endpoint.clone(),
+        observability_config.otlp.level,
+        observability_config.otlp.tracing_endpoint.clone(),
+        observability_config.otlp.logging_endpoint.clone(),
     )
     .expect("Failed to create OpenTelemetry config");
 
@@ -51,10 +83,28 @@ pub async fn main() {
         .with_sentry(sentry)
         .with_opentelemetry(Some(otlp))
         .build();
+
+    let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
+
+    // =========== handle the CLI subcommand if any ===========
+    if let Some(cmd) = opt.cmd {
+        match cmd {
+            CliCommand::Config(args) => {
+                args.run(config_repo, "").unwrap();
+                return;
+            }
+        }
+    }
+
+    let mut config = build_external_config(config_repo);
+    let _sandbox_guard = if opt.sandbox {
+        // Creates a temporary directory for RocksDB and switches to it.
+        enable_sandbox_mode(&mut config)
+    } else {
+        None
+    };
     tracing::info!(?config, "Loaded config");
-
     load_internal_config(&mut config);
-
     let prometheus: PrometheusExporterConfig =
         PrometheusExporterConfig::pull(config.observability_config.prometheus.port);
 
@@ -126,66 +176,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
     }
 }
 
-fn build_external_config() -> Config {
-    // todo: change with the idiomatic approach
-    let mut schema = ConfigSchema::default();
-    schema
-        .insert(&GeneralConfig::DESCRIPTION, "general")
-        .expect("Failed to insert general config");
-    schema
-        .insert(&GenesisConfig::DESCRIPTION, "genesis")
-        .expect("Failed to insert genesis config");
-    schema
-        .insert(&RpcConfig::DESCRIPTION, "rpc")
-        .expect("Failed to insert rpc config");
-    schema
-        .insert(&MempoolConfig::DESCRIPTION, "mempool")
-        .expect("Failed to insert mempool config");
-    schema
-        .insert(&TxValidatorConfig::DESCRIPTION, "tx_validator")
-        .expect("Failed to insert tx_validator config");
-    schema
-        .insert(&SequencerConfig::DESCRIPTION, "sequencer")
-        .expect("Failed to insert sequencer config");
-    schema
-        .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
-        .expect("Failed to insert l1_sender config");
-    schema
-        .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
-        .expect("Failed to insert l1_watcher config");
-    schema
-        .insert(&BatcherConfig::DESCRIPTION, "batcher")
-        .expect("Failed to insert batcher config");
-    schema
-        .insert(
-            &ProverInputGeneratorConfig::DESCRIPTION,
-            "prover_input_generator",
-        )
-        .expect("Failed to insert prover_input_generator config");
-    schema
-        .insert(&ProverApiConfig::DESCRIPTION, "prover_api")
-        .expect("Failed to insert prover api config");
-    schema
-        .insert(&StatusServerConfig::DESCRIPTION, "status_server")
-        .expect("Failed to insert status server config");
-    schema
-        .insert(&ObservabilityConfig::DESCRIPTION, "observability")
-        .expect("Failed to insert observability config");
-    schema
-        .insert(&GasAdjusterConfig::DESCRIPTION, "gas_adjuster")
-        .expect("Failed to insert gas adjuster config");
-    schema
-        .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
-        .expect("Failed to insert batch verification config");
-
-    let mut env = Environment::prefixed("");
-    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
-    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
-    // an `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
-    env.coerce_json()
-        .expect("failed to coerce JSON envvar values");
-    let repo = ConfigRepository::new(&schema).with(env);
-
+fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     let mut general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
@@ -323,6 +314,25 @@ fn build_external_config() -> Config {
         gas_adjuster_config,
         batch_verification_config,
     }
+}
+
+fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
+    let original_path = config.general_config.rocks_db_path.clone();
+    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
+        tracing::warn!(
+            original_path = %original_path.display(),
+            "general_rocks_db_path parameter is ignored in sandbox mode"
+        );
+    }
+
+    let tempdir =
+        tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
+    config.general_config.rocks_db_path = tempdir.path().to_path_buf();
+    tracing::info!(
+        path = %config.general_config.rocks_db_path.display(),
+        "Sandbox mode enabled. Using temporary RocksDB directory"
+    );
+    Some(tempdir)
 }
 
 fn load_internal_config(config: &mut Config) {

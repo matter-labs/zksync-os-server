@@ -5,10 +5,10 @@ use vise::{Counter, Gauge, Metrics};
 pub struct BatchVerificationClientMetrics {
     /// Number of blocks currently cached
     block_cache_size: Gauge<usize>,
-    /// Lowest block height in the cache
-    block_cache_from_height: Gauge<u64>,
-    /// Highest block height in the cache
-    block_cache_to_height: Gauge<u64>,
+    /// Lowest block number in the cache
+    block_cache_from_number: Gauge<u64>,
+    /// Highest block number in the cache
+    block_cache_to_number: Gauge<u64>,
     /// Last request ID processed
     last_request_id: Gauge<u64>,
     /// Last batch number in last processed request id
@@ -27,8 +27,8 @@ pub(crate) static BATCH_VERIFICATION_CLIENT_METRICS: vise::Global<BatchVerificat
 
 impl BatchVerificationClientMetrics {
     pub fn update_cache_range(&self, from: u64, to: u64) {
-        self.block_cache_from_height.set(from);
-        self.block_cache_to_height.set(to);
+        self.block_cache_from_number.set(from);
+        self.block_cache_to_number.set(to);
         self.block_cache_size.set((to + 1 - from) as usize);
     }
 

@@ -1,7 +1,5 @@
 use num_enum::TryFromPrimitive;
 
-use crate::ExecutionVersion;
-
 use super::ProtocolSemanticVersion;
 
 /// Identifier of the proving harness that must be used to generate and verify proofs for a given execution version.
@@ -17,6 +15,7 @@ pub enum ProvingVersion {
     V3 = 3,
     V4 = 4,
     V5 = 5,
+    V6 = 6,
 }
 
 impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
@@ -30,7 +29,10 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
         match (version.minor, version.patch) {
             (29, 0) | (29, 1) => Ok(ProvingVersion::V4),
             (30, 0) => Ok(ProvingVersion::V5),
-            (31, 0) => Ok(ProvingVersion::V5),
+            (30, 1) => Ok(ProvingVersion::V6),
+            (30, 2) => Ok(ProvingVersion::V6),
+            (31, 0) => Ok(ProvingVersion::V6),
+            (31, 1) => Ok(ProvingVersion::V6),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -56,6 +58,10 @@ impl ProvingVersion {
     const V5_VK_HASH: &'static str =
         "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581";
 
+    /// verification key hash generated from zksync-os v0.2.5, zksync-airbender v0.5.2 and zkos-wrapper v0.5.4
+    const V6_VK_HASH: &'static str =
+        "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
+
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
         match self {
@@ -64,6 +70,7 @@ impl ProvingVersion {
             Self::V3 => Self::V3_VK_HASH,
             Self::V4 => Self::V4_VK_HASH,
             Self::V5 => Self::V5_VK_HASH,
+            Self::V6 => Self::V6_VK_HASH,
         }
     }
 
@@ -75,24 +82,8 @@ impl ProvingVersion {
             Self::V3_VK_HASH => Ok(Self::V3),
             Self::V4_VK_HASH => Ok(Self::V4),
             Self::V5_VK_HASH => Ok(Self::V5),
+            Self::V6_VK_HASH => Ok(Self::V6),
             val => Err(ProvingVersionError::UnsupportedVkHash(val.to_string())),
-        }
-    }
-
-    /// Method to decide what execution version/VK should the prover use.
-    ///
-    /// Generally speaking, we could have a single execution version, the one used by the server.
-    /// There's an edge case where we have a circuit bug and it would require us to prove a batch
-    /// with a different execution version than the one it was generated/sealed.
-    /// For such cases, we have this mapping defined here, that will allow us to release patch versions that will say:
-    /// "oh, you executed with v3? np, prove with v4 as v3 proving is bugged".
-    pub fn from_forward_run_execution_version(
-        forward_run_execution_version: ExecutionVersion,
-    ) -> Self {
-        match forward_run_execution_version {
-            ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => Self::V3,
-            ExecutionVersion::V4 => Self::V4,
-            ExecutionVersion::V5 => Self::V5,
         }
     }
 }
@@ -118,7 +109,9 @@ mod tests {
             ((0, 29, 0), ProvingVersion::V4),
             ((0, 29, 1), ProvingVersion::V4),
             ((0, 30, 0), ProvingVersion::V5),
-            ((0, 31, 0), ProvingVersion::V5),
+            ((0, 30, 1), ProvingVersion::V6),
+            ((0, 31, 0), ProvingVersion::V6),
+            ((0, 31, 1), ProvingVersion::V6),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -128,7 +121,7 @@ mod tests {
             assert_eq!(&proving_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 1), (0, 32, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 32, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
@@ -147,6 +140,8 @@ mod tests {
             (ProvingVersion::V2, ProvingVersion::V2_VK_HASH),
             (ProvingVersion::V3, ProvingVersion::V3_VK_HASH),
             (ProvingVersion::V4, ProvingVersion::V4_VK_HASH),
+            (ProvingVersion::V5, ProvingVersion::V5_VK_HASH),
+            (ProvingVersion::V6, ProvingVersion::V6_VK_HASH),
         ];
 
         for (proving_version, expected_vk_hash) in test_vector.iter() {

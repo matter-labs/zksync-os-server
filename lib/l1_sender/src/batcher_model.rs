@@ -10,7 +10,7 @@ use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_types::PubdataMode;
-use zksync_os_types::{ExecutionVersion, ProtocolSemanticVersion, ProvingVersion};
+use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
 // todo: these models are used throughout the batcher subsystem - not only l1 sender
 //       we will move them to `types` or `batcher_types` when an analogous crate is created in `zksync-os`
 
@@ -49,13 +49,8 @@ impl BatchMetadata {
             .vk_hash())
     }
 
-    /// As a temporary flexibility measure, we allow to set different versions for the same execution version.
-    /// For details see doc comment to `from_forward_run_execution_version`
     pub fn proving_version(&self) -> anyhow::Result<ProvingVersion> {
-        let forward_run_execution_version = ExecutionVersion::try_from(self.execution_version)?;
-        Ok(ProvingVersion::from_forward_run_execution_version(
-            forward_run_execution_version,
-        ))
+        Ok(ProvingVersion::try_from(self.protocol_version.clone())?)
     }
 }
 
@@ -80,6 +75,9 @@ pub enum BatchSignatureData {
     Signed {
         signatures: BatchSignatureSet,
     },
+    /// Batch was already committed, but is going through pipeline the second time.
+    /// We do not need to have signatures for it now
+    AlreadyCommitted,
     // default to allow deserializing of older objects
     /// Batch signatures are not enabled
     #[default]

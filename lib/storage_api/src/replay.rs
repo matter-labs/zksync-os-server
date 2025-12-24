@@ -25,6 +25,7 @@ use zksync_os_interface::types::BlockContext;
 /// This is left ambiguous on purpose to allow both in-memory and persistent implementations, hence
 /// any specific implementation SHOULD declare if it satisfies requirements for a longer period of
 /// time.
+#[auto_impl::auto_impl(&, Box, Arc)]
 pub trait ReadReplay: Send + Sync + 'static {
     /// Get block's execution context. Meant to be used in situations where the full block data is
     /// not needed.
