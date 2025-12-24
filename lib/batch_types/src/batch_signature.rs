@@ -5,6 +5,7 @@ use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::{SolValue, eip712_domain};
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use zksync_os_contract_interface::calldata::encode_commit_batch_data;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_types::ProtocolSemanticVersion;
@@ -111,6 +112,9 @@ impl BatchSignature {
     }
 }
 
+const TYPEHASH_BYTES: &[u8] = b"CommitBatchesMultisig(address chainAddress,uint256 processBatchFrom,uint256 processBatchTo,bytes batchData)";
+static TYPEHASH: LazyLock<B256> = LazyLock::new(|| keccak256(TYPEHASH_BYTES));
+
 /// Compute the full EIP-712 digest used by the `MultisigCommitter` contract
 /// for the `commitBatchesMultisig` typed data, based on the given batch info
 /// and L1 domain parameters.
@@ -121,8 +125,7 @@ fn eip712_multisig_digest(
     multisig_committer: Address,
     protocol_version: &ProtocolSemanticVersion,
 ) -> B256 {
-    const TYPEHASH_BYTES: &[u8] = b"CommitBatchesMultisig(address chainAddress,uint256 processBatchFrom,uint256 processBatchTo,bytes batchData)";
-    let typehash = keccak256(TYPEHASH_BYTES);
+    let typehash = *TYPEHASH;
 
     let batch_data = encode_commit_batch_data(
         prev_batch_info,
@@ -143,6 +146,8 @@ fn eip712_multisig_digest(
 
     let struct_hash = keccak256(encoded);
 
+    // Those name and version are currently used in contracts. This will need
+    // to be updated if at some point we decide to change them
     let domain = eip712_domain! {
         name: "MultisigCommitter",
         version: "1",
