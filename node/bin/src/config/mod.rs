@@ -2,10 +2,8 @@ pub use self::cli::ConfigArgs;
 use crate::{command_source::RebuildOptions, config_constants::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
-use smart_config::ErrorWithOrigin;
-use smart_config::de::{DeserializeContext, DeserializeParam, WellKnown, WellKnownOption};
-use smart_config::metadata::{BasicTypes, ParamMetadata, TimeUnit, TypeDescription};
-use smart_config::value::{ExposeSecret, SecretString};
+use smart_config::metadata::TimeUnit;
+use smart_config::value::SecretString;
 use smart_config::{
     ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
@@ -27,7 +25,7 @@ mod cli;
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
 /// Default values are provided for local setup.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Config {
     pub general_config: GeneralConfig,
     pub genesis_config: GenesisConfig,
@@ -44,15 +42,11 @@ pub struct Config {
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
-    pub chains: Option<Vec<ChainConfig>>,
 }
 
 impl Config {
     pub fn schema() -> ConfigSchema {
         let mut schema = ConfigSchema::default();
-        schema
-            .insert(&ChainsConfig::DESCRIPTION, "")
-            .expect("Failed to insert chains config");
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
@@ -110,89 +104,6 @@ impl Config {
         repo.single()?.parse().map_err(log_all_errors)
     }
 }
-
-/// Config for multiple chains. Used for multi-chain setups.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct ChainsConfig {
-    /// Optional list of chain settings.
-    #[config(default)]
-    pub chains: Option<Vec<ChainConfig>>,
-}
-
-/// Config for a single chain. Used for multi-chain setups.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
-pub struct ChainConfig {
-    /// RPC address of the chain.
-    #[config(default)]
-    pub rpc_address: String,
-    /// Chain ID of the chain.
-    #[config(default)]
-    pub chain_id: u64,
-    /// Private key to commit batches to L1.
-    #[config(default_t = SecretString::from(""))]
-    pub operator_commit_pk: SecretString,
-    /// Private key to use to submit proofs to L1.
-    #[config(default_t = SecretString::from(""))]
-    pub operator_prove_pk: SecretString,
-    /// Private key to use to execute batches on L1.
-    #[config(default_t = SecretString::from("") )]
-    pub operator_execute_pk: SecretString,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ChainConfigSerde {
-    rpc_address: String,
-    chain_id: u64,
-    operator_commit_pk: String,
-    operator_prove_pk: String,
-    operator_execute_pk: String,
-}
-
-#[derive(Debug)]
-pub struct ChainConfigDeserializer;
-
-impl DeserializeParam<ChainConfig> for ChainConfigDeserializer {
-    const EXPECTING: BasicTypes = BasicTypes::OBJECT;
-
-    fn describe(&self, description: &mut TypeDescription) {
-        description.set_details("chain configuration object");
-    }
-
-    fn deserialize_param(
-        &self,
-        ctx: DeserializeContext<'_>,
-        param: &'static ParamMetadata,
-    ) -> Result<ChainConfig, ErrorWithOrigin> {
-        let inner_de: Serde![*] = Serde![*];
-        let helper: ChainConfigSerde = inner_de.deserialize_param(ctx, param)?;
-        Ok(ChainConfig {
-            rpc_address: helper.rpc_address,
-            chain_id: helper.chain_id,
-            operator_commit_pk: SecretString::from(helper.operator_commit_pk),
-            operator_prove_pk: SecretString::from(helper.operator_prove_pk),
-            operator_execute_pk: SecretString::from(helper.operator_execute_pk),
-        })
-    }
-
-    fn serialize_param(&self, param: &ChainConfig) -> serde_json::Value {
-        serde_json::json!({
-            "rpc_address": param.rpc_address,
-            "chain_id": param.chain_id,
-            "operator_commit_pk": param.operator_commit_pk.expose_secret(),
-            "operator_prove_pk": param.operator_prove_pk.expose_secret(),
-            "operator_execute_pk": param.operator_execute_pk.expose_secret(),
-        })
-    }
-}
-
-impl WellKnown for ChainConfig {
-    type Deserializer = ChainConfigDeserializer;
-    const DE: Self::Deserializer = ChainConfigDeserializer;
-}
-
-impl WellKnownOption for ChainConfig {}
 
 fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
     const MAX_DISPLAYED_ERRORS: usize = 5;

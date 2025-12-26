@@ -252,7 +252,6 @@ impl Tester {
             observability_config: Default::default(),
             gas_adjuster_config: Default::default(),
             batch_verification_config,
-            chains: None,
         };
         if let Some(f) = config_overrides {
             f(&mut config)

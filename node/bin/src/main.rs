@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand};
-use smart_config::value::{ExposeSecret, SecretString};
+use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use tokio::task::JoinSet;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
@@ -13,11 +12,10 @@ use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_server::{
     config::{
-        BatchVerificationConfig, BatcherConfig, ChainConfig, ChainsConfig, Config, ConfigArgs,
-        GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig,
-        MempoolConfig, ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig,
-        RebuildBlocksConfig, RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig,
-        TxValidatorConfig,
+        BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
+        GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
+        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
+        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
     },
     config_constants::DEFAULT_ROCKS_DB_PATH,
 };
@@ -122,78 +120,36 @@ pub async fn main() {
     }
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
-
-    let mut configs_to_run = if let Some(chains) = &config.chains {
-        chains
-            .iter()
-            .map(|chain| get_chain_config(&config, chain))
-            .collect()
-    } else {
-        vec![config.clone()]
-    };
-
-    // =========== Use temporary directory for state in the sandbox mode ===========
-    // =========== Init observability ===========
-    let (_sandbox_guard, prometheus) = if config.general_config.sandbox {
-        let sandbox_guard = create_sandbox_base_dir(&config);
-        let sandbox_base_dir = sandbox_guard.path().to_path_buf();
-
-        for cfg in configs_to_run.iter_mut() {
-            let chain_id = cfg
-                .genesis_config
-                .chain_id
-                .expect("chain_id must be set for sandbox config");
-            let node_dir = sandbox_base_dir.join(chain_id.to_string());
-            cfg.general_config.rocks_db_path = node_dir.clone();
-            cfg.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
-                file_backed_base_path: node_dir.join("shared"),
-            };
-        }
-        tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
-        (Some(sandbox_guard), None)
-    } else {
-        (
-            None,
-            Some(PrometheusExporterConfig::pull(
-                config.observability_config.prometheus.port,
-            )),
-        )
-    };
-
     // =========== init interruption channel ===========
 
     // todo: implement interruption handling in other tasks
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
-    let main_task = async move {
-        let mut nodes = JoinSet::new();
-        for node_config in configs_to_run {
-            let stop_clone = main_stop.clone();
-            nodes.spawn(async move {
-                match node_config.general_config.state_backend {
-                    StateBackendConfig::FullDiffs => {
-                        run::<FullDiffsState>(stop_clone, node_config).await
-                    }
-                    StateBackendConfig::Compacted => {
-                        run::<StateHandle>(stop_clone, node_config).await
-                    }
-                }
-            });
-        }
+    let sandbox_enabled = config.general_config.sandbox;
+    let _sandbox_guard = sandbox_enabled.then(|| enable_sandbox_mode(&mut config));
+    let prometheus_port = config.observability_config.prometheus.port;
 
-        nodes.join_next().await
+    let main_task = async move {
+        match config.general_config.state_backend {
+            StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
+            StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+        }
+    };
+
+    let prometheus_task = async {
+        if sandbox_enabled {
+            tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
+            // no-op for the sandbox mode
+            future::pending::<anyhow::Result<()>>().await
+        } else {
+            let prometheus: PrometheusExporterConfig =
+                PrometheusExporterConfig::pull(prometheus_port);
+            prometheus.run(stop_receiver.clone()).await
+        }
     };
 
     let stop_receiver_copy = stop_receiver.clone();
-    let prometheus_task = async {
-        if let Some(prometheus_config) = prometheus {
-            prometheus_config.run(stop_receiver).await
-        } else {
-            // no-op for the sandbox mode
-            future::pending::<anyhow::Result<()>>().await
-        }
-    };
 
     tokio::select! {
         _ = main_task => {
@@ -248,12 +204,6 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
 }
 
 fn build_external_config(repo: ConfigRepository<'_>) -> Config {
-    let chains_config = repo
-        .single::<ChainsConfig>()
-        .expect("Failed to load chains config")
-        .parse()
-        .expect("Failed to parse chains config");
-
     let mut general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
@@ -363,19 +313,15 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 
     // Validate that operator keys are different
-    ensure_different_operator_addresses(
-        &l1_sender_config.operator_commit_pk,
-        &l1_sender_config.operator_prove_pk,
-        &l1_sender_config.operator_execute_pk,
-    );
-    if let Some(chains) = &chains_config.chains {
-        for chain in chains {
-            ensure_different_operator_addresses(
-                &chain.operator_commit_pk,
-                &chain.operator_prove_pk,
-                &chain.operator_execute_pk,
-            );
-        }
+    if l1_sender_config.operator_commit_pk.expose_secret()
+        == l1_sender_config.operator_prove_pk.expose_secret()
+        || l1_sender_config.operator_prove_pk.expose_secret()
+            == l1_sender_config.operator_execute_pk.expose_secret()
+        || l1_sender_config.operator_execute_pk.expose_secret()
+            == l1_sender_config.operator_commit_pk.expose_secret()
+    {
+        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
+        panic!("Operator addresses for commit, prove and execute must be different");
     }
 
     Config {
@@ -394,21 +340,10 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
-        chains: chains_config.chains,
     }
 }
 
-fn get_chain_config(base_config: &Config, chain_config: &ChainConfig) -> Config {
-    let mut config = base_config.clone();
-    config.rpc_config.address = chain_config.rpc_address.to_string();
-    config.genesis_config.chain_id = Some(chain_config.chain_id);
-    config.l1_sender_config.operator_commit_pk = chain_config.operator_commit_pk.clone();
-    config.l1_sender_config.operator_prove_pk = chain_config.operator_prove_pk.clone();
-    config.l1_sender_config.operator_execute_pk = chain_config.operator_execute_pk.clone();
-    config
-}
-
-fn create_sandbox_base_dir(config: &Config) -> TempDir {
+fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
     if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
         tracing::warn!(
@@ -421,29 +356,22 @@ fn create_sandbox_base_dir(config: &Config) -> TempDir {
         tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
     tracing::info!(
         path = %tempdir.path().display(),
-        "Sandbox mode enabled. Using temporary RocksDB directory"
+        "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
     );
-    tempdir
-}
-
-/// Validates that operator keys for commit, prove and execute are different.
-fn ensure_different_operator_addresses(
-    operator_commit_pk: &SecretString,
-    operator_prove_pk: &SecretString,
-    operator_execute_pk: &SecretString,
-) {
-    use std::collections::HashSet;
-
-    let keys: HashSet<&str> = HashSet::from([
-        operator_commit_pk.expose_secret(),
-        operator_prove_pk.expose_secret(),
-        operator_execute_pk.expose_secret(),
-    ]);
-
-    if keys.len() != 3 {
-        // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
-        panic!("Operator addresses for commit, prove and execute must be different");
-    }
+    let tempdir_path = tempdir.path();
+    config.general_config.rocks_db_path = tempdir_path
+        .join(
+            config
+                .genesis_config
+                .chain_id
+                .unwrap_or_default()
+                .to_string(),
+        )
+        .to_path_buf();
+    config.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
+        file_backed_base_path: tempdir_path.join("shared"),
+    };
+    Some(tempdir)
 }
 
 fn load_internal_config(config: &mut Config) {
