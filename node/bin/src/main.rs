@@ -126,7 +126,7 @@ pub async fn main() {
     let mut configs_to_run = if let Some(chains) = &config.chains {
         chains
             .iter()
-            .map(|chain| get_chain_config(&config, &chain))
+            .map(|chain| get_chain_config(&config, chain))
             .collect()
     } else {
         vec![config.clone()]
