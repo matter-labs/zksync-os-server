@@ -33,9 +33,9 @@ jobs:
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # todo - remove after `tracing-subscriber` is `>=0.3.20` in all dependencies
-          ignore: 'RUSTSEC-2025-0055'
-
+          # 'RUSTSEC-2025-0055'todo - remove after `tracing-subscriber` is `>=0.3.20` in all dependencies
+          # 'RUSTSEC-2025-0137' todo - it affects reciprocal_mg10 we are not using. Remove after `ruint` is patched and we updated it.
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2025-0137'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
