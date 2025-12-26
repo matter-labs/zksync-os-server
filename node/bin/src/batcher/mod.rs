@@ -1,6 +1,5 @@
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
 use crate::config::BatcherConfig;
-use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -50,7 +49,6 @@ pub struct Batcher {
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
     pub pubdata_mode: PubdataMode,
-    pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batches: mpsc::Receiver<CommittedBatch>,
 }
 
@@ -183,12 +181,6 @@ impl PipelineComponent for Batcher {
             );
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            if let Some(sidecar) = batch_envelope.batch.batch_info.blob_sidecar.clone() {
-                self.sidecar_sender
-                    .send(sidecar)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
-            }
             output
                 .send(batch_envelope)
                 .await

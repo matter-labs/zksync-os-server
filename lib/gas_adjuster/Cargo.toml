@@ -18,4 +18,3 @@ anyhow.workspace = true
 vise.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["time"] }
-num.workspace = true
