@@ -354,11 +354,12 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
 
     let tempdir =
         tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
+    let tempdir_path = tempdir.path();
     tracing::info!(
-        path = %tempdir.path().display(),
+        path = %tempdir_path.display(),
         "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
     );
-    let tempdir_path = tempdir.path();
+
     config.general_config.rocks_db_path = tempdir_path
         .join(
             config
