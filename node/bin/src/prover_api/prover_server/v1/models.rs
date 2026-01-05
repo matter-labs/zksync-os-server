@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct BatchDataPayload {
@@ -17,6 +18,7 @@ pub(super) struct FriProofPayload {
     pub batch_number: u64,
     pub vk_hash: String,
     pub proof: String,
+    pub time_taken_prover_end: Option<Duration>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +35,7 @@ pub(super) struct SnarkProofPayload {
     pub to_batch_number: u64,
     pub vk_hash: String,
     pub proof: String,
+    pub time_taken_prover_end: Option<Duration>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

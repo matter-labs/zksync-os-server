@@ -18,6 +18,10 @@ pub struct ProverMetrics {
     /// The time passed between when a job was picked and reported back
     #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
     pub prove_time: LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
+    /// The time prover spent actually proving (excluding waiting time). Reported by prover.
+    #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
+    pub prove_time_prover_end:
+        LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
     /// The time passed between when a job was picked and reported back
     /// divided by the number of transactions in job.
     /// That is, for SNARKs it's divided by the total number of txs in batch range.
@@ -32,6 +36,15 @@ pub struct ProverMetrics {
     /// Time spent holding the lock in ProverJobMap
     #[metrics(unit = Unit::Seconds, labels = ["stage", "method"], buckets = Buckets::LATENCIES)]
     pub job_map_lock_hold_time: LabeledFamily<(ProverStage, JobMapMethod), Histogram<Duration>, 2>,
+    /// Number of computational native proven.
+    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
+    pub computational_native_proven:
+        LabeledFamily<(ProverStage, ProverType, String), Histogram<u64>, 3>,
+    /// Rate of computational native proven per millisecond.
+    /// Basically, `computational_native_proven` divided by `prove_time_prover_end_ms`.
+    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
+    pub computational_native_per_ms:
+        LabeledFamily<(ProverStage, ProverType, String), Histogram<u64>, 3>,
 }
 
 #[derive(Debug, Metrics)]

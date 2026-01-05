@@ -14,6 +14,7 @@ pub struct JobMetadata {
     pub batch_number: u64,
     pub proving_version: ProvingVersion,
     pub tx_count: usize,
+    pub computational_native_used: Option<u64>,
     pub added_at: Instant,
     pub assigned_to_prover_id: Option<String>,
     pub assigned_at: Option<Instant>,
@@ -58,11 +59,13 @@ impl JobMetadata {
             .proving_version()
             .expect("Must be valid execution as set by the server");
         let tx_count = batch_envelope.batch.tx_count;
+        let computational_native_used = batch_envelope.batch.computational_native_used;
 
         Self {
             batch_number,
             proving_version,
             tx_count,
+            computational_native_used,
             added_at: Instant::now(),
             assigned_to_prover_id: None,
             assigned_at: None,
@@ -86,6 +89,7 @@ pub struct JobBatchStats {
     pub proving_version: ProvingVersion,
     pub max_time_since_added: Duration,
     pub total_txs: usize,
+    pub total_computational_native_used: Option<u64>,
     // if at least one of the batches was already assigned
     pub job_with_max_attempts_info: Option<PreviousAttemptsInfo>,
 }
@@ -123,6 +127,10 @@ impl JobBatchStats {
             proving_version: min_batch.proving_version,
             max_time_since_added: min_batch.added_at.elapsed(),
             total_txs: metadata_list.iter().map(|m| m.tx_count).sum(),
+            total_computational_native_used: metadata_list
+                .iter()
+                .map(|m| m.computational_native_used)
+                .sum(),
             job_with_max_attempts_info,
         }
     }

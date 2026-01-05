@@ -39,6 +39,8 @@ pub struct BatchMetadata {
     pub execution_version: u32,
     #[serde(default = "default_protocol_version")] // Default to allow deserializing older objects
     pub protocol_version: ProtocolSemanticVersion,
+    #[serde(default)]
+    pub computational_native_used: Option<u64>,
 }
 
 impl BatchMetadata {
