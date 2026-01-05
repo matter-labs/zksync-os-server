@@ -61,9 +61,9 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: perekopskiy/boojumos-e2e-tests
+          repository: Romsters/boojumos-e2e-tests
           submodules: recursive
-          ref: main # use tag to pin a stable version
+          ref: stable # use tag to pin a stable version
 
       - name: Install python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
@@ -215,9 +215,9 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: perekopskiy/boojumos-e2e-tests
+          repository: Romsters/boojumos-e2e-tests
           submodules: recursive
-          ref: main # use tag to pin a stable version
+          ref: stable # use tag to pin a stable version
           path: ${{ env.TESTS_WORKING_DIR }}
 
       - name: Run spec tests
