@@ -3,7 +3,7 @@
 //!
 //! Examples include creating, encoding, and decoding protocol messages.
 
-use crate::version::{AnyZksProtocolVersion, ZksVersion};
+use crate::version::AnyZksProtocolVersion;
 use crate::wire::replays::RecordOverride;
 use crate::wire::{BlockReplays, GetBlockReplays};
 use alloy::primitives::BlockNumber;
@@ -39,7 +39,7 @@ impl<P: AnyZksProtocolVersion> ZksMessage<P> {
 
     /// Returns the protocol for the zks protocol.
     pub const fn protocol() -> Protocol {
-        Protocol::new(Self::capability(), ZksMessageId::message_count(P::VERSION))
+        Protocol::new(Self::capability(), P::VERSION.message_count())
     }
 
     /// Returns the message's ID.
@@ -113,27 +113,14 @@ pub enum ZksMessageId {
 
 impl ZksMessageId {
     /// Returns the corresponding `u8` value for a `ZksMessageId`.
-    pub const fn to_u8(&self) -> u8 {
+    pub const fn as_u8(&self) -> u8 {
         *self as u8
-    }
-
-    /// Returns the max value for the given version.
-    pub const fn max(version: ZksVersion) -> u8 {
-        match version {
-            ZksVersion::Zks0 => Self::BlockReplays as u8,
-            ZksVersion::Zks1 => Self::BlockReplays as u8,
-        }
-    }
-
-    /// Returns the total number of message types for the given version.
-    pub const fn message_count(version: ZksVersion) -> u8 {
-        Self::max(version) + 1
     }
 }
 
 impl Encodable for ZksMessageId {
     fn encode(&self, out: &mut dyn BufMut) {
-        out.put_u8(self.to_u8());
+        out.put_u8(self.as_u8());
     }
     fn length(&self) -> usize {
         1

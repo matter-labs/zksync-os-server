@@ -1,5 +1,6 @@
 //! Support for representing the version of the `zks` protocol
 
+use crate::wire::message::ZksMessageId;
 use crate::wire::replays::{AnyReplayRecord, v0, v1};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
@@ -58,6 +59,19 @@ impl ZksVersion {
 
     /// All known zks versions
     pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1];
+
+    /// Returns the max value for the given version.
+    const fn max(&self) -> u8 {
+        match self {
+            ZksVersion::Zks0 => ZksMessageId::BlockReplays as u8,
+            ZksVersion::Zks1 => ZksMessageId::BlockReplays as u8,
+        }
+    }
+
+    /// Returns the total number of message types for the given version.
+    pub(crate) const fn message_count(&self) -> u8 {
+        self.max() + 1
+    }
 }
 
 /// RLP encodes `ZksVersion` as a single byte.
