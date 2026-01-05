@@ -18,11 +18,21 @@ pub const ZKS_PROTOCOL: &str = "zks";
 
 /// Represents a message in the zks wire protocol, versions 1-1.
 ///
-/// As of version 1, the only supported method of communication is streaming: at least one side of
-/// the connection MUST send exactly one [`GetBlockReplays`] request at the start of connection. Main
-/// node (block producer) MUST NOT send the request but if both participants are external nodes then
-/// both sides MAY send the request. The rest of the connection MUST consist of indefinite number of
-/// [`BlockReplays`] messages.
+/// As of version 1, the only supported method of communication is streaming. Let's call main node MN
+/// and external node EN. As there can only be one MN, the connection can be either EN<->MN or
+/// EN<->EN.
+///
+/// In former case:
+///  * EN MUST send exactly one [`GetBlockReplays`] request at the start of connection.
+///  * MN MUST NOT send any [`GetBlockReplays`] requests.
+///  * On receiving EN's request and for the rest of the connection MN MUST send an indefinite number
+///    of [`BlockReplays`] messages.
+///
+/// In latter case:
+///  * Both ENs MUST NOT send or receive any messages from each other.
+///
+/// This functionality will be revised in the future versions of the protocol. As of version 1 it
+/// corresponds to the legacy HTTP-based replay transport.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ZksMessage<P: AnyZksProtocolVersion> {
     /// Represents a `GetBlockReplays` streaming request.
