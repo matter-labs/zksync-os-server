@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-use crate::command_source::RebuildOptions;
+use crate::{command_source::RebuildOptions, config_constants::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
@@ -162,7 +162,7 @@ pub struct GeneralConfig {
     pub force_starting_block_number: Option<u64>,
 
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
-    #[config(default_t = "./db/node1".into())]
+    #[config(default_t = DEFAULT_ROCKS_DB_PATH.into())]
     pub rocks_db_path: PathBuf,
 
     /// State backend to use. When changed, a replay of all blocks may be needed.
@@ -186,6 +186,13 @@ pub struct GeneralConfig {
     /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
+
+    /// Whether to run the priority tree component.
+    /// Required for Main Node (will panic if false on Main Node).
+    /// Optional for External Nodes - if disabled on EN, the priority tree will need to be rebuilt
+    /// from scratch before turning this EN into a Main Node.
+    #[config(default_t = true)]
+    pub run_priority_tree: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -206,8 +213,8 @@ pub struct GenesisConfig {
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
     // find it in `zkos-l1-state.json`
-    #[config(default_t = crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap())]
-    pub bytecode_supplier_address: Address,
+    #[config(default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
+    pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
     #[config(default_t = Some(crate::config_constants::CHAIN_ID))]

@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_types.workspace = true
+zksync_os_types = { workspace = true, features = ["reth"] }
 zksync_os_observability.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_l1_sender.workspace = true
@@ -42,3 +42,8 @@ dashmap.workspace = true
 structdiff.workspace = true
 secrecy.workspace = true
 vise.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true

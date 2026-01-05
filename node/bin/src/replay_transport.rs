@@ -1,109 +1,103 @@
-use std::fmt::Display;
-
 use alloy::primitives::{BlockNumber, Bytes};
-use futures::{SinkExt, StreamExt, stream::BoxStream};
+use anyhow::anyhow;
+use axum::body::Body;
+use axum::extract::State;
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use axum::{Json, Router};
+use futures::{SinkExt, StreamExt, TryStreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
-use tokio::io::BufReader;
+use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::net::ToSocketAddrs;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use tokio::{io::AsyncReadExt, net::TcpListener};
 use tokio_util::codec::{self, FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::io::{ReaderStream, StreamReader};
 use zksync_os_sequencer::model::blocks::BlockCommand;
-use zksync_os_socket::{connect, skip_http_headers};
 use zksync_os_storage_api::{REPLAY_WIRE_FORMAT_VERSION, ReadReplay, ReadReplayExt, ReplayRecord};
+
+async fn block_replays_handler(
+    State(state): State<Arc<dyn ReadReplay>>,
+    Json(block_replay_query): Json<BlockReplayQuery>,
+) -> Response {
+    let (mut tx, rx) = tokio::io::duplex(16 * 1024);
+
+    tokio::spawn(async move {
+        if let Err(e) = tx.write_u32(REPLAY_WIRE_FORMAT_VERSION).await {
+            tracing::info!("Could not write replay version: {}", e);
+            return;
+        }
+
+        tracing::info!(
+            starting_block = block_replay_query.starting_block,
+            "streaming replay records",
+        );
+
+        let mut replay_sender = FramedWrite::new(tx, BlockReplayEncoder::new());
+        let mut stream = state.stream_from_forever(
+            block_replay_query.starting_block,
+            block_replay_query
+                .record_overrides
+                .into_iter()
+                .map(|(k, v)| (k, v.to_vec()))
+                .collect(),
+        );
+        loop {
+            let replay = stream.next().await.unwrap();
+            match replay_sender.send(replay).await {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::info!("failed to send replay: {}", e);
+                    return;
+                }
+            };
+        }
+    });
+
+    let body = Body::from_stream(ReaderStream::new(rx));
+    body.into_response()
+}
 
 pub async fn replay_server(
     block_replays: impl ReadReplay + Clone,
     address: impl ToSocketAddrs,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(address).await?;
+    let app = Router::new()
+        .route("/block_replays", post(block_replays_handler))
+        .with_state(Arc::new(block_replays));
+    axum::serve(listener, app).await?;
 
-    loop {
-        let (mut socket, _) = listener.accept().await?;
-
-        let block_replays = block_replays.clone();
-        tokio::spawn(async move {
-            let (recv, mut send) = socket.split();
-
-            let mut reader = BufReader::new(recv);
-            let _skipped_bytes = skip_http_headers(&mut reader)
-                .await
-                .expect("failed to skip HTTP headers");
-
-            let len = match reader.read_u32().await {
-                Ok(len) => len,
-                Err(e) => {
-                    tracing::info!("Could not read query len: {}", e);
-                    return;
-                }
-            };
-
-            let mut buf = vec![0u8; len as usize];
-            if let Err(e) = reader.read_exact(&mut buf).await {
-                tracing::info!("Could not read query bytes: {}", e);
-                return;
-            };
-
-            let block_replay_query: BlockReplayQuery = match serde_json::from_slice(&buf) {
-                Ok(q) => q,
-                Err(e) => {
-                    tracing::info!("Could not deserialize query: {}", e);
-                    return;
-                }
-            };
-
-            if let Err(e) = send.write_u32(REPLAY_WIRE_FORMAT_VERSION).await {
-                tracing::info!("Could not write replay version: {}", e);
-                return;
-            }
-
-            tracing::info!(
-                "Streaming replays to {} starting from {}",
-                send.peer_addr().unwrap(),
-                block_replay_query.starting_block
-            );
-
-            let mut replay_sender = FramedWrite::new(send, BlockReplayEncoder::new());
-            let mut stream = block_replays.stream_from_forever(
-                block_replay_query.starting_block,
-                block_replay_query
-                    .record_overrides
-                    .into_iter()
-                    .map(|(k, v)| (k, v.to_vec()))
-                    .collect(),
-            );
-            loop {
-                let replay = stream.next().await.unwrap();
-                match replay_sender.send(replay).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::info!("Failed to send replay: {}", e);
-                        return;
-                    }
-                };
-            }
-        });
-    }
+    Ok(())
 }
 
 pub async fn replay_receiver(
     starting_block: BlockNumber,
     record_overrides: Vec<(u64, Bytes)>,
-    address: impl ToSocketAddrs + Display,
+    address: &str,
 ) -> anyhow::Result<BoxStream<'static, BlockCommand>> {
-    let query = BlockReplayQuery::new(starting_block, record_overrides);
-    let mut socket = connect(&address, "/block_replays").await?;
+    let client = reqwest::Client::new();
 
-    // Instead of negotiating an upgrade, we just drop down to the TCP layer after the headers.
-    let query_bytes = serde_json::to_vec(&query)?;
-    socket.write_u32(query_bytes.len().try_into()?).await?;
-    socket.write_all(&query_bytes).await?;
-    let replay_version = socket.read_u32().await?;
+    let query = BlockReplayQuery::new(starting_block, record_overrides);
+    let response = client
+        .post(format!("{address}/block_replays"))
+        .body(serde_json::to_vec(&query)?)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let text = response.text().await?;
+        return Err(anyhow!("request failed: {text}"));
+    }
+
+    let stream = response.bytes_stream();
+    let stream = stream.map_err(std::io::Error::other);
+    let mut reader = StreamReader::new(stream);
+    let replay_version = reader.read_u32().await?;
+    tracing::info!(replay_version, "start streaming from main node");
 
     Ok(
-        FramedRead::new(socket, BlockReplayDecoder::new(replay_version))
+        FramedRead::new(reader, BlockReplayDecoder::new(replay_version))
             .map(|replay| BlockCommand::Replay(Box::new(replay.unwrap())))
             .boxed(),
     )

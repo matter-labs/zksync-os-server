@@ -61,6 +61,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     config: RpcConfig,
     chain_id: u64,
     bridgehub_address: Address,
+    bytecode_supplier_address: Address,
     storage: RpcStorage,
     mempool: Mempool,
     genesis_input_source: Arc<dyn GenesisInputSource>,
@@ -94,7 +95,13 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     )?;
     rpc.merge(EthPubsubNamespace::new(storage.clone(), mempool).into_rpc())?;
     rpc.merge(
-        ZksNamespace::new(bridgehub_address, storage.clone(), genesis_input_source).into_rpc(),
+        ZksNamespace::new(
+            bridgehub_address,
+            bytecode_supplier_address,
+            storage.clone(),
+            genesis_input_source,
+        )
+        .into_rpc(),
     )?;
     rpc.merge(OtsNamespace::new(storage.clone()).into_rpc())?;
     rpc.merge(DebugNamespace::new(storage.clone(), eth_call_handler).into_rpc())?;

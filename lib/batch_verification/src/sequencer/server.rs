@@ -2,17 +2,24 @@ use crate::{
     BATCH_VERIFICATION_WIRE_FORMAT_VERSION, BatchVerificationRequest,
     BatchVerificationRequestCodec, BatchVerificationResponse, BatchVerificationResponseDecoder,
 };
-use futures::{SinkExt, StreamExt};
-use tokio::io::BufReader;
+use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::Request;
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use futures::{SinkExt, StreamExt, TryStreamExt};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tokio::{
-    io::AsyncWriteExt,
-    net::{TcpListener, TcpStream},
-};
+use tokio::{io::AsyncWriteExt, net::TcpListener};
 use tokio_util::codec::{FramedRead, FramedWrite};
+use tokio_util::io::{ReaderStream, StreamReader};
+use tower::ServiceExt;
 use zksync_os_l1_sender::batcher_model::BatchForSigning;
-use zksync_os_socket::skip_http_headers;
 
 /// Accepts connections from batch verification clients. Crafts and sends
 /// BatchVerificationRequests to all clients. Receives responses and forwards
@@ -45,97 +52,105 @@ impl BatchVerificationServer {
     }
 
     /// Start the TCP server that accepts connections from external nodes
-    pub async fn run_server(&self, address: String) -> anyhow::Result<()> {
-        tracing::info!("Starting Batch Verification server at {}", address);
-
+    pub async fn run_server(self: Arc<Self>, address: String) -> anyhow::Result<()> {
         let listener = TcpListener::bind(address).await?;
-        let response_sender = self.response_sender.clone();
+        let app = Router::new()
+            .route("/batch_verification", post(Self::handle_batch_verification))
+            .with_state(self);
 
         loop {
-            let (socket, addr) = listener.accept().await?;
-            let verification_request_rx = self.verification_request_broadcast.subscribe();
-            let response_sender = response_sender.clone();
-            let client_addr = addr.to_string();
+            let (stream, client_addr) = listener.accept().await?;
+            let app = app.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_client(
-                    socket,
-                    client_addr,
-                    verification_request_rx,
-                    response_sender,
-                )
-                .await
-                {
-                    tracing::info!("Error handling client {}: {}", addr, e);
+                let stream = TokioIo::new(stream);
+
+                let service = hyper::service::service_fn(move |req| app.clone().oneshot(req));
+
+                let mut builder = server::conn::auto::Builder::new(TokioExecutor::new());
+                builder.http1().keep_alive(false);
+                builder
+                    .http2()
+                    .keep_alive_interval(None)
+                    .keep_alive_timeout(Duration::from_secs(12 * 60 * 60)) // 12 hours
+                    .max_send_buf_size(16 * 1024); // 16KB buffer
+                let conn = builder.serve_connection(stream, service);
+
+                if let Err(e) = conn.await {
+                    tracing::info!(%client_addr, "connection error: {}", e);
                 }
             });
         }
     }
 
-    async fn handle_client(
-        mut socket: TcpStream,
-        client_addr: String,
-        mut verification_request_rx: broadcast::Receiver<BatchVerificationRequest>,
-        response_sender: mpsc::Sender<BatchVerificationResponse>,
-    ) -> anyhow::Result<()> {
-        let (recv, mut send) = socket.split();
-        let mut reader = BufReader::new(recv);
+    async fn handle_batch_verification(
+        State(state): State<Arc<BatchVerificationServer>>,
+        request: Request<Body>,
+    ) -> Response {
+        let (mut tx, rx) = tokio::io::duplex(16 * 1024);
+        let mut verification_request_rx = state.verification_request_broadcast.subscribe();
 
-        // Skip HTTP headers similar to replay_transport
-        skip_http_headers(&mut reader).await?;
+        tokio::spawn(async move {
+            if let Err(e) = tx.write_u32(BATCH_VERIFICATION_WIRE_FORMAT_VERSION).await {
+                tracing::info!("Could not write batch verification version: {}", e);
+                return;
+            }
 
-        // Write wire format version
-        send.write_u32(BATCH_VERIFICATION_WIRE_FORMAT_VERSION)
-            .await?;
+            tracing::info!("batch verification client connected");
 
-        tracing::info!("Batch verification client connected: {}", client_addr);
+            let mut writer = FramedWrite::new(tx, BatchVerificationRequestCodec::new());
+            let reader = StreamReader::new(
+                request
+                    .into_body()
+                    .into_data_stream()
+                    .map_err(std::io::Error::other),
+            );
+            let mut reader = FramedRead::new(reader, BatchVerificationResponseDecoder::new());
 
-        let mut writer = FramedWrite::new(send, BatchVerificationRequestCodec::new());
-        let mut reader = FramedRead::new(reader, BatchVerificationResponseDecoder::new());
-
-        // Handle bidirectional communication
-        loop {
-            tokio::select! {
-                // Send batches for signing to the client (verifier EN)
-                request = verification_request_rx.recv() => {
-                    match request {
-                        Ok(req) => {
-                            if let Err(e) = writer.send(req).await {
-                                tracing::error!("Failed to send request to client {}: {}", client_addr, e);
+            // Handle bidirectional communication
+            loop {
+                tokio::select! {
+                    // Send batches for signing to the client (verifier EN)
+                    request = verification_request_rx.recv() => {
+                        match request {
+                            Ok(req) => {
+                                if let Err(e) = writer.send(req).await {
+                                    tracing::error!("Failed to send request to client: {}", e);
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Error reading request for client: {}", e);
                                 break;
                             }
                         }
-                        Err(e) => {
-                            tracing::error!("Error reading request for client {}: {}", client_addr, e);
-                            break;
-                        }
                     }
-                }
 
-                // Receive signing responses from client (verifier EN)
-                response = reader.next() => {
-                    match response {
-                        Some(Ok(resp)) => {
-                            if let Err(e) = response_sender.send(resp).await {
-                                tracing::error!(
-                                    batch_number = e.0.batch_number,
-                                    request_id = e.0.request_id,
-                                    "Failed to forward response from client {}: {}", client_addr, e
-                                );
+                    // Receive signing responses from client (verifier EN)
+                    response = reader.next() => {
+                        match response {
+                            Some(Ok(resp)) => {
+                                if let Err(e) = state.response_sender.send(resp).await {
+                                    tracing::error!(
+                                        batch_number = e.0.batch_number,
+                                        request_id = e.0.request_id,
+                                        "Failed to forward response from client: {}", e
+                                    );
+                                }
                             }
+                            Some(Err(e)) => {
+                                tracing::error!("Error reading from client: {}", e);
+                                break;
+                            }
+                            None => break, // Connection closed
                         }
-                        Some(Err(e)) => {
-                            tracing::error!("Error reading from client {}: {}", client_addr, e);
-                            break;
-                        }
-                        None => break, // Connection closed
                     }
                 }
             }
-        }
+        });
 
-        tracing::info!("Batch verification client disconnected: {}", client_addr);
-        Ok(())
+        let body = Body::from_stream(ReaderStream::new(rx));
+        body.into_response()
     }
 
     /// Send a batch verification request to all connected clients
