@@ -1,6 +1,9 @@
 use std::time::Duration;
 use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
+const PROVER_JOB_LABELS: [&str; 3] = ["stage", "type", "id"];
+pub type ProverJobLabels = (ProverStage, ProverType, String);
+
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover")]
 pub struct ProverMetrics {
@@ -16,17 +19,16 @@ pub struct ProverMetrics {
     /// doesn't always equal to .batch_count()
     pub batch_count: LabeledFamily<ProverStage, Gauge>,
     /// The time passed between when a job was picked and reported back
-    #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
-    pub prove_time: LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
+    #[metrics(unit = Unit::Seconds, labels = PROVER_JOB_LABELS, buckets = Buckets::LATENCIES)]
+    pub prove_time: LabeledFamily<ProverJobLabels, Histogram<Duration>, 3>,
     /// The time prover spent actually proving (excluding waiting time). Reported by prover.
-    #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
-    pub prove_time_prover_end:
-        LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
+    #[metrics(unit = Unit::Seconds, labels = PROVER_JOB_LABELS, buckets = Buckets::LATENCIES)]
+    pub prove_time_prover_end: LabeledFamily<ProverJobLabels, Histogram<Duration>, 3>,
     /// The time passed between when a job was picked and reported back
     /// divided by the number of transactions in job.
     /// That is, for SNARKs it's divided by the total number of txs in batch range.
-    #[metrics(unit = Unit::Seconds, labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
-    pub prove_time_per_tx: LabeledFamily<(ProverStage, ProverType, String), Histogram<Duration>, 3>,
+    #[metrics(unit = Unit::Seconds, labels = PROVER_JOB_LABELS, buckets = Buckets::LATENCIES)]
+    pub prove_time_per_tx: LabeledFamily<ProverJobLabels, Histogram<Duration>, 3>,
     #[metrics(labels = ["stage", "type"], buckets = Buckets::values(&[1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 50.0]))]
     pub proved_after_attempts: LabeledFamily<(ProverStage, ProverType), Histogram, 2>,
     /// Time spent waiting to acquire the lock in ProverJobMap
@@ -37,14 +39,12 @@ pub struct ProverMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage", "method"], buckets = Buckets::LATENCIES)]
     pub job_map_lock_hold_time: LabeledFamily<(ProverStage, JobMapMethod), Histogram<Duration>, 2>,
     /// Number of computational native proven.
-    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::exponential(10_000_000.0..=2_000_000_000.0, 2.0))]
-    pub computational_native_proven:
-        LabeledFamily<(ProverStage, ProverType, String), Histogram<u64>, 3>,
+    #[metrics(labels = PROVER_JOB_LABELS, buckets = Buckets::exponential(10_000_000.0..=2_000_000_000.0, 2.0))]
+    pub computational_native_proven: LabeledFamily<ProverJobLabels, Histogram<u64>, 3>,
     /// Rate of computational native proven per millisecond.
     /// Basically, `computational_native_proven` divided by `prove_time_prover_end_ms`.
-    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::linear(0.0..=20999.9, 3000.0))]
-    pub computational_native_per_ms:
-        LabeledFamily<(ProverStage, ProverType, String), Histogram<f64>, 3>,
+    #[metrics(labels = PROVER_JOB_LABELS, buckets = Buckets::linear(0.0..=20999.9, 3000.0))]
+    pub computational_native_per_ms: LabeledFamily<ProverJobLabels, Histogram<f64>, 3>,
 }
 
 #[derive(Debug, Metrics)]
