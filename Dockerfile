@@ -45,7 +45,7 @@ RUN useradd -m -u ${UID} app && \
 # ---- copy binary + genesis.json ----
 COPY --from=builder /app/target/release/zksync-os-server /usr/local/bin/
 
-COPY --from=builder /app/genesis/genesis.json /app/genesis/
+COPY --from=builder /app/local-chains/v30/genesis.json /app/local-chains/v30/
 
 USER app
 WORKDIR /app

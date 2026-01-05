@@ -218,7 +218,7 @@ pub struct GenesisConfig {
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
-    // find it in `zkos-l1-state.json`
+    // find it in `./local-chains/v30/zkos-l1-state.json`
     #[config(default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
     pub bytecode_supplier_address: Option<Address>,
 
@@ -227,7 +227,7 @@ pub struct GenesisConfig {
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some("./genesis/genesis.json".into()))]
+    #[config(default_t = Some("./local-chains/v30/genesis.json".into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
