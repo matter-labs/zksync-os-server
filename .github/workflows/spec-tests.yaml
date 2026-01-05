@@ -61,7 +61,7 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: Romsters/boojumos-e2e-tests
+          repository: perekopskiy/boojumos-e2e-tests
           submodules: recursive
           ref: stable # use tag to pin a stable version
 
@@ -215,7 +215,7 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: Romsters/boojumos-e2e-tests
+          repository: perekopskiy/boojumos-e2e-tests
           submodules: recursive
           ref: stable # use tag to pin a stable version
           path: ${{ env.TESTS_WORKING_DIR }}
