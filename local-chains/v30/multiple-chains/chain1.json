@@ -5,7 +5,7 @@
     "genesis": {
         "bridgehub_address": "0xc72e9838fe3618bf57240fe243f5ca58aceccfe3",
         "bytecode_supplier_address": "0xa28bfbddb93eab8886f09844bd1becd6330b3b38",
-        "genesis_input_path": "./configs/v30/multiple-chains/genesis.json",
+        "genesis_input_path": "./local-chains/v30/multiple-chains/genesis.json",
         "chain_id": 6565
     },
     "l1_sender": {
