@@ -33,10 +33,6 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Enables sandbox mode (uses a temporary RocksDB directory that is removed on shutdown).
-    #[arg(long)]
-    sandbox: bool,
-
     /// Path to a JSON config file.
     #[arg(long)]
     config: Option<String>,
@@ -114,10 +110,6 @@ pub async fn main() {
     }
 
     let mut config = build_external_config(config_repo);
-    // Respect sandbox flag from CLI
-    if opt.sandbox {
-        config.general_config.sandbox = true;
-    }
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     // =========== init interruption channel ===========
