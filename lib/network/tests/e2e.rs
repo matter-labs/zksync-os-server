@@ -60,10 +60,9 @@ async fn send_replay_record_matching_version() {
     let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
     let peer0 = &mut net.peers_mut()[0];
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        max_active_connections: 100,
         replay: InMemReplay(HashMap::from([(1, record1.clone())])),
         to_request_blocks: false,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -72,10 +71,9 @@ async fn send_replay_record_matching_version() {
     let (replay_tx, mut replay_rx_peer1) = mpsc::unbounded_channel();
     let peer1 = &mut net.peers_mut()[1];
     peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        max_active_connections: 100,
         replay: InMemReplay::default(),
         to_request_blocks: true,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -118,10 +116,9 @@ async fn send_replay_record_different_versions() {
     let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
     let peer0 = &mut net.peers_mut()[0];
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        max_active_connections: 100,
         replay: InMemReplay(HashMap::from([(1, record1.clone())])),
         to_request_blocks: false,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -129,10 +126,9 @@ async fn send_replay_record_different_versions() {
     let (protocol_tx, mut from_peer0) = mpsc::unbounded_channel();
     let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV0, _> {
-        max_active_connections: 100,
         replay: InMemReplay(HashMap::from([(1, record1.clone())])),
         to_request_blocks: false,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -141,10 +137,9 @@ async fn send_replay_record_different_versions() {
     let (replay_tx, mut replay_rx_peer1) = mpsc::unbounded_channel();
     let peer1 = &mut net.peers_mut()[1];
     peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV0, _> {
-        max_active_connections: 100,
         replay: InMemReplay::default(),
         to_request_blocks: true,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -192,10 +187,9 @@ async fn max_active_connections() {
     let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
     let peer0 = &mut net.peers_mut()[0];
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        max_active_connections: 1,
         replay: InMemReplay::default(),
         to_request_blocks: false,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 1),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -206,10 +200,9 @@ async fn max_active_connections() {
     let peer1_id = peer1.peer_id();
     let peer1_addr = peer1.local_addr();
     peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        max_active_connections: 100,
         replay: InMemReplay::default(),
         to_request_blocks: true,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -220,10 +213,9 @@ async fn max_active_connections() {
     let peer2_id = peer2.peer_id();
     let peer2_addr = peer2.local_addr();
     peer2.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        max_active_connections: 100,
         replay: InMemReplay::default(),
         to_request_blocks: true,
-        state: ProtocolState::new(protocol_tx),
+        state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
     });
@@ -245,8 +237,8 @@ async fn max_active_connections() {
     // Connect peers 0 and 2, max active connections exceeded
     peer0_handle.network().add_peer(peer2_id, peer2_addr);
     match from_peer0.recv().await.unwrap() {
-        ProtocolEvent::MaxActiveConnectionsExceeded { num_active } => {
-            assert_eq!(num_active, 1);
+        ProtocolEvent::MaxActiveConnectionsExceeded { max_connections } => {
+            assert_eq!(max_connections, 1);
         }
         ev => {
             panic!("unexpected event: {ev:?}");

@@ -17,15 +17,12 @@ use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 
 #[derive(Debug, Clone)]
 pub struct ZksProtocolHandler<P: AnyZksProtocolVersion, Replay: Clone> {
-    /// The maximum number of active connections.
-    pub max_active_connections: u64,
     /// Storage to serve block replay records from.
     pub replay: Replay,
     /// Whether this node wants to request blocks from its peers.
@@ -39,22 +36,36 @@ pub struct ZksProtocolHandler<P: AnyZksProtocolVersion, Replay: Clone> {
 impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ProtocolHandler
     for ZksProtocolHandler<P, Replay>
 {
-    type ConnectionHandler = Self;
+    type ConnectionHandler = ZksProtocolConnectionHandler<P, Replay>;
 
     fn on_incoming(&self, socket_addr: SocketAddr) -> Option<Self::ConnectionHandler> {
-        let num_active = self.state.active_connections();
-        if num_active >= self.max_active_connections {
-            tracing::trace!(
-                num_active, max_connections = self.max_active_connections, %socket_addr,
-                "ignoring incoming connection, max active reached"
-            );
-            let _ = self
-                .state
-                .events_sender
-                .send(ProtocolEvent::MaxActiveConnectionsExceeded { num_active });
-            None
-        } else {
-            Some(self.clone())
+        match self
+            .state
+            .active_connections_semaphore
+            .clone()
+            .try_acquire_owned()
+        {
+            Ok(permit) => Some(ZksProtocolConnectionHandler {
+                replay: self.replay.clone(),
+                to_request_blocks: self.to_request_blocks,
+                state: self.state.clone(),
+                replay_sender: self.replay_sender.clone(),
+                permit,
+                _phantom: Default::default(),
+            }),
+            Err(_) => {
+                tracing::trace!(
+                    max_connections = self.state.max_active_connections, %socket_addr,
+                    "ignoring incoming connection, max active reached"
+                );
+                let _ =
+                    self.state
+                        .events_sender
+                        .send(ProtocolEvent::MaxActiveConnectionsExceeded {
+                            max_connections: self.state.max_active_connections,
+                        });
+                None
+            }
         }
     }
 
@@ -63,19 +74,33 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ProtocolHandler
         socket_addr: SocketAddr,
         peer_id: PeerId,
     ) -> Option<Self::ConnectionHandler> {
-        let num_active = self.state.active_connections();
-        if num_active >= self.max_active_connections {
-            tracing::trace!(
-                num_active, max_connections = self.max_active_connections, %socket_addr, %peer_id,
-                "ignoring outgoing connection, max active reached"
-            );
-            let _ = self
-                .state
-                .events_sender
-                .send(ProtocolEvent::MaxActiveConnectionsExceeded { num_active });
-            None
-        } else {
-            Some(self.clone())
+        match self
+            .state
+            .active_connections_semaphore
+            .clone()
+            .try_acquire_owned()
+        {
+            Ok(permit) => Some(ZksProtocolConnectionHandler {
+                replay: self.replay.clone(),
+                to_request_blocks: self.to_request_blocks,
+                state: self.state.clone(),
+                replay_sender: self.replay_sender.clone(),
+                permit,
+                _phantom: Default::default(),
+            }),
+            Err(_) => {
+                tracing::trace!(
+                    max_connections = self.state.max_active_connections, %socket_addr, %peer_id,
+                    "ignoring outgoing connection, max active reached"
+                );
+                let _ =
+                    self.state
+                        .events_sender
+                        .send(ProtocolEvent::MaxActiveConnectionsExceeded {
+                            max_connections: self.state.max_active_connections,
+                        });
+                None
+            }
         }
     }
 }
@@ -84,22 +109,27 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ProtocolHandler
 pub struct ProtocolState {
     /// Protocol event sender.
     events_sender: mpsc::UnboundedSender<ProtocolEvent>,
-    /// The number of active connections.
-    active_connections: Arc<AtomicU64>,
+    /// The maximum number of active connections.
+    max_active_connections: usize,
+    active_connections_semaphore: Arc<Semaphore>,
 }
 
 impl ProtocolState {
     /// Create new protocol state.
-    pub fn new(events_sender: mpsc::UnboundedSender<ProtocolEvent>) -> Self {
+    pub fn new(
+        events_sender: mpsc::UnboundedSender<ProtocolEvent>,
+        max_active_connections: usize,
+    ) -> Self {
         Self {
             events_sender,
-            active_connections: Arc::default(),
+            max_active_connections,
+            active_connections_semaphore: Arc::new(Semaphore::new(max_active_connections)),
         }
     }
 
     /// Returns the current number of active connections.
     pub fn active_connections(&self) -> u64 {
-        self.active_connections.load(Ordering::Relaxed)
+        (self.max_active_connections - self.active_connections_semaphore.available_permits()) as u64
     }
 }
 
@@ -114,13 +144,26 @@ pub enum ProtocolEvent {
     },
     /// Number of max active connections exceeded. New connection was rejected.
     MaxActiveConnectionsExceeded {
-        /// The current number of active connections.
-        num_active: u64,
+        /// The max number of active connections.
+        max_connections: usize,
     },
 }
 
+pub struct ZksProtocolConnectionHandler<P: AnyZksProtocolVersion, Replay: Clone> {
+    /// Storage to serve block replay records from.
+    replay: Replay,
+    /// Whether this node wants to request blocks from its peers.
+    to_request_blocks: bool,
+    /// Current state of the protocol.
+    state: ProtocolState,
+    replay_sender: mpsc::UnboundedSender<ReplayRecord>,
+    /// Owned permit that corresponds to a taken active connection slot.
+    permit: OwnedSemaphorePermit,
+    _phantom: PhantomData<P>,
+}
+
 impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ConnectionHandler
-    for ZksProtocolHandler<P, Replay>
+    for ZksProtocolConnectionHandler<P, Replay>
 {
     type Connection = ZksConnection<P, Replay>;
 
@@ -155,11 +198,6 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ConnectionHandler
             .send(ProtocolEvent::Established { direction, peer_id })
             .ok();
 
-        // Increment the number of active sessions.
-        self.state
-            .active_connections
-            .fetch_add(1, Ordering::Relaxed);
-
         ZksConnection {
             peer_id,
             conn,
@@ -173,6 +211,7 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay + Clone> ConnectionHandler
             replay: self.replay.clone(),
             replay_sender: self.replay_sender.clone(),
             terminated: false,
+            _permit: self.permit,
         }
     }
 }
@@ -188,6 +227,8 @@ pub struct ZksConnection<P: AnyZksProtocolVersion, Replay> {
     replay_sender: mpsc::UnboundedSender<ReplayRecord>,
     /// Flag indicating whether this stream has previously been terminated.
     terminated: bool,
+    /// Owned permit that corresponds to a taken active connection slot.
+    _permit: OwnedSemaphorePermit,
 }
 
 struct ResponseState {
