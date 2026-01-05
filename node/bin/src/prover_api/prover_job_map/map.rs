@@ -365,8 +365,8 @@ impl<T: Clone> ProverJobMap<T> {
                     PROVER_METRICS.computational_native_per_ms
                         [&(self.prover_stage, prover_type, prover_id.to_string())]
                         .observe(
-                            total_computational_native_used
-                                / time_taken_prover_end.as_millis() as u64,
+                            total_computational_native_used as f64
+                                / (time_taken_prover_end.as_secs_f64() * 1000.0), // `as_millis_f64` is unstable
                         );
                 }
 

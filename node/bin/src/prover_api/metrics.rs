@@ -37,14 +37,14 @@ pub struct ProverMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage", "method"], buckets = Buckets::LATENCIES)]
     pub job_map_lock_hold_time: LabeledFamily<(ProverStage, JobMapMethod), Histogram<Duration>, 2>,
     /// Number of computational native proven.
-    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
+    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::exponential(10_000_000.0..=2_000_000_000.0, 2.0))]
     pub computational_native_proven:
         LabeledFamily<(ProverStage, ProverType, String), Histogram<u64>, 3>,
     /// Rate of computational native proven per millisecond.
     /// Basically, `computational_native_proven` divided by `prove_time_prover_end_ms`.
-    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::LATENCIES)]
+    #[metrics(labels = ["stage", "type", "id"], buckets = Buckets::linear(0.0..=20999.9, 3000.0))]
     pub computational_native_per_ms:
-        LabeledFamily<(ProverStage, ProverType, String), Histogram<u64>, 3>,
+        LabeledFamily<(ProverStage, ProverType, String), Histogram<f64>, 3>,
 }
 
 #[derive(Debug, Metrics)]
