@@ -102,7 +102,7 @@ impl ExecuteCommand {
             if self.batches.first().unwrap().batch.protocol_version.minor >= 31 {
                 // For now, these are not validated, so they can be empty.
                 // IMPORTANT: the struct is not correct, it only works while the array is empty
-                let lops: Vec<u8> = Default::default();
+                let logs: Vec<u8> = Default::default();
                 let messages: Vec<Vec<u8>> = Default::default();
                 let message_roots: Vec<FixedBytes<32>> = Default::default();
 
@@ -110,7 +110,7 @@ impl ExecuteCommand {
                     stored_batch_infos,
                     priority_ops,
                     interop_roots,
-                    lops,
+                    logs,
                     messages,
                     message_roots,
                 )
