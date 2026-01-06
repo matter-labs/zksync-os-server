@@ -49,6 +49,14 @@ pub async fn main() {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
 
+    let mut env = Environment::prefixed("");
+    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
+    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
+    // and `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
+    env.coerce_json()
+        .expect("failed to coerce JSON envvar values");
+    config_sources.push(env);
+
     // Process the config file if provided
     if let Some(config_path) = &opt.config {
         let config_contents =
@@ -58,14 +66,6 @@ pub async fn main() {
                 .expect("Failed to parse config file from provided path");
         config_sources.push(Json::new(config_path, config_json));
     }
-
-    let mut env = Environment::prefixed("");
-    // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
-    // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
-    // and `null` (missing value). Usage example: `GENESIS_BRIDGEHUB_ADDRESS__JSON=null`
-    env.coerce_json()
-        .expect("failed to coerce JSON envvar values");
-    config_sources.push(env);
 
     // =========== init observability ===========
     let observability_config =
@@ -352,15 +352,7 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
         "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
     );
 
-    config.general_config.rocks_db_path = tempdir_path
-        .join(
-            config
-                .genesis_config
-                .chain_id
-                .unwrap_or_default()
-                .to_string(),
-        )
-        .to_path_buf();
+    config.general_config.rocks_db_path = tempdir_path.join("node");
     config.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
         file_backed_base_path: tempdir_path.join("shared"),
     };
