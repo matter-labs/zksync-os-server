@@ -4,8 +4,6 @@ use crate::wire::message::ZksMessageId;
 use crate::wire::replays::{AnyReplayRecord, v0, v1};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
-use core::str::FromStr;
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 /// Any protocol version along with its pinned wire formats.
@@ -45,7 +43,7 @@ pub struct ParseVersionError(String);
 
 /// The `zks` protocol version.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ZksVersion {
     /// The `zks` protocol version 0. Only used for testing.
     Zks0 = 0,
@@ -60,8 +58,8 @@ impl ZksVersion {
     /// All known zks versions
     pub const ALL_VERSIONS: &'static [Self] = &[Self::Zks0, Self::Zks1];
 
-    /// Returns the max value for the given version.
-    const fn max(&self) -> u8 {
+    /// Returns the max message id for the given version.
+    const fn max_message_id(&self) -> u8 {
         match self {
             ZksVersion::Zks0 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks1 => ZksMessageId::BlockReplays as u8,
@@ -70,7 +68,7 @@ impl ZksVersion {
 
     /// Returns the total number of message types for the given version.
     pub(crate) const fn message_count(&self) -> u8 {
-        self.max() + 1
+        self.max_message_id() + 1
     }
 }
 
@@ -91,28 +89,6 @@ impl Decodable for ZksVersion {
     fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
         let version = u8::decode(buf)?;
         Self::try_from(version).map_err(|_| RlpError::Custom("invalid zks version"))
-    }
-}
-
-/// Allow for converting from a `&str` to an `ZksVersion`.
-///
-/// # Example
-/// ```
-/// use zksync_os_network::wire::ZksVersion;
-///
-/// let version = ZksVersion::try_from("1").unwrap();
-/// assert_eq!(version, ZksVersion::Zks1);
-/// ```
-impl TryFrom<&str> for ZksVersion {
-    type Error = ParseVersionError;
-
-    #[inline]
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        match s {
-            "0" => Ok(Self::Zks0),
-            "1" => Ok(Self::Zks1),
-            _ => Err(ParseVersionError(s.to_string())),
-        }
     }
 }
 
@@ -138,15 +114,6 @@ impl TryFrom<u8> for ZksVersion {
     }
 }
 
-impl FromStr for ZksVersion {
-    type Err = ParseVersionError;
-
-    #[inline]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s)
-    }
-}
-
 impl From<ZksVersion> for u8 {
     #[inline]
     fn from(v: ZksVersion) -> Self {
@@ -166,29 +133,9 @@ impl From<ZksVersion> for &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParseVersionError, ZksVersion};
+    use super::*;
     use alloy::primitives::bytes::BytesMut;
     use alloy_rlp::{Decodable, Encodable, Error as RlpError};
-
-    #[test]
-    fn test_zks_version_try_from_str() {
-        assert_eq!(ZksVersion::Zks0, ZksVersion::try_from("0").unwrap());
-        assert_eq!(ZksVersion::Zks1, ZksVersion::try_from("1").unwrap());
-        assert_eq!(
-            Err(ParseVersionError("2".to_string())),
-            ZksVersion::try_from("2")
-        );
-    }
-
-    #[test]
-    fn test_zks_version_from_str() {
-        assert_eq!(ZksVersion::Zks0, "0".parse().unwrap());
-        assert_eq!(ZksVersion::Zks1, "1".parse().unwrap());
-        assert_eq!(
-            Err(ParseVersionError("2".to_string())),
-            "2".parse::<ZksVersion>()
-        );
-    }
 
     #[test]
     fn test_zks_version_rlp_encode() {
@@ -203,6 +150,7 @@ mod tests {
             assert_eq!(encoded[0], version as u8);
         }
     }
+
     #[test]
     fn test_zks_version_rlp_decode() {
         let test_cases = [
