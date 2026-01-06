@@ -130,6 +130,14 @@ impl TryFrom<&str> for ProtocolSemanticVersion {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let version = semver::Version::parse(value)?;
+        assert!(
+            version.build.is_empty(),
+            "ProtocolSemanticVersion is not supposed to have build metadata"
+        );
+        assert!(
+            version.pre.is_empty(),
+            "ProtocolSemanticVersion is not supposed to have prerelease identifier"
+        );
         Ok(Self(version))
     }
 }
@@ -139,6 +147,14 @@ impl FromStr for ProtocolSemanticVersion {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let version = semver::Version::parse(s)?;
+        assert!(
+            version.build.is_empty(),
+            "ProtocolSemanticVersion is not supposed to have build metadata"
+        );
+        assert!(
+            version.pre.is_empty(),
+            "ProtocolSemanticVersion is not supposed to have prerelease identifier"
+        );
         Ok(Self(version))
     }
 }
