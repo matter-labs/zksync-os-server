@@ -9,6 +9,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::config::get_chain_id;
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
 use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_types::{
@@ -27,7 +28,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
         tester.l1_provider.clone(),
-        zksync_os_server::config_constants::CHAIN_ID,
+        get_chain_id(),
     );
     let amount = U256::from(100);
     let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;

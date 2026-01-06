@@ -11,7 +11,7 @@ anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 then launch the server:
 
 ```
-cargo run
+cargo run -- --config ./local-chains/v30/config.json
 ```
 
 To restart the chain, erase the local DB and re-run anvil:
@@ -41,7 +41,7 @@ cast send -r http://localhost:3050 0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0 --
 See `node/sequencer/config.rs` for config options and defaults. Use env variables to override, e.g.:
 
 ```
-prover_api_fake_provers_enabled=false cargo run --release
+prover_api_fake_provers_enabled=false cargo run
 ```
 or a JSON configuration file:
 ```
@@ -55,5 +55,5 @@ Sandbox mode runs the node using a temporary, isolated state directory, allowing
 
 The `sandbox` setting is part of the general config and can be set like any other config value:
 ```
-general_sandbox=true cargo run --release
+general_sandbox=true cargo run --release -- --config ./local-chains/v30/config.json
 ```

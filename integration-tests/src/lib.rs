@@ -16,10 +16,11 @@ use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
-    GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
     StatusServerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
+use crate::config::get_default_config;
 
 pub mod assert_traits;
 pub mod contracts;
@@ -28,6 +29,7 @@ mod network;
 mod prover_tester;
 pub mod provider;
 pub mod upgrade;
+pub mod config;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
@@ -229,19 +231,15 @@ impl Tester {
             address: status_address,
         };
 
+        let default_config = get_default_config();
         let mut config = Config {
             general_config,
-            genesis_config: GenesisConfig {
-                genesis_input_path: Some(
-                    concat!(env!("WORKSPACE_DIR"), "/local-chains/v30/genesis.json").into(),
-                ),
-                ..Default::default()
-            },
+            genesis_config: default_config.genesis_config,
             rpc_config,
             mempool_config: Default::default(),
             tx_validator_config: Default::default(),
             sequencer_config,
-            l1_sender_config: Default::default(),
+            l1_sender_config: default_config.l1_sender_config,
             l1_watcher_config: Default::default(),
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {

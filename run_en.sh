@@ -5,4 +5,4 @@ observability_prometheus_port=3313 \
 general_main_node_rpc_url=http://localhost:3050 \
 rpc_address=0.0.0.0:3051 \
 status_server_address=0.0.0.0:3073 \
-cargo run --release
+cargo run --release -- --config ./local-chains/v30/config.json
