@@ -254,7 +254,7 @@ pub struct CommittedBatch {
 impl CommittedBatch {
     /// Fetches extra information that is not available inside `CommitBatchInfo` from L1 to construct
     /// `CommitedBatch`. Requires `l1_block_id` where the batch was committed.
-    async fn fetch(
+    pub async fn fetch(
         zk_chain: &ZkChain<DynProvider>,
         commit_batch_info: CommitBatchInfo,
         l1_block_id: BlockId,
@@ -296,6 +296,7 @@ impl CommittedBatch {
 
 /// Information about a stored batch on L1. Compared to plain `StoredBatchInfo` also contains block
 /// range belonging to this batch.
+#[derive(Clone, Debug)]
 pub struct StoredBatchData {
     pub batch_info: StoredBatchInfo,
     pub first_block_number: BlockNumber,

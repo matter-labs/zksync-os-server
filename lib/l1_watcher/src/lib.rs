@@ -26,4 +26,7 @@ mod watcher;
 mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
 
+mod batch_provider;
+pub use batch_provider::CommittedBatchProvider;
+
 mod factory_deps;

@@ -1,8 +1,15 @@
-use alloy::primitives::BlockNumber;
+use crate::watcher::L1WatcherError;
+use crate::{CommittedBatch, StoredBatchData};
+use alloy::consensus::Transaction;
+use alloy::eips::BlockId;
+use alloy::primitives::{BlockNumber, TxHash};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use std::sync::Arc;
+use zksync_os_batch_types::BatchInfo;
+use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
+use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::{IExecutor, ZkChain};
 
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
@@ -214,4 +221,90 @@ pub async fn find_l1_execute_block_by_batch_number(
         Ok(res >= batch_number)
     })
     .await
+}
+
+/// Fetches and decodes stored batch data for batch `batch_number` that is expected to have been
+/// committed in `l1_block_number`. Returns `None` if requested batch has not been committed in
+/// the given L1 block.
+pub async fn fetch_stored_batch_data(
+    zk_chain: &ZkChain<DynProvider>,
+    l1_block_number: BlockNumber,
+    batch_number: u64,
+) -> anyhow::Result<Option<StoredBatchData>> {
+    let logs = zk_chain
+        .provider()
+        .get_logs(
+            &Filter::new()
+                .address(*zk_chain.address())
+                .event_signature(ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH)
+                .from_block(l1_block_number)
+                .to_block(l1_block_number),
+        )
+        .await?;
+    let Some((log, tx_hash)) = logs.into_iter().find_map(|log| {
+        let batch_log = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)
+            .expect("unable to decode `ReportCommittedBatchRangeZKsyncOS` log");
+        if batch_log.batchNumber == batch_number {
+            Some((
+                batch_log,
+                log.transaction_hash.expect("indexed log without tx hash"),
+            ))
+        } else {
+            None
+        }
+    }) else {
+        return Ok(None);
+    };
+    let committed_batch = fetch_commit_calldata(zk_chain, tx_hash).await?;
+
+    // todo: stop using this struct once fully migrated from S3
+    let last_executed_batch_info = BatchInfo {
+        commit_info: committed_batch.commit_info,
+        chain_address: Default::default(),
+        upgrade_tx_hash: committed_batch.upgrade_tx_hash,
+        blob_sidecar: None,
+    };
+    let batch_info = last_executed_batch_info.into_stored(&committed_batch.protocol_version);
+
+    Ok(Some(StoredBatchData {
+        batch_info,
+        first_block_number: log.firstBlockNumber,
+        last_block_number: log.lastBlockNumber,
+    }))
+}
+
+/// Finds and decodes stored batch data for batch `batch_number`. Returns `None` if there is none.
+pub async fn find_stored_batch_data_by_batch_number(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<Option<StoredBatchData>> {
+    let l1_block_with_commit =
+        find_l1_commit_block_by_batch_number(zk_chain.clone(), batch_number, max_l1_blocks_to_scan)
+            .await?;
+    fetch_stored_batch_data(zk_chain, l1_block_with_commit, batch_number).await
+}
+
+/// Fetches and decodes batch commit transaction. Fails if transaction does not exist or is not
+/// a valid commit transaction.
+pub async fn fetch_commit_calldata(
+    zk_chain: &ZkChain<DynProvider>,
+    tx_hash: TxHash,
+) -> Result<CommittedBatch, L1WatcherError> {
+    // todo: retry-backoff logic in case tx is missing
+    let tx = zk_chain
+        .provider()
+        .get_transaction_by_hash(tx_hash)
+        .await?
+        .expect("tx not found");
+    let CommitCalldata {
+        commit_batch_info, ..
+    } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
+
+    // L1 block where this batch got committed.
+    let l1_block_id = BlockId::number(
+        tx.block_number
+            .expect("mined transaction has no block number"),
+    );
+    CommittedBatch::fetch(zk_chain, commit_batch_info, l1_block_id).await
 }

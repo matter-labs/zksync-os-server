@@ -67,8 +67,8 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    BatchRangeWatcher, BatchRangeWatcherInit, CommittedBatch, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher, StoredBatchData,
+    BatchRangeWatcher, BatchRangeWatcherInit, CommittedBatch, CommittedBatchProvider,
+    L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, StoredBatchData,
 };
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
@@ -200,6 +200,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
+
+    let committed_batch_provider =
+        CommittedBatchProvider::init(&l1_state, config.l1_watcher_config.max_blocks_to_process)
+            .await
+            .expect("failed to init CommittedBatchProvider");
 
     match (config.l1_sender_config.pubdata_mode, l1_state.da_input_mode) {
         (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
@@ -336,8 +341,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
+            committed_batch_provider,
             finality_storage.clone(),
-            batch_storage.clone(),
         )
         .await
         .expect("failed to start L1 commit watcher")
