@@ -8,10 +8,8 @@ alloy::sol! {
         // Getters
         function owner() external view returns (address);
         function chainTypeManager(uint256 _chainId) external view returns (address);
+        function chainAssetHandler() external view returns (address);
         function getZKChain(uint256 _chainId) external view returns (address);
-
-        // Upgrade functionality
-        function pauseMigration() external;
     }
 
     enum Action {
@@ -155,5 +153,11 @@ alloy::sol! {
         /// @notice Publishes multiple bytecodes.
         /// @param _bytecodes Array of bytecodes to be published.
         function publishBytecodes(bytes[] calldata _bytecodes) external;
+    }
+
+    #[sol(rpc)]
+    contract ChainAssetHandler {
+        function owner() external view returns (address);
+        function pauseMigration() external;
     }
 }
