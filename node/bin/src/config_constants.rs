@@ -8,11 +8,11 @@ pub const DEFAULT_ROCKS_DB_PATH: &str = "./db/node1";
 
 /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
 /// other contracts should be discoverable through it.
-pub const BRIDGEHUB_ADDRESS: &str = "0xd7e1f660ed86e1e9add0000ad860c5b1b1916be2";
+pub const BRIDGEHUB_ADDRESS: &str = "0x0767b13ae281dd3a4cf963d9f1e26719e4dea04e";
 
 /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
 /// so it has to be provided explicitly.
-pub const BYTECODE_SUPPLIER_ADDRESS: &str = "0x7e6217aaa2b800d648fe6337b8dfe3c41d0ca12d";
+pub const BYTECODE_SUPPLIER_ADDRESS: &str = "0xc40e7810e36888598341af0436bd17490eff3f14";
 
 /// Chain ID of the chain node operates on.
 pub const CHAIN_ID: u64 = 6565;
