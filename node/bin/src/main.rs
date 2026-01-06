@@ -1,11 +1,12 @@
 use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
-use smart_config::{ConfigRepository, ConfigSources, Environment};
-use std::{path::Path, time::Duration};
+use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
+use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -32,9 +33,10 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Enables sandbox mode (uses a temporary RocksDB directory that is removed on shutdown).
+    /// Path to a JSON config file.
     #[arg(long)]
-    sandbox: bool,
+    config: Option<String>,
+
     #[command(subcommand)]
     cmd: Option<CliCommand>,
 }
@@ -46,6 +48,7 @@ pub async fn main() {
     // =========== load configs ===========
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
+
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
     // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
@@ -53,6 +56,16 @@ pub async fn main() {
     env.coerce_json()
         .expect("failed to coerce JSON envvar values");
     config_sources.push(env);
+
+    // Process the config file if provided
+    if let Some(config_path) = &opt.config {
+        let config_contents =
+            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+        let config_json: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&config_contents)
+                .expect("Failed to parse config file from provided path");
+        config_sources.push(Json::new(config_path, config_json));
+    }
 
     // =========== init observability ===========
     let observability_config =
@@ -97,28 +110,34 @@ pub async fn main() {
     }
 
     let mut config = build_external_config(config_repo);
-    let _sandbox_guard = if opt.sandbox {
-        // Creates a temporary directory for RocksDB and switches to it.
-        enable_sandbox_mode(&mut config)
-    } else {
-        None
-    };
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
-    let prometheus: PrometheusExporterConfig =
-        PrometheusExporterConfig::pull(config.observability_config.prometheus.port);
-
     // =========== init interruption channel ===========
 
     // todo: implement interruption handling in other tasks
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
+    let sandbox_enabled = config.general_config.sandbox;
+    let _sandbox_guard = sandbox_enabled.then(|| enable_sandbox_mode(&mut config));
+    let prometheus_port = config.observability_config.prometheus.port;
 
     let main_task = async move {
         match config.general_config.state_backend {
             StateBackendConfig::FullDiffs => run::<FullDiffsState>(main_stop.clone(), config).await,
             StateBackendConfig::Compacted => run::<StateHandle>(main_stop.clone(), config).await,
+        }
+    };
+
+    let prometheus_task = async {
+        if sandbox_enabled {
+            tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
+            // no-op for the sandbox mode
+            future::pending::<anyhow::Result<()>>().await
+        } else {
+            let prometheus: PrometheusExporterConfig =
+                PrometheusExporterConfig::pull(prometheus_port);
+            prometheus.run(stop_receiver.clone()).await
         }
     };
 
@@ -135,7 +154,7 @@ pub async fn main() {
             }
         },
         _ = handle_delayed_termination(stop_sender) => {},
-        res = prometheus.run(stop_receiver) => {
+        res = prometheus_task => {
             match res {
                 Ok(_) => {
                     if *stop_receiver_copy.borrow() {
@@ -327,11 +346,23 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
 
     let tempdir =
         tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
-    config.general_config.rocks_db_path = tempdir.path().to_path_buf();
+    let tempdir_path = tempdir.path();
     tracing::info!(
-        path = %config.general_config.rocks_db_path.display(),
-        "Sandbox mode enabled. Using temporary RocksDB directory"
+        path = %tempdir_path.display(),
+        "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
     );
+
+    // Update config to use temporary directory
+    config.general_config.rocks_db_path = tempdir_path.join("node");
+    config.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
+        file_backed_base_path: tempdir_path.join("shared"),
+    };
+
+    // Disable services that are not needed in sandbox mode
+    config.prover_api_config.enabled = false;
+    config.status_server_config.enabled = false;
+    config.sequencer_config.block_replay_server_enabled = false;
+
     Some(tempdir)
 }
 

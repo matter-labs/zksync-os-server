@@ -118,6 +118,10 @@ pub struct ExecutionMetrics {
     pub next_l1_priority_id: Gauge<u64>,
 
     pub last_execution_version: Gauge<u64>,
+
+    pub pubdata_price: Gauge<u64>,
+
+    pub blob_fill_ratio: Gauge<f64>,
 }
 
 #[vise::register]

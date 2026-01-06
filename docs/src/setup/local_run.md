@@ -5,7 +5,7 @@
 To run node locally, first launch `anvil`:
 
 ```
-anvil --load-state zkos-l1-state.json --port 8545
+anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 ```
 
 then launch the server:
@@ -25,8 +25,8 @@ By default, fake (dummy) proofs are used both for FRI and SNARK proofs.
 **Rich account:**
 
 ```
-PRIVATE_KEY = 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
-ACCOUNT_ID = 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
+PRIVATE_KEY=0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+ACCOUNT_ID=0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
 ```
 
 Example transaction to send:
@@ -42,4 +42,18 @@ See `node/sequencer/config.rs` for config options and defaults. Use env variable
 
 ```
 prover_api_fake_provers_enabled=false cargo run --release
+```
+or a JSON configuration file:
+```
+cargo run --release -- --config ./local-chains/v30/config.json
+```
+
+Explore the `local-chains` folder for additional chain configs grouped by protocol version. Detailed information is available in `local-chains/README.md`.
+
+**Sandbox mode**
+Sandbox mode runs the node using a temporary, isolated state directory, allowing you to spin up one or more local chains without them interfering with the same folder. When enabled, the node creates a temporary base directory for RocksDB and the file-backed object store, this directory is automatically removed on shutdown. To remain as lightweight as possible, Sandbox mode disables all APIs except for JSON-RPC (status, prometheus APIs etc are unavailable). It can be used for quick local testing and multi-chain setups.
+
+The `sandbox` setting is part of the general config and can be set like any other config value:
+```
+general_sandbox=true cargo run --release
 ```
