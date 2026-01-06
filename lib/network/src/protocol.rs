@@ -1,7 +1,6 @@
 //! An RLPX subprotocol for ZKsync OS functionality.
 
 use crate::version::AnyZksProtocolVersion;
-use crate::wire::GetBlockReplays;
 use crate::wire::message::{ZKS_PROTOCOL, ZksMessage};
 use crate::wire::replays::WireReplayRecord;
 use alloy::primitives::BlockNumber;
@@ -233,8 +232,6 @@ pub struct ZksConnection<P: AnyZksProtocolVersion, Replay> {
 
 struct ResponseState {
     next_block_number: BlockNumber,
-    #[expect(dead_code)]
-    request: GetBlockReplays,
 }
 
 impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, Replay> {
@@ -286,7 +283,6 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
                     }
                     this.response_state = Some(ResponseState {
                         next_block_number: message.starting_block,
-                        request: message,
                     });
                 }
                 ZksMessage::BlockReplays(message) => {
