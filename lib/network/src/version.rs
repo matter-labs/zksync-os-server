@@ -133,7 +133,7 @@ impl From<ZksVersion> for &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::ZksVersion;
     use alloy::primitives::bytes::BytesMut;
     use alloy_rlp::{Decodable, Encodable, Error as RlpError};
 
