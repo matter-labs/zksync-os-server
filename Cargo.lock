@@ -15142,7 +15142,6 @@ dependencies = [
  "reth-network-peers",
  "reth-provider",
  "semver 1.0.26",
- "serde",
  "test-log",
  "thiserror 2.0.17",
  "tokio",

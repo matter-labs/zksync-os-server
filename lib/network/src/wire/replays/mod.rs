@@ -11,13 +11,12 @@ mod impls;
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
 use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 
 /// A request for a peer to return block replays starting at the requested block number.
 /// The peer MUST start streaming indefinite number of [`BlockReplays`] responses.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
 pub struct GetBlockReplays {
     /// The block number that the peer should start returning replay blocks from.
     pub starting_block: u64,
@@ -27,7 +26,7 @@ pub struct GetBlockReplays {
 
 /// Specifies one overridden block replay record. This allows EN to sync replay record that is not
 /// a part of the canonical chain (useful for debugging reverted blocks).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
 pub struct RecordOverride {
     /// Block number for which record should be pulled from a different DB key.
     pub block_number: BlockNumber,
@@ -36,7 +35,7 @@ pub struct RecordOverride {
 }
 
 /// The response to [`GetBlockReplays`], containing one or more consecutive replay records.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
 pub struct BlockReplays<T: AnyReplayRecord> {
     pub records: Vec<T>,
 }

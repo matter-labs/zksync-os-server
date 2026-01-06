@@ -3,9 +3,8 @@
 use alloy::primitives::bytes::BufMut;
 use alloy::primitives::{B256, Bytes, U256};
 use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
 pub struct ForcedPreimage {
     pub hash: B256,
     pub preimage: Bytes,
@@ -15,34 +14,6 @@ pub struct ForcedPreimage {
 /// network but this is kept for now as a short-cut.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlockHashes(pub [U256; 256]);
-
-impl Default for BlockHashes {
-    fn default() -> Self {
-        Self([U256::ZERO; 256])
-    }
-}
-
-impl Serialize for BlockHashes {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.to_vec().serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for BlockHashes {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let vec: Vec<U256> = Vec::deserialize(deserializer)?;
-        let array: [U256; 256] = vec
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("Expected array of length 256"))?;
-        Ok(Self(array))
-    }
-}
 
 impl Encodable for BlockHashes {
     fn encode(&self, out: &mut dyn BufMut) {

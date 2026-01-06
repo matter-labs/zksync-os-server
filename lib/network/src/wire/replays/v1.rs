@@ -7,10 +7,9 @@
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::primitives::{Address, B256, U256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
-use serde::{Deserialize, Serialize};
 use zksync_os_types::{L1TxSerialId, ProtocolSemanticVersion, ZkEnvelope};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
 pub struct ReplayRecord {
     pub block_context: BlockContext,
     pub starting_l1_priority_id: L1TxSerialId,
@@ -21,7 +20,7 @@ pub struct ReplayRecord {
     pub force_preimages: Vec<ForcedPreimage>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
 pub struct BlockContext {
     pub chain_id: u64,
     pub block_number: u64,

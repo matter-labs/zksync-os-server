@@ -27,7 +27,6 @@ alloy = { workspace = true, default-features = false, features = [
 alloy-rlp.workspace = true
 futures.workspace = true
 semver.workspace = true
-serde.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
