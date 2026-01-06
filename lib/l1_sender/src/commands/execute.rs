@@ -95,12 +95,29 @@ impl ExecuteCommand {
             .collect::<Vec<_>>();
         // For now interop roots are empty.
         let interop_roots: Vec<Vec<InteropRoot>> = vec![vec![]; self.batches.len()];
-        // For now, these are not validated, so they can be empty.
-        // IMPORTANT: the struct is not correct, it only works while the array is empty
-        let lops: Vec<u8> = Default::default();
-        let messages: Vec<Vec<u8>> = Default::default();
-        let message_roots: Vec<FixedBytes<32>> = Default::default();
-        let encoded_data = (stored_batch_infos, priority_ops, interop_roots, lops, messages, message_roots).abi_encode_params();
+
+        // FIXME: Execute command calldata encoding for protocol versions after v31 has changed.
+        // We need to handle the upgrades properly here.
+        let encoded_data: Vec<u8> =
+            if self.batches.first().unwrap().batch.protocol_version.minor >= 31 {
+                // For now, these are not validated, so they can be empty.
+                // IMPORTANT: the struct is not correct, it only works while the array is empty
+                let lops: Vec<u8> = Default::default();
+                let messages: Vec<Vec<u8>> = Default::default();
+                let message_roots: Vec<FixedBytes<32>> = Default::default();
+
+                (
+                    stored_batch_infos,
+                    priority_ops,
+                    interop_roots,
+                    lops,
+                    messages,
+                    message_roots,
+                )
+                    .abi_encode_params()
+            } else {
+                (stored_batch_infos, priority_ops, interop_roots).abi_encode_params()
+            };
 
         /// Current commitment encoding version as per protocol.
         const SUPPORTED_ENCODING_VERSION: u8 = 1;
