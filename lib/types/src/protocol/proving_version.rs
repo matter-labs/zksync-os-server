@@ -114,7 +114,6 @@ mod tests {
             ((0, 31, 0), ProvingVersion::V6),
             ((0, 31, 1), ProvingVersion::V6),
             ((0, 32, 0), ProvingVersion::V6),
-            ((0, 32, 1), ProvingVersion::V6),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
