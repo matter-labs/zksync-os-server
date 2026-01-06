@@ -233,12 +233,12 @@ impl Tester {
         let default_config = get_default_config();
         let mut config = Config {
             general_config,
-            genesis_config: default_config.genesis_config,
+            genesis_config: default_config.genesis_config.clone(),
             rpc_config,
             mempool_config: Default::default(),
             tx_validator_config: Default::default(),
             sequencer_config,
-            l1_sender_config: default_config.l1_sender_config,
+            l1_sender_config: default_config.l1_sender_config.clone(),
             l1_watcher_config: Default::default(),
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {

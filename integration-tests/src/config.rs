@@ -1,27 +1,28 @@
-const CONFIG_PATH: &str = concat!(env!("WORKSPACE_DIR"), "/local-chains/v30/config.json");
-const CHAIN_CONFIG: &str = include_str!(concat!(
-    env!("WORKSPACE_DIR"),
-    "/local-chains/v30/config.json"
-));
+use std::sync::LazyLock;
 
 use smart_config::{ConfigRepository, ConfigSources, Json};
-use zksync_os_server::config::Config;
+use zksync_os_server::config::{Config, GenesisConfig};
 
-pub fn get_default_config() -> Config {
+static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
+    let workspace_dir =
+        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
+    let config_path = format!("{workspace_dir}/local-chains/v30/config.json");
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
-    let config_contents = std::fs::read_to_string(CONFIG_PATH)
-        .expect("Failed to read config file from provided path");
+    let config_contents =
+        std::fs::read_to_string(&config_path).expect("Failed to read config file");
 
     let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&config_contents)
-            .expect("Failed to parse config file from provided path");
-    config_sources.push(Json::new(CONFIG_PATH, config_json));
+        serde_json::from_str(&config_contents).expect("Failed to parse config file");
+    config_sources.push(Json::new(&config_path, config_json));
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
+    let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
+    genesis_config.genesis_input_path =
+        Some(format!("{workspace_dir}/local-chains/v30/genesis.json").into());
 
     Config {
-        genesis_config: config_repo.single().unwrap().parse().unwrap(),
+        genesis_config,
         l1_sender_config: config_repo.single().unwrap().parse().unwrap(),
         general_config: Default::default(),
         rpc_config: Default::default(),
@@ -37,29 +38,8 @@ pub fn get_default_config() -> Config {
         gas_adjuster_config: Default::default(),
         batch_verification_config: Default::default(),
     }
-}
+});
 
-pub fn get_chain_id() -> u64 {
-    let chain_config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(CHAIN_CONFIG)
-            .expect("Failed to parse chain config file from provided path");
-
-    chain_config_json
-        .get("genesis")
-        .and_then(|g| g.pointer("/chain_id"))
-        .and_then(|v| v.as_u64())
-        .expect("chain_id is missing in the genesis config")
-}
-
-pub fn get_bridge_hub_supplier_address() -> String {
-    let chain_config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(CHAIN_CONFIG)
-            .expect("Failed to parse chain config file from provided path");
-
-    chain_config_json
-        .get("genesis") // Get the top level object
-        .and_then(|g| g.pointer("/bytecode_supplier_address"))
-        .and_then(|v| v.as_str())
-        .expect("bytecode_supplier_address is missing in the genesis config")
-        .to_string()
+pub fn get_default_config() -> &'static Config {
+    &DEFAULT_CONFIG
 }
