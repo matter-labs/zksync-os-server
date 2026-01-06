@@ -252,6 +252,7 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
             return Poll::Ready(Some(request_to_send.encoded()));
         }
 
+        let _span = tracing::info_span!("poll connection", %peer_id);
         loop {
             // todo: subscribe to new blocks
             if let Some(response_state) = &mut this.response_state
@@ -266,11 +267,11 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
             let Some(next) = maybe_msg else { break };
             let msg = match ZksMessage::<P>::decode_message(&mut &next[..]) {
                 Ok(msg) => {
-                    tracing::trace!(%peer_id, ?msg, "processing peer message");
+                    tracing::trace!(?msg, "processing peer message");
                     msg
                 }
                 Err(error) => {
-                    tracing::debug!(%peer_id, %error, "error decoding peer message");
+                    tracing::info!(%error, "error decoding peer message");
                     break;
                 }
             };
@@ -278,7 +279,9 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
             match msg {
                 ZksMessage::GetBlockReplays(message) => {
                     if this.response_state.is_some() {
-                        tracing::trace!(%peer_id, "received two `GetBlockReplays` requests from the same peer");
+                        tracing::info!(
+                            "received two `GetBlockReplays` requests from the same peer"
+                        );
                         break;
                     }
                     this.response_state = Some(ResponseState {
@@ -289,18 +292,18 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
                 ZksMessage::BlockReplays(message) => {
                     for record in message.records {
                         tracing::info!(
-                            %peer_id, block_number = record.block_number(),
+                            block_number = record.block_number(),
                             "received block replay"
                         );
                         let record = match record.try_into() {
                             Ok(record) => record,
                             Err(error) => {
-                                tracing::trace!(%peer_id, %error, "failed to recover replay block");
+                                tracing::info!(%error, "failed to recover replay block");
                                 break;
                             }
                         };
                         if this.replay_sender.send(record).is_err() {
-                            tracing::trace!(%peer_id, "network replay channel is closed");
+                            tracing::trace!("network replay channel is closed");
                             break;
                         }
                     }
