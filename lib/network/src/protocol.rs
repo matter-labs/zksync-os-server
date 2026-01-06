@@ -306,7 +306,6 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
                     }
                 }
             }
-            continue;
         }
 
         // Terminate the connection.
