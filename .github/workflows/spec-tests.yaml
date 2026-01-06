@@ -183,6 +183,8 @@ jobs:
         env:
           # Do not use colored logs, otherwise logfile contains ANSI codes that are not human-readable
           LOG_USE_COLOR: false
+          # Set pubdata price to constant value (10^9 wei), tests use constant gas limits and it doesn't work with big pubdata price.
+          SEQUENCER_PUBDATA_PRICE_OVERRIDE: "0x3B9ACA00"
         run: cargo run --release --bin zksync-os-server > ${SERVER_LOGFILE} 2>&1 &
 
       - name: Wait for zksync OS to start
@@ -270,7 +272,7 @@ jobs:
           action_fail: true # Fail the action if any of the tests failed
 
       - name: Slack notification
-        if: ${{ failure() }}
+        if: ${{ failure() && github.ref == 'refs/heads/main' }}
         uses: ./.github/actions/slack-notify
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}
