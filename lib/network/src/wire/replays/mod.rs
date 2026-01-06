@@ -36,11 +36,11 @@ pub struct RecordOverride {
 
 /// The response to [`GetBlockReplays`], containing one or more consecutive replay records.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, RlpEncodable, RlpDecodable)]
-pub struct BlockReplays<T: AnyReplayRecord> {
+pub struct BlockReplays<T: WireReplayRecord> {
     pub records: Vec<T>,
 }
 
-impl<T: AnyReplayRecord> BlockReplays<T> {
+impl<T: WireReplayRecord> BlockReplays<T> {
     pub fn new(records: Vec<StorageReplayRecord>) -> Self {
         let records = records.into_iter().map(T::from).collect();
         Self { records }
@@ -49,7 +49,7 @@ impl<T: AnyReplayRecord> BlockReplays<T> {
 
 /// Represents any replay record wire format. It's expected to be convertable from/to replay record
 /// used by sequencer and storage layers.
-pub trait AnyReplayRecord:
+pub trait WireReplayRecord:
     From<StorageReplayRecord>
     + TryInto<StorageReplayRecord, Error = RecoveryError>
     + Encodable

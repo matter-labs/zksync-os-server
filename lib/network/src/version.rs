@@ -1,7 +1,7 @@
 //! Support for representing the version of the `zks` protocol
 
 use crate::wire::message::ZksMessageId;
-use crate::wire::replays::{AnyReplayRecord, v0, v1};
+use crate::wire::replays::{WireReplayRecord, v0, v1};
 use alloy::primitives::bytes::BufMut;
 use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use std::fmt::Debug;
@@ -9,7 +9,7 @@ use std::fmt::Debug;
 /// Any protocol version along with its pinned wire formats.
 pub trait AnyZksProtocolVersion: Debug + Send + Sync + Clone + 'static {
     /// Wire format for replay record.
-    type Record: AnyReplayRecord;
+    type Record: WireReplayRecord;
 
     /// Version number matching this protocol version.
     const VERSION: ZksVersion;

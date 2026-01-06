@@ -3,7 +3,7 @@
 //! Note that this file is allowed to change as traits can evolve over time and hence can the
 //! surrounding logic.
 
-use crate::wire::replays::{AnyReplayRecord, v0, v1};
+use crate::wire::replays::{WireReplayRecord, v0, v1};
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
@@ -17,7 +17,7 @@ use zksync_os_types::ProtocolSemanticVersion;
 // | Implementations for protocol version 0 (Dummy) |
 // ==================================================
 
-impl AnyReplayRecord for v0::ReplayRecord {
+impl WireReplayRecord for v0::ReplayRecord {
     fn block_number(&self) -> BlockNumber {
         self.block_number
     }
@@ -56,7 +56,7 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
 // | Implementations for protocol version 1 |
 // ==========================================
 
-impl AnyReplayRecord for v1::ReplayRecord {
+impl WireReplayRecord for v1::ReplayRecord {
     fn block_number(&self) -> BlockNumber {
         self.block_context.block_number
     }

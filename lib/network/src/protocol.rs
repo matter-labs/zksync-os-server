@@ -3,7 +3,7 @@
 use crate::version::AnyZksProtocolVersion;
 use crate::wire::GetBlockReplays;
 use crate::wire::message::{ZKS_PROTOCOL, ZksMessage};
-use crate::wire::replays::AnyReplayRecord;
+use crate::wire::replays::WireReplayRecord;
 use alloy::primitives::BlockNumber;
 use alloy::primitives::bytes::BytesMut;
 use futures::{Stream, StreamExt};
