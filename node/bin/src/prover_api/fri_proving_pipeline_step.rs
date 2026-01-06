@@ -20,6 +20,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 /// - Fake provers pool
 /// - This pipeline step (adds jobs via add_job)
 pub struct FriProvingPipelineStep {
+    last_proved_batch_number: u64,
     fri_job_manager: Arc<FriJobManager>,
     batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
 }
@@ -27,6 +28,7 @@ pub struct FriProvingPipelineStep {
 impl FriProvingPipelineStep {
     pub fn new(
         proof_storage: ProofStorage,
+        last_proved_batch_number: u64,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<FriJobManager>) {
@@ -42,6 +44,7 @@ impl FriProvingPipelineStep {
         ));
 
         let result = Self {
+            last_proved_batch_number,
             fri_job_manager: fri_job_manager.clone(),
             batches_with_proof_receiver,
         };
@@ -68,12 +71,18 @@ impl PipelineComponent for FriProvingPipelineStep {
         tokio::select! {
             result = async {
                 while let Some(batch) = input.recv().await {
-                    tracing::info!(
-                        "Received batch for FRI proving: {:?}",
-                        batch.batch_number()
-                    );
-                    // Add job directly to FriJobManager - this will await if queue is full
-                    self.fri_job_manager.add_job(batch).await
+                    if batch.batch_number() > self.last_proved_batch_number {
+                        tracing::info!(
+                            "Received batch for FRI proving: {:?}",
+                            batch.batch_number()
+                        );
+                        // Add job directly to FriJobManager - this will await if queue is full
+                        self.fri_job_manager.add_job(batch).await
+                    } else {
+                        // Already proven - send with fake proof to pass through the pipeline
+                        let batch_with_fake_proof = batch.with_data(FriProof::AlreadySubmittedToL1);
+                        let _ = output.send(batch_with_fake_proof).await;
+                    }
                 }
                 Ok::<(), anyhow::Error>(())
             } => {
