@@ -234,6 +234,10 @@ pub struct GenesisConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct StatusServerConfig {
+    /// Whether to enable status server.
+    #[config(default_t = true)]
+    pub enabled: bool,
+
     /// Status server address to listen on.
     #[config(default_t = "0.0.0.0:3071".into())]
     pub address: String,
@@ -259,6 +263,10 @@ pub struct SequencerConfig {
     /// **Setting this makes the node into an external node.**
     #[config(default_t = None)]
     pub block_replay_download_address: Option<String>,
+
+    /// Whether to enable block replays server
+    #[config(default_t = true)]
+    pub block_replay_server_enabled: bool,
 
     /// Where to serve block replays (EN syncing protocol)
     #[config(default_t = "0.0.0.0:3053".into())]
@@ -536,6 +544,10 @@ pub struct ProverInputGeneratorConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverApiConfig {
+    /// Whether to enable prover server.
+    #[config(default_t = true)]
+    pub enabled: bool,
+
     /// Prover API address to listen on.
     #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,

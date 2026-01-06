@@ -352,10 +352,17 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
         "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
     );
 
+    // Update config to use temporary directory
     config.general_config.rocks_db_path = tempdir_path.join("node");
     config.prover_api_config.object_store.mode = ObjectStoreMode::FileBacked {
         file_backed_base_path: tempdir_path.join("shared"),
     };
+
+    // Disable services that are not needed in sandbox mode
+    config.prover_api_config.enabled = false;
+    config.status_server_config.enabled = false;
+    config.sequencer_config.block_replay_server_enabled = false;
+
     Some(tempdir)
 }
 

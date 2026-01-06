@@ -413,9 +413,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ======== Start Status Server ========
-    if config.general_config.sandbox {
-        tracing::info!("Sandbox mode enabled, skipping status server");
-    } else {
+    if config.status_server_config.enabled {
         tasks.spawn(
             run_status_server(
                 config.status_server_config.address.clone(),
@@ -546,9 +544,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
-    if config.general_config.sandbox {
-        tracing::info!("Sandbox mode enabled, skipping replay server");
-    } else {
+    if config.sequencer_config.block_replay_server_enabled {
         tasks.spawn(
             replay_server(
                 block_replay_storage.clone(),
@@ -658,9 +654,7 @@ async fn run_main_node_pipeline(
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    if config.general_config.sandbox {
-        tracing::info!("Sandbox mode enabled, skipping prover API server");
-    } else {
+    if config.prover_api_config.enabled {
         tasks.spawn(
             prover_server::run(
                 fri_job_manager.clone(),
