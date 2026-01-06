@@ -414,13 +414,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ======== Start Status Server ========
-    tasks.spawn(
-        run_status_server(
-            config.status_server_config.address.clone(),
-            stop_receiver.clone(),
-        )
-        .map(report_exit("Status server")),
-    );
+    if config.status_server_config.enabled {
+        tasks.spawn(
+            run_status_server(
+                config.status_server_config.address.clone(),
+                stop_receiver.clone(),
+            )
+            .map(report_exit("Status server")),
+        );
+    }
 
     // =========== Start JSON RPC ========
 
@@ -551,13 +553,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
-    tasks.spawn(
-        replay_server(
-            block_replay_storage.clone(),
-            config.sequencer_config.block_replay_server_address.clone(),
-        )
-        .map(report_exit("replay server")),
-    );
+    if config.sequencer_config.block_replay_server_enabled {
+        tasks.spawn(
+            replay_server(
+                block_replay_storage.clone(),
+                config.sequencer_config.block_replay_server_address.clone(),
+            )
+            .map(report_exit("replay server")),
+        );
+    }
 
     let repositories_clone = repositories.clone();
     tasks.spawn(async move {
@@ -661,15 +665,17 @@ async fn run_main_node_pipeline(
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    tasks.spawn(
-        prover_server::run(
-            fri_job_manager.clone(),
-            snark_job_manager.clone(),
-            batch_storage.clone(),
-            config.prover_api_config.address.clone(),
-        )
-        .map(report_exit("prover_server_job")),
-    );
+    if config.prover_api_config.enabled {
+        tasks.spawn(
+            prover_server::run(
+                fri_job_manager.clone(),
+                snark_job_manager.clone(),
+                batch_storage.clone(),
+                config.prover_api_config.address.clone(),
+            )
+            .map(report_exit("prover_server_job")),
+        );
+    }
 
     if config.prover_api_config.fake_fri_provers.enabled {
         run_fake_fri_provers(&config.prover_api_config, tasks, fri_job_manager);

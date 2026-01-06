@@ -193,6 +193,12 @@ pub struct GeneralConfig {
     /// from scratch before turning this EN into a Main Node.
     #[config(default_t = true)]
     pub run_priority_tree: bool,
+
+    /// Enables sandbox mode that isolates RocksDB into a temporary directory.
+    /// The directory is removed once the process shuts down.
+    /// Disables all HTTP APIs except JSON RPC.
+    #[config(default_t = false)]
+    pub sandbox: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -212,7 +218,7 @@ pub struct GenesisConfig {
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
-    // find it in `zkos-l1-state.json`
+    // find it in `./local-chains/v30/zkos-l1-state.json`
     #[config(default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
     pub bytecode_supplier_address: Option<Address>,
 
@@ -221,13 +227,17 @@ pub struct GenesisConfig {
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some("./genesis/genesis.json".into()))]
+    #[config(default_t = Some("./local-chains/v30/genesis.json".into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct StatusServerConfig {
+    /// Whether to enable status server.
+    #[config(default_t = true)]
+    pub enabled: bool,
+
     /// Status server address to listen on.
     #[config(default_t = "0.0.0.0:3071".into())]
     pub address: String,
@@ -253,6 +263,10 @@ pub struct SequencerConfig {
     /// **Setting this makes the node into an external node.**
     #[config(default_t = None)]
     pub block_replay_download_address: Option<String>,
+
+    /// Whether to enable block replays server
+    #[config(default_t = true)]
+    pub block_replay_server_enabled: bool,
 
     /// Where to serve block replays (EN syncing protocol)
     #[config(default_t = "0.0.0.0:3053".into())]
@@ -530,6 +544,10 @@ pub struct ProverInputGeneratorConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct ProverApiConfig {
+    /// Whether to enable prover server.
+    #[config(default_t = true)]
+    pub enabled: bool,
+
     /// Prover API address to listen on.
     #[config(default_t = "0.0.0.0:3124".into())]
     pub address: String,
