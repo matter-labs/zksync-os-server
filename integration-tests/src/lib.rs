@@ -225,6 +225,7 @@ impl Tester {
         };
 
         let status_server_config = StatusServerConfig {
+            enabled: true,
             address: status_address,
         };
 
