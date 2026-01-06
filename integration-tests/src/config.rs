@@ -1,5 +1,8 @@
 const CONFIG_PATH: &str = concat!(env!("WORKSPACE_DIR"), "/local-chains/v30/config.json");
-const CHAIN_CONFIG: &str = include_str!(concat!(env!("WORKSPACE_DIR"), "/local-chains/v30/config.json"));
+const CHAIN_CONFIG: &str = include_str!(concat!(
+    env!("WORKSPACE_DIR"),
+    "/local-chains/v30/config.json"
+));
 
 use smart_config::{ConfigRepository, ConfigSources, Json};
 use zksync_os_server::config::Config;

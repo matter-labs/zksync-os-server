@@ -1,3 +1,4 @@
+use crate::config::get_default_config;
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
@@ -16,20 +17,18 @@ use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-    StatusServerConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
-use crate::config::get_default_config;
 
 pub mod assert_traits;
+pub mod config;
 pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
 mod prover_tester;
 pub mod provider;
 pub mod upgrade;
-pub mod config;
 mod utils;
 
 /// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
