@@ -147,7 +147,7 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
             force_preimages: value
                 .force_preimages
                 .into_iter()
-                .map(|p| (p.hash, p.preimage.to_vec()))
+                .map(|p| (p.hash, p.preimage.into()))
                 .collect(),
         })
     }
