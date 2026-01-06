@@ -1,4 +1,5 @@
 use alloy::primitives::{B256, BlockNumber};
+use assert_matches::assert_matches;
 use reth_network::{Peers, test_utils::Testnet};
 use reth_provider::test_utils::MockEthProvider;
 use std::collections::HashMap;
@@ -82,22 +83,12 @@ async fn send_replay_record_matching_version() {
     let handle = net.spawn();
     handle.connect_peers().await;
 
-    match from_peer0.recv().await.unwrap() {
-        ProtocolEvent::Established { peer_id, .. } => {
-            assert_eq!(peer_id, *handle.peers()[1].peer_id());
-        }
-        ev => {
-            panic!("unexpected event: {ev:?}");
-        }
-    };
-    match from_peer1.recv().await.unwrap() {
-        ProtocolEvent::Established { peer_id, .. } => {
-            assert_eq!(peer_id, *handle.peers()[0].peer_id());
-        }
-        ev => {
-            panic!("unexpected event: {ev:?}");
-        }
-    };
+    assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+        assert_eq!(peer_id, *handle.peers()[1].peer_id());
+    });
+    assert_matches!(from_peer1.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+        assert_eq!(peer_id, *handle.peers()[0].peer_id());
+    });
 
     let received_replay_record = replay_rx_peer1.recv().await.unwrap();
     assert_eq!(received_replay_record, record1);
@@ -148,22 +139,12 @@ async fn send_replay_record_different_versions() {
     let handle = net.spawn();
     handle.connect_peers().await;
 
-    match from_peer0.recv().await.unwrap() {
-        ProtocolEvent::Established { peer_id, .. } => {
-            assert_eq!(peer_id, *handle.peers()[1].peer_id());
-        }
-        ev => {
-            panic!("unexpected event: {ev:?}");
-        }
-    };
-    match from_peer1.recv().await.unwrap() {
-        ProtocolEvent::Established { peer_id, .. } => {
-            assert_eq!(peer_id, *handle.peers()[0].peer_id());
-        }
-        ev => {
-            panic!("unexpected event: {ev:?}");
-        }
-    };
+    assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+        assert_eq!(peer_id, *handle.peers()[1].peer_id());
+    });
+    assert_matches!(from_peer1.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+        assert_eq!(peer_id, *handle.peers()[0].peer_id());
+    });
 
     let received_replay_record = replay_rx_peer1.recv().await.unwrap();
     // Received record MUST NOT match what peer0 has in storage. This is expected because v0 loses
@@ -225,23 +206,16 @@ async fn max_active_connections() {
     // Connect peers 0 and 1
     let peer0_handle = &handle.peers()[0];
     peer0_handle.network().add_peer(peer1_id, peer1_addr);
-    match from_peer0.recv().await.unwrap() {
-        ProtocolEvent::Established { peer_id, .. } => {
-            assert_eq!(peer_id, *peer1_id);
-        }
-        ev => {
-            panic!("unexpected event: {ev:?}");
-        }
-    }
+    assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
+        assert_eq!(peer_id, *peer1_id);
+    });
 
     // Connect peers 0 and 2, max active connections exceeded
     peer0_handle.network().add_peer(peer2_id, peer2_addr);
-    match from_peer0.recv().await.unwrap() {
-        ProtocolEvent::MaxActiveConnectionsExceeded { max_connections } => {
+    assert_matches!(
+        from_peer0.recv().await,
+        Some(ProtocolEvent::MaxActiveConnectionsExceeded { max_connections }) => {
             assert_eq!(max_connections, 1);
         }
-        ev => {
-            panic!("unexpected event: {ev:?}");
-        }
-    }
+    );
 }

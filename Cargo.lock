@@ -15136,6 +15136,7 @@ version = "0.13.0-non-semver-compat"
 dependencies = [
  "alloy",
  "alloy-rlp",
+ "assert_matches",
  "futures",
  "reth-eth-wire",
  "reth-network",

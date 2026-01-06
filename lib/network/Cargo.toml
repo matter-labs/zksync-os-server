@@ -36,6 +36,7 @@ reth-network-peers.workspace = true
 reth-eth-wire.workspace = true
 
 [dev-dependencies]
+assert_matches.workspace = true
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 
 reth-network = { workspace = true, features = ["test-utils"] }
