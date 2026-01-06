@@ -1,4 +1,5 @@
 use alloy::consensus::BlobTransactionSidecar;
+use alloy::eips::BlockId;
 use alloy::primitives::{U256, b256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
@@ -16,6 +17,18 @@ async fn call_genesis() -> anyhow::Result<()> {
         .l2_provider
         .call(TransactionRequest::default())
         .block(0.into())
+        .await?;
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn call_pending() -> anyhow::Result<()> {
+    // Test that the node can run `eth_call` on pending block
+    let tester = Tester::setup().await?;
+    tester
+        .l2_provider
+        .call(TransactionRequest::default())
+        .block(BlockId::pending())
         .await?;
     Ok(())
 }
@@ -53,7 +66,7 @@ async fn call_fail() -> anyhow::Result<()> {
         .call(TransactionRequest::default())
         // Very far ahead block
         .block((u32::MAX as u64).into())
-        .expect_to_fail("block not found")
+        .expect_to_fail("block `0xffffffff` not found")
         .await;
 
     // Fee errors

@@ -66,7 +66,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     mempool: Mempool,
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
-    pending_block_context: watch::Receiver<Option<BlockContext>>,
+    last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<DynProvider>,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
@@ -76,7 +76,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         config.clone(),
         storage.clone(),
         chain_id,
-        pending_block_context,
+        last_constructed_block_context,
     );
     rpc.merge(
         EthNamespace::new(

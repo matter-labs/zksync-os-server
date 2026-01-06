@@ -2,20 +2,21 @@ use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
 use crate::js_tracer;
 use crate::result::RevertError;
-use crate::rpc_storage::ReadRpcStorage;
+use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::sandbox::{call_trace_simulate, execute};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
-use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use serde_json::Value as JsonValue;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_interface::types::ExecutionOutput;
+use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
 use zksync_os_interface::{
     error::InvalidTransaction,
     types::{BlockContext, ExecutionResult},
@@ -37,7 +38,8 @@ pub struct EthCallHandler<RpcStorage> {
     config: RpcConfig,
     storage: RpcStorage,
     chain_id: u64,
-    pending_block_context: watch::Receiver<Option<BlockContext>>,
+    /// Last block context constructed by sequencer but not necessarily executed yet.
+    last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
 }
 
 struct ExecutionEnv {
@@ -50,13 +52,13 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         config: RpcConfig,
         storage: RpcStorage,
         chain_id: u64,
-        pending_block_context: watch::Receiver<Option<BlockContext>>,
+        last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     ) -> Self {
         Self {
             config,
             storage,
             chain_id,
-            pending_block_context,
+            last_constructed_block_context,
         }
     }
 
@@ -95,7 +97,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             nonce
         } else {
             self.storage
-                .state_view_at(block_context.block_number)?
+                .state_at_block_number_or_latest(block_context.block_number)?
                 .get_account(from.unwrap_or_default())
                 .as_ref()
                 .map(get_nonce)
@@ -197,6 +199,74 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(Recovered::new_unchecked(tx, from).into())
     }
 
+    /// Builds new block context for theoretical pending block using current system state.
+    fn build_pending_block_context(&self) -> BlockContext {
+        let latest_block_number = self.storage.replay_storage().latest_record();
+        let latest_block = self
+            .storage
+            .replay_storage()
+            .get_replay_record(latest_block_number)
+            .expect("latest block record must exist");
+        let latest_block_context = latest_block.block_context;
+
+        // Shift block hashes one to the left and append latest block's hash
+        let mut block_hashes = latest_block_context.block_hashes.0;
+        block_hashes.rotate_left(1);
+        block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
+
+        // Use current timestamp for pending block
+        let millis_since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("incorrect system time")
+            .as_millis();
+        let timestamp = (millis_since_epoch / 1000) as u64;
+
+        BlockContext {
+            chain_id: self.chain_id,
+            block_number: latest_block_number + 1,
+            block_hashes: BlockHashes(block_hashes),
+            timestamp,
+            // Presume all other fields are the same as latest block, subject to change in the future
+            eip1559_basefee: latest_block_context.eip1559_basefee,
+            pubdata_price: latest_block_context.pubdata_price,
+            native_price: latest_block_context.native_price,
+            coinbase: latest_block_context.coinbase,
+            gas_limit: latest_block_context.gas_limit,
+            pubdata_limit: latest_block_context.pubdata_limit,
+            mix_hash: latest_block_context.mix_hash,
+            execution_version: latest_block_context.execution_version,
+            blob_fee: latest_block_context.blob_fee,
+        }
+    }
+
+    fn resolve_block_context(
+        &self,
+        block_id: Option<BlockId>,
+    ) -> Result<BlockContext, EthCallError> {
+        let block_id = block_id.unwrap_or_default();
+        if block_id.is_pending() {
+            let latest_block_number = self.storage.replay_storage().latest_record();
+            // Check if last constructed block context has been fully processed yet
+            if let Some(pending_block_context) = *self.last_constructed_block_context.borrow()
+                && pending_block_context.block_number > latest_block_number
+            {
+                // If it hasn't, it's the pending block we are looking for
+                Ok(pending_block_context)
+            } else {
+                // If it has, we build new block context using current system state
+                Ok(self.build_pending_block_context())
+            }
+        } else {
+            let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
+                return Err(RpcStorageError::BlockNotFound(block_id).into());
+            };
+            self.storage
+                .replay_storage()
+                .get_context(block_number)
+                .ok_or(RpcStorageError::BlockNotFound(block_id).into())
+        }
+    }
+
     fn prepare_execution_env(
         &self,
         request: TransactionRequest,
@@ -207,16 +277,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             return Err(EthCallError::BlockOverridesNotSupported);
         }
 
-        let block_id = block.unwrap_or_default();
-        let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
-            return Err(EthCallError::BlockNotFound(block_id));
-        };
-        let block_context = self
-            .storage
-            .replay_storage()
-            .get_context(block_number)
-            .ok_or(EthCallError::BlockNotFound(block_id))?;
-
+        let block_context = self.resolve_block_context(block)?;
         let transaction = self.create_tx_from_request(request, &block_context, false)?;
 
         Ok(ExecutionEnv {
@@ -235,7 +296,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut execution_env = self.prepare_execution_env(request, block, block_overrides)?;
         let storage_view = self
             .storage
-            .state_view_at(execution_env.block_context.block_number)?;
+            .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
 
         execution_env.block_context.eip1559_basefee = U256::from(0);
         let res = match state_overrides {
@@ -275,7 +336,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let execution_env = self.prepare_execution_env(request, block, block_overrides)?;
         let storage_view = self
             .storage
-            .state_view_at(execution_env.block_context.block_number)?;
+            .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
 
         match state_overrides {
             Some(overrides) => call_trace_simulate(
@@ -306,7 +367,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let execution_env = self.prepare_execution_env(request, block, block_overrides)?;
         let storage_view = self
             .storage
-            .state_view_at(execution_env.block_context.block_number)?;
+            .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
 
         let mut tracer_output = match state_overrides {
             Some(overrides) => {
@@ -354,37 +415,10 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     pub fn estimate_gas_impl(
         &self,
         request: TransactionRequest,
-        block_number: Option<BlockId>,
+        block: Option<BlockId>,
         state_override: Option<StateOverride>,
     ) -> Result<U256, EthCallError> {
-        let block_id = block_number.unwrap_or_default();
-
-        let mut block_context = {
-            let Some(resolved_block_number) = self.storage.resolve_block_number(block_id)? else {
-                return Err(EthCallError::BlockNotFound(block_id));
-            };
-            match block_id {
-                BlockId::Number(BlockNumberOrTag::Pending) => {
-                    if let Some(mut pending_block_context) = *self.pending_block_context.borrow() {
-                        if pending_block_context.block_number > resolved_block_number {
-                            // Decrease block number so we get latest available state view
-                            pending_block_context.block_number = resolved_block_number;
-                        }
-                        pending_block_context
-                    } else {
-                        self.storage
-                            .replay_storage()
-                            .get_context(resolved_block_number)
-                            .ok_or(EthCallError::BlockNotFound(block_id))?
-                    }
-                }
-                block_id => self
-                    .storage
-                    .replay_storage()
-                    .get_context(resolved_block_number)
-                    .ok_or(EthCallError::BlockNotFound(block_id))?,
-            }
-        };
+        let mut block_context = self.resolve_block_context(block)?;
 
         // Overestimate pubdata price to leave some space for fluctuations. Usual Ethereum tooling
         // assumes that gas limit stays constant in most scenarios, which is not the case in our system.
@@ -393,20 +427,22 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         );
 
         // Choose storage view (with optional overrides) once and reuse it throughout.
-        let base_view = self.storage.state_view_at(block_context.block_number)?;
+        let storage_view = self
+            .storage
+            .state_at_block_number_or_latest(block_context.block_number)?;
         match state_override {
             Some(overrides) => self.estimate_gas_with_view(
                 request,
                 block_context,
-                OverriddenStateView::new(base_view, overrides),
+                OverriddenStateView::new(storage_view, overrides),
             ),
-            None => self.estimate_gas_with_view(request, block_context, base_view),
+            None => self.estimate_gas_with_view(request, block_context, storage_view),
         }
     }
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
-    fn estimate_gas_with_view<V: ViewState>(
+    fn estimate_gas_with_view<V: ViewState + Clone>(
         &self,
         mut request: TransactionRequest,
         block_context: BlockContext,
@@ -599,8 +635,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(U256::from(highest_gas_limit))
     }
 
-    pub fn pending_block_context(&self) -> Option<BlockContext> {
-        *self.pending_block_context.borrow()
+    pub fn last_constructed_block_context(&self) -> Option<BlockContext> {
+        *self.last_constructed_block_context.borrow()
     }
 }
 
@@ -663,10 +699,6 @@ pub enum EthCallError {
     #[error("upgrade transactions cannot be estimated")]
     UpgradeTxNotEstimatable,
 
-    /// Block could not be found by its id (hash/number/tag).
-    #[error("block not found")]
-    BlockNotFound(BlockId),
-
     /// Error while decoding or validating transaction request fees.
     #[error(transparent)]
     CallFees(#[from] CallFeesError),
@@ -688,6 +720,8 @@ pub enum EthCallError {
     #[error("invalid transaction: {0:?}")]
     InvalidTransaction(InvalidTransaction),
 
+    #[error(transparent)]
+    Storage(#[from] RpcStorageError),
     #[error(transparent)]
     Repository(#[from] RepositoryError),
     #[error(transparent)]

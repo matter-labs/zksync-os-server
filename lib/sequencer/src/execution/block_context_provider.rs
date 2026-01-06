@@ -53,7 +53,7 @@ pub struct BlockContextProvider<Mempool> {
     native_price_override: Option<U256>,
     pubdata_price_provider: watch::Receiver<Option<u128>>,
     blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
-    pending_block_context_sender: watch::Sender<Option<BlockContext>>,
+    last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
     pubdata_mode: PubdataMode,
 }
 
@@ -77,7 +77,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         native_price_override: Option<U128>,
         pubdata_price_provider: watch::Receiver<Option<u128>>,
         blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
-        pending_block_context_sender: watch::Sender<Option<BlockContext>>,
+        last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
         pubdata_mode: PubdataMode,
     ) -> Self {
         Self {
@@ -99,7 +99,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             native_price_override: native_price_override.map(U256::from),
             pubdata_price_provider,
             blob_fill_ratio_provider,
-            pending_block_context_sender,
+            last_constructed_block_ctx_sender,
             pubdata_mode,
         }
     }
@@ -192,7 +192,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     execution_version: execution_version as u32,
                     blob_fee: U256::ZERO,
                 };
-                self.pending_block_context_sender
+                self.last_constructed_block_ctx_sender
                     .send_replace(Some(block_context));
                 PreparedBlockCommand {
                     block_context,
