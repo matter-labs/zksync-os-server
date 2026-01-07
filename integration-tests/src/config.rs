@@ -1,12 +1,15 @@
 use std::sync::LazyLock;
 
 use smart_config::{ConfigRepository, ConfigSources, Json};
-use zksync_os_server::config::{Config, GenesisConfig};
+use zksync_os_server::{
+    config::{Config, GenesisConfig},
+    config_constants::PROTOCOL_VERSION,
+};
 
 static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    let config_path = format!("{workspace_dir}/local-chains/v30/config.json");
+    let config_path = format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/config.json");
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
     let config_contents =
@@ -19,7 +22,7 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
     genesis_config.genesis_input_path =
-        Some(format!("{workspace_dir}/local-chains/v30/genesis.json").into());
+        Some(format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/genesis.json").into());
 
     Config {
         genesis_config,

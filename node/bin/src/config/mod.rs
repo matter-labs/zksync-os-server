@@ -1,5 +1,8 @@
 pub use self::cli::ConfigArgs;
-use crate::{command_source::RebuildOptions, config_constants::DEFAULT_ROCKS_DB_PATH};
+use crate::{
+    command_source::RebuildOptions,
+    config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
+};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
@@ -223,7 +226,7 @@ pub struct GenesisConfig {
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some("./local-chains/v30/genesis.json".into()))]
+    #[config(default_t = Some(format!("./local-chains/{PROTOCOL_VERSION}/genesis.json").into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
