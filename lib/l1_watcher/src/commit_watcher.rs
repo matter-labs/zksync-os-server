@@ -1,6 +1,6 @@
 use crate::batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{CommittedBatch, L1WatcherConfig, ProcessL1Event, StoredBatchData, util};
+use crate::{CommittedBatch, DiscoveredCommittedBatch, L1WatcherConfig, ProcessL1Event, util};
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, TxHash};
@@ -122,13 +122,16 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
             };
             let batch_info =
                 last_executed_batch_info.into_stored(&committed_batch.protocol_version);
-            let stored_batch_data = StoredBatchData {
+            let committed_batch = DiscoveredCommittedBatch {
                 batch_info,
                 first_block_number: report.firstBlockNumber,
                 last_block_number: report.lastBlockNumber,
+                commit_l1_block_number: log
+                    .block_number
+                    .expect("indexed log without l1 block number"),
             };
 
-            let last_committed_block = stored_batch_data.last_block_number;
+            let last_committed_block = committed_batch.last_block_number;
             self.finality.update_finality_status(|finality| {
                 assert!(
                     batch_number > finality.last_committed_batch,
@@ -141,7 +144,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
                 finality.last_committed_batch = batch_number;
                 finality.last_committed_block = last_committed_block;
             });
-            self.committed_batch_provider.add(stored_batch_data);
+            self.committed_batch_provider.add(committed_batch);
         }
         Ok(())
     }
