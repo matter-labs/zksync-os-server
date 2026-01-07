@@ -46,3 +46,9 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
 pub fn get_default_config() -> &'static Config {
     &DEFAULT_CONFIG
 }
+
+pub fn get_default_l1_state_path() -> String {
+    let workspace_dir =
+        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
+    format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/zkos-l1-state.json")
+}

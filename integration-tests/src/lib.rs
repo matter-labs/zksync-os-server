@@ -1,4 +1,4 @@
-use crate::config::get_default_config;
+use crate::config::{get_default_config, get_default_l1_state_path};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
@@ -393,7 +393,7 @@ impl TesterBuilder {
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg(concat!(env!("WORKSPACE_DIR"), "/zkos-l1-state.json"))
+                .arg(get_default_l1_state_path())
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
