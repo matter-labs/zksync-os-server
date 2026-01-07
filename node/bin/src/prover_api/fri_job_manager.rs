@@ -157,7 +157,6 @@ impl FriJobManager {
         proof_bytes: Bytes,
         proving_version: ProvingVersion,
         prover_id: &str,
-        time_taken_prover_end: Option<Duration>,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
         let batch_metadata = match self.jobs.get_job_batch_metadata(batch_number).await {
@@ -191,12 +190,7 @@ impl FriJobManager {
         // Remove the job from the assigned map.
         let Some(removed_job) = self
             .jobs
-            .complete_job(
-                batch_number,
-                ProverType::Real,
-                prover_id,
-                time_taken_prover_end,
-            )
+            .complete_job(batch_number, ProverType::Real, prover_id)
             .await
         else {
             // If already removed due to a race
@@ -343,7 +337,7 @@ impl FriJobManager {
         // Downstream has capacity - we remove the job from `assigned_jobs`.
         let assigned = match self
             .jobs
-            .complete_job(batch_number, ProverType::Fake, prover_id, None)
+            .complete_job(batch_number, ProverType::Fake, prover_id)
             .await
         {
             Some(e) => e,

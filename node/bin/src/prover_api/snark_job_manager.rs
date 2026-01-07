@@ -100,7 +100,6 @@ impl SnarkJobManager {
         proving_version: ProvingVersion,
         payload: Vec<u8>,
         prover_id: String,
-        time_taken_prover_end: Option<Duration>,
     ) -> anyhow::Result<()> {
         // note: we still hold mutex while verifying the proof -
         // this is desired since we don't want the batches to timeout
@@ -113,13 +112,7 @@ impl SnarkJobManager {
         // prove is valid - consuming proven batches
         let Some(consumed_batches_proven) = self
             .jobs
-            .complete_many_jobs(
-                batch_from,
-                batch_to,
-                ProverType::Real,
-                &prover_id,
-                time_taken_prover_end,
-            )
+            .complete_many_jobs(batch_from, batch_to, ProverType::Real, &prover_id)
             .await
         else {
             anyhow::bail!("race condition: some batches were completed earlier")
@@ -197,7 +190,7 @@ impl SnarkJobManager {
             for (job, _) in assigned {
                 if let Some(envelope) = self
                     .jobs
-                    .complete_job(job.batch_number, ProverType::Fake, "fake_prover", None)
+                    .complete_job(job.batch_number, ProverType::Fake, "fake_prover")
                     .await
                 {
                     completed.push(envelope);

@@ -81,7 +81,7 @@ pub(super) async fn submit_fri_proof(
     })?;
     let result = match state
         .fri_job_manager
-        .submit_proof(payload.batch_number, proof_bytes.into(), proving_version, &prover_id, payload.time_taken_prover_end)
+        .submit_proof(payload.batch_number, proof_bytes.into(), proving_version, &prover_id)
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
@@ -202,7 +202,6 @@ pub(super) async fn submit_snark_proof(
             proving_version,
             proof_bytes,
             query.id,
-            payload.time_taken_prover_end,
         )
         .await
     {

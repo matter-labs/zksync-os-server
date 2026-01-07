@@ -268,17 +268,10 @@ impl<T: Clone> ProverJobMap<T> {
         batch_number: u64,
         prover_type: ProverType,
         prover_id: &str,
-        time_taken_prover_end: Option<Duration>,
     ) -> Option<SignedBatchEnvelope<T>> {
-        self.complete_many_jobs(
-            batch_number,
-            batch_number,
-            prover_type,
-            prover_id,
-            time_taken_prover_end,
-        )
-        .await
-        .and_then(|mut envelopes| envelopes.pop())
+        self.complete_many_jobs(batch_number, batch_number, prover_type, prover_id)
+            .await
+            .and_then(|mut envelopes| envelopes.pop())
     }
 
     /// Marks a job as complete by removing it from the map.
@@ -293,7 +286,6 @@ impl<T: Clone> ProverJobMap<T> {
         batch_number_to: u64,
         prover_type: ProverType,
         prover_id: &str,
-        time_taken_prover_end: Option<Duration>,
     ) -> Option<Vec<SignedBatchEnvelope<T>>> {
         let mut jobs = self
             .lock_with_tracking(JobMapMethod::CompleteManyJobs)
@@ -345,31 +337,21 @@ impl<T: Clone> ProverJobMap<T> {
                 PROVER_METRICS.prove_time[&(self.prover_stage, prover_type, prover_id.to_string())]
                     // time since last assignment is proving time
                     .observe(assignment_info.time_since_last_assignment);
-                if let Some(time_taken_prover_end) = time_taken_prover_end {
-                    PROVER_METRICS.prove_time_prover_end
-                        [&(self.prover_stage, prover_type, prover_id.to_string())]
-                        .observe(time_taken_prover_end);
-                }
                 if let Some(total_computational_native_used) = stats.total_computational_native_used
                 {
                     PROVER_METRICS.computational_native_proven
                         [&(self.prover_stage, prover_type, prover_id.to_string())]
                         .observe(total_computational_native_used);
+                    if total_computational_native_used > 0 {
+                        PROVER_METRICS.prove_time_per_million_native
+                            [&(self.prover_stage, prover_type, prover_id.to_string())]
+                            .observe(
+                                assignment_info
+                                    .time_since_last_assignment
+                                    .div_f64(total_computational_native_used as f64 / 1_000_000.0),
+                            );
+                    }
                 }
-
-                if let Some(time_taken_prover_end) = time_taken_prover_end
-                    && let Some(total_computational_native_used) =
-                        stats.total_computational_native_used
-                    && time_taken_prover_end.as_millis() > 0
-                {
-                    PROVER_METRICS.computational_native_per_ms
-                        [&(self.prover_stage, prover_type, prover_id.to_string())]
-                        .observe(
-                            total_computational_native_used as f64
-                                / (time_taken_prover_end.as_secs_f64() * 1000.0), // `as_millis_f64` is unstable
-                        );
-                }
-
                 if stats.total_txs > 0 {
                     PROVER_METRICS.prove_time_per_tx
                         [&(self.prover_stage, prover_type, prover_id.to_string())]
@@ -549,12 +531,7 @@ mod tests {
         assert_eq!(metadata.unwrap().batch_info.commit_info.batch_number, 1);
 
         let result = map
-            .complete_job(
-                1,
-                crate::prover_api::metrics::ProverType::Real,
-                "prover-1",
-                None,
-            )
+            .complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
             .await;
         assert!(result.is_some());
         assert_eq!(result.unwrap().batch_number(), 1);
@@ -654,7 +631,6 @@ mod tests {
                 3,
                 crate::prover_api::metrics::ProverType::Real,
                 "prover-1",
-                None,
             )
             .await;
         assert!(result.is_some());
@@ -681,7 +657,6 @@ mod tests {
                 3,
                 crate::prover_api::metrics::ProverType::Real,
                 "prover-1",
-                None,
             )
             .await;
         assert!(result.is_none());
@@ -716,13 +691,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Complete a job to make space
-        map.complete_job(
-            1,
-            crate::prover_api::metrics::ProverType::Real,
-            "prover-1",
-            None,
-        )
-        .await;
+        map.complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
+            .await;
 
         // Now the add should succeed
         tokio::time::timeout(Duration::from_millis(500), add_task)
@@ -778,22 +748,12 @@ mod tests {
         map.add_job(create_test_batch_envelope(1)).await;
 
         let result1 = map
-            .complete_job(
-                1,
-                crate::prover_api::metrics::ProverType::Real,
-                "prover-1",
-                None,
-            )
+            .complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
             .await;
         assert!(result1.is_some());
 
         let result2 = map
-            .complete_job(
-                1,
-                crate::prover_api::metrics::ProverType::Real,
-                "prover-1",
-                None,
-            )
+            .complete_job(1, crate::prover_api::metrics::ProverType::Real, "prover-1")
             .await;
         assert!(result2.is_none());
     }
