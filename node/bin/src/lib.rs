@@ -67,8 +67,7 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    BatchRangeWatcher, BatchRangeWatcherInit, CommittedBatch, CommittedBatchProvider,
-    L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher, StoredBatchData,
+    CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
@@ -171,9 +170,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel between L1UpgradeWatcher and Sequencer
     let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
         tokio::sync::mpsc::channel(5);
-
-    // Channel between BatchRangeWatcher and Batcher
-    let (batch_ranges_sender, batch_ranges_for_batcher) = tokio::sync::mpsc::channel(5);
 
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
@@ -341,7 +337,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
-            committed_batch_provider,
+            committed_batch_provider.clone(),
             finality_storage.clone(),
         )
         .await
@@ -361,37 +357,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to start L1 execute watcher")
         .run()
         .map(report_exit("L1 execute watcher")),
-    );
-
-    let BatchRangeWatcherInit {
-        l1_watcher: batch_range_watcher,
-        last_executed_batch_data,
-    } = BatchRangeWatcher::create_watcher(
-        config.l1_watcher_config.clone().into(),
-        node_startup_state.l1_state.diamond_proxy.clone(),
-        node_startup_state.l1_state.last_executed_batch,
-        node_startup_state.l1_state.last_committed_batch,
-        batch_ranges_sender,
-    )
-    .await
-    .expect("failed to start L1 batch range watcher");
-    let last_executed_batch_data = match last_executed_batch_data {
-        Some(last_executed_batch_data) => last_executed_batch_data,
-        None => {
-            // Fallback to genesis if there is none on L1
-            let batch_info = genesis_stored_batch_info(&repositories, &tree_db, &genesis).await;
-            StoredBatchData {
-                batch_info,
-                first_block_number: 0,
-                last_block_number: 0,
-            }
-        }
-    };
-
-    tasks.spawn(
-        batch_range_watcher
-            .run()
-            .map(report_exit("L1 batch range watcher")),
     );
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
@@ -588,8 +553,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             stop_receiver.clone(),
             tx_acceptance_state_sender,
-            batch_ranges_for_batcher,
-            last_executed_batch_data,
+            committed_batch_provider,
         )
         .await;
     } else {
@@ -639,8 +603,7 @@ async fn run_main_node_pipeline(
     chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
-    batch_ranges_for_batcher: tokio::sync::mpsc::Receiver<CommittedBatch>,
-    last_executed_batch_data: StoredBatchData,
+    committed_batch_provider: CommittedBatchProvider,
 ) {
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
@@ -730,7 +693,8 @@ async fn run_main_node_pipeline(
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
-                last_executed_batch_data,
+                last_committed_batch: node_state_on_startup.l1_state.last_committed_batch,
+                last_executed_batch: node_state_on_startup.l1_state.last_executed_batch,
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
@@ -738,7 +702,7 @@ async fn run_main_node_pipeline(
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
             pubdata_mode: config.l1_sender_config.pubdata_mode,
-            committed_batches: batch_ranges_for_batcher,
+            committed_batch_provider,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),

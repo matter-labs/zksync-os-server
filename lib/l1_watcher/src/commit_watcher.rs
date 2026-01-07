@@ -1,15 +1,12 @@
 use crate::batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{CommittedBatch, DiscoveredCommittedBatch, L1WatcherConfig, ProcessL1Event, util};
-use alloy::consensus::Transaction;
-use alloy::eips::BlockId;
-use alloy::primitives::{Address, TxHash};
+use crate::{DiscoveredCommittedBatch, L1WatcherConfig, ProcessL1Event, util};
+use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use zksync_os_batch_types::BatchInfo;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_storage_api::WriteFinality;
 
 pub struct L1CommitWatcher<Finality> {
@@ -62,31 +59,6 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
 
         Ok(l1_watcher)
     }
-
-    /// Fetches and decodes batch commit transaction. Fails if transaction does not exist or is not
-    /// a valid commit transaction.
-    async fn fetch_commit_calldata(
-        &self,
-        tx_hash: TxHash,
-    ) -> Result<CommittedBatch, L1WatcherError> {
-        // todo: retry-backoff logic in case tx is missing
-        let tx = self
-            .zk_chain
-            .provider()
-            .get_transaction_by_hash(tx_hash)
-            .await?
-            .expect("tx not found");
-        let CommitCalldata {
-            commit_batch_info, ..
-        } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
-
-        // L1 block where this batch got committed.
-        let l1_block_id = BlockId::number(
-            tx.block_number
-                .expect("mined transaction has no block number"),
-        );
-        CommittedBatch::fetch(&self.zk_chain, commit_batch_info, l1_block_id).await
-    }
 }
 
 #[async_trait::async_trait]
@@ -111,7 +83,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
         } else {
             tracing::debug!(batch_number, "discovered committed batch");
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
-            let committed_batch = self.fetch_commit_calldata(tx_hash).await?;
+            let committed_batch = util::fetch_commit_calldata(&self.zk_chain, tx_hash).await?;
 
             // todo: stop using this struct once fully migrated from S3
             let last_executed_batch_info = BatchInfo {

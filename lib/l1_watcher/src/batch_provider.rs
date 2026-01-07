@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 
+#[derive(Debug, Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
 }
@@ -56,6 +57,7 @@ impl CommittedBatchProvider {
     }
 }
 
+#[derive(Debug)]
 struct Inner {
     batches: HashMap<u64, DiscoveredCommittedBatch>,
 }
@@ -70,4 +72,10 @@ pub struct DiscoveredCommittedBatch {
     pub last_block_number: BlockNumber,
     /// L1 block number where this batch was committed.
     pub commit_l1_block_number: BlockNumber,
+}
+
+impl DiscoveredCommittedBatch {
+    pub fn number(&self) -> u64 {
+        self.batch_info.batch_number
+    }
 }
