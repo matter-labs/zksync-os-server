@@ -69,7 +69,7 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 2. Run the ZKsync OS server:
    ```bash
-   cargo run --release -- --config ./local-chains/v30/config.json
+   cargo run --release
    ```
 
 ### Running Multiple Chains

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Basic Commands
 - **Build**: `cargo build` or `cargo build --release`
-- **Run locally**: `cargo run -- --config ./local-chains/v30/config.json` (requires `anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545` running first)
+- **Run locally**: `cargo run` (requires `anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545` running first)
 - **Format**: `cargo fmt --all -- --check`
 - **Lint**: `cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings`
 - **Unit tests**: `cargo nextest run --workspace --exclude zksync_os_integration_tests`
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Local Development Setup
 1. Start anvil: `anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545`
-2. Run server: `cargo run -- --config ./local-chains/v30/config.json`
+2. Run server: `cargo run`
 3. To restart chain: `rm -rf db/*` then restart anvil
 
 ### External Node Mode
@@ -25,7 +25,7 @@ block_replay_server_address=0.0.0.0:3054 \
 sequencer_rocks_db_path=./db/en \
 sequencer_prometheus_port=3313 \
 rpc_address=0.0.0.0:3051 \
-cargo run --release -- --config ./local-chains/v30/config.json
+cargo run --release
 ```
 
 ## Architecture Overview
@@ -80,7 +80,7 @@ The ZKsync OS Sequencer is organized into three main subsystems:
 ### Configuration
 - Main config: `node/sequencer/config.rs`
 - Override with environment variables
-- Example: `prover_api_fake_provers_enabled=false cargo run --release -- --config ./local-chains/v30/config.json`
+- Example: `prover_api_fake_provers_enabled=false cargo run --release`
 
 ### State Recovery
 Most components are designed to be stateless or recover from persistent storage. The system follows a replay-based recovery model where components can reconstruct their state by replaying blocks from the last compacted state.

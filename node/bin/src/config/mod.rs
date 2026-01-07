@@ -216,7 +216,7 @@ pub struct GenesisConfig {
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
-    // find it in `./local-chains/v30/zkos-l1-state.json`
+    // find it in `./local-chains/<protocol_version>/zkos-l1-state.json`
     pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
