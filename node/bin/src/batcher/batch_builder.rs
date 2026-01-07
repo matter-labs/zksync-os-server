@@ -107,6 +107,12 @@ pub(crate) fn seal_batch(
                 .sum(),
             execution_version,
             protocol_version,
+            computational_native_used: Some(
+                blocks
+                    .iter()
+                    .map(|(block_output, _, _, _)| block_output.computaional_native_used)
+                    .sum(),
+            ),
         },
         batch_prover_input,
     )

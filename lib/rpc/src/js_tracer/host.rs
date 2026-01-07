@@ -155,31 +155,70 @@ fn install_db_wrapper(ctx: &mut BoaContext) -> anyhow::Result<()> {
 
 fn install_step_helpers(ctx: &mut BoaContext) -> anyhow::Result<()> {
     let helpers = r#"
-            function normalizeHex(value){
-                if (typeof value !== 'string') {
-                    return '0x';
-                }
-                if (value === '' || value === '0x' || value === '0X') {
-                    return '0x';
-                }
-                if (value.startsWith('0x') || value.startsWith('0X')) {
-                    return '0x' + value.slice(2).toLowerCase();
-                }
-                return '0x' + value.toLowerCase();
+        function normalizeHex(value){
+            if (typeof value !== 'string') {
+                return '0x';
+            }
+            if (value === '' || value === '0x' || value === '0X') {
+                return '0x';
+            }
+            if (value.startsWith('0x') || value.startsWith('0X')) {
+                return '0x' + value.slice(2).toLowerCase();
+            }
+            return '0x' + value.toLowerCase();
+        }
+
+        function hexToBytes(value){
+            const hex = normalizeHex(value).slice(2);
+            if (hex.length === 0) {
+                return new Uint8Array(0);
+            }
+            const padded = hex.length % 2 === 0 ? hex : '0' + hex;
+            const out = new Uint8Array(padded.length / 2);
+            for (let i = 0; i < padded.length; i += 2) {
+                out[i >> 1] = parseInt(padded.slice(i, i + 2), 16);
+            }
+            return out;
+        }
+
+        function toHex(value) {
+            if (value === undefined || value === null) {
+                return "0x";
             }
 
-            function hexToBytes(value){
-                const hex = normalizeHex(value).slice(2);
-                if (hex.length === 0) {
-                    return new Uint8Array(0);
-                }
-                const padded = hex.length % 2 === 0 ? hex : '0' + hex;
-                const out = new Uint8Array(padded.length / 2);
-                for (let i = 0; i < padded.length; i += 2) {
-                    out[i >> 1] = parseInt(padded.slice(i, i + 2), 16);
-                }
-                return out;
+            if (typeof value === "number") {
+                return "0x" + value.toString(16);
             }
+
+            if (typeof value === "bigint") {
+                return "0x" + value.toString(16);
+            }
+
+            if (typeof value === "string") {
+                if (value.startsWith("0x")) {
+                    return value.toLowerCase();
+                }
+                return "0x" + Buffer.from(value, "utf8").toString("hex");
+            }
+
+            // Uint8Array / byte slice from the EVM
+            if (value instanceof Uint8Array || Array.isArray(value)) {
+                var hex = "";
+                for (var i = 0; i < value.length; i++) {
+                    var h = value[i].toString(16);
+                    if (h.length === 1) h = "0" + h;
+                    hex += h;
+                }
+                return "0x" + hex;
+            }
+
+            // Objects with toString (e.g. BN, big.Int)
+            if (typeof value.toString === "function") {
+                return "0x" + value.toString(16);
+            }
+
+            throw new Error("toHex: unsupported type " + (typeof value));
+        }
     "#;
 
     ctx.eval(Source::from_bytes(helpers.as_bytes()))
