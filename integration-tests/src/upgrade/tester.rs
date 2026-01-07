@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
+use crate::config::get_default_config;
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use alloy::network::TransactionBuilder;
@@ -155,6 +156,12 @@ impl UpgradeTester {
 
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
+        let default_config: &zksync_os_server::config::Config = get_default_config();
+        let chain_id = default_config
+            .genesis_config
+            .chain_id
+            .expect("Chain id is missing in the config");
+
         let bridgehub = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let bridgehub = interfaces::Bridgehub::new(bridgehub, tester.l1_provider.clone());
         let chain_asset_handler = bridgehub.chainAssetHandler().call().await?;
@@ -162,21 +169,15 @@ impl UpgradeTester {
             interfaces::ChainAssetHandler::new(chain_asset_handler, tester.l1_provider.clone());
         let chain_asset_handler_owner = chain_asset_handler.owner().call().await?;
         let ctm = bridgehub
-            .chainTypeManager(U256::from(zksync_os_server::config_constants::CHAIN_ID))
+            .chainTypeManager(U256::from(chain_id))
             .call()
             .await?;
         let ctm = interfaces::ChainTypeManager::new(ctm, tester.l1_provider.clone());
-        let raw_protocol_version = ctm
-            .getProtocolVersion(U256::from(zksync_os_server::config_constants::CHAIN_ID))
-            .call()
-            .await?;
+        let raw_protocol_version = ctm.getProtocolVersion(U256::from(chain_id)).call().await?;
         let protocol_version = ProtocolSemanticVersion::try_from(raw_protocol_version)
             .expect("invalid protocol version stored in CTM");
 
-        let diamond_proxy = bridgehub
-            .getZKChain(U256::from(zksync_os_server::config_constants::CHAIN_ID))
-            .call()
-            .await?;
+        let diamond_proxy = bridgehub.getZKChain(U256::from(chain_id)).call().await?;
         let diamond_proxy = interfaces::ZkChain::new(diamond_proxy, tester.l1_provider.clone());
 
         let l1_chain_admin = diamond_proxy.getAdmin().call().await?;
@@ -191,8 +192,10 @@ impl UpgradeTester {
         // Bytecode supplier is a bit special: right now it's not discoverable
         // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
         // to the value stored in `zkos-l1-state.json`.
-        let bytecode_supplier_address =
-            zksync_os_server::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse()?;
+        let bytecode_supplier_address = default_config
+            .genesis_config
+            .bridgehub_address
+            .expect("Bytecode supplier address is missing in the config");
         anyhow::ensure!(
             !tester
                 .l1_provider

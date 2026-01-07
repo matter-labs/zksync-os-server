@@ -1,5 +1,8 @@
 pub use self::cli::ConfigArgs;
-use crate::{command_source::RebuildOptions, config_constants::DEFAULT_ROCKS_DB_PATH};
+use crate::{
+    command_source::RebuildOptions,
+    config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
+};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
@@ -208,26 +211,22 @@ pub enum StateBackendConfig {
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
 pub struct GenesisConfig {
     /// L1 address of `Bridgehub` contract. This address and chain ID is an entrypoint into L1 discoverability so most
     /// other contracts should be discoverable through it.
-    #[config(default_t = Some(crate::config_constants::BRIDGEHUB_ADDRESS.parse().unwrap()))]
     pub bridgehub_address: Option<Address>,
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
     // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
-    // find it in `./local-chains/v30/zkos-l1-state.json`
-    #[config(default_t = Some(crate::config_constants::BYTECODE_SUPPLIER_ADDRESS.parse().unwrap()))]
+    // find it in `./local-chains/<protocol_version>/zkos-l1-state.json`
     pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
-    #[config(default_t = Some(crate::config_constants::CHAIN_ID))]
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some("./local-chains/v31/genesis.json".into()))]
+    #[config(default_t = Some(format!("./local-chains/{PROTOCOL_VERSION}/genesis.json").into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 
@@ -406,24 +405,17 @@ pub struct RpcConfig {
 
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
-#[config(derive(Default))]
 pub struct L1SenderConfig {
     /// Private key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
-    // TODO: Pre-configured value, to be removed
-    #[config(alias = "operator_private_key", default_t = SecretString::from(crate::config_constants::OPERATOR_COMMIT_PK))]
     pub operator_commit_pk: SecretString,
 
     /// Private key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
-    // TODO: Pre-configured value, to be removed
-    #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_PROVE_PK))]
     pub operator_prove_pk: SecretString,
 
     /// Private key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
-    // TODO: Pre-configured value, to be removed
-    #[config(default_t = SecretString::from(crate::config_constants::OPERATOR_EXECUTE_PK))]
     pub operator_execute_pk: SecretString,
 
     /// Max fee per gas we are willing to spend.

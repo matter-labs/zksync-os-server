@@ -13303,7 +13303,6 @@ dependencies = [
  "clap",
  "tokio",
  "zksync_os_contract_interface",
- "zksync_os_server",
  "zksync_os_types",
 ]
 
@@ -13341,6 +13340,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "smart-config",
  "tempfile",
  "test-log",
  "tokio",

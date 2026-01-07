@@ -17,7 +17,7 @@ use zksync_os_server::{
         ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
         RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
     },
-    config_constants::DEFAULT_ROCKS_DB_PATH,
+    config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
 };
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
@@ -33,9 +33,9 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Path to a JSON config file.
-    #[arg(long)]
-    config: Option<String>,
+    /// Path to a JSON config file. Env variables override file values if specified.
+    #[arg(long, default_value_t = format!("./local-chains/{PROTOCOL_VERSION}/config.json"))]
+    config: String,
 
     #[command(subcommand)]
     cmd: Option<CliCommand>,
@@ -49,6 +49,15 @@ pub async fn main() {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
 
+    // Process the config file
+    let config_path = &opt.config;
+    let config_contents =
+        fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+    let config_json: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&config_contents)
+            .expect("Failed to parse config file from provided path");
+    config_sources.push(Json::new(config_path, config_json));
+
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
     // deserialization as JSON instead of plain string. This is useful to distinguish between "null"
@@ -56,16 +65,6 @@ pub async fn main() {
     env.coerce_json()
         .expect("failed to coerce JSON envvar values");
     config_sources.push(env);
-
-    // Process the config file if provided
-    if let Some(config_path) = &opt.config {
-        let config_contents =
-            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
-        let config_json: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&config_contents)
-                .expect("Failed to parse config file from provided path");
-        config_sources.push(Json::new(config_path, config_json));
-    }
 
     // =========== init observability ===========
     let observability_config =

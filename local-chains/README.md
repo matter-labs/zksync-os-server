@@ -38,6 +38,7 @@ anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 
 Node configuration file used to override the default values defined in `node/sequencer/config.rs`. Commonly modified values include:
 
+- `genesis.chain_id` — Chain ID of the chain node operates on
 - `genesis.bridgehub_address` — Address of the Bridgehub contract on L1
 - `genesis.bytecode_supplier_address` — Address of the bytecode supplier contract
 - `l1_sender.operator_commit_pk` — Private key for committing batches
@@ -68,7 +69,7 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 2. Run the ZKsync OS server:
    ```bash
-   cargo run --release -- --config ./local-chains/v30/config.json
+   cargo run --release
    ```
 
 ### Running Multiple Chains

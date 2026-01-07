@@ -9,6 +9,7 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::config::get_default_config;
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
 use zksync_os_integration_tests::provider::ZksyncApi;
 use zksync_os_types::{
@@ -23,11 +24,17 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let alice_l1_initial_balance = tester.l1_provider.get_balance(alice).await?;
     let alice_l2_initial_balance = tester.l2_provider.get_balance(alice).await?;
 
+    let default_config: &zksync_os_server::config::Config = get_default_config();
+    let chain_id = default_config
+        .genesis_config
+        .chain_id
+        .expect("Chain id is missing in the config");
+
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
         tester.l1_provider.clone(),
-        zksync_os_server::config_constants::CHAIN_ID,
+        chain_id,
     );
     let amount = U256::from(100);
     let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;

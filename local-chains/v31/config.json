@@ -1,7 +1,8 @@
 {
     "genesis": {
         "bridgehub_address": "0xb318b56e313d15e61467d894c431ada085a7a5ae",
-        "bytecode_supplier_address": "0xd7313cfbc527956f36c13c1db8f7ce7ef91eb40b"
+        "bytecode_supplier_address": "0xd7313cfbc527956f36c13c1db8f7ce7ef91eb40b",
+        "chain_id": 6565
     },
     "l1_sender": {
         "operator_commit_pk": "0x04375f3e7300f1cd56f016a97fcd11350997eac7f80cb70bb47a094b79c53072",
