@@ -233,7 +233,7 @@ impl Tester {
             general_config,
             genesis_config: GenesisConfig {
                 genesis_input_path: Some(
-                    concat!(env!("WORKSPACE_DIR"), "/local-chains/v30/genesis.json").into(),
+                    concat!(env!("WORKSPACE_DIR"), "/local-chains/v31/genesis.json").into(),
                 ),
                 ..Default::default()
             },
