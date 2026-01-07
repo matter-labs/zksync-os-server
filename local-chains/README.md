@@ -38,6 +38,7 @@ anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 
 Node configuration file used to override the default values defined in `node/sequencer/config.rs`. Commonly modified values include:
 
+- `genesis.chain_id` — Chain ID of the chain node operates on
 - `genesis.bridgehub_address` — Address of the Bridgehub contract on L1
 - `genesis.bytecode_supplier_address` — Address of the bytecode supplier contract
 - `l1_sender.operator_commit_pk` — Private key for committing batches
