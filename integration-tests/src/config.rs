@@ -7,8 +7,7 @@ use zksync_os_server::{
 };
 
 static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
-    let workspace_dir =
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
+    let workspace_dir = env!("WORKSPACE_DIR");
     let config_path = format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/config.json");
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
@@ -48,7 +47,6 @@ pub fn get_default_config() -> &'static Config {
 }
 
 pub fn get_default_l1_state_path() -> String {
-    let workspace_dir =
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
+    let workspace_dir = env!("WORKSPACE_DIR");
     format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/zkos-l1-state.json")
 }
