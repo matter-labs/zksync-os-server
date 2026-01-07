@@ -12,11 +12,31 @@ pub struct CommittedBatchProvider {
 }
 
 impl CommittedBatchProvider {
-    pub async fn init(l1_state: &L1State, max_l1_blocks_to_scan: u64) -> anyhow::Result<Self> {
+    pub async fn init<F>(
+        l1_state: &L1State,
+        max_l1_blocks_to_scan: u64,
+        load_genesis_batch_info: impl Fn() -> F,
+    ) -> anyhow::Result<Self>
+    where
+        F: Future<Output = StoredBatchInfo>,
+    {
         let mut inner = Inner {
             batches: Default::default(),
         };
-        for batch_number in l1_state.last_executed_batch + 1..=l1_state.last_committed_batch {
+        for batch_number in l1_state.last_executed_batch..=l1_state.last_committed_batch {
+            if batch_number == 0 {
+                inner.batches.insert(
+                    0,
+                    DiscoveredCommittedBatch {
+                        batch_info: load_genesis_batch_info().await,
+                        first_block_number: 0,
+                        last_block_number: 0,
+                        // Shouldn't matter?
+                        commit_l1_block_number: 0,
+                    },
+                );
+                continue;
+            }
             let l1_block_with_commit = util::find_l1_commit_block_by_batch_number(
                 l1_state.diamond_proxy.clone(),
                 batch_number,

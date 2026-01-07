@@ -197,11 +197,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
 
-    let committed_batch_provider =
-        CommittedBatchProvider::init(&l1_state, config.l1_watcher_config.max_blocks_to_process)
-            .await
-            .expect("failed to init CommittedBatchProvider");
-
     match (config.l1_sender_config.pubdata_mode, l1_state.da_input_mode) {
         (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
         | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
@@ -242,6 +237,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis,
     )
     .await;
+
+    let committed_batch_provider = CommittedBatchProvider::init(
+        &l1_state,
+        config.l1_watcher_config.max_blocks_to_process,
+        || genesis_stored_batch_info(&repositories, &tree_db, &genesis),
+    )
+    .await
+    .expect("failed to init CommittedBatchProvider");
 
     let state = State::new(&config.general_config, &genesis).await;
 
