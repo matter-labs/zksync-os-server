@@ -44,16 +44,9 @@ struct Cli {
     cmd: Option<CliCommand>,
 }
 
-#[tokio::main]
-pub async fn main() {
-    let opt = Cli::parse();
-
-    // =========== load configs ===========
-    let config_schema = Config::schema();
-    let mut config_sources = ConfigSources::default();
-
+fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
     // Process the config file if provided or if default exists
-    let config_path: Option<String> = opt.config.or_else(|| {
+    let config_path: Option<String> = config_path.or_else(|| {
         let default_path = format!("./local-chains/{PROTOCOL_VERSION}/config.json");
         Path::new(&default_path).exists().then_some(default_path)
     });
@@ -66,6 +59,18 @@ pub async fn main() {
                 .expect("Failed to parse config file from provided path");
         config_sources.push(Json::new(config_path, config_json));
     }
+}
+
+#[tokio::main]
+pub async fn main() {
+    let opt = Cli::parse();
+
+    // =========== load configs ===========
+    let config_schema = Config::schema();
+    let mut config_sources = ConfigSources::default();
+
+    // Process the config file if provided or if default exists
+    load_config_defaults(&mut config_sources, opt.config);
 
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
