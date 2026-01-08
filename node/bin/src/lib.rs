@@ -8,7 +8,6 @@ pub mod config;
 pub mod config_constants;
 mod en_remote_config;
 mod l1_provider;
-pub mod metadata;
 mod node_state_on_startup;
 mod priority_tree_steps;
 pub mod prover_api;
@@ -24,7 +23,6 @@ use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
 use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
-use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::priority_tree_steps::priority_tree_en_step::PriorityTreeENStep;
 use crate::priority_tree_steps::priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -73,6 +71,7 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_metadata::NODE_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
@@ -102,7 +101,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
-    let node_version: semver::Version = NODE_VERSION.parse().unwrap();
     let role: &'static str = if config.sequencer_config.is_main_node() {
         "main_node"
     } else {
@@ -124,7 +122,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if !config.l1_sender_config.enabled {
         unimplemented!("running without L1 Senders is temporarily not supported");
     }
-    tracing::info!(version = %node_version, role, "Initializing Node");
+    tracing::info!(version = NODE_VERSION, role, "Initializing Node");
 
     let (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source) =
         if config.sequencer_config.is_main_node() {
@@ -224,7 +222,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .rocks_db_path
             .join(BLOCK_REPLAY_WAL_DB_NAME),
         &genesis,
-        node_version.clone(),
     )
     .await;
 
@@ -524,7 +521,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         chain_id,
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
-        node_version,
         current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,

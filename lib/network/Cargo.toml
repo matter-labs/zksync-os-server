@@ -1,0 +1,43 @@
+[package]
+name = "zksync_os_network"
+description = "ZKsync OS implementation of p2p networking"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_storage_api.workspace = true
+zksync_os_types = { workspace = true, features = ["reth"] }
+zksync_os_metadata.workspace = true
+
+zksync_os_interface.workspace = true
+
+alloy = { workspace = true, default-features = false, features = [
+    "rlp",
+    "eips",
+    "consensus",
+    "k256",
+    "rand",
+] }
+alloy-rlp.workspace = true
+futures.workspace = true
+semver.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+reth-network.workspace = true
+reth-network-peers.workspace = true
+reth-eth-wire.workspace = true
+
+[dev-dependencies]
+assert_matches.workspace = true
+test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
+
+reth-network = { workspace = true, features = ["test-utils"] }
+reth-provider = { workspace = true, features = ["test-utils"] }

@@ -19,7 +19,6 @@ impl<'a> fmt::Debug for PreparedBlockCommand<'a> {
         // ds.field("tx_source", &"<skipped>");
         ds.field("starting_l1_priority_id", &self.starting_l1_priority_id);
         ds.field("metrics_label", &self.metrics_label);
-        ds.field("node_version", &self.node_version);
         ds.field(
             "expected_block_output_hash",
             &self.expected_block_output_hash,

@@ -6,6 +6,7 @@ use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::BlockContext;
+use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
@@ -77,7 +78,7 @@ impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
 
-    pub async fn new(db_path: &Path, genesis: &Genesis, node_version: semver::Version) -> Self {
+    pub async fn new(db_path: &Path, genesis: &Genesis) -> Self {
         let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
             .expect("Failed to open BlockReplayStorage")
             .with_sync_writes();
@@ -95,7 +96,7 @@ impl BlockReplayStorage {
                     starting_l1_priority_id: 0,
                     transactions: vec![],
                     previous_block_timestamp: 0,
-                    node_version,
+                    node_version: NODE_SEMVER_VERSION.clone(),
                     protocol_version: genesis_tx.protocol_version,
                     block_output_hash: B256::ZERO,
                     force_preimages: genesis_tx.force_deploy_preimages,
