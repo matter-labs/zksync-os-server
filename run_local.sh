@@ -95,6 +95,19 @@ SINGLE_CONFIG="$CONFIG_DIR/config.json"
 
 if [ -f "$SINGLE_CONFIG" ]; then
     # Single chain mode
+    
+    # Prompt to clean up db folder (only for single chain mode)
+    if [ -d "db" ] && [ "$(ls -A db 2>/dev/null)" ]; then
+        echo -e "${YELLOW}The db/ folder contains existing data.${NC}"
+        read -p "Do you want to clean it up? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Cleaning up db/* ...${NC}"
+            rm -rf db/*
+            echo -e "${GREEN}db/ folder cleaned${NC}"
+        fi
+    fi
+    
     echo -e "\n${GREEN}Starting single chain with config: $SINGLE_CONFIG${NC}"
     cargo run --release -- --config "$SINGLE_CONFIG" &
     CHAIN_PID=$!

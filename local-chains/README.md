@@ -80,8 +80,9 @@ The `run_local.sh` script automates starting Anvil and chain node(s):
 4. **Detects chain mode**:
    - If `config.json` exists → Starts single chain
    - Otherwise → Starts all `chain*.json` files found
-5. **Monitors processes** — If any process fails, all services are stopped
-6. **Graceful shutdown** — Press `Ctrl+C` to stop all services
+5. **Database cleanup prompt** (single chain mode only) — If the `db/` folder contains existing data, prompts whether to clean it up before starting
+6. **Monitors processes** — If any process fails, all services are stopped
+7. **Graceful shutdown** — Press `Ctrl+C` to stop all services
 
 #### Script Output
 
