@@ -221,7 +221,7 @@ zksync_os_internal_config = { version = "=0.12.1-non-semver-compat", path = "lib
 
 zksync_os_server = { version = "=0.12.1-non-semver-compat", path = "node/bin" }
 
-[patch.crates-io]
+#[patch.crates-io]
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 
