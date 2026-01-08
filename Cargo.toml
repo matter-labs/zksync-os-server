@@ -85,8 +85,8 @@ zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github
 
 # Dependency on `zk_ee_0_1_0` and `zk_os_basic_system_0_1_0` can be removed after server doesn't have to prove and submit v29 batches.
 # After they're removed you'll see where they were used and should be able to clean it up there.
-zk_ee_0_1_0 = { package = "zk_ee", git = "https://github.com/RomanHiden/zksync-os", branch = "v0.1.0-rc2" }
-zk_os_basic_system_0_1_0 = { package = "basic_system", git = "https://github.com/RomanHiden/zksync-os", branch = "v0.1.0-rc2" }
+zk_ee_0_1_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", branch = "v0.1.0-rc2" }
+zk_os_basic_system_0_1_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", branch = "v0.1.0-rc2" }
 
 zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4", features = [
     "production",
