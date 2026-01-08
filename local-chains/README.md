@@ -38,12 +38,12 @@ anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 
 Node configuration file used to override the default values defined in `node/sequencer/config.rs`. Commonly modified values include:
 
-- `genesis.chain_id` — Chain ID of the chain node operates on
-- `genesis.bridgehub_address` — Address of the Bridgehub contract on L1
-- `genesis.bytecode_supplier_address` — Address of the bytecode supplier contract
-- `l1_sender.operator_commit_pk` — Private key for committing batches
-- `l1_sender.operator_prove_pk` — Private key for proving batches
-- `l1_sender.operator_execute_pk` — Private key for executing batches
+- `genesis.chain_id` - Chain ID of the chain node operates on
+- `genesis.bridgehub_address` - Address of the Bridgehub contract on L1
+- `genesis.bytecode_supplier_address` - Address of the bytecode supplier contract
+- `l1_sender.operator_commit_pk` - Private key for committing batches
+- `l1_sender.operator_prove_pk` - Private key for proving batches
+- `l1_sender.operator_execute_pk` - Private key for executing batches
 
 ### `genesis.json`
 
@@ -74,15 +74,15 @@ The `run_local.sh` script automates starting Anvil and chain node(s):
 
 #### How the Script Works
 
-1. **Validates configuration directory** — Checks that the directory exists and contains `zkos-l1-state.json`
-2. **Starts Anvil** — Loads the L1 state snapshot on port 8545 (logs suppressed)
-3. **Waits for Anvil readiness** — Polls the JSON-RPC endpoint until Anvil responds (up to 30 seconds)
+1. **Validates configuration directory** - Checks that the directory exists and contains `zkos-l1-state.json`
+2. **Starts Anvil** - Loads the L1 state snapshot on port 8545 (logs suppressed)
+3. **Waits for Anvil readiness** - Polls the JSON-RPC endpoint until Anvil responds (up to 30 seconds)
 4. **Detects chain mode**:
    - If `config.json` exists → Starts single chain
    - Otherwise → Starts all `chain*.json` files found
-5. **Database cleanup prompt** (single chain mode only) — If the `db/` folder contains existing data, prompts whether to clean it up before starting
-6. **Monitors processes** — If any process fails, all services are stopped
-7. **Graceful shutdown** — Press `Ctrl+C` to stop all services
+5. **Database cleanup prompt** (single chain mode only) - If the `db/` folder contains existing data, prompts whether to clean it up before starting
+6. **Monitors processes** - If any process fails, all services are stopped
+7. **Graceful shutdown** - Press `Ctrl+C` to stop all services
 
 #### Script Output
 
@@ -149,5 +149,5 @@ When a new protocol version is released:
 
 ### Multiple chains: port conflicts
 
-- Each chain config must specify unique ports. `rpc.address` — JSON-RPC port (e.g., 3050, 3051, 3052)
+- Each chain config must specify unique ports. `rpc.address` - JSON-RPC port (e.g., 3050, 3051, 3052)
 - Chains should be run in sandbox mode or use unique directory paths for RocksDB and file storage to avoid interfering with one another.
