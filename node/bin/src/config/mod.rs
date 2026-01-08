@@ -23,7 +23,7 @@ use zksync_os_network::SecretKey;
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
-use zksync_os_types::PubdataMode;
+use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
 
@@ -382,6 +382,14 @@ pub struct SequencerConfig {
 impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
+    }
+
+    pub fn node_role(&self) -> NodeRole {
+        if self.is_main_node() {
+            NodeRole::MainNode
+        } else {
+            NodeRole::ExternalNode
+        }
     }
 }
 

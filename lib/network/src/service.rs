@@ -12,6 +12,7 @@ use tokio::task::JoinSet;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord};
+use zksync_os_types::NodeRole;
 
 /// Manages the entire network state including all RLPx subprotocols and discv5 peer discovery.
 ///
@@ -26,7 +27,7 @@ pub struct NetworkService {
 impl NetworkService {
     pub async fn new(
         config: NetworkConfig,
-        is_main_node: bool,
+        node_role: NodeRole,
         replay: impl ReadReplay + Clone,
         zk_provider_factory: ZkProviderFactory<
             impl ReadStateHistory + Clone,
@@ -78,8 +79,8 @@ impl NetworkService {
             // several versions are registered here.
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
                 replay,
-                // we only want to request blocks if this is not the main node
-                to_request_blocks: !is_main_node,
+                // we only want to request blocks if this is external node
+                to_request_blocks: node_role.is_external(),
                 state: ProtocolState::new(protocol_tx, 10),
                 replay_sender,
                 _phantom: Default::default(),

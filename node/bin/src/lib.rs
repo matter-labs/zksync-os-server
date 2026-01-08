@@ -261,7 +261,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
         let network_service = NetworkService::new(
             config.network_config.clone().into(),
-            config.sequencer_config.is_main_node(),
+            config.sequencer_config.node_role(),
             block_replay_storage.clone(),
             zk_provider_factory,
             replay_sender,
