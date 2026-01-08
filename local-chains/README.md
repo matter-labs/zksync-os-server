@@ -100,7 +100,7 @@ The `run_local.sh` script automates starting Anvil and chain node(s):
 
 2. Run the ZKsync OS server:
    ```bash
-   cargo run -- --config ./local-chains/v30/config.json
+   cargo run --release
    ```
 
 #### Running Multiple Chains
@@ -143,14 +143,10 @@ When a new protocol version is released:
 ### Chain fails to start
 
 - Check for port conflicts between chains
-- Verify all required config fields are present (especially `l1_sender` private keys)
+- Verify all required config fields are present
 - Check the terminal output for specific error messages
 
 ### Multiple chains: port conflicts
 
-Each chain config must specify unique ports:
-- `rpc.address` — JSON-RPC port (e.g., 3050, 3051, 3052)
-- `sequencer.block_replay_server_address` — Replay server port
-- `status_server.address` — Status server port
-- `prover_api.address` — Prover API port
-- `observability.prometheus.port` — Prometheus metrics port
+- Each chain config must specify unique ports. `rpc.address` — JSON-RPC port (e.g., 3050, 3051, 3052)
+- Chains should be run in sandbox mode or use unique directory paths for RocksDB and file storage to avoid interfering with one another.

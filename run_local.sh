@@ -96,7 +96,7 @@ SINGLE_CONFIG="$CONFIG_DIR/config.json"
 if [ -f "$SINGLE_CONFIG" ]; then
     # Single chain mode
     echo -e "\n${GREEN}Starting single chain with config: $SINGLE_CONFIG${NC}"
-    cargo run -- --config "$SINGLE_CONFIG" &
+    cargo run --release -- --config "$SINGLE_CONFIG" &
     CHAIN_PID=$!
     PIDS+=($CHAIN_PID)
     echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
@@ -113,7 +113,7 @@ else
     
     for config_file in "${CHAIN_CONFIGS[@]}"; do
         echo -e "${GREEN}Starting chain with config: $config_file${NC}"
-        cargo run -- --config "$config_file" &
+        cargo run --release -- --config "$config_file" &
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)
         echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
