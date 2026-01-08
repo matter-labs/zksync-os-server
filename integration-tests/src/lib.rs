@@ -1,3 +1,4 @@
+use crate::config::{get_default_config, get_default_l1_state_path};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
@@ -16,12 +17,12 @@ use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
-    GenesisConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-    StatusServerConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
+pub mod config;
 pub mod contracts;
 pub mod dyn_wallet_provider;
 mod network;
@@ -225,22 +226,19 @@ impl Tester {
         };
 
         let status_server_config = StatusServerConfig {
+            enabled: true,
             address: status_address,
         };
 
+        let default_config = get_default_config();
         let mut config = Config {
             general_config,
-            genesis_config: GenesisConfig {
-                genesis_input_path: Some(
-                    concat!(env!("WORKSPACE_DIR"), "/genesis/genesis.json").into(),
-                ),
-                ..Default::default()
-            },
+            genesis_config: default_config.genesis_config.clone(),
             rpc_config,
             mempool_config: Default::default(),
             tx_validator_config: Default::default(),
             sequencer_config,
-            l1_sender_config: Default::default(),
+            l1_sender_config: default_config.l1_sender_config.clone(),
             l1_watcher_config: Default::default(),
             batcher_config: Default::default(),
             prover_input_generator_config: ProverInputGeneratorConfig {
@@ -395,7 +393,7 @@ impl TesterBuilder {
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg(concat!(env!("WORKSPACE_DIR"), "/zkos-l1-state.json"))
+                .arg(get_default_l1_state_path())
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();

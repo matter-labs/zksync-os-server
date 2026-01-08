@@ -29,7 +29,7 @@ The ZKsync OS Server design optimizes for throughput, low latency, and a seamles
 To run server locally with in-memory L1 node and dummy proofs, run the following commands:
 ```bash
 # Start in-memory L1 node
-anvil --load-state zkos-l1-state.json --port 8545
+anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 # Launch zksync-os-server on the default port 3050
 # By default, fake (dummy) proofs are used both for FRI and SNARK proofs.
 cargo run --release --bin zksync-os-server

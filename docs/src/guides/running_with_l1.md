@@ -13,7 +13,7 @@ It also comes with a deposit transaction that makes `0x36615cf349d7f6344891b1e7c
 Before you run an L1 node, make sure you have a `1.3.4` version of `anvil` installed (see [foundry guide](https://getfoundry.sh/)). Then:
 
 ```
-anvil --load-state zkos-l1-state.json --port 8545
+anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
 ...
 Listening on 127.0.0.1:8545
 ...
@@ -121,22 +121,22 @@ Note: There is an [experimental tool](https://github.com/mm-zk/zksync_tools/tree
 
 L1 state is checked in into this repo under `zkos-l1-state.json`. To regenerate it from scratch, run the following commands:
 ```
-anvil -m "stuff slice staff easily soup parent arm payment cotton trade scatter struggle" --state zkos-l1-state.json
+anvil -m "stuff slice staff easily soup parent arm payment cotton trade scatter struggle" --state ./local-chains/v30/zkos-l1-state.json
 ```
 Note that we pass this mnemonic to have `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` rich wallet - legacy from era.
 
 Then deploy the contracts using legacy tooling (see above). 
 After that, add a deposit transaction to the state - integration and load tests expect that `0x36615cf349d7f6344891b1e7ca7c72883f5dc049` has L2 funds. For this, use `generate-deposit` tool in this repo. 
-Make sure to provide correct `bridgehub_addres` (you can find it in `configs/contracts.yaml`):
+Make sure to provide correct `bridgehub_addres` (you can find it in `configs/contracts.yaml`) and chain id:
 ```
-> cargo run --bin zksync_os_generate_deposit -- --bridgehub <BRIDGEHUB_ADDRESS>
+> cargo run --bin zksync_os_generate_deposit -- --bridgehub <BRIDGEHUB_ADDRESS> --chain-id <CHAIN_ID>
 L1 balance: 9879999865731420184000
 Successfully submitted L1->L2 deposit tx with hash '0xb8544a2a9bc55713f1f94acf3711c23d07e02917f44885b05e20b13af1402283'
 
 Process finished with exit code 0
 
 ```
-Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--load-state zkos-l1-state.json`  (`--load-state` - not `--state`, otherwise it will be overwritten). Commit the new file in git.
+Now stop anvil (ctrl+c) - the state will be saved to the file. Rerun it with `--load-state ./local-chains/v30/zkos-l1-state.json`  (`--load-state` - not `--state`, otherwise it will be overwritten). Commit the new file in git.
 
 Update values in `L1SenderConfig`:
 * `bridgehub_address` -> `bridgehub_proxy_addr` in `contracts.yaml` of `zkstack` tool output

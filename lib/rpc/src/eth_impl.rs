@@ -323,7 +323,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
 
     fn gas_price_impl(&self) -> EthResult<U256> {
         // Only base fee is taken into account, suggested priority fee is zero.
-        if let Some(c) = self.eth_call_handler.pending_block_context() {
+        if let Some(c) = self.eth_call_handler.last_constructed_block_context() {
             Ok(c.eip1559_basefee)
         } else {
             let latest_block_id = BlockId::Number(BlockNumberOrTag::Latest);
@@ -380,7 +380,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             .map(|c| c.eip1559_basefee)
         {
             base_fee_per_gas.push(base_fee.saturating_to());
-        } else if let Some(c) = self.eth_call_handler.pending_block_context()
+        } else if let Some(c) = self.eth_call_handler.last_constructed_block_context()
             && c.block_number == end_block_plus
         {
             base_fee_per_gas.push(c.eip1559_basefee.saturating_to());

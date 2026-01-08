@@ -1,9 +1,14 @@
 //! This module determines the fees to pay in txs containing blocks submitted to the L1.
 
-use crate::statistics::GasStatistics;
+use crate::statistics::{GasStatistics, Statistics};
+use alloy::consensus::{BlobTransactionSidecar, SidecarCoder, SimpleCoder};
+use alloy::eips::eip4844::FIELD_ELEMENTS_PER_BLOB;
 use alloy::providers::{DynProvider, Provider};
 use metrics::METRICS;
+use num::rational::Ratio;
 use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::watch;
 use zksync_os_types::PubdataMode;
 
@@ -18,10 +23,13 @@ mod statistics;
 pub struct GasAdjuster {
     base_fee_statistics: GasStatistics<u128>,
     blob_base_fee_statistics: GasStatistics<u128>,
+    blob_fill_ratio_statistics: Statistics<Ratio<u64>>,
 
     config: GasAdjusterConfig,
     provider: DynProvider,
     pubdata_price_sender: watch::Sender<Option<u128>>,
+    blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
+    sidecar_receiver: Receiver<BlobTransactionSidecar>,
 }
 
 #[derive(Debug)]
@@ -29,6 +37,7 @@ pub struct GasAdjusterConfig {
     pub pubdata_mode: PubdataMode,
     pub max_base_fee_samples: usize,
     pub num_samples_for_blob_base_fee_estimate: usize,
+    pub max_blob_fill_ratio_samples: usize,
     pub max_priority_fee_per_gas: u128,
     pub poll_period: Duration,
     pub pubdata_pricing_multiplier: f64,
@@ -39,6 +48,8 @@ impl GasAdjuster {
         provider: DynProvider,
         config: GasAdjusterConfig,
         pubdata_price_sender: watch::Sender<Option<u128>>,
+        blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
+        sidecar_receiver: Receiver<BlobTransactionSidecar>,
     ) -> anyhow::Result<Self> {
         // Subtracting 1 from the "latest" block number to prevent errors in case
         // the info about the latest block is not yet present on the node.
@@ -63,9 +74,12 @@ impl GasAdjuster {
         let this = Self {
             base_fee_statistics,
             blob_base_fee_statistics,
+            blob_fill_ratio_statistics: Statistics::new(config.max_blob_fill_ratio_samples),
             config,
             provider,
             pubdata_price_sender,
+            blob_fill_ratio_sender,
+            sidecar_receiver,
         };
         this.pubdata_price_sender
             .send_replace(Some(this.pubdata_price()));
@@ -135,6 +149,35 @@ impl GasAdjuster {
         Ok(())
     }
 
+    pub async fn update_blob_fill_ratios(&mut self) -> anyhow::Result<()> {
+        loop {
+            match self.sidecar_receiver.try_recv() {
+                Ok(sidecar) => {
+                    let mut decoder = SimpleCoder::default();
+                    if let Some(decoded) = decoder.decode_all(&sidecar.blobs) {
+                        if decoded.len() != 1 {
+                            anyhow::bail!("Expected exactly one blob in sidecar");
+                        }
+                        let pubdata_len = decoded[0].len() as u64;
+                        let total_size =
+                            (FIELD_ELEMENTS_PER_BLOB * (sidecar.blobs.len() as u64) - 1) * 31;
+                        self.blob_fill_ratio_statistics
+                            .add_samples([Ratio::new(pubdata_len, total_size)]);
+
+                        self.blob_fill_ratio_sender
+                            .send_replace(self.blob_fill_ratio_median());
+                    } else {
+                        anyhow::bail!("Failed to decode blobs from sidecar");
+                    }
+                }
+                Err(TryRecvError::Empty) => break Ok(()),
+                Err(TryRecvError::Disconnected) => {
+                    anyhow::bail!("Blob sidecar receiver disconnected")
+                }
+            }
+        }
+    }
+
     pub async fn run(mut self) -> anyhow::Result<()> {
         let mut timer = tokio::time::interval(self.config.poll_period);
         let mut attempts_failed_in_a_row = 0usize;
@@ -149,6 +192,12 @@ impl GasAdjuster {
                 }
             } else {
                 attempts_failed_in_a_row = 0;
+            }
+
+            // `update_blob_fill_ratios` cannot fail due to transient issue, unlike `update_fees`.
+            // So we log all errors.
+            if let Err(err) = self.update_blob_fill_ratios().await {
+                tracing::warn!("Cannot update blob fill ratios: {err}");
             }
             timer.tick().await;
         }
@@ -178,6 +227,10 @@ impl GasAdjuster {
         };
 
         (self.config.pubdata_pricing_multiplier * price as f64) as u128
+    }
+
+    pub fn blob_fill_ratio_median(&self) -> Option<Ratio<u64>> {
+        self.blob_fill_ratio_statistics.median()
     }
 
     /// Collects the base fee history for the specified block range.

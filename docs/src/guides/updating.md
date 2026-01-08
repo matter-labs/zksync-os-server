@@ -36,6 +36,6 @@ Currently it is a little bit of a frustrating process, but we plan to improve it
 * Step 2: compute "genesis hash" - when you start the server **with new genesis.json** created in the step above - add a print here: https://github.com/matter-labs/zksync-os-server/blob/main/node/bin/src/batcher/util.rs#L36 to get the hash value.
 * Step 3: Put the new hash value into: https://github.com/matter-labs/zksync-era/blob/zksync-os-integration/etc/env/file_based/genesis.yaml
 * Step 4: Re-run the Step 1. Make sure to use zksync-era with the Step3, as new genesis is used inside CTM registration, so it will impact the state.json contents.
-* Step 5: check that everything works -- you should be able to run anvil with the new state (`anvil --load_state zkos-l1-state.json`) and zksync-os-server **with new genesis.json** (it normally loads it from local directory).
+* Step 5: check that everything works -- you should be able to run anvil with the new state (`anvil --load_state ./local-chains/v30/zkos-l1-state.json`) and zksync-os-server **with new genesis.json** (it normally loads it from local directory).
 
 https://github.com/matter-labs/zksync-os-server/blob/main/node/bin/src/batcher/util.rs#L36
