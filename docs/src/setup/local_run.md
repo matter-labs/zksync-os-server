@@ -1,6 +1,18 @@
 ## Run
 
-### Local
+### Using the `run_local.sh` Script
+
+The `run_local.sh` script automates starting Anvil and chain node(s):
+
+```bash
+# Run a single chain
+./run_local.sh ./local-chains/v30
+
+# Run multiple chains
+./run_local.sh ./local-chains/v30/multiple-chains
+```
+
+### Manual setup
 
 To run node locally, first launch `anvil`:
 

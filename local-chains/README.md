@@ -60,7 +60,38 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 ## Usage
 
-### Running a Single Chain
+### Using the `run_local.sh` Script (Recommended)
+
+The `run_local.sh` script automates starting Anvil and chain node(s):
+
+```bash
+# Run a single chain
+./run_local.sh ./local-chains/v30
+
+# Run multiple chains
+./run_local.sh ./local-chains/v30/multiple-chains
+```
+
+#### How the Script Works
+
+1. **Validates configuration directory** — Checks that the directory exists and contains `zkos-l1-state.json`
+2. **Starts Anvil** — Loads the L1 state snapshot on port 8545 (logs suppressed)
+3. **Waits for Anvil readiness** — Polls the JSON-RPC endpoint until Anvil responds (up to 30 seconds)
+4. **Detects chain mode**:
+   - If `config.json` exists → Starts single chain
+   - Otherwise → Starts all `chain*.json` files found
+5. **Monitors processes** — If any process fails, all services are stopped
+6. **Graceful shutdown** — Press `Ctrl+C` to stop all services
+
+#### Script Output
+
+- **Anvil logs**: Suppressed
+- **Chain logs**: Displayed in terminal
+- **Script messages**: Color-coded status updates
+
+### Manual Setup
+
+#### Running a Single Chain
 
 1. Start Anvil with the L1 state:
    ```bash
@@ -69,10 +100,10 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 2. Run the ZKsync OS server:
    ```bash
-   cargo run --release
+   cargo run -- --config ./local-chains/v30/config.json
    ```
 
-### Running Multiple Chains
+#### Running Multiple Chains
 
 The `multiple-chains/` subfolder contains configurations for running multiple chain instances against a shared L1 state.
 
@@ -101,3 +132,25 @@ When a new protocol version is released:
 2. Generate new L1 state with updated contracts
 3. Create appropriate `genesis.json` and `config.json` files
 4. Optionally add scenario-specific subfolders (e.g., `multiple-chains/`)
+
+## Troubleshooting
+
+### Anvil failed to start
+
+- Check if port 8545 is already in use: `lsof -i :8545`
+- Verify `zkos-l1-state.json` exists and is valid JSON
+
+### Chain fails to start
+
+- Check for port conflicts between chains
+- Verify all required config fields are present (especially `l1_sender` private keys)
+- Check the terminal output for specific error messages
+
+### Multiple chains: port conflicts
+
+Each chain config must specify unique ports:
+- `rpc.address` — JSON-RPC port (e.g., 3050, 3051, 3052)
+- `sequencer.block_replay_server_address` — Replay server port
+- `status_server.address` — Status server port
+- `prover_api.address` — Prover API port
+- `observability.prometheus.port` — Prometheus metrics port
