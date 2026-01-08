@@ -33,7 +33,10 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Path to a JSON config file. Env variables override file values if specified.
+    /// Path to a JSON config file. If not specified, default config will attempted to be loaded to fill in the config 
+    /// values for local setup. If default config is missing, no configs will be loaded, and they must be explicitly set 
+    /// via other configuration means (e.g. environment variables). Env variables override config settings from the file
+    /// if both are provided.
     #[arg(long)]
     config: Option<String>,
 
