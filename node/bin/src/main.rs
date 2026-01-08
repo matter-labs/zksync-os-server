@@ -34,8 +34,8 @@ enum CliCommand {
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
     /// Path to a JSON config file. Env variables override file values if specified.
-    #[arg(long, default_value_t = format!("./local-chains/{PROTOCOL_VERSION}/config.json"))]
-    config: String,
+    #[arg(long)]
+    config: Option<String>,
 
     #[command(subcommand)]
     cmd: Option<CliCommand>,
@@ -49,14 +49,20 @@ pub async fn main() {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
 
-    // Process the config file
-    let config_path = &opt.config;
-    let config_contents =
-        fs::read_to_string(config_path).expect("Failed to read config file from provided path");
-    let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&config_contents)
-            .expect("Failed to parse config file from provided path");
-    config_sources.push(Json::new(config_path, config_json));
+    // Process the config file if provided or if default exists
+    let config_path: Option<String> = opt.config.or_else(|| {
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/config.json");
+        Path::new(&default_path).exists().then_some(default_path)
+    });
+
+    if let Some(config_path) = &config_path {
+        let config_contents =
+            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+        let config_json: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&config_contents)
+                .expect("Failed to parse config file from provided path");
+        config_sources.push(Json::new(config_path, config_json));
+    }
 
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
