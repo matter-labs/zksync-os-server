@@ -17,6 +17,7 @@ use zksync_os_storage_api::{ReadReplay, ReadRepository, ReadStateHistory, Replay
 ///
 /// This type is supposed to be consumed through [`NetworkService::run`] that registers it as an
 /// endless task that consistently drives the state of the entire network forward.
+#[derive(Debug)]
 pub struct NetworkService {
     network_manager: NetworkManager,
     protocol_rx: mpsc::UnboundedReceiver<ProtocolEvent>,

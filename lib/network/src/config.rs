@@ -1,6 +1,7 @@
 use reth_network::config::SecretKey;
 use reth_network_peers::NodeRecord;
 
+#[derive(Debug)]
 pub struct NetworkConfig {
     /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
     /// handshake.
