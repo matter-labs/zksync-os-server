@@ -85,9 +85,23 @@ pub trait ReadRpcStorage: ReadStateHistory + Clone {
     ) -> RpcStorageResult<impl ViewState> {
         let block_id = block_id.unwrap_or_default();
         let Some(block_number) = self.resolve_block_number(block_id)? else {
-            return Err(RpcStorageError::BlockNotFound);
+            return Err(RpcStorageError::BlockNotFound(block_id));
         };
         Ok(self.state_view_at(block_number)?)
+    }
+
+    /// Fetch state as stored at the end of the provided block. If there is no such block yet, then
+    /// uses latest available state as a fallback (useful for pending blocks).
+    fn state_at_block_number_or_latest(
+        &self,
+        block_number: BlockNumber,
+    ) -> StateResult<impl ViewState> {
+        let block_range = self.block_range_available();
+        if &block_number <= block_range.end() {
+            self.state_view_at(block_number)
+        } else {
+            self.state_view_at(*block_range.end())
+        }
     }
 }
 
@@ -183,9 +197,9 @@ pub type RpcStorageResult<Ok> = Result<Ok, RpcStorageError>;
 /// Generic error type for RPC storage.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum RpcStorageError {
-    /// Block could not be found.
-    #[error("block not found")]
-    BlockNotFound,
+    /// Block could not be found by its id (hash/number/tag).
+    #[error("block `{0}` not found")]
+    BlockNotFound(BlockId),
 
     #[error(transparent)]
     Repository(#[from] RepositoryError),

@@ -35,7 +35,7 @@ async fn batch_verification_works() -> anyhow::Result<()> {
         .l2_zk_provider
         .wait_finalized_with_timeout(
             deploy_tx_receipt.block_number.unwrap(),
-            Duration::from_secs(60),
+            zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
         )
         .await?;
     Ok(())
@@ -63,7 +63,10 @@ async fn batch_verification_without_enough_ens() -> anyhow::Result<()> {
     // First block should not get finalized because EN with 2FA is needed.
     main_node
         .l2_zk_provider
-        .wait_not_finalized(1, Duration::from_secs(60))
+        .wait_not_finalized(
+            1,
+            zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
+        )
         .await?;
     Ok(())
 }
@@ -84,7 +87,10 @@ async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
     // First block should not get finalized because 2 EN with 2FA are needed.
     main_node
         .l2_zk_provider
-        .wait_not_finalized(1, Duration::from_secs(60))
+        .wait_not_finalized(
+            1,
+            zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
+        )
         .await?;
 
     let _en2 = main_node
@@ -107,7 +113,7 @@ async fn batch_verification_with_2_ens() -> anyhow::Result<()> {
         .l2_zk_provider
         .wait_finalized_with_timeout(
             deploy_tx_receipt.block_number.unwrap(),
-            Duration::from_secs(60),
+            zksync_os_integration_tests::assert_traits::DEFAULT_TIMEOUT,
         )
         .await?;
     Ok(())

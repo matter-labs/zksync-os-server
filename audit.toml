@@ -1,4 +1,0 @@
-[advisories]
-ignore = [
-    "RUSTSEC-2025-0137",  # Unsoundness in reciprocal_mg10 - not used by our code
-]

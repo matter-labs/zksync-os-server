@@ -39,6 +39,7 @@ use crate::prover_input_generator::ProverInputGenerator;
 use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
+use alloy::consensus::BlobTransactionSidecar;
 use alloy::network::{Ethereum, EthereumWallet};
 use alloy::primitives::BlockNumber;
 use alloy::providers::fillers::{FillProvider, TxFiller};
@@ -410,13 +411,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ======== Start Status Server ========
-    tasks.spawn(
-        run_status_server(
-            config.status_server_config.address.clone(),
-            stop_receiver.clone(),
-        )
-        .map(report_exit("Status server")),
-    );
+    if config.status_server_config.enabled {
+        tasks.spawn(
+            run_status_server(
+                config.status_server_config.address.clone(),
+                stop_receiver.clone(),
+            )
+            .map(report_exit("Status server")),
+        );
+    }
 
     // =========== Start JSON RPC ========
 
@@ -446,7 +449,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         None
     };
 
-    let (pending_block_context_sender, pending_block_context_receiver) = watch::channel(None);
+    let (last_constructed_block_ctx_sender, last_constructed_block_ctx_receiver) =
+        watch::channel(None);
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
@@ -457,14 +461,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l2_mempool.clone(),
             genesis_input_source,
             tx_acceptance_state_receiver,
-            pending_block_context_receiver,
+            last_constructed_block_ctx_receiver,
             main_node_provider,
         )
         .map(report_exit("JSON-RPC server")),
     );
 
     tracing::info!("Initializing pubdata price provider");
+    // Channels for GasAdjuster->BlockContextProvider communication.
     let (pubdata_price_sender, pubdata_price_receiver) = watch::channel(None);
+    let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
+    // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
+    let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
     if config.sequencer_config.is_main_node() {
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
@@ -475,6 +483,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_provider.clone().erased(),
             gas_adjuster_config,
             pubdata_price_sender,
+            blob_fill_ratio_sender,
+            sidecar_receiver,
         )
         .await
         .unwrap();
@@ -517,7 +527,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.pubdata_price_override,
         config.sequencer_config.native_price_override,
         pubdata_price_receiver,
-        pending_block_context_sender,
+        blob_fill_ratio_receiver,
+        last_constructed_block_ctx_sender,
         config.l1_sender_config.pubdata_mode,
     );
 
@@ -538,13 +549,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
-    tasks.spawn(
-        replay_server(
-            block_replay_storage.clone(),
-            config.sequencer_config.block_replay_server_address.clone(),
-        )
-        .map(report_exit("replay server")),
-    );
+    if config.sequencer_config.block_replay_server_enabled {
+        tasks.spawn(
+            replay_server(
+                block_replay_storage.clone(),
+                config.sequencer_config.block_replay_server_address.clone(),
+            )
+            .map(report_exit("replay server")),
+        );
+    }
 
     let repositories_clone = repositories.clone();
     tasks.spawn(async move {
@@ -579,6 +592,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             stop_receiver.clone(),
             tx_acceptance_state_sender,
+            sidecar_sender,
             batch_ranges_for_batcher,
             last_executed_batch_data,
         )
@@ -630,11 +644,13 @@ async fn run_main_node_pipeline(
     chain_id: u64,
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
+    sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     batch_ranges_for_batcher: tokio::sync::mpsc::Receiver<CommittedBatch>,
     last_executed_batch_data: StoredBatchData,
 ) {
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
+        node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
@@ -646,15 +662,17 @@ async fn run_main_node_pipeline(
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    tasks.spawn(
-        prover_server::run(
-            fri_job_manager.clone(),
-            snark_job_manager.clone(),
-            batch_storage.clone(),
-            config.prover_api_config.address.clone(),
-        )
-        .map(report_exit("prover_server_job")),
-    );
+    if config.prover_api_config.enabled {
+        tasks.spawn(
+            prover_server::run(
+                fri_job_manager.clone(),
+                snark_job_manager.clone(),
+                batch_storage.clone(),
+                config.prover_api_config.address.clone(),
+            )
+            .map(report_exit("prover_server_job")),
+        );
+    }
 
     if config.prover_api_config.fake_fri_provers.enabled {
         run_fake_fri_provers(&config.prover_api_config, tasks, fri_job_manager);
@@ -729,6 +747,7 @@ async fn run_main_node_pipeline(
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
             pubdata_mode: config.l1_sender_config.pubdata_mode,
+            sidecar_sender,
             committed_batches: batch_ranges_for_batcher,
         })
         .pipe(BatchVerificationPipelineStep::new(

@@ -79,6 +79,7 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         tx_count: 0,
         execution_version: 1,
         protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
+        computational_native_used: None,
     }
 }
 

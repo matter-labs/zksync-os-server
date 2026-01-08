@@ -178,8 +178,8 @@ impl BatchInfo {
                     };
                 B256::from(system_batch_output.hash())
             }
-            // 31 needed for upgrade integration test
-            30 | 31 => {
+            // 32 needed for upgrade integration test
+            30..=32 => {
                 use zk_ee::utils::Bytes32;
                 let system_batch_output =
                     zk_os_basic_system::system_implementation::system::BatchOutput {

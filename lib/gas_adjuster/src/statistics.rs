@@ -53,6 +53,42 @@ impl<T: Ord + Copy + Default> GasStatistics<T> {
     }
 }
 
+/// Helper structure responsible for keeping some latest samples and calculating median.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Statistics<T> {
+    samples: VecDeque<T>,
+    median_cached: Option<T>,
+    max_samples: usize,
+}
+
+impl<T: Ord + Copy + Default> Statistics<T> {
+    pub fn new(max_samples: usize) -> Self {
+        Self {
+            max_samples,
+            samples: VecDeque::with_capacity(max_samples),
+            median_cached: None,
+        }
+    }
+
+    pub fn median(&self) -> Option<T> {
+        self.median_cached
+    }
+
+    pub fn add_samples(&mut self, new_samples: impl IntoIterator<Item = T>) {
+        self.samples.extend(new_samples);
+
+        let extra = self.samples.len().saturating_sub(self.max_samples);
+        self.samples.drain(..extra);
+
+        let mut samples: Vec<_> = self.samples.iter().cloned().collect();
+
+        if !self.samples.is_empty() {
+            let (_, &mut median, _) = samples.select_nth_unstable(self.samples.len() / 2);
+            self.median_cached = Some(median);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::GasStatistics;

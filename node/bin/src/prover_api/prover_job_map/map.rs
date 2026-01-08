@@ -337,6 +337,21 @@ impl<T: Clone> ProverJobMap<T> {
                 PROVER_METRICS.prove_time[&(self.prover_stage, prover_type, prover_id.to_string())]
                     // time since last assignment is proving time
                     .observe(assignment_info.time_since_last_assignment);
+                if let Some(total_computational_native_used) = stats.total_computational_native_used
+                {
+                    PROVER_METRICS.computational_native_proven
+                        [&(self.prover_stage, prover_type, prover_id.to_string())]
+                        .observe(total_computational_native_used);
+                    if total_computational_native_used > 0 {
+                        PROVER_METRICS.prove_time_per_million_native
+                            [&(self.prover_stage, prover_type, prover_id.to_string())]
+                            .observe(
+                                assignment_info
+                                    .time_since_last_assignment
+                                    .div_f64(total_computational_native_used as f64 / 1_000_000.0),
+                            );
+                    }
+                }
                 if stats.total_txs > 0 {
                     PROVER_METRICS.prove_time_per_tx
                         [&(self.prover_stage, prover_type, prover_id.to_string())]
@@ -497,6 +512,7 @@ mod tests {
             tx_count: 10,
             execution_version: 1,
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
+            computational_native_used: None,
         };
 
         BatchForSigning::new(batch, vec![1, 2, 3])
