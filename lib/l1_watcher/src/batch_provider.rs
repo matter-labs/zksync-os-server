@@ -49,7 +49,7 @@ impl CommittedBatchProvider {
                 batch_number,
             )
             .await?
-            .with_context(|| format!("failed to find committed batch {} on L1", batch_number))?;
+            .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
             inner.batches.insert(
                 batch_number,
                 DiscoveredCommittedBatch {
