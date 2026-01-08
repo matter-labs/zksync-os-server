@@ -4,4 +4,4 @@
 pub const DEFAULT_ROCKS_DB_PATH: &str = "./db/node1";
 
 /// Current protocol version for local chain configuration.
-pub const PROTOCOL_VERSION: &str = "v31";
+pub const PROTOCOL_VERSION: &str = "v30";
