@@ -25,9 +25,9 @@ const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = Address::new([
 const L2_ASSET_ROUTER_ADDRESS: Address = Address::new([
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x03,
 ]);
-const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address = Address::new([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x08,
-]);
+// const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address = Address::new([
+//     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x08,
+// ]);
 
 sol! {
     #[sol(rpc)]
@@ -173,65 +173,69 @@ fn build_second_bridge_calldata(
     Bytes::from(result)
 }
 
-/// L2->L1 log proof structure
-#[derive(Debug, Clone)]
-struct L2ToL1LogProof {
-    batch_number: u64,
-    id: u64,
-    proof: Vec<FixedBytes<32>>,
-}
+// /// L2->L1 log proof structure
+// #[derive(Debug, Clone)]
+// struct L2ToL1LogProof {
+//     batch_number: u64,
+//     id: u64,
+//     proof: Vec<FixedBytes<32>>,
+// }
 
-/// Wait for L2->L1 log proof to be available
-async fn wait_for_l2_to_l1_proof<P: Provider + ZksyncApi>(
-    provider: &P,
-    tx_hash: FixedBytes<32>,
-    log_index: u64,
-) -> Result<L2ToL1LogProof> {
-    use std::time::Duration;
-    use tokio::time::sleep;
+// /// Wait for L2->L1 log proof to be available
+// async fn wait_for_l2_to_l1_proof<P: Provider + ZksyncApi>(
+//     provider: &P,
+//     tx_hash: FixedBytes<32>,
+//     log_index: u64,
+// ) -> Result<L2ToL1LogProof> {
+//     use std::time::Duration;
+//     use tokio::time::sleep;
+//
+//     // Try to get the proof, with retries for up to 60 seconds
+//     for _ in 0..60 {
+//         if let Ok(Some(proof)) = provider.get_l2_to_l1_log_proof(tx_hash, log_index).await {
+//             return Ok(L2ToL1LogProof {
+//                 batch_number: proof.batch_number,
+//                 id: proof.id as u64,
+//                 proof: proof.proof,
+//             });
+//         }
+//         sleep(Duration::from_secs(1)).await;
+//     }
+//
+//     anyhow::bail!("Timeout waiting for L2->L1 log proof")
+// }
 
-    // Try to get the proof, with retries for up to 60 seconds
-    for _ in 0..60 {
-        if let Ok(Some(proof)) = provider.get_l2_to_l1_log_proof(tx_hash, log_index).await {
-            return Ok(L2ToL1LogProof {
-                batch_number: proof.batch_number,
-                id: proof.id as u64,
-                proof: proof.proof,
-            });
-        }
-        sleep(Duration::from_secs(1)).await;
-    }
-
-    anyhow::bail!("Timeout waiting for L2->L1 log proof")
-}
-
-/// Wait for interop root to be available on the destination chain
-async fn wait_for_interop_root<P: Provider>(
-    provider: &P,
-    source_chain_id: u64,
-    batch_number: u64,
-) -> Result<()> {
-    use std::time::Duration;
-    use tokio::time::sleep;
-
-    let storage = IL2InteropRootStorage::new(L2_INTEROP_ROOT_STORAGE_ADDRESS, provider);
-
-    // Poll for up to 120 seconds (interop root propagation may take time)
-    for _ in 0..120 {
-        let root = storage
-            .interopRoots(U256::from(source_chain_id), U256::from(batch_number))
-            .call()
-            .await?;
-
-        if root != FixedBytes::ZERO {
-            return Ok(());
-        }
-
-        sleep(Duration::from_secs(1)).await;
-    }
-
-    anyhow::bail!("Timeout waiting for interop root")
-}
+// /// Wait for interop root to be available on the destination chain
+// async fn wait_for_interop_root<P: Provider>(
+//     provider: &P,
+//     source_chain_id: u64,
+//     batch_number: u64,
+// ) -> Result<()> {
+//     use std::time::Duration;
+//     use tokio::time::sleep;
+//
+//     const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address = Address::new([
+//         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x08,
+//     ]);
+//
+//     let storage = IL2InteropRootStorage::new(L2_INTEROP_ROOT_STORAGE_ADDRESS, provider);
+//
+//     // Poll for up to 120 seconds (interop root propagation may take time)
+//     for _ in 0..120 {
+//         let root = storage
+//             .interopRoots(U256::from(source_chain_id), U256::from(batch_number))
+//             .call()
+//             .await?;
+//
+//         if root != FixedBytes::ZERO {
+//             return Ok(());
+//         }
+//
+//         sleep(Duration::from_secs(1)).await;
+//     }
+//
+//     anyhow::bail!("Timeout waiting for interop root")
+// }
 
 #[test(tokio::test)]
 async fn test_interop_bundle_send() -> Result<()> {
@@ -357,7 +361,7 @@ async fn test_interop_bundle_send() -> Result<()> {
     );
     tracing::info!(
         "Destination chain ID (hex): {}",
-        hex::encode(&format_evm_v1(chain_b_id))
+        hex::encode(format_evm_v1(chain_b_id))
     );
 
     // Step 5: Send bundle to chain B
@@ -389,7 +393,7 @@ async fn test_interop_bundle_send() -> Result<()> {
             if receipt.status() {
                 println!("\n========================================");
                 println!("✅ Bundle sent successfully!");
-                println!("TX Hash: {}", hash);
+                println!("TX Hash: {hash}");
                 println!("RPC URL: {}", chain_a.l2_rpc_url());
                 println!("Block: {:?}", receipt.block_number);
                 println!("Gas Used: {}", receipt.gas_used);
@@ -447,15 +451,11 @@ async fn test_interop_bundle_send() -> Result<()> {
                         anyhow::bail!("Block was not finalized in time");
                     }
 
-                    match chain_a.l2_provider.get_block_number().await {
-                        Ok(finalized_block) => {
-                            if finalized_block >= block_number {
-                                tracing::info!("✅ Block {} finalized", block_number);
-                                break;
-                            }
+                    if let Ok(finalized_block) = chain_a.l2_provider.get_block_number().await
+                        && finalized_block >= block_number {
+                            tracing::info!("✅ Block {} finalized", block_number);
+                            break;
                         }
-                        Err(_) => {}
-                    }
 
                     tokio::time::sleep(poll_interval).await;
                 }
@@ -468,15 +468,12 @@ async fn test_interop_bundle_send() -> Result<()> {
                         anyhow::bail!("Log proof was not available in time");
                     }
 
-                    match chain_a.l2_zk_provider.get_l2_to_l1_log_proof(hash, 0).await {
-                        Ok(Some(proof)) => {
-                            tracing::info!("✅ Log proof obtained");
-                            tracing::info!("Batch number: {}", proof.batch_number);
-                            tracing::info!("Message index: {}", proof.id);
-                            tracing::info!("Proof length: {}", proof.proof.len());
-                            break proof;
-                        }
-                        _ => {}
+                    if let Ok(Some(proof)) = chain_a.l2_zk_provider.get_l2_to_l1_log_proof(hash, 0).await {
+                        tracing::info!("✅ Log proof obtained");
+                        tracing::info!("Batch number: {}", proof.batch_number);
+                        tracing::info!("Message index: {}", proof.id);
+                        tracing::info!("Proof length: {}", proof.proof.len());
+                        break proof;
                     }
 
                     tokio::time::sleep(poll_interval).await;
@@ -667,7 +664,7 @@ async fn test_interop_bundle_send() -> Result<()> {
                 println!("\n========================================");
                 println!("❌ TRANSACTION REVERTED");
                 println!("========================================");
-                println!("TX Hash: {}", hash);
+                println!("TX Hash: {hash}");
                 println!("Gas Used: {} (very low - early revert)", receipt.gas_used);
                 println!("Block: {:?}", receipt.block_number);
                 println!("\nThis suggests the AssetRouter is reverting early,");
