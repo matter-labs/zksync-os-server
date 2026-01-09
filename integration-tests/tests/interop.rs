@@ -644,15 +644,18 @@ async fn test_interop_bundle_send() -> Result<()> {
                                     tracing::error!("❌ executeBundle transaction reverted");
                                     tracing::error!("Gas used: {}", execute_receipt.gas_used);
                                     tracing::error!("Receipt: {:?}", execute_receipt);
+                                    anyhow::bail!("executeBundle transaction reverted on chain B");
                                 }
                             }
                             Err(e) => {
                                 tracing::error!("❌ Failed to get executeBundle receipt: {:?}", e);
+                                anyhow::bail!("Failed to get executeBundle receipt: {}", e);
                             }
                         }
                     }
                     Err(e) => {
                         tracing::error!("❌ Failed to send executeBundle transaction: {:?}", e);
+                        anyhow::bail!("Failed to send executeBundle transaction: {}", e);
                     }
                 }
             } else {
@@ -678,6 +681,8 @@ async fn test_interop_bundle_send() -> Result<()> {
                 println!("3. Chain ID or destination validation failure");
                 println!("4. Asset not properly registered");
                 println!("========================================\n");
+
+                anyhow::bail!("Bundle transaction reverted on chain A");
             }
 
             hash
