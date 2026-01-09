@@ -412,9 +412,11 @@ async fn test_interop_bundle_send() -> Result<()> {
 
                 // Decode the log data as bytes (it's ABI-encoded)
                 use alloy::sol_types::SolType;
-                let bundle_with_prefix: Bytes = <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(
-                    &l1_messenger_log.data().data
-                ).expect("Failed to decode bundle from log");
+                let bundle_with_prefix: Bytes =
+                    <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(
+                        &l1_messenger_log.data().data,
+                    )
+                    .expect("Failed to decode bundle from log");
 
                 tracing::info!(
                     "✅ Extracted bundle from L1Messenger log, length: {}",
@@ -568,8 +570,14 @@ async fn test_interop_bundle_send() -> Result<()> {
                 tracing::info!("\n=== CALLDATA DEBUG INFO ===");
                 tracing::info!("EncodedBundle (no prefix) length: {}", bundle.len());
                 tracing::info!("EncodedBundle (no prefix): 0x{}", hex::encode(&bundle));
-                tracing::info!("L2ToL1Message (with prefix) length: {}", bundle_with_prefix.len());
-                tracing::info!("L2ToL1Message (with prefix): 0x{}", hex::encode(&bundle_with_prefix));
+                tracing::info!(
+                    "L2ToL1Message (with prefix) length: {}",
+                    bundle_with_prefix.len()
+                );
+                tracing::info!(
+                    "L2ToL1Message (with prefix): 0x{}",
+                    hex::encode(&bundle_with_prefix)
+                );
                 tracing::info!("Complete calldata: {}", calldata_hex);
                 tracing::info!("Calldata length: {}", calldata.len());
                 tracing::info!("Function selector: {}", &calldata_hex[0..10]);
@@ -580,10 +588,7 @@ async fn test_interop_bundle_send() -> Result<()> {
                 match execute_call_with_gas.send().await {
                     Ok(pending_tx) => {
                         let tx_hash = *pending_tx.tx_hash();
-                        tracing::info!(
-                            "executeBundle transaction sent: {:?}",
-                            tx_hash
-                        );
+                        tracing::info!("executeBundle transaction sent: {:?}", tx_hash);
 
                         match pending_tx.get_receipt().await {
                             Ok(execute_receipt) => {
@@ -605,7 +610,8 @@ async fn test_interop_bundle_send() -> Result<()> {
 
                                     tracing::info!("Token address on chain B: {}", token_b_address);
 
-                                    let token_b = TestERC20::new(token_b_address, &chain_b.l2_provider);
+                                    let token_b =
+                                        TestERC20::new(token_b_address, &chain_b.l2_provider);
                                     let balance_b = token_b.balanceOf(sender).call().await?;
 
                                     tracing::info!(
