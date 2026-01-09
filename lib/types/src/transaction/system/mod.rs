@@ -67,32 +67,40 @@ mod tests {
     fn interop_roots_tx_serialization() {
         // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
         // See https://ethereum.github.io/execution-apis/api-documentation/
-        let tx = InteropRootsEnvelope {
-            hash: Default::default(),
-            inner: SystemTransaction {
-                gas_limit: 0x10000,
-                to: Default::default(),
-                input: Default::default(),
-                marker: Default::default(),
-            },
+
+        let transaction = SystemTransaction {
+            gas_limit: 0x10000,
+            to: Default::default(),
+            input: Default::default(),
+            marker: Default::default(),
         };
+
+        let tx = InteropRootsEnvelope {
+            hash: transaction.calculate_hash(),
+            inner: transaction,
+        };
+
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),
             r#"{
-  "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-  "nonce": "0x0",
+  "hash": "0xd06b6df7ff36db8daee83e3a8d5d0b1e349e57968054b3da83192341e195a848",
+  "initiator": "0x0000000000000000000000000000000000008001",
   "to": "0x0000000000000000000000000000000000000000",
   "gas": "0x10000",
-  "value": "0x0",
-  "input": "0x",
-  "maxPriorityFeePerGas": "0x0",
+  "gasPerPubdataByteLimit": "0x0",
   "maxFeePerGas": "0x0",
-  "gasPrice": "0x0",
-  "chainId": "0x270",
-  "yParity": "0x0",
-  "r": "0x0",
-  "s": "0x0",
-            }"#
+  "maxPriorityFeePerGas": "0x0",
+  "nonce": "0x0",
+  "value": "0x0",
+  "toMint": "0x0",
+  "refundRecipient": "0x0000000000000000000000000000000000000000",
+  "input": "0x",
+  "factoryDeps": [],
+  "v": "0x0",
+  "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "yParity": "0x0"
+}"#
         );
     }
 }

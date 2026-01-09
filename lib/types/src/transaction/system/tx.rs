@@ -209,29 +209,10 @@ impl<T: SystemTxType> RlpEcdsaDecodableTx for SystemTransaction<T> {
     }
 }
 
-enum ServiceTxField<'b> {
-    U64(u64),
-    Bytes(&'b [u8]),
-}
-
-impl<'b> Encodable for ServiceTxField<'b> {
-    fn encode(&self, out: &mut dyn BufMut) {
-        match self {
-            ServiceTxField::U64(v) => v.encode(out),
-            ServiceTxField::Bytes(b) => (*b).encode(out),
-        }
-    }
-}
-
+// if something goes wrong with encoding, there's a chance that something is wrong here
 impl<T: SystemTxType> Encodable for SystemTransaction<T> {
     fn encode(&self, out: &mut dyn BufMut) {
-        let fields = vec![
-            ServiceTxField::U64(self.gas_limit),
-            ServiceTxField::Bytes(self.to.as_slice()),
-            ServiceTxField::Bytes(self.input.as_ref()),
-        ];
-
-        fields.encode(out);
+        self.rlp_encode(out);
     }
 
     fn length(&self) -> usize {
