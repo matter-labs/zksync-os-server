@@ -52,3 +52,9 @@ pub fn get_default_l1_state_path() -> String {
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
     format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/zkos-l1-state.json")
 }
+
+pub fn get_multiple_chains_l1_state_path() -> String {
+    let workspace_dir =
+        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
+    format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/multiple-chains/zkos-l1-state.json")
+}
