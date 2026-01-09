@@ -1,6 +1,6 @@
 {
     "general": {
-        "sandbox": true
+        "ephemeral": true
     },
     "genesis": {
         "bridgehub_address": "0xb318b56e313d15e61467d894c431ada085a7a5ae",

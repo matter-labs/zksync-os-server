@@ -132,8 +132,8 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
-    let sandbox_enabled = config.general_config.sandbox;
-    let _sandbox_guard = sandbox_enabled.then(|| enable_sandbox_mode(&mut config));
+    let ephemeral_enabled = config.general_config.ephemeral;
+    let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
     let prometheus_port = config.observability_config.prometheus.port;
 
     let main_task = async move {
@@ -144,9 +144,9 @@ pub async fn main() {
     };
 
     let prometheus_task = async {
-        if sandbox_enabled {
-            tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
-            // no-op for the sandbox mode
+        if ephemeral_enabled {
+            tracing::info!("Ephemeral mode enabled, skipping Prometheus exporter");
+            // no-op for the ephemeral mode
             future::pending::<anyhow::Result<()>>().await
         } else {
             let prometheus: PrometheusExporterConfig =
@@ -349,21 +349,21 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 }
 
-fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
+fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
     if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
         tracing::warn!(
             original_path = %original_path.display(),
-            "general_rocks_db_path parameter is ignored in sandbox mode"
+            "general_rocks_db_path parameter is ignored in ephemeral mode"
         );
     }
 
-    let tempdir =
-        tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
+    let tempdir = tempfile::tempdir()
+        .expect("Failed to create temporary RocksDB directory for ephemeral mode");
     let tempdir_path = tempdir.path();
     tracing::info!(
         path = %tempdir_path.display(),
-        "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
+        "Ephemeral mode enabled. Using temporary directory for RocksDB and shared object store"
     );
 
     // Update config to use temporary directory
@@ -372,7 +372,7 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
         file_backed_base_path: tempdir_path.join("shared"),
     };
 
-    // Disable services that are not needed in sandbox mode
+    // Disable services that are not needed in ephemeral mode
     config.prover_api_config.enabled = false;
     config.status_server_config.enabled = false;
     config.sequencer_config.block_replay_server_enabled = false;
