@@ -2,6 +2,8 @@
 
 ### Using the `run_local.sh` Script
 
+⚠️ This script is a temporary solution that will later be replaced by a dedicated orchestrator binary. Do not depend on it in production.
+
 The `run_local.sh` script automates starting Anvil and chain node(s):
 
 ```bash

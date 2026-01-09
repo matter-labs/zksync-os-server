@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -e
 
@@ -8,6 +8,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+echo -e "${YELLOW}⚠️  This script is a temporary solution that will later be replaced by a dedicated orchestrator binary.${NC}"
+echo -e "${YELLOW}   Do not depend on it in production.${NC}"
+echo ""
 
 # Array to store PIDs of background processes
 declare -a PIDS=()
