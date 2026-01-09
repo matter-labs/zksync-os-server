@@ -153,5 +153,5 @@ When a new protocol version is released:
 ### Multiple chains: port conflicts
 
 - Each chain config must specify unique ports. `rpc.address` - JSON-RPC port (e.g., 3050, 3051, 3052)
-- Chains should be run in sandbox mode or use unique directory paths for RocksDB and file storage to avoid interfering with one another.
+- Chains should be run in ephemeral mode or use unique directory paths for RocksDB and file storage to avoid interfering with one another.
 
