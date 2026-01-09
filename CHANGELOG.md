@@ -11,7 +11,7 @@
 
 ### Features
 
-* add sequencer sandbox mode ([#730](https://github.com/matter-labs/zksync-os-server/issues/730)) ([b55cdcd](https://github.com/matter-labs/zksync-os-server/commit/b55cdcd652e6ba8a70e82aa451fbddfc597b9aa8))
+* add sequencer ephemeral mode ([#730](https://github.com/matter-labs/zksync-os-server/issues/730)) ([b55cdcd](https://github.com/matter-labs/zksync-os-server/commit/b55cdcd652e6ba8a70e82aa451fbddfc597b9aa8))
 * config option to disable priority tree ([#738](https://github.com/matter-labs/zksync-os-server/issues/738)) ([36fbd35](https://github.com/matter-labs/zksync-os-server/commit/36fbd3536a28d231fb1fb5899cd46e9268d23d33))
 * **config:** make mempool tx_fee_cap configurable ([#717](https://github.com/matter-labs/zksync-os-server/issues/717)) ([4548357](https://github.com/matter-labs/zksync-os-server/commit/4548357ee2d9e4a9da6709d3f301f8ff7dd80499))
 * make bytecode supplier address config value optional ([#735](https://github.com/matter-labs/zksync-os-server/issues/735)) ([1e6f363](https://github.com/matter-labs/zksync-os-server/commit/1e6f363db7dae74bbf923a052498ce353018bacf))
