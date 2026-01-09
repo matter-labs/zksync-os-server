@@ -11,6 +11,7 @@ use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::BlockOutput;
+use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{
     MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
@@ -153,7 +154,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             }
                             Err(e) => {
                                 match (tx.tx_type(), command.invalid_tx_policy) {
-                                    (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
+                                    (ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::InteropRoots, _) => {
                                         return Err(
                                             BlockDump {
                                                 ctx,
@@ -335,7 +336,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             command.starting_l1_priority_id,
             executed_txs,
             command.previous_block_timestamp,
-            command.node_version,
+            NODE_SEMVER_VERSION.clone(),
             command.protocol_version,
             block_hash_output,
             command.force_preimages,

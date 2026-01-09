@@ -104,7 +104,6 @@ pub struct PreparedBlockCommand<'a> {
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,
     pub metrics_label: &'static str,
-    pub node_version: semver::Version,
     pub protocol_version: ProtocolSemanticVersion,
     /// Expected hash of the block output (missing for command generated from `BlockCommand::Produce`)
     pub expected_block_output_hash: Option<B256>,
