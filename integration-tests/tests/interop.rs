@@ -452,10 +452,11 @@ async fn test_interop_bundle_send() -> Result<()> {
                     }
 
                     if let Ok(finalized_block) = chain_a.l2_provider.get_block_number().await
-                        && finalized_block >= block_number {
-                            tracing::info!("✅ Block {} finalized", block_number);
-                            break;
-                        }
+                        && finalized_block >= block_number
+                    {
+                        tracing::info!("✅ Block {} finalized", block_number);
+                        break;
+                    }
 
                     tokio::time::sleep(poll_interval).await;
                 }
@@ -468,7 +469,9 @@ async fn test_interop_bundle_send() -> Result<()> {
                         anyhow::bail!("Log proof was not available in time");
                     }
 
-                    if let Ok(Some(proof)) = chain_a.l2_zk_provider.get_l2_to_l1_log_proof(hash, 0).await {
+                    if let Ok(Some(proof)) =
+                        chain_a.l2_zk_provider.get_l2_to_l1_log_proof(hash, 0).await
+                    {
                         tracing::info!("✅ Log proof obtained");
                         tracing::info!("Batch number: {}", proof.batch_number);
                         tracing::info!("Message index: {}", proof.id);
