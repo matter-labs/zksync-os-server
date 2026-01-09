@@ -13,10 +13,11 @@ use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_server::{
     config::{
-        BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
-        GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
-        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+        BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
+        ExternalPriceApiClientConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
+        L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
+        ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+        StateBackendConfig, StatusServerConfig, TxValidatorConfig,
     },
     config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
 };
@@ -300,6 +301,18 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse batch verification config");
 
+    let base_token_updater_config = repo
+        .single::<BaseTokenPriceUpdaterConfig>()
+        .expect("Failed to load base token price updater config")
+        .parse()
+        .expect("Failed to parse base token price updater config");
+
+    let external_price_api_client_config = repo
+        .single::<ExternalPriceApiClientConfig>()
+        .expect("Failed to load external price API client config")
+        .parse()
+        .expect("Failed to parse external price API client config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -346,6 +359,8 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
+        base_token_price_updater_config: base_token_updater_config,
+        external_price_api_client_config,
     }
 }
 

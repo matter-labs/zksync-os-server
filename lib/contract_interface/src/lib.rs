@@ -171,6 +171,9 @@ alloy::sol! {
         function getProtocolVersion() external view returns (uint256);
         function getL2SystemContractsUpgradeTxHash() external view returns (bytes32);
         function getL2SystemContractsUpgradeBatchNumber() external view returns (uint256);
+        function baseTokenGasPriceMultiplierNominator() external view returns (uint128);
+        function baseTokenGasPriceMultiplierDenominator() external view returns (uint128);
+        function getBaseToken() external view returns (address);
     }
 
     // Taken from `common/Config.sol`
@@ -286,9 +289,20 @@ alloy::sol! {
         event UpdateUpgradeTimestamp(uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
 
+    // `IChainAdminOwnable.sol`
+    #[sol(rpc)]
+    interface IChainAdminOwnable {
+        function setTokenMultiplier(address _chainContract, uint128 _nominator, uint128 _denominator) external;
+    }
+
     // `BytecodeSupplier.sol`
     interface IBytecodeSupplier {
         event BytecodePublished(bytes32 indexed bytecodeHash, bytes bytecode);
+    }
+
+    #[sol(rpc)]
+    interface IERC20 {
+        function decimals() external view returns (uint8);
     }
 }
 
@@ -549,6 +563,15 @@ impl<P: Provider> ZkChain<P> {
             .await
             .map(|n| n.saturating_to())
             .enrich("getL2SystemContractsUpgradeBatchNumber", Some(block_id))
+    }
+
+    /// Returns base token address.
+    pub async fn get_base_token_address(&self) -> Result<Address> {
+        self.instance
+            .getBaseToken()
+            .call()
+            .await
+            .enrich("getBaseToken", None)
     }
 }
 

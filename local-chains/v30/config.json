@@ -8,5 +8,9 @@
         "operator_commit_pk": "0x2c096b29fdfa333428eca566906cc8c89ecf715f99d15fd94967509a240c4de2",
         "operator_prove_pk": "0xb02977208bae4f76545b488dc1964ba3afa014b8bb14963a1e20dc1ebde07579",
         "operator_execute_pk": "0xf2658e1bd579b90a9ffe659ddcc76b6a178db1692aae304bb2ea01c3a1fa651a"
+    },
+    "external_price_api_client": {
+        "source": "Forced",
+        "forced_prices": [["0x0000000000000000000000000000000000000001", 3000]]
     }
 }

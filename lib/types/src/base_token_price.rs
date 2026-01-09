@@ -1,0 +1,41 @@
+use chrono::{DateTime, Utc};
+use num::rational::Ratio;
+use num::{BigInt, BigUint};
+
+/// Struct to represent API response containing denominator, numerator, and timestamp.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BaseTokenApiRatio {
+    pub ratio: Ratio<BigUint>,
+    // Either the timestamp of the quote or the timestamp of the request.
+    pub timestamp: DateTime<Utc>,
+}
+
+impl BaseTokenApiRatio {
+    pub fn from_f64_decimals_and_timestamp(
+        value: f64,
+        decimals: u8,
+        timestamp: Option<DateTime<Utc>>,
+    ) -> Self {
+        assert!(value > 0.0, "Value must be positive");
+        let signed_ratio =
+            Ratio::<BigInt>::from_float(value).expect("Failed to convert float to ratio");
+
+        let mut ratio = Ratio::<BigUint>::new(
+            signed_ratio.numer().to_biguint().unwrap(),
+            signed_ratio.denom().to_biguint().unwrap(),
+        );
+        ratio /= BigUint::from(10u64).pow(decimals as u32);
+
+        Self {
+            ratio,
+            timestamp: timestamp.unwrap_or_else(Utc::now),
+        }
+    }
+
+    pub fn reciprocal(&self) -> Self {
+        Self {
+            ratio: self.ratio.recip(),
+            timestamp: self.timestamp,
+        }
+    }
+}

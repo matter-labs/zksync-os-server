@@ -45,6 +45,8 @@ pub struct Config {
     pub observability_config: ObservabilityConfig,
     pub gas_adjuster_config: GasAdjusterConfig,
     pub batch_verification_config: BatchVerificationConfig,
+    pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
+    pub external_price_api_client_config: ExternalPriceApiClientConfig,
 }
 
 impl Config {
@@ -98,6 +100,18 @@ impl Config {
         schema
             .insert(&BatchVerificationConfig::DESCRIPTION, "batch_verification")
             .expect("Failed to insert batch verification config");
+        schema
+            .insert(
+                &BaseTokenPriceUpdaterConfig::DESCRIPTION,
+                "base_token_price_updater",
+            )
+            .expect("Failed to insert base token price updater config");
+        schema
+            .insert(
+                &ExternalPriceApiClientConfig::DESCRIPTION,
+                "external_price_api_client",
+            )
+            .expect("Failed to insert external price api client config");
         schema
     }
 
@@ -751,6 +765,77 @@ pub struct BatchVerificationConfig {
     pub signing_key: SecretString,
 }
 
+/// Config for the base token price updater.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct BaseTokenPriceUpdaterConfig {
+    /// How often to fetch external prices.
+    #[config(default_t = Duration::from_secs(30))]
+    pub price_polling_interval: Duration,
+    /// How many percent a quote needs to change in order for update to be propagated to L1.
+    /// Exists to save on gas.
+    #[config(default_t = 10)]
+    pub l1_update_deviation_percentage: u32,
+    /// Maximum number of attempts to fetch quote from a remote API before failing over.
+    #[config(default_t = 3)]
+    pub price_fetching_max_attempts: u32,
+    /// Override for address of the base token address.
+    pub base_token_addr_override: Option<Address>,
+    /// Override for decimals of the base token.
+    pub base_token_decimals_override: Option<u8>,
+    /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
+    pub gateway_base_token_addr_override: Option<Address>,
+    /// Private key to update base token price on L1.
+    /// Must be consistent with the key set on the chain admin contract.
+    /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
+    pub token_multiplier_setter_pk: Option<SecretString>,
+}
+
+/// Config to force configured token prices in USD.
+/// E.g. if needed to force 1 TOKEN = 0.3 USD, that would be represented in a config with price=0.3 for this token.
+/// Important: price is **token** price (e.g. for USDC it would be 1), not base token unit price.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct ForcedPriceClientConfig {
+    /// Map of token addresses to their forced price in USD for 1 token (not base token unit!).
+    #[config(default, with = Serde![*])]
+    pub prices: Vec<(Address, f64)>,
+    /// Forced fluctuation. It defines how much percent the ratio should fluctuate from its forced
+    /// value. If it's 0, then the ForcedPriceClient will return the same quote every time
+    /// it's called. Otherwise, ForcedPriceClient will return quote with numerator +/- fluctuation %.
+    #[config(default_t = 20.0)]
+    pub fluctuation: f64,
+    /// In order to smooth out fluctuation, consecutive values returned by forced client will not
+    /// differ more than next_value_fluctuation percent.
+    #[config(default_t = 5.0)]
+    pub next_value_fluctuation: f64,
+}
+
+/// Source of external price data.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ExternalPriceSource {
+    Forced,
+    CoinGecko,
+    CoinMarketCap,
+}
+
+/// Configuration for external price API client.
+#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+pub struct ExternalPriceApiClientConfig {
+    #[config(with = Serde![str])]
+    pub source: ExternalPriceSource,
+    /// Base URL of the external price API.
+    pub base_url: Option<String>,
+    /// API key for the external price API.
+    pub api_key: Option<String>,
+    /// Timeout for the external price API client.
+    #[config(default_t = Duration::from_secs(10))]
+    pub client_timeout: Duration,
+    /// Config for forced price client.
+    #[config(nest)]
+    pub forced: Option<ForcedPriceClientConfig>,
+}
+
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     fn from(c: RpcConfig) -> Self {
         Self {
@@ -887,5 +972,55 @@ pub fn gas_adjuster_config(
         max_priority_fee_per_gas: max_priority_fee_per_gas_wei,
         poll_period: c.poll_period,
         pubdata_pricing_multiplier: c.pubdata_pricing_multiplier,
+    }
+}
+
+impl From<ExternalPriceSource> for zksync_os_base_token_adjuster::ExternalPriceSource {
+    fn from(source: ExternalPriceSource) -> Self {
+        match source {
+            ExternalPriceSource::Forced => Self::Forced,
+            ExternalPriceSource::CoinGecko => Self::CoinGecko,
+            ExternalPriceSource::CoinMarketCap => Self::CoinMarketCap,
+        }
+    }
+}
+
+pub fn base_token_price_updater_config(
+    c: &BaseTokenPriceUpdaterConfig,
+    l1_sender_config: &L1SenderConfig,
+) -> zksync_os_base_token_adjuster::BaseTokenPriceUpdaterConfig {
+    zksync_os_base_token_adjuster::BaseTokenPriceUpdaterConfig {
+        price_polling_interval: c.price_polling_interval,
+        l1_update_deviation_percentage: c.l1_update_deviation_percentage,
+        price_fetching_max_attempts: c.price_fetching_max_attempts,
+        base_token_addr_override: c.base_token_addr_override,
+        base_token_decimals_override: c.base_token_decimals_override,
+        gateway_base_token_addr_override: c.gateway_base_token_addr_override,
+        token_multiplier_setter_pk: c.token_multiplier_setter_pk.clone(),
+        max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
+        max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
+    }
+}
+
+impl From<ForcedPriceClientConfig> for zksync_os_external_price_api::ForcedPriceClientConfig {
+    fn from(c: ForcedPriceClientConfig) -> Self {
+        Self {
+            prices: c.prices.into_iter().collect(),
+            fluctuation: c.fluctuation,
+            next_value_fluctuation: c.next_value_fluctuation,
+        }
+    }
+}
+
+impl From<ExternalPriceApiClientConfig>
+    for zksync_os_external_price_api::ExternalPriceApiClientConfig
+{
+    fn from(c: ExternalPriceApiClientConfig) -> Self {
+        Self {
+            base_url: c.base_url,
+            api_key: c.api_key,
+            client_timeout: c.client_timeout,
+            forced: c.forced.map(Into::into),
+        }
     }
 }
