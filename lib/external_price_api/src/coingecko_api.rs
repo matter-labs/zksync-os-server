@@ -150,7 +150,7 @@ mod test {
 
             if let Some(p) = price {
                 then.status(200)
-                    .body(get_mock_response(&address.to_string(), p));
+                    .body(get_mock_response(&address.to_string().to_lowercase(), p));
             } else {
                 // requesting with invalid/unknown address results in empty json
                 // example:
