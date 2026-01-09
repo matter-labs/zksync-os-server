@@ -60,7 +60,9 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 ## Usage
 
-### Using the `run_local.sh` Script (Recommended)
+### Using the `run_local.sh` Script
+
+⚠️ This script is a temporary solution that will later be replaced by a dedicated orchestrator binary. Do not depend on it in production
 
 The `run_local.sh` script automates starting Anvil and chain node(s):
 
@@ -133,6 +135,7 @@ When a new protocol version is released:
 2. Generate new L1 state with updated contracts
 3. Create appropriate `genesis.json` and `config.json` files
 4. Optionally add scenario-specific subfolders (e.g., `multiple-chains/`)
+5. Add a README.md with general information and the era-contracts branch used. Feel free to check existing files for the template.
 
 ## Troubleshooting
 
@@ -151,3 +154,4 @@ When a new protocol version is released:
 
 - Each chain config must specify unique ports. `rpc.address` - JSON-RPC port (e.g., 3050, 3051, 3052)
 - Chains should be run in sandbox mode or use unique directory paths for RocksDB and file storage to avoid interfering with one another.
+

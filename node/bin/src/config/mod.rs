@@ -197,11 +197,11 @@ pub struct GeneralConfig {
     #[config(default_t = true)]
     pub run_priority_tree: bool,
 
-    /// Enables sandbox mode that isolates RocksDB into a temporary directory.
+    /// Enables ephemeral mode that isolates RocksDB into a temporary directory.
     /// The directory is removed once the process shuts down.
     /// Disables all HTTP APIs except JSON RPC.
-    #[config(default_t = false)]
-    pub sandbox: bool,
+    #[config(default_t = false, alias = "sandbox")]
+    pub ephemeral: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

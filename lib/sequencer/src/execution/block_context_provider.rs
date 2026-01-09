@@ -18,8 +18,8 @@ use zksync_os_mempool::{
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, L1PriorityEnvelope, L2Envelope, ProtocolSemanticVersion, PubdataMode,
-    UpgradeTransaction, ZkEnvelope,
+    ExecutionVersion, InteropRootsEnvelope, L1PriorityEnvelope, L2Envelope,
+    ProtocolSemanticVersion, PubdataMode, UpgradeTransaction, ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -36,6 +36,7 @@ pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+    interop_transactions: mpsc::Receiver<InteropRootsEnvelope>,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -62,6 +63,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         next_l1_priority_id: u64,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+        interop_transactions: mpsc::Receiver<InteropRootsEnvelope>,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -82,6 +84,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             next_l1_priority_id,
             l1_transactions,
             upgrade_transactions,
+            interop_transactions,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -113,6 +116,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let mut best_txs = best_transactions(
                     &self.l2_mempool,
                     &mut self.l1_transactions,
+                    &mut self.interop_transactions,
                     &mut self.upgrade_transactions,
                 );
 
@@ -332,6 +336,14 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
+                ZkEnvelope::InteropRoots(interop_tx) => {
+                    if matches!(
+                        cmd_type,
+                        BlockCommandType::Rebuild | BlockCommandType::Replay
+                    ) {
+                        assert_eq!(&self.interop_transactions.recv().await.unwrap(), interop_tx);
+                    }
+                }
                 ZkEnvelope::L1(l1_tx) => {
                     self.next_l1_priority_id = l1_tx.priority_id() + 1;
                     // consume processed L1 txs for non-produce commands

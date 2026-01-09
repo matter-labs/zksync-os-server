@@ -4,6 +4,8 @@ mod l1;
 pub use l1::*;
 mod l2;
 pub use l2::*;
+mod system;
+pub use system::*;
 
 use std::fmt;
 
@@ -18,13 +20,15 @@ use std::hash::Hash;
 // `TransactionEnvelope` derive macro below depends on this being present
 use alloy::rlp as alloy_rlp;
 
-/// ZKsync OS transaction envelope describing both [EIP-2718] envelopes and custom L1->L2 transaction
-/// envelope.
+/// ZKsync OS transaction envelope describing [EIP-2718] envelopes, custom L1->L2 transaction
+/// envelope and custom transaction envelope for publishing interop roots.
 ///
 /// [EIP-2718]: https://eips.ethereum.org/EIPS/eip-2718
 #[derive(Clone, Debug, TransactionEnvelope)]
 #[envelope(alloy_consensus = alloy::consensus, tx_type_name = ZkTxType)]
 pub enum ZkEnvelope {
+    #[envelope(ty = 125)]
+    InteropRoots(InteropRootsEnvelope),
     #[envelope(ty = 126)]
     Upgrade(L1UpgradeEnvelope),
     #[envelope(ty = 127)]
@@ -37,6 +41,7 @@ impl ZkEnvelope {
     /// Returns the [`ZkTxType`] of the inner transaction.
     pub const fn tx_type(&self) -> ZkTxType {
         match self {
+            Self::InteropRoots(_) => ZkTxType::InteropRoots,
             Self::Upgrade(_) => ZkTxType::Upgrade,
             Self::L1(_) => ZkTxType::L1,
             Self::L2(l2_tx) => ZkTxType::L2(l2_tx.tx_type()),
@@ -46,6 +51,7 @@ impl ZkEnvelope {
     /// Recovers the signer of inner transaction and returns a `ZkTransaction`.
     pub fn try_into_recovered(self) -> Result<ZkTransaction, RecoveryError> {
         match self {
+            Self::InteropRoots(interop_tx) => Ok(ZkTransaction::from(interop_tx)),
             Self::Upgrade(upgrade_tx) => Ok(ZkTransaction::from(upgrade_tx)),
             Self::L1(l1_tx) => Ok(ZkTransaction::from(l1_tx)),
             Self::L2(l2_tx) => Ok(ZkTransaction::from(SignerRecoverable::try_into_recovered(
@@ -111,6 +117,7 @@ impl ZkTransaction {
 
     pub fn hash(&self) -> &B256 {
         match self.envelope() {
+            ZkEnvelope::InteropRoots(interop_tx) => interop_tx.hash(),
             ZkEnvelope::Upgrade(upgrade_tx) => upgrade_tx.hash(),
             ZkEnvelope::L1(l1_tx) => l1_tx.hash(),
             ZkEnvelope::L2(l2_tx) => l2_tx.hash(),
@@ -150,6 +157,17 @@ impl ZkTransaction {
     }
 }
 
+impl From<InteropRootsEnvelope> for ZkTransaction {
+    fn from(value: InteropRootsEnvelope) -> Self {
+        Self {
+            inner: Recovered::new_unchecked(
+                ZkEnvelope::InteropRoots(value),
+                BOOTLOADER_FORMAL_ADDRESS,
+            ),
+        }
+    }
+}
+
 impl From<L1UpgradeEnvelope> for ZkTransaction {
     fn from(value: L1UpgradeEnvelope) -> Self {
         let signer = value.inner.initiator;
@@ -180,6 +198,7 @@ impl From<L2Transaction> for ZkTransaction {
 impl fmt::Display for ZkTxType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InteropRoots => write!(f, "InteropRoots"),
             Self::L2(tx) => tx.fmt(f),
             Self::L1 => write!(f, "L1"),
             Self::Upgrade => write!(f, "Upgrade"),

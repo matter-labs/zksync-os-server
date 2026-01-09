@@ -1,6 +1,7 @@
-use crate::transaction::L1TxType;
 use crate::transaction::l1::L1Envelope;
 use crate::transaction::l2::L2Transaction;
+use crate::transaction::system::envelope::SystemTransactionEnvelope;
+use crate::transaction::{BOOTLOADER_FORMAL_ADDRESS, L1TxType, SystemTxType};
 use crate::{ZkEnvelope, ZkTransaction};
 use alloy::consensus::Transaction;
 use alloy::eips::Encodable2718;
@@ -23,6 +24,12 @@ impl<T: L1TxType> ZksyncOsEncode for L1Envelope<T> {
     }
 }
 
+impl<T: SystemTxType> ZksyncOsEncode for SystemTransactionEnvelope<T> {
+    fn encode(self) -> EncodedTx {
+        EncodedTx::Rlp(self.encoded_2718(), BOOTLOADER_FORMAL_ADDRESS)
+    }
+}
+
 impl ZksyncOsEncode for L2Transaction {
     fn encode(self) -> EncodedTx {
         let (envelope, signer) = self.into_parts();
@@ -34,6 +41,7 @@ impl ZksyncOsEncode for ZkTransaction {
     fn encode(self) -> EncodedTx {
         let (envelope, signer) = self.into_parts();
         match envelope {
+            ZkEnvelope::InteropRoots(interop_envelope) => interop_envelope.encode(),
             ZkEnvelope::L1(l1_envelope) => l1_envelope.encode(),
             ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.encode(),
             ZkEnvelope::L2(l2_envelope) => {
@@ -179,10 +187,35 @@ impl From<L2Transaction> for TransactionData {
     }
 }
 
+impl<T: SystemTxType> From<SystemTransactionEnvelope<T>> for TransactionData {
+    fn from(system_tx: SystemTransactionEnvelope<T>) -> Self {
+        let system_tx = system_tx.inner;
+        TransactionData {
+            tx_type: U256::from(T::TX_TYPE),
+            from: BOOTLOADER_FORMAL_ADDRESS,
+            to: system_tx.to,
+            gas_limit: U256::from(system_tx.gas_limit),
+            pubdata_price_limit: U256::from(0),
+            max_fee_per_gas: U256::from(system_tx.max_fee_per_gas()),
+            max_priority_fee_per_gas: U256::from(system_tx.max_priority_fee_per_gas().unwrap_or(0)),
+            paymaster: Address::ZERO,
+            nonce: U256::from(system_tx.nonce()),
+            value: U256::from(system_tx.value()),
+            reserved: [U256::ZERO, U256::ZERO, U256::ZERO, U256::ZERO],
+            data: system_tx.input.to_vec(),
+            signature: vec![],
+            factory_deps: vec![],
+            paymaster_input: vec![],
+            reserved_dynamic: vec![],
+        }
+    }
+}
+
 impl From<ZkTransaction> for TransactionData {
     fn from(value: ZkTransaction) -> Self {
         let (envelope, signer) = value.into_parts();
         match envelope {
+            ZkEnvelope::InteropRoots(interop_envelope) => interop_envelope.into(),
             ZkEnvelope::L1(l1_envelope) => l1_envelope.into(),
             ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.into(),
             ZkEnvelope::L2(l2_envelope) => L2Transaction::new_unchecked(l2_envelope, signer).into(),
