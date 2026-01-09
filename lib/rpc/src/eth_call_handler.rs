@@ -642,6 +642,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     match tx.inner.inner_mut() {
+        ZkEnvelope::InteropRoots(interop_tx) => interop_tx.inner.gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Legacy(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip2930(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip1559(inner)) => inner.tx_mut().gas_limit = gas_limit,

@@ -167,6 +167,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel between L1TxWatcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
 
+    // Channel between InteropRootsWatcher and Sequencer
+    // todo: implement InteropRootsWatcher
+    let (_interop_transactions_sender, interop_transactions_receiver) =
+        tokio::sync::mpsc::channel(5);
+
     // Channel between L1UpgradeWatcher and Sequencer
     let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
         tokio::sync::mpsc::channel(5);
@@ -515,6 +520,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         next_l1_priority_id,
         l1_transactions_for_sequencer,
         l1_upgrade_transactions_receiver,
+        interop_transactions_receiver,
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
