@@ -289,7 +289,10 @@ async fn test_interop_bundle_send() -> Result<()> {
     // Build call attributes with indirectCall
     use alloy::sol_types::SolCall;
     let call_attributes = vec![Bytes::from(
-        indirectCallCall { _gasLimit: U256::ZERO }.abi_encode(),
+        indirectCallCall {
+            _gasLimit: U256::ZERO,
+        }
+        .abi_encode(),
     )];
 
     let to_address = format_evm_v1_address_only(L2_ASSET_ROUTER_ADDRESS);
@@ -336,17 +339,15 @@ async fn test_interop_bundle_send() -> Result<()> {
 
     // Decode the log data as bytes (it's ABI-encoded)
     use alloy::sol_types::SolType;
-    let bundle_with_prefix: Bytes = <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(
-        &l1_messenger_log.data().data,
-    )
-    .expect("Failed to decode bundle from log");
+    let bundle_with_prefix: Bytes =
+        <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(&l1_messenger_log.data().data)
+            .expect("Failed to decode bundle from log");
 
     let bundle = Bytes::from(bundle_with_prefix[1..].to_vec()); // Remove 0x01 prefix
 
     // Get message proof
     let block_number = receipt.block_number.expect("Block number not found");
-    let log_proof =
-        relayer_get_message_proof(&chain_a.l2_zk_provider, hash, block_number).await?;
+    let log_proof = relayer_get_message_proof(&chain_a.l2_zk_provider, hash, block_number).await?;
 
     // Build MessageInclusionProof
     let proof_data: Vec<FixedBytes<32>> = log_proof.proof.clone();
@@ -358,8 +359,7 @@ async fn test_interop_bundle_send() -> Result<()> {
         message: IInteropHandler::L2Message {
             txNumberInBatch: receipt
                 .transaction_index
-                .expect("Transaction index not found")
-                as u16,
+                .expect("Transaction index not found") as u16,
             sender: L2_INTEROP_CENTER_ADDRESS,
             data: bundle_with_prefix.clone(),
         },
