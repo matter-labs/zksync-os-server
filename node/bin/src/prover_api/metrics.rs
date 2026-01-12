@@ -29,7 +29,7 @@ pub struct ProverMetrics {
     /// The time passed between when a job was picked and reported back
     /// divided by the number of native resource in job in millions.
     /// That is, for SNARKs it's divided by the total number of txs in batch range.
-    #[metrics(unit = Unit::Seconds, labels = PROVER_JOB_LABELS, buckets = Buckets::linear(0.0..=2.399, 0.3))]
+    #[metrics(unit = Unit::Seconds, labels = PROVER_JOB_LABELS, buckets = Buckets::linear(0.0..=2.0, 0.1))]
     pub prove_time_per_million_native: LabeledFamily<ProverJobLabels, Histogram<Duration>, 3>,
     #[metrics(labels = ["stage", "type"], buckets = Buckets::values(&[1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 50.0]))]
     pub proved_after_attempts: LabeledFamily<(ProverStage, ProverType), Histogram, 2>,

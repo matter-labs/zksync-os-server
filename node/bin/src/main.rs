@@ -35,12 +35,32 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Path to a JSON config file. Env variables override file values if specified.
-    #[arg(long, default_value_t = format!("./local-chains/{PROTOCOL_VERSION}/config.json"))]
-    config: String,
+    /// Path to a JSON config file. If not specified, default config will attempted to be loaded to fill in the config
+    /// values for local setup. If default config is missing, no configs will be loaded, and they must be explicitly set
+    /// via other configuration means (e.g. environment variables). Env variables override config settings from the file
+    /// if both are provided.
+    #[arg(long)]
+    config: Option<String>,
 
     #[command(subcommand)]
     cmd: Option<CliCommand>,
+}
+
+fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
+    // Process the config file if provided or if default exists
+    let config_path: Option<String> = config_path.or_else(|| {
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/config.json");
+        Path::new(&default_path).exists().then_some(default_path)
+    });
+
+    if let Some(config_path) = &config_path {
+        let config_contents =
+            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+        let config_json: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&config_contents)
+                .expect("Failed to parse config file from provided path");
+        config_sources.push(Json::new(config_path, config_json));
+    }
 }
 
 #[tokio::main]
@@ -51,14 +71,8 @@ pub async fn main() {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
 
-    // Process the config file
-    let config_path = &opt.config;
-    let config_contents =
-        fs::read_to_string(config_path).expect("Failed to read config file from provided path");
-    let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&config_contents)
-            .expect("Failed to parse config file from provided path");
-    config_sources.push(Json::new(config_path, config_json));
+    // Process the config file if provided or if default exists
+    load_config_defaults(&mut config_sources, opt.config);
 
     let mut env = Environment::prefixed("");
     // Enables JSON coercion - env variables with `__JSON` suffix can be used to force value
@@ -119,8 +133,8 @@ pub async fn main() {
     let (stop_sender, stop_receiver) = watch::channel(false);
     // ======= Run tasks ===========
     let main_stop = stop_receiver.clone(); // keep original for Prometheus
-    let sandbox_enabled = config.general_config.sandbox;
-    let _sandbox_guard = sandbox_enabled.then(|| enable_sandbox_mode(&mut config));
+    let ephemeral_enabled = config.general_config.ephemeral;
+    let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
     let prometheus_port = config.observability_config.prometheus.port;
 
     let main_task = async move {
@@ -131,9 +145,9 @@ pub async fn main() {
     };
 
     let prometheus_task = async {
-        if sandbox_enabled {
-            tracing::info!("Sandbox mode enabled, skipping Prometheus exporter");
-            // no-op for the sandbox mode
+        if ephemeral_enabled {
+            tracing::info!("Ephemeral mode enabled, skipping Prometheus exporter");
+            // no-op for the ephemeral mode
             future::pending::<anyhow::Result<()>>().await
         } else {
             let prometheus: PrometheusExporterConfig =
@@ -343,21 +357,21 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 }
 
-fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
+fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
     if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
         tracing::warn!(
             original_path = %original_path.display(),
-            "general_rocks_db_path parameter is ignored in sandbox mode"
+            "general_rocks_db_path parameter is ignored in ephemeral mode"
         );
     }
 
-    let tempdir =
-        tempfile::tempdir().expect("Failed to create temporary RocksDB directory for sandbox mode");
+    let tempdir = tempfile::tempdir()
+        .expect("Failed to create temporary RocksDB directory for ephemeral mode");
     let tempdir_path = tempdir.path();
     tracing::info!(
         path = %tempdir_path.display(),
-        "Sandbox mode enabled. Using temporary directory for RocksDB and shared object store"
+        "Ephemeral mode enabled. Using temporary directory for RocksDB and shared object store"
     );
 
     // Update config to use temporary directory
@@ -366,7 +380,7 @@ fn enable_sandbox_mode(config: &mut Config) -> Option<TempDir> {
         file_backed_base_path: tempdir_path.join("shared"),
     };
 
-    // Disable services that are not needed in sandbox mode
+    // Disable services that are not needed in ephemeral mode
     config.prover_api_config.enabled = false;
     config.status_server_config.enabled = false;
     config.sequencer_config.block_replay_server_enabled = false;

@@ -101,3 +101,4 @@ When a new protocol version is released:
 2. Generate new L1 state with updated contracts
 3. Create appropriate `genesis.json` and `config.json` files
 4. Optionally add scenario-specific subfolders (e.g., `multiple-chains/`)
+5. Add a README.md with general information and the era-contracts branch used. Feel free to check existing files for the template.
