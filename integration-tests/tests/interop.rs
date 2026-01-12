@@ -174,7 +174,11 @@ fn build_second_bridge_calldata(
 async fn setup_token_on_chain_a(
     provider: &zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider,
     sender: Address,
-) -> Result<(TestERC20::TestERC20Instance<zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider>, U256, [u8; 32])> {
+) -> Result<(
+    TestERC20::TestERC20Instance<zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider>,
+    U256,
+    [u8; 32],
+)> {
     tracing::info!("=== Setting up token on chain A ===");
 
     // Deploy ERC20 token
