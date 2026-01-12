@@ -1,7 +1,6 @@
 //! Interop integration tests for cross-chain token transfers.
 
 use alloy::{
-    hex,
     primitives::{Address, Bytes, FixedBytes, U256, address},
     providers::Provider,
     sol,
@@ -171,8 +170,6 @@ async fn setup_token_on_chain_a(
     U256,
     [u8; 32],
 )> {
-    tracing::info!("=== Setting up token on chain A ===");
-
     // Deploy ERC20 token
     let initial_supply = U256::from(1_000_000) * U256::from(10).pow(U256::from(18));
     let token = TestERC20::deploy(
@@ -183,8 +180,6 @@ async fn setup_token_on_chain_a(
     )
     .await?;
 
-    tracing::info!("Token deployed at: {}", token.address());
-
     // Mint tokens to sender
     token
         .mint(sender, initial_supply)
@@ -194,7 +189,6 @@ async fn setup_token_on_chain_a(
         .await?;
 
     let balance = token.balanceOf(sender).call().await?;
-    tracing::info!("Sender token balance: {}", balance);
     assert_eq!(balance, initial_supply, "Token minting failed");
 
     // Register token with Native Token Vault
@@ -208,10 +202,6 @@ async fn setup_token_on_chain_a(
         .await?;
 
     let asset_id = compute_asset_id(chain_id, *token.address());
-    tracing::info!(
-        "Token registered with asset ID: {:?}",
-        FixedBytes::<32>::from(asset_id)
-    );
 
     Ok((token, initial_supply, asset_id))
 }
@@ -222,8 +212,6 @@ async fn relayer_get_message_proof(
     tx_hash: FixedBytes<32>,
     block_number: u64,
 ) -> Result<zksync_os_rpc_api::types::L2ToL1LogProof> {
-    tracing::info!("=== Relayer: Waiting for block finalization ===");
-
     let poll_interval = tokio::time::Duration::from_millis(100);
     let timeout = tokio::time::Duration::from_secs(300); // 5 minutes
     let start = tokio::time::Instant::now();
@@ -237,14 +225,11 @@ async fn relayer_get_message_proof(
         if let Ok(finalized_block) = provider.get_block_number().await
             && finalized_block >= block_number
         {
-            tracing::info!("✅ Block {} finalized", block_number);
             break;
         }
 
         tokio::time::sleep(poll_interval).await;
     }
-
-    tracing::info!("=== Relayer: Getting L2→L1 log proof ===");
 
     // Get the log proof
     let log_proof = loop {
@@ -253,10 +238,6 @@ async fn relayer_get_message_proof(
         }
 
         if let Ok(Some(proof)) = provider.get_l2_to_l1_log_proof(tx_hash, 0).await {
-            tracing::info!("✅ Log proof obtained");
-            tracing::info!("  Batch number: {}", proof.batch_number);
-            tracing::info!("  Message index: {}", proof.id);
-            tracing::info!("  Proof length: {}", proof.proof.len());
             break proof;
         }
 
@@ -271,11 +252,6 @@ async fn test_interop_bundle_send() -> Result<()> {
     // This test validates the first part of the interop flow:
     // setting up two chains and sending an interop bundle from chain A to chain B
 
-    tracing::info!("Starting interop bundle send test");
-
-    // ========================================
-    // SETUP: Initialize two L2 chains
-    // ========================================
     let multi_chain = MultiChainTester::setup(2).await?;
 
     let chain_a = multi_chain.chain_a();
@@ -284,21 +260,11 @@ async fn test_interop_bundle_send() -> Result<()> {
     let chain_a_id = chain_a.l2_provider.get_chain_id().await?;
     let chain_b_id = chain_b.l2_provider.get_chain_id().await?;
 
-    tracing::info!("Chain A ID: {}, Chain B ID: {}", chain_a_id, chain_b_id);
-
-    // Use the default wallet from chain A
     let sender = chain_a.l2_wallet.default_signer().address();
-    tracing::info!("Sender address: {}", sender);
 
-    // ========================================
-    // SETUP: Deploy and register token
-    // ========================================
     let (token, _initial_supply, asset_id) =
         setup_token_on_chain_a(&chain_a.l2_provider, sender).await?;
 
-    // ========================================
-    // Step 1: Approve Native Token Vault
-    // ========================================
     let amount_to_send = U256::from(100) * U256::from(10).pow(U256::from(18));
 
     token
@@ -307,25 +273,13 @@ async fn test_interop_bundle_send() -> Result<()> {
         .await?
         .expect_successful_receipt()
         .await?;
-    tracing::info!("Approved {} tokens for Native Token Vault", amount_to_send);
 
-    // ========================================
-    // Step 2: Build interop bundle
-    // ========================================
+    // Build interop bundle
     let second_bridge_calldata = build_second_bridge_calldata(
         asset_id,
         amount_to_send,
         sender,        // recipient on chain B
         Address::ZERO, // maybeTokenAddress = 0
-    );
-
-    tracing::info!(
-        "Second bridge calldata length: {}",
-        second_bridge_calldata.len()
-    );
-    tracing::info!(
-        "Second bridge calldata (hex): {}",
-        hex::encode(&second_bridge_calldata)
     );
 
     // Build call attributes with indirectCall
@@ -349,18 +303,10 @@ async fn test_interop_bundle_send() -> Result<()> {
         [unbundler_selector, &unbundler_encoded[..]].concat(),
     )];
 
-    tracing::info!(
-        "Destination chain ID (hex): {}",
-        hex::encode(format_evm_v1(chain_b_id))
-    );
-
-    // ========================================
-    // Step 3: Send bundle to chain B
-    // ========================================
+    // Send bundle to chain B
     let interop_center = IInteropCenter::new(L2_INTEROP_CENTER_ADDRESS, &chain_a.l2_provider);
     let destination_chain_id = format_evm_v1(chain_b_id);
 
-    tracing::info!("Sending bundle transaction...");
     let send_result = interop_center
         .sendBundle(destination_chain_id.clone(), calls, bundle_attributes)
         .value(U256::ZERO)
@@ -370,22 +316,13 @@ async fn test_interop_bundle_send() -> Result<()> {
         .send()
         .await;
 
-    let tx_hash = match send_result {
+    match send_result {
         Ok(pending_tx) => {
             let hash = *pending_tx.tx_hash();
-            tracing::info!("Bundle transaction submitted: {}", hash);
 
             let receipt = pending_tx.get_receipt().await?;
 
             if receipt.status() {
-                tracing::info!("========================================");
-                tracing::info!("✅ Bundle sent successfully!");
-                tracing::info!("TX Hash: {}", hash);
-                tracing::info!("RPC URL: {}", chain_a.l2_rpc_url());
-                tracing::info!("Block: {:?}", receipt.block_number);
-                tracing::info!("Gas Used: {}", receipt.gas_used);
-                tracing::info!("========================================");
-
                 // Extract bundle data from the L1Messenger log (log #3)
                 let l1_messenger_log = receipt.logs().get(3).expect("L1Messenger log not found");
                 let l1_messenger_address = FixedBytes::<20>::new([
@@ -401,22 +338,12 @@ async fn test_interop_bundle_send() -> Result<()> {
                     )
                     .expect("Failed to decode bundle from log");
 
-                tracing::info!(
-                    "✅ Extracted bundle from L1Messenger log, length: {}",
-                    bundle_with_prefix.len()
-                );
-
                 let bundle = Bytes::from(bundle_with_prefix[1..].to_vec()); // Remove 0x01 prefix
-                tracing::info!("Bundle length (without prefix): {}", bundle.len());
 
-                // ========================================
-                // RELAYER: Get message proof
-                // ========================================
+                // Get message proof
                 let block_number = receipt.block_number.expect("Block number not found");
                 let log_proof =
                     relayer_get_message_proof(&chain_a.l2_zk_provider, hash, block_number).await?;
-
-                tracing::info!("=== Preparing bundle execution data ===");
 
                 // Build MessageInclusionProof
                 let proof_data: Vec<FixedBytes<32>> = log_proof.proof.clone();
@@ -436,90 +363,22 @@ async fn test_interop_bundle_send() -> Result<()> {
                     proof: proof_data,
                 };
 
-                tracing::info!("✅ Successfully prepared bundle execution data:");
-                tracing::info!("  Source Chain ID: {}", message_inclusion_proof.chainId);
-                tracing::info!("  Batch Number: {}", message_inclusion_proof.l1BatchNumber);
-                tracing::info!(
-                    "  Message Index: {}",
-                    message_inclusion_proof.l2MessageIndex
-                );
-                tracing::info!("  Bundle Length (without prefix): {}", bundle.len());
-                tracing::info!("  Interop Root: {:?}", log_proof.root);
-                tracing::info!(
-                    "  Amount to Send: {} tokens",
-                    amount_to_send / U256::from(10u128.pow(18))
-                );
-
-                tracing::info!("=== Test summary ===");
-                tracing::info!(
-                    "✅ Two L2 chains launched successfully (IDs: {}, {})",
-                    chain_a_id,
-                    chain_b_id
-                );
-                tracing::info!("✅ ERC20 token deployed and minted on chain A");
-                tracing::info!("✅ Token registered with Native Token Vault");
-                tracing::info!("✅ Token approval granted to Native Token Vault");
-                tracing::info!("✅ Interop bundle constructed with correct ERC-7930 encoding");
-                tracing::info!(
-                    "✅ sendBundle transaction executed successfully (gas: {})",
-                    receipt.gas_used
-                );
-                tracing::info!(
-                    "✅ L2→L1 log proof obtained (batch: {}, index: {})",
-                    log_proof.batch_number,
-                    log_proof.id
-                );
-                tracing::info!("✅ Bundle extracted from L1Messenger log");
-                tracing::info!("✅ MessageInclusionProof constructed correctly");
-
-                // ========================================
-                // Step 4: Execute bundle on chain B
-                // ========================================
-                tracing::info!("=== Executing bundle on chain B ===");
-
+                // Execute bundle on chain B
                 let interop_handler =
                     IInteropHandler::new(L2_INTEROP_HANDLER_ADDRESS, &chain_b.l2_provider);
 
-                tracing::info!("Calling executeBundle on chain B...");
-
-                // Get the calldata for executeBundle
                 let execute_call =
                     interop_handler.executeBundle(bundle.clone(), message_inclusion_proof.clone());
-                let calldata = execute_call.calldata().clone();
-                let calldata_hex = format!("0x{}", hex::encode(&calldata));
-
-                tracing::info!("=== Calldata debug info ===");
-                tracing::info!("EncodedBundle (no prefix) length: {}", bundle.len());
-                tracing::info!("EncodedBundle (no prefix): 0x{}", hex::encode(&bundle));
-                tracing::info!(
-                    "L2ToL1Message (with prefix) length: {}",
-                    bundle_with_prefix.len()
-                );
-                tracing::info!(
-                    "L2ToL1Message (with prefix): 0x{}",
-                    hex::encode(&bundle_with_prefix)
-                );
-                tracing::info!("Complete calldata: {}", calldata_hex);
-                tracing::info!("Calldata length: {}", calldata.len());
-                tracing::info!("Function selector: {}", &calldata_hex[0..10]);
 
                 // Send executeBundle with high gas limit
                 let execute_call_with_gas = execute_call.gas(50_000_000);
 
                 match execute_call_with_gas.send().await {
                     Ok(pending_tx) => {
-                        let tx_hash = *pending_tx.tx_hash();
-                        tracing::info!("executeBundle transaction sent: {:?}", tx_hash);
-
                         match pending_tx.get_receipt().await {
                             Ok(execute_receipt) => {
                                 if execute_receipt.status() {
-                                    tracing::info!("✅ executeBundle succeeded!");
-                                    tracing::info!("Gas used: {}", execute_receipt.gas_used);
-
                                     // Verify token balance on chain B
-                                    tracing::info!("=== Verifying token balance on chain B ===");
-
                                     let vault_b = IL2NativeTokenVault::new(
                                         L2_NATIVE_TOKEN_VAULT_ADDRESS,
                                         &chain_b.l2_provider,
@@ -528,97 +387,46 @@ async fn test_interop_bundle_send() -> Result<()> {
                                     let token_b_address =
                                         vault_b.tokenAddress(asset_id_bytes).call().await?;
 
-                                    tracing::info!("Token address on chain B: {}", token_b_address);
-
                                     let token_b =
                                         TestERC20::new(token_b_address, &chain_b.l2_provider);
                                     let balance_b = token_b.balanceOf(sender).call().await?;
 
-                                    tracing::info!(
-                                        "Receiver balance on chain B: {} tokens",
-                                        balance_b / U256::from(10u128.pow(18))
-                                    );
-
                                     if balance_b >= amount_to_send {
                                         tracing::info!(
-                                            "✅✅✅ INTEROP TOKEN TRANSFER SUCCESSFUL! ✅✅✅"
-                                        );
-                                        tracing::info!(
-                                            "Tokens successfully bridged from chain {} to chain {}",
+                                            "✅ Interop transfer successful: {} -> {}",
                                             chain_a_id,
                                             chain_b_id
                                         );
                                     } else {
-                                        tracing::error!("❌ Token balance verification failed");
-                                        tracing::error!(
-                                            "Expected: {} tokens",
-                                            amount_to_send / U256::from(10u128.pow(18))
-                                        );
-                                        tracing::error!(
-                                            "Actual: {} tokens",
+                                        anyhow::bail!(
+                                            "Token balance verification failed: expected {}, got {}",
+                                            amount_to_send / U256::from(10u128.pow(18)),
                                             balance_b / U256::from(10u128.pow(18))
                                         );
                                     }
                                 } else {
-                                    tracing::error!("❌ executeBundle transaction reverted");
-                                    tracing::error!("Gas used: {}", execute_receipt.gas_used);
-                                    tracing::error!("Receipt: {:?}", execute_receipt);
                                     anyhow::bail!("executeBundle transaction reverted on chain B");
                                 }
                             }
                             Err(e) => {
-                                tracing::error!("❌ Failed to get executeBundle receipt: {:?}", e);
                                 anyhow::bail!("Failed to get executeBundle receipt: {}", e);
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::error!("❌ Failed to send executeBundle transaction: {:?}", e);
                         anyhow::bail!("Failed to send executeBundle transaction: {}", e);
                     }
                 }
             } else {
-                tracing::error!("❌ Bundle transaction reverted: {}", hash);
-                tracing::error!("Gas used: {}", receipt.gas_used);
-                tracing::error!("Block number: {:?}", receipt.block_number);
-                tracing::error!("Receipt: {:?}", receipt);
-
-                tracing::info!("========================================");
-                tracing::info!("❌ TRANSACTION REVERTED");
-                tracing::info!("========================================");
-                tracing::info!("TX Hash: {}", hash);
-                tracing::info!("Gas Used: {} (very low - early revert)", receipt.gas_used);
-                tracing::info!("Block: {:?}", receipt.block_number);
-                tracing::info!("");
-                tracing::info!("This suggests the AssetRouter is reverting early,");
-                tracing::info!("likely in a validation check. Based on the execution trace:");
-                tracing::info!("- InteropCenter calls AssetRouter with selector 0x4d7e3d62");
-                tracing::info!("- AssetRouter reverts after only ~554 instructions");
-                tracing::info!("- No error message returned (empty returndata)");
-                tracing::info!("");
-                tracing::info!("Possible causes:");
-                tracing::info!("1. Missing approval or balance check");
-                tracing::info!("2. Incorrect bundle format/encoding");
-                tracing::info!("3. Chain ID or destination validation failure");
-                tracing::info!("4. Asset not properly registered");
-                tracing::info!("========================================");
-
                 anyhow::bail!("Bundle transaction reverted on chain A");
             }
 
-            hash
+            Ok(())
         }
         Err(e) => {
             anyhow::bail!("Failed to send bundle transaction: {}", e);
         }
-    };
-
-    tracing::info!("Transaction hash: {}", tx_hash);
-    tracing::info!("L2 RPC URL: {}", chain_a.l2_rpc_url());
-
-    tracing::info!("✅ Interop bundle send test completed successfully!");
-
-    Ok(())
+    }
 }
 
 #[test(tokio::test)]
@@ -628,9 +436,6 @@ async fn test_interop_erc20_transfer_manual() -> Result<()> {
     // - Two L2 chains running on localhost:3050 and localhost:3051
     // - Wallet with funds on both chains
     // - Interop relayer running to propagate roots
-
-    tracing::info!("Manual interop test placeholder");
-
     Ok(())
 }
 
@@ -646,8 +451,5 @@ async fn test_interop_root_propagation() -> Result<()> {
     // 3. Wait for the transaction to be included in a batch
     // 4. Start the interop relayer (or mock root propagation)
     // 5. Verify that the root appears in L2InteropRootStorage on chain B
-
-    tracing::info!("Interop root propagation test placeholder");
-
     Ok(())
 }
