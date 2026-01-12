@@ -1,19 +1,19 @@
 {
-    "general": {
-        "ephemeral": true
-    },
-    "genesis": {
-        "bridgehub_address": "0xb318b56e313d15e61467d894c431ada085a7a5ae",
-        "bytecode_supplier_address": "0xd7313cfbc527956f36c13c1db8f7ce7ef91eb40b",
-        "genesis_input_path": "./local-chains/v31/genesis.json",
-        "chain_id": 6566
-    },
-    "l1_sender": {
-        "operator_commit_pk": "0x151e63010a97a164c6528a1100eb023defc1d4c870825bd864ac2ce21f168c9d",
-        "operator_prove_pk": "0x7f71a570df281bc39985b4db666fec4c82dc21e59b011029814de0ce1a2fc9db",
-        "operator_execute_pk": "0xd2cae51a3de908992bfe2eb2bde6d53e9af3ecdab8f0d26699a258f7d9107b2d"
-    },
-    "rpc": {
-        "address": "0.0.0.0:3051"
-    }
+  "general": {
+    "ephemeral": true
+  },
+  "genesis": {
+    "bridgehub_address": "0xf2425685a8e7072d7deadd780d97f8f65b00de97",
+    "bytecode_supplier_address": "0x14b59fceb2673da448ae4a4cf2ae1261ed60cdee",
+    "genesis_input_path": "./local-chains/v31/genesis.json",
+    "chain_id": 6566
+  },
+  "l1_sender": {
+    "operator_commit_pk": "0x339e89d9b1305cf74bd86879aae9f7f45773b9d73b80988cb7a0a252940267b5",
+    "operator_prove_pk": "0xa7869fae9af82ba9c845d3c675deaf9b206c2ee2e03b3ae71d492a142e0b5055",
+    "operator_execute_pk": "0x5b3bc7b34ee976c21df39ca592c4fe08e1751814b428d25ba1bade71b41c36e4"
+  },
+  "rpc": {
+    "address": "0.0.0.0:3051"
+  }
 }
