@@ -72,7 +72,7 @@ pub fn get_chain_config(chain_index: usize) -> Config {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
     let config_contents = std::fs::read_to_string(&config_path)
-        .expect(&format!("Failed to read config file: {}", config_path));
+        .unwrap_or_else(|_| panic!("Failed to read config file: {config_path}"));
 
     let config_json: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&config_contents).expect("Failed to parse config file");
