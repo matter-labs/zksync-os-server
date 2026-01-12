@@ -61,7 +61,8 @@ impl NetworkService {
             .disable_discv4_discovery()
             // Disable DNS-based discovery (EIP-1459), unused in ZKsync OS
             .disable_dns_discovery()
-            // Disable NAT temporarily as only localhost setup is supported right now
+            // Disable built-in NAT resolver as discv5 does not need it (ENR socket address is
+            // updated based on PONG responses from the majority of peers)
             .disable_nat()
             // Setup Node Discovery Protocol v5 on `localhost:<port>:UDP` that points to RLPx socket
             // at `localhost:<port>:TCP`
