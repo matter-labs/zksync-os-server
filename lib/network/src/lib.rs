@@ -7,4 +7,4 @@ pub mod wire;
 // Re-export relevant Reth types
 pub use reth_network::config::SecretKey;
 pub use reth_network::config::rng_secret_key;
-pub use reth_network_peers::parse_nodes;
+pub use reth_network_peers::NodeRecord;

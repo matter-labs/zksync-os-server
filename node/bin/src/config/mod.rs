@@ -20,13 +20,14 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
-use zksync_os_network::SecretKey;
+use zksync_os_network::{NodeRecord, SecretKey};
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
+mod de;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -233,11 +234,11 @@ pub struct NetworkConfig {
     // ENs can connect to local MN with zero configuration.
     #[config(
         default_t = vec![
-            "enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060".into()
+            NodeRecord::from_str("enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060").unwrap(),
         ],
-        with = Delimited(",")
+        with = de::NodeRecordVec
     )]
-    pub boot_nodes: Vec<String>,
+    pub boot_nodes: Vec<NodeRecord>,
     /// Maximum number of active connections with other peers.
     #[config(default_t = 10)]
     pub max_active_connections: usize,
@@ -805,7 +806,7 @@ impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
                 .expect("network secret key is malformed"),
             address: value.address,
             port: value.port,
-            boot_nodes: zksync_os_network::parse_nodes(value.boot_nodes),
+            boot_nodes: value.boot_nodes,
             max_active_connections: value.max_active_connections,
         }
     }
