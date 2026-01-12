@@ -38,6 +38,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: test token
+        run: |
+          curl -i -X POST \
+            -H "Authorization: Bearer ${{ secrets.RELEASE_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/matter-labs/ethereum-prover/git/refs \
+            --data-raw '{
+              "ref": "refs/tags/test-tag",
+              "sha": "4597cae68267e67159c0340f9c6ff9cf8853dcc8"
+            }'
+
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
