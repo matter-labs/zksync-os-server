@@ -4,9 +4,8 @@ use alloy::{
     primitives::{Address, Bytes, FixedBytes, U256, address},
     providers::Provider,
     sol,
-    sol_types::SolValue,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use test_log::test;
 use zksync_os_integration_tests::{
     MultiChainTester, assert_traits::ReceiptAssert, contracts::TestERC20, provider::ZksyncApi,
@@ -16,6 +15,7 @@ const L2_INTEROP_CENTER_ADDRESS: Address = address!("000000000000000000000000000
 const L2_INTEROP_HANDLER_ADDRESS: Address = address!("000000000000000000000000000000000001000d");
 const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = address!("0000000000000000000000000000000000010004");
 const L2_ASSET_ROUTER_ADDRESS: Address = address!("0000000000000000000000000000000000010003");
+const L1_MESSENGER_ADDRESS: Address = address!("0000000000000000000000000000000000008008");
 
 sol! {
     #[sol(rpc)]
@@ -73,6 +73,10 @@ sol! {
         function interopRoots(uint256 chainId, uint256 batchNumber) external view returns (bytes32);
         function addInteropRoot(uint256 chainId, uint256 batchNumber, bytes32[] memory sides) external;
     }
+
+    // Bundle attribute functions for encoding
+    function indirectCall(uint256 _gasLimit) external pure returns (bytes memory);
+    function unbundlerAddress(bytes calldata _address) external pure returns (bytes memory);
 }
 
 /// Helper to format ERC-7930 interoperable address with just address (no chain reference)
@@ -212,7 +216,7 @@ async fn relayer_get_message_proof(
     tx_hash: FixedBytes<32>,
     block_number: u64,
 ) -> Result<zksync_os_rpc_api::types::L2ToL1LogProof> {
-    let poll_interval = tokio::time::Duration::from_millis(100);
+    let poll_interval = tokio::time::Duration::from_millis(10);
     let timeout = tokio::time::Duration::from_secs(300); // 5 minutes
     let start = tokio::time::Instant::now();
 
@@ -283,9 +287,9 @@ async fn test_interop_bundle_send() -> Result<()> {
     );
 
     // Build call attributes with indirectCall
-    let indirect_call_selector = &alloy::primitives::keccak256("indirectCall(uint256)")[0..4];
+    use alloy::sol_types::SolCall;
     let call_attributes = vec![Bytes::from(
-        [indirect_call_selector, &U256::ZERO.abi_encode()[..]].concat(),
+        indirectCallCall { _gasLimit: U256::ZERO }.abi_encode(),
     )];
 
     let to_address = format_evm_v1_address_only(L2_ASSET_ROUTER_ADDRESS);
@@ -297,136 +301,116 @@ async fn test_interop_bundle_send() -> Result<()> {
     }];
 
     // Build bundle attributes with unbundlerAddress
-    let unbundler_selector = &alloy::primitives::keccak256("unbundlerAddress(bytes)")[0..4];
-    let unbundler_encoded = format_evm_v1_address_only(sender).abi_encode();
     let bundle_attributes = vec![Bytes::from(
-        [unbundler_selector, &unbundler_encoded[..]].concat(),
+        unbundlerAddressCall {
+            _address: format_evm_v1_address_only(sender),
+        }
+        .abi_encode(),
     )];
 
     // Send bundle to chain B
     let interop_center = IInteropCenter::new(L2_INTEROP_CENTER_ADDRESS, &chain_a.l2_provider);
     let destination_chain_id = format_evm_v1(chain_b_id);
 
-    let send_result = interop_center
+    // Send sendBundle transaction
+    let pending_tx = interop_center
         .sendBundle(destination_chain_id.clone(), calls, bundle_attributes)
         .value(U256::ZERO)
         .gas(10_000_000)
         .max_fee_per_gas(1_000_000_000)
         .max_priority_fee_per_gas(0)
         .send()
-        .await;
+        .await
+        .context("Failed to send bundle transaction")?;
 
-    match send_result {
-        Ok(pending_tx) => {
-            let hash = *pending_tx.tx_hash();
+    let hash = *pending_tx.tx_hash();
+    let receipt = pending_tx.get_receipt().await?;
 
-            let receipt = pending_tx.get_receipt().await?;
-
-            if receipt.status() {
-                // Extract bundle data from the L1Messenger log (log #3)
-                let l1_messenger_log = receipt.logs().get(3).expect("L1Messenger log not found");
-                let l1_messenger_address = FixedBytes::<20>::new([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x08,
-                ]);
-                assert_eq!(*l1_messenger_log.address(), l1_messenger_address);
-
-                // Decode the log data as bytes (it's ABI-encoded)
-                use alloy::sol_types::SolType;
-                let bundle_with_prefix: Bytes =
-                    <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(
-                        &l1_messenger_log.data().data,
-                    )
-                    .expect("Failed to decode bundle from log");
-
-                let bundle = Bytes::from(bundle_with_prefix[1..].to_vec()); // Remove 0x01 prefix
-
-                // Get message proof
-                let block_number = receipt.block_number.expect("Block number not found");
-                let log_proof =
-                    relayer_get_message_proof(&chain_a.l2_zk_provider, hash, block_number).await?;
-
-                // Build MessageInclusionProof
-                let proof_data: Vec<FixedBytes<32>> = log_proof.proof.clone();
-
-                let message_inclusion_proof = IInteropHandler::MessageInclusionProof {
-                    chainId: U256::from(chain_a_id),
-                    l1BatchNumber: U256::from(log_proof.batch_number),
-                    l2MessageIndex: U256::from(log_proof.id),
-                    message: IInteropHandler::L2Message {
-                        txNumberInBatch: receipt
-                            .transaction_index
-                            .expect("Transaction index not found")
-                            as u16,
-                        sender: L2_INTEROP_CENTER_ADDRESS,
-                        data: bundle_with_prefix.clone(),
-                    },
-                    proof: proof_data,
-                };
-
-                // Execute bundle on chain B
-                let interop_handler =
-                    IInteropHandler::new(L2_INTEROP_HANDLER_ADDRESS, &chain_b.l2_provider);
-
-                let execute_call =
-                    interop_handler.executeBundle(bundle.clone(), message_inclusion_proof.clone());
-
-                // Send executeBundle with high gas limit
-                let execute_call_with_gas = execute_call.gas(50_000_000);
-
-                match execute_call_with_gas.send().await {
-                    Ok(pending_tx) => {
-                        match pending_tx.get_receipt().await {
-                            Ok(execute_receipt) => {
-                                if execute_receipt.status() {
-                                    // Verify token balance on chain B
-                                    let vault_b = IL2NativeTokenVault::new(
-                                        L2_NATIVE_TOKEN_VAULT_ADDRESS,
-                                        &chain_b.l2_provider,
-                                    );
-                                    let asset_id_bytes = FixedBytes::<32>::from(asset_id);
-                                    let token_b_address =
-                                        vault_b.tokenAddress(asset_id_bytes).call().await?;
-
-                                    let token_b =
-                                        TestERC20::new(token_b_address, &chain_b.l2_provider);
-                                    let balance_b = token_b.balanceOf(sender).call().await?;
-
-                                    if balance_b >= amount_to_send {
-                                        tracing::info!(
-                                            "✅ Interop transfer successful: {} -> {}",
-                                            chain_a_id,
-                                            chain_b_id
-                                        );
-                                    } else {
-                                        anyhow::bail!(
-                                            "Token balance verification failed: expected {}, got {}",
-                                            amount_to_send / U256::from(10u128.pow(18)),
-                                            balance_b / U256::from(10u128.pow(18))
-                                        );
-                                    }
-                                } else {
-                                    anyhow::bail!("executeBundle transaction reverted on chain B");
-                                }
-                            }
-                            Err(e) => {
-                                anyhow::bail!("Failed to get executeBundle receipt: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        anyhow::bail!("Failed to send executeBundle transaction: {}", e);
-                    }
-                }
-            } else {
-                anyhow::bail!("Bundle transaction reverted on chain A");
-            }
-
-            Ok(())
-        }
-        Err(e) => {
-            anyhow::bail!("Failed to send bundle transaction: {}", e);
-        }
+    if !receipt.status() {
+        anyhow::bail!("Bundle transaction reverted on chain A");
     }
+
+    // Extract bundle data from the L1Messenger log (log #3)
+    let l1_messenger_log = receipt.logs().get(3).expect("L1Messenger log not found");
+    assert_eq!(l1_messenger_log.address(), L1_MESSENGER_ADDRESS.as_slice());
+
+    // Decode the log data as bytes (it's ABI-encoded)
+    use alloy::sol_types::SolType;
+    let bundle_with_prefix: Bytes = <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(
+        &l1_messenger_log.data().data,
+    )
+    .expect("Failed to decode bundle from log");
+
+    let bundle = Bytes::from(bundle_with_prefix[1..].to_vec()); // Remove 0x01 prefix
+
+    // Get message proof
+    let block_number = receipt.block_number.expect("Block number not found");
+    let log_proof =
+        relayer_get_message_proof(&chain_a.l2_zk_provider, hash, block_number).await?;
+
+    // Build MessageInclusionProof
+    let proof_data: Vec<FixedBytes<32>> = log_proof.proof.clone();
+
+    let message_inclusion_proof = IInteropHandler::MessageInclusionProof {
+        chainId: U256::from(chain_a_id),
+        l1BatchNumber: U256::from(log_proof.batch_number),
+        l2MessageIndex: U256::from(log_proof.id),
+        message: IInteropHandler::L2Message {
+            txNumberInBatch: receipt
+                .transaction_index
+                .expect("Transaction index not found")
+                as u16,
+            sender: L2_INTEROP_CENTER_ADDRESS,
+            data: bundle_with_prefix.clone(),
+        },
+        proof: proof_data,
+    };
+
+    // Execute bundle on chain B
+    let interop_handler = IInteropHandler::new(L2_INTEROP_HANDLER_ADDRESS, &chain_b.l2_provider);
+
+    let execute_call =
+        interop_handler.executeBundle(bundle.clone(), message_inclusion_proof.clone());
+
+    // Send executeBundle with high gas limit
+    let pending_tx = execute_call
+        .gas(50_000_000)
+        .send()
+        .await
+        .context("Failed to send executeBundle transaction")?;
+
+    let execute_receipt = pending_tx
+        .get_receipt()
+        .await
+        .context("Failed to get executeBundle receipt")?;
+
+    if !execute_receipt.status() {
+        anyhow::bail!("executeBundle transaction reverted on chain B");
+    }
+
+    // Verify token balance on chain B
+    let vault_b = IL2NativeTokenVault::new(L2_NATIVE_TOKEN_VAULT_ADDRESS, &chain_b.l2_provider);
+    let asset_id_bytes = FixedBytes::<32>::from(asset_id);
+    let token_b_address = vault_b.tokenAddress(asset_id_bytes).call().await?;
+
+    let token_b = TestERC20::new(token_b_address, &chain_b.l2_provider);
+    let balance_b = token_b.balanceOf(sender).call().await?;
+
+    if balance_b < amount_to_send {
+        anyhow::bail!(
+            "Token balance verification failed: expected {}, got {}",
+            amount_to_send / U256::from(10u128.pow(18)),
+            balance_b / U256::from(10u128.pow(18))
+        );
+    }
+
+    tracing::info!(
+        "✅ Interop transfer successful: {} -> {}",
+        chain_a_id,
+        chain_b_id
+    );
+
+    Ok(())
 }
 
 #[test(tokio::test)]
