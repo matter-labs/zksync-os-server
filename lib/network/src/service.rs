@@ -115,6 +115,9 @@ impl NetworkService {
                 let Some(event) = self.protocol_rx.recv().await else {
                     break;
                 };
+                // For now events are only used for diagnostical reasons (new connection got
+                // established or max connections reached). In the future we might have other events
+                // that we would want to process here somehow.
                 tracing::trace!(?event, "received zks protocol event");
             }
         });
