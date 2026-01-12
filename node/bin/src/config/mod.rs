@@ -229,6 +229,8 @@ pub struct NetworkConfig {
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is
     /// `enode://<node ID>@<IP address>:<port>`.
+    // Default value corresponds to the default value of `secret_key` above. This is needed so local
+    // ENs can connect to local MN with zero configuration.
     #[config(
         default_t = vec![
             "enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060".into()
