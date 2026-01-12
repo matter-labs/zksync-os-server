@@ -25,3 +25,24 @@ impl DeserializeParam<Vec<NodeRecord>> for NodeRecordVec {
         serde_json::to_value(param).unwrap()
     }
 }
+
+#[derive(Debug)]
+pub struct SecretKey;
+
+impl DeserializeParam<zksync_os_network::SecretKey> for SecretKey {
+    const EXPECTING: BasicTypes = BasicTypes::STRING;
+
+    fn deserialize_param(
+        &self,
+        ctx: DeserializeContext<'_>,
+        param: &'static ParamMetadata,
+    ) -> Result<zksync_os_network::SecretKey, ErrorWithOrigin> {
+        let de = ctx.current_value_deserializer(param.name)?;
+        let key = zksync_os_network::SecretKey::deserialize(de)?;
+        Ok(key)
+    }
+
+    fn serialize_param(&self, param: &zksync_os_network::SecretKey) -> Value {
+        serde_json::to_value(param).unwrap()
+    }
+}

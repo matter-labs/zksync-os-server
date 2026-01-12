@@ -6,7 +6,7 @@ use crate::{
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
-use smart_config::value::{ExposeSecret, SecretString};
+use smart_config::value::SecretString;
 use smart_config::{
     ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
@@ -220,8 +220,11 @@ pub struct NetworkConfig {
     pub enabled: bool,
     /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
     /// handshake.
-    #[config(default_t = SecretString::from("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349"))]
-    pub secret_key: SecretString,
+    #[config(
+        default_t = SecretKey::from_str("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349").unwrap(),
+        with = de::SecretKey
+    )]
+    pub secret_key: SecretKey,
     /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     #[config(default_t = Ipv4Addr::LOCALHOST, with = Serde![str])]
     pub address: Ipv4Addr,
@@ -802,8 +805,7 @@ pub struct BatchVerificationConfig {
 impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
     fn from(value: NetworkConfig) -> Self {
         Self {
-            secret_key: SecretKey::from_str(value.secret_key.expose_secret())
-                .expect("network secret key is malformed"),
+            secret_key: value.secret_key,
             address: value.address,
             port: value.port,
             boot_nodes: value.boot_nodes,
