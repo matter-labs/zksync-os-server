@@ -2,7 +2,7 @@
 
 use alloy::{
     hex,
-    primitives::{Address, Bytes, FixedBytes, U256},
+    primitives::{Address, Bytes, FixedBytes, U256, address},
     providers::Provider,
     sol,
     sol_types::SolValue,
@@ -13,18 +13,10 @@ use zksync_os_integration_tests::{
     MultiChainTester, assert_traits::ReceiptAssert, contracts::TestERC20, provider::ZksyncApi,
 };
 
-const L2_INTEROP_CENTER_ADDRESS: Address = Address::new([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x10,
-]);
-const L2_INTEROP_HANDLER_ADDRESS: Address = Address::new([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x0d,
-]);
-const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = Address::new([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x04,
-]);
-const L2_ASSET_ROUTER_ADDRESS: Address = Address::new([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0x03,
-]);
+const L2_INTEROP_CENTER_ADDRESS: Address = address!("0000000000000000000000000000000000010010");
+const L2_INTEROP_HANDLER_ADDRESS: Address = address!("000000000000000000000000000000000001000d");
+const L2_NATIVE_TOKEN_VAULT_ADDRESS: Address = address!("0000000000000000000000000000000000010004");
+const L2_ASSET_ROUTER_ADDRESS: Address = address!("0000000000000000000000000000000000010003");
 
 sol! {
     #[sol(rpc)]

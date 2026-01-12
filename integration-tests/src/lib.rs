@@ -427,7 +427,8 @@ impl TesterBuilder {
 impl Drop for Tester {
     fn drop(&mut self) {
         // Send stop signal to main node
-        self.stop_sender.send(true).unwrap();
+        // Ignore error if receiver is already dropped (service already stopped)
+        let _ = self.stop_sender.send(true);
         self.main_task.abort();
     }
 }
@@ -478,12 +479,15 @@ impl MultiChainTester {
 
         tracing::info!("L1 chain started on {}", l1_address);
 
-        // Launch L2 chains
-        // Use chain IDs that are registered in the multiple-chains L1 state
-        // The multiple-chains L1 state has chain IDs 6565 and 6566 registered
+        // Launch L2 chains using chain configurations from config files
         let mut chains = Vec::new();
         for i in 0..num_chains {
-            let chain_id = 6565 + i as u64;
+            // Load the chain config to get the chain ID
+            let chain_config = config::get_chain_config(i);
+            let chain_id = chain_config
+                .genesis_config
+                .chain_id
+                .expect("Chain ID must be set in chain config");
 
             let chain_override = move |config: &mut Config| {
                 config.genesis_config.chain_id = Some(chain_id);
@@ -525,11 +529,11 @@ impl MultiChainTester {
 
     /// Get chain A (first chain)
     pub fn chain_a(&self) -> &Tester {
-        &self.chains[0]
+        self.chain(0)
     }
 
     /// Get chain B (second chain)
     pub fn chain_b(&self) -> &Tester {
-        &self.chains[1]
+        self.chain(1)
     }
 }
