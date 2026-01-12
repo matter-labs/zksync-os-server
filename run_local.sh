@@ -2,6 +2,9 @@
 
 set -e
 
+# Get the directory where this script is located
+REPO_ROOT="$(dirname "$(realpath "$0")")"
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -55,7 +58,8 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-CONFIG_DIR="$1"
+# Resolve to absolute path
+CONFIG_DIR="$(realpath "$1")"
 
 # Verify the directory exists
 if [ ! -d "$CONFIG_DIR" ]; then
@@ -72,12 +76,12 @@ fi
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Starting Local Development Environment${NC}"
-echo -e "${BLUE}Config directory: $CONFIG_DIR${NC}"
+echo -e "${BLUE}Config directory: $1${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Build first
 echo -e "\n${GREEN}Building zksync-os-server...${NC}"
-if ! cargo build --release; then
+if ! cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml"; then
     echo -e "${RED}Build failed${NC}"
     exit 1
 fi
@@ -112,19 +116,19 @@ if [ -f "$SINGLE_CONFIG" ]; then
     # Single chain mode
     
     # Prompt to clean up db folder (only for single chain mode)
-    if [ -d "db" ] && [ "$(ls -A db 2>/dev/null)" ]; then
+    if [ -d "$REPO_ROOT/db" ] && [ "$(ls -A "$REPO_ROOT/db" 2>/dev/null)" ]; then
         echo -e "${YELLOW}The db/ folder contains existing data.${NC}"
         read -p "Do you want to clean it up? (y/N): " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             echo -e "${YELLOW}Cleaning up db/* ...${NC}"
-            rm -rf db/*
+            rm -rf "$REPO_ROOT/db"/*
             echo -e "${GREEN}db/ folder cleaned${NC}"
         fi
     fi
     
     echo -e "\n${GREEN}Starting single chain with config: $SINGLE_CONFIG${NC}"
-    cargo run --release -- --config "$SINGLE_CONFIG" &
+    cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$SINGLE_CONFIG" &
     CHAIN_PID=$!
     PIDS+=($CHAIN_PID)
     echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
@@ -141,7 +145,7 @@ else
     
     for config_file in "${CHAIN_CONFIGS[@]}"; do
         echo -e "${GREEN}Starting chain with config: $config_file${NC}"
-        cargo run --release -- --config "$config_file" &
+        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" &
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)
         echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
