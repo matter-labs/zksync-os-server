@@ -1,9 +1,10 @@
 //! Interop integration tests for cross-chain token transfers.
 
 use alloy::{
-    primitives::{Address, Bytes, FixedBytes, U256, address},
+    primitives::{Address, Bytes, FixedBytes, U256, address, keccak256},
     providers::Provider,
     sol,
+    sol_types::{SolCall, SolType, SolValue},
 };
 use anyhow::{Context, Result};
 use test_log::test;
@@ -117,8 +118,6 @@ fn to_chain_reference(chain_id: u64) -> Vec<u8> {
 
 /// Helper to compute asset ID (keccak256(abi.encode(chainId, ntvAddress, tokenAddress)))
 fn compute_asset_id(chain_id: u64, token_address: Address) -> [u8; 32] {
-    use alloy::primitives::keccak256;
-    use alloy::sol_types::SolValue;
     let encoded = (
         U256::from(chain_id),
         L2_NATIVE_TOKEN_VAULT_ADDRESS,
@@ -135,8 +134,6 @@ fn build_second_bridge_calldata(
     receiver: Address,
     maybe_token_address: Address,
 ) -> Bytes {
-    use alloy::sol_types::SolValue;
-
     // encodeBridgeBurnData(amount, receiver, maybeTokenAddress)
     let inner = (amount, receiver, maybe_token_address).abi_encode();
 
@@ -287,7 +284,6 @@ async fn test_interop_bundle_send() -> Result<()> {
     );
 
     // Build call attributes with indirectCall
-    use alloy::sol_types::SolCall;
     let call_attributes = vec![Bytes::from(
         indirectCallCall {
             _gasLimit: U256::ZERO,
@@ -338,7 +334,6 @@ async fn test_interop_bundle_send() -> Result<()> {
     assert_eq!(l1_messenger_log.address(), L1_MESSENGER_ADDRESS.as_slice());
 
     // Decode the log data as bytes (it's ABI-encoded)
-    use alloy::sol_types::SolType;
     let bundle_with_prefix: Bytes =
         <alloy::sol_types::sol_data::Bytes as SolType>::abi_decode(&l1_messenger_log.data().data)
             .expect("Failed to decode bundle from log");
