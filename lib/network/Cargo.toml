@@ -35,6 +35,7 @@ secrecy.workspace = true
 
 reth-network.workspace = true
 reth-network-peers.workspace = true
+reth-net-nat.workspace = true
 reth-eth-wire.workspace = true
 reth-discv5.workspace = true
 reth-chainspec.workspace = true

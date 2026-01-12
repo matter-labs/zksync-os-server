@@ -15137,6 +15137,7 @@ dependencies = [
  "reth-chainspec",
  "reth-discv5",
  "reth-eth-wire",
+ "reth-net-nat",
  "reth-network",
  "reth-network-peers",
  "reth-provider",

@@ -4,6 +4,7 @@ use crate::version::ZksProtocolV1;
 use reth_chainspec::ChainSpecProvider;
 use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
+use reth_net_nat::NatResolver;
 use reth_network::error::NetworkError;
 use reth_network::{NetworkConfig as RethNetworkConfig, NetworkManager};
 use std::net::{SocketAddr, SocketAddrV4};
@@ -35,6 +36,14 @@ impl NetworkService {
         >,
         replay_sender: mpsc::UnboundedSender<ReplayRecord>,
     ) -> Result<Self, NetworkError> {
+        match NatResolver::Any.external_addr().await {
+            None => {
+                tracing::info!("could not resolve external IP (STUN)");
+            }
+            Some(ip) => {
+                tracing::info!(%ip, "resolved external IP (STUN)");
+            }
+        };
         let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let net_cfg = RethNetworkConfig::builder(config.secret_key)

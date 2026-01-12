@@ -202,6 +202,7 @@ reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-net-nat = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
