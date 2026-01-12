@@ -91,35 +91,38 @@ jobs:
           compare_to_earlier_commit: false # Do not compare with `main` due to different number of iterations
 
 
+  # Temporary disable code coverage measurements in main due to llvm-cov issue with rustc v1.89:
+  # https://github.com/rust-lang/rust/issues/141577
+  # TODO: re-enable the job after upgrading Rust to >=1.90
   ######################################
   # Measure code coverage on main push #
   ######################################
-  code-coverage:
-    # Code coverage is measured only on push to main branch
-    # as it slows down PR testing significantly (2m -> 15m for tests execution)
-    # due to overhead with LLVM instrumentation.
-    # So, we keep the main numbers, but not force every PR to wait for it.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: matterlabs-ci-runner-high-performance
-    env:
-      RUSTC_BOOTSTRAP: 1
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Setup runner
-        uses: ./.github/actions/runner-setup
-
-      - name: Measure coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace --release --profile coverage
-
-      - name: Generate codecov report
-        uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
-        if: always() && !cancelled()
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          slug: ${{ github.repository }}
+  # code-coverage:
+  #   # Code coverage is measured only on push to main branch
+  #   # as it slows down PR testing significantly (2m -> 15m for tests execution)
+  #   # due to overhead with LLVM instrumentation.
+  #   # So, we keep the main numbers, but not force every PR to wait for it.
+  #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  #   runs-on: matterlabs-ci-runner-high-performance
+  #   env:
+  #     RUSTC_BOOTSTRAP: 1
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  #
+  #     - name: Setup runner
+  #       uses: ./.github/actions/runner-setup
+  #
+  #     - name: Measure coverage
+  #       run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace --release --profile coverage
+  #
+  #     - name: Generate codecov report
+  #       uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
+  #       if: always() && !cancelled()
+  #       with:
+  #         token: ${{ secrets.CODECOV_TOKEN }}
+  #         files: lcov.info
+  #         slug: ${{ github.repository }}
 
 
   ############################################
