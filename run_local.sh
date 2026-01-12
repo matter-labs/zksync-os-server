@@ -18,6 +18,9 @@ declare -a PIDS=()
 
 # Cleanup function to stop all started services
 cleanup() {
+    # Prevent re-entry when exit triggers the trap again
+    trap - SIGINT SIGTERM EXIT
+    
     echo -e "\n${YELLOW}Shutting down all services...${NC}"
     for pid in "${PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
@@ -71,6 +74,14 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Starting Local Development Environment${NC}"
 echo -e "${BLUE}Config directory: $CONFIG_DIR${NC}"
 echo -e "${BLUE}========================================${NC}"
+
+# Build first
+echo -e "\n${GREEN}Building zksync-os-server...${NC}"
+if ! cargo build --release; then
+    echo -e "${RED}Build failed${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Build completed${NC}"
 
 # Start Anvil
 echo -e "\n${GREEN}Starting Anvil...${NC}"
@@ -134,8 +145,8 @@ else
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)
         echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
-        
-        # Small delay between starting chains to avoid port conflicts
+                
+        # Small delay between starting chains (to make sure file locks are awaited properly)
         sleep 2
     done
 fi
