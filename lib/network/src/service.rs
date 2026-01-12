@@ -6,7 +6,7 @@ use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
 use reth_network::error::NetworkError;
 use reth_network::{NetworkConfig as RethNetworkConfig, NetworkManager};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{SocketAddr, SocketAddrV4};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
@@ -35,8 +35,7 @@ impl NetworkService {
         >,
         replay_sender: mpsc::UnboundedSender<ReplayRecord>,
     ) -> Result<Self, NetworkError> {
-        // todo: do not use localhost
-        let rlpx_address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.port));
+        let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let net_cfg = RethNetworkConfig::builder(config.secret_key)
             .boot_nodes(config.boot_nodes.clone())
@@ -67,8 +66,8 @@ impl NetworkService {
                 ),
             )
             // Use the same port for RLPx (TCP) and for discv5 (UDP)
-            .listener_port(config.port)
-            .discovery_port(config.port)
+            .listener_addr(rlpx_address)
+            .discovery_addr(rlpx_address)
             // Disable transaction gossip as it is unsupported by ZKsync OS
             .disable_tx_gossip(true)
             // Do not require any block hashes in `eth` RLPx protocol as it is unused

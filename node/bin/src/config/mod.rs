@@ -12,6 +12,7 @@ use smart_config::{
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::HashSet;
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
@@ -220,6 +221,9 @@ pub struct NetworkConfig {
     /// handshake.
     #[config(default_t = SecretString::from("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349"))]
     pub secret_key: SecretString,
+    /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    #[config(default_t = Ipv4Addr::LOCALHOST, with = Serde![str])]
+    pub address: Ipv4Addr,
     /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     #[config(default_t = 3060)]
     pub port: u16,
@@ -797,6 +801,7 @@ impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
         Self {
             secret_key: SecretKey::from_str(value.secret_key.expose_secret())
                 .expect("network secret key is malformed"),
+            address: value.address,
             port: value.port,
             boot_nodes: zksync_os_network::parse_nodes(value.boot_nodes),
             max_active_connections: value.max_active_connections,
