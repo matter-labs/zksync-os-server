@@ -79,7 +79,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
     let command_name = Input::NAME;
 
     let operator_address =
-        register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
+        register_operator::<_, Input>(&mut provider, &config.operator_pk).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
     // Process all potential passthrough commands first
@@ -312,7 +312,7 @@ async fn register_operator<
     Input: SendToL1,
 >(
     provider: &mut P,
-    private_key: SecretString,
+    private_key: &SecretString,
 ) -> anyhow::Result<Address> {
     let signer = PrivateKeySigner::from_str(private_key.expose_secret())
         .context("failed to parse operator private key")?;

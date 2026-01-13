@@ -81,7 +81,7 @@ pub struct BaseTokenPriceUpdater<
 
 async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
     provider: &mut P,
-    private_key: SecretString,
+    private_key: &SecretString,
 ) -> anyhow::Result<Address> {
     let signer = PrivateKeySigner::from_str(private_key.expose_secret())
         .context("failed to parse operator private key")?;
@@ -113,14 +113,12 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         external_price_source: ExternalPriceSource,
         external_price_api_client_config: ExternalPriceApiClientConfig,
     ) -> anyhow::Result<Self> {
-        let token_multiplier_setter_address = if let Some(pk) = base_token_adjuster_config
-            .token_multiplier_setter_pk
-            .clone()
-        {
-            Some(register_operator(&mut l1_provider, pk).await?)
-        } else {
-            None
-        };
+        let token_multiplier_setter_address =
+            if let Some(pk) = &base_token_adjuster_config.token_multiplier_setter_pk {
+                Some(register_operator(&mut l1_provider, pk).await?)
+            } else {
+                None
+            };
 
         let base_token_address = base_token_adjuster_config
             .base_token_addr_override
