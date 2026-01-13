@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
-use crate::config::get_default_config;
+use crate::config::get_default_config_v30;
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use alloy::network::TransactionBuilder;
@@ -151,7 +151,7 @@ impl UpgradeTester {
 
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
-        let default_config: &zksync_os_server::config::Config = get_default_config();
+        let default_config: &zksync_os_server::config::Config = get_default_config_v30();
         let chain_id = default_config
             .genesis_config
             .chain_id
