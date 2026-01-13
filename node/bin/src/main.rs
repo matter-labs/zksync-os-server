@@ -352,10 +352,10 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
 fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
-    if original_path != Path::new("./db/node1") {
+    if original_path.exists() {
         tracing::warn!(
             original_path = %original_path.display(),
-            "general_rocks_db_path parameter is ignored in ephemeral mode"
+            "general.rocks_db_path parameter is ignored in ephemeral mode"
         );
     }
 

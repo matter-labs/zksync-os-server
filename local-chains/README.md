@@ -6,37 +6,42 @@ This directory contains configuration files for running ZKsync OS nodes locally.
 
 ```
 local-chains/
-├── README.md                  # Top-level documentation for local chain configurations
-├── v30.2/                     # Protocol version v30.2
-│   ├── default/               # Default (single-chain) setup
-│   │   ├── README.md          # Scenario-specific documentation
-│   │   ├── config.json        # Sequencer configuration
-│   │   ├── genesis.json       # Genesis configuration
-│   │   ├── wallets.yaml       # Wallets configuration
-│   │   └── zkos-l1-state.json # L1 state for this scenario
-│   ├── multi_chain/           # Multi-chain scenario
-│   │   ├── README.md          # Scenario-specific documentation
-│   │   ├── chain_6565.json    # Configuration for chain with ID 6565
-│   │   ├── chain_6566.json    # Configuration for chain with ID 6566
-│   │   ├── wallets_6565.yaml  # Wallets for chain 6565
-│   │   ├── wallets_6566.yaml  # Wallets for chain 6566
-│   │   └── zkos-l1-state.json # Shared L1 state for the multi-chain scenario
-│   └── versions.toml          # Version metadata for protocol v30.2
-└── v31.0/                     # Protocol version v31.0
-    ├── default/               # Default (single-chain) setup
-    │   ├── README.md          # Scenario-specific documentation
-    │   ├── config.json        # Sequencer configuration
-    │   ├── genesis.json       # Genesis configuration
-    │   ├── wallets.yaml       # Wallets configuration
-    │   └── zkos-l1-state.json # L1 state for this scenario
-    ├── multi_chain/           # Multi-chain scenario
-    │   ├── README.md          # Scenario-specific documentation
-    │   ├── chain_6565.json    # Configuration for chain with ID 6565
-    │   ├── chain_6566.json    # Configuration for chain with ID 6566
-    │   ├── wallets_6565.yaml  # Wallets for chain 6565
-    │   ├── wallets_6566.yaml  # Wallets for chain 6566
-    │   └── zkos-l1-state.json # Shared L1 state for the multi-chain scenario
-    └── versions.toml          # Version metadata for protocol v31.0
+├── README.md                    # Top-level documentation for local chain configurations
+├── v30.2/                       # Protocol version v30.2
+│   ├── default/                 # Default (single-chain) setup
+│   │   ├── README.md            # Scenario-specific documentation
+│   │   ├── config.json          # Sequencer configuration
+│   │   ├── genesis.json         # Genesis configuration
+│   │   ├── wallets.yaml         # Wallets configuration
+│   │   ├── contracts.yaml       # Contracts configuration
+│   │   └── zkos-l1-state.json   # L1 state for this scenario
+│   ├── multi_chain/             # Multi-chain scenario
+│   │   ├── README.md            # Scenario-specific documentation
+│   │   ├── chain_6565.json      # Configuration for chain with ID 6565
+│   │   ├── chain_6566.json      # Configuration for chain with ID 6566
+│   │   ├── wallets_6565.yaml    # Wallets for chain 6565
+│   │   ├── wallets_6566.yaml    # Wallets for chain 6566
+│   │   ├── contracts_6565.yaml  # Contracts for chain 6565
+│   │   ├── contracts_6566.yaml  # Contracts for chain 6566
+│   │   └── zkos-l1-state.json   # Shared L1 state for the multi-chain scenario
+│   └── versions.yaml            # Version metadata for protocol v30.2
+└── v31.0/                       # Protocol version v31.0
+    ├── default/                 # Default (single-chain) setup
+    │   ├── README.md            # Scenario-specific documentation
+    │   ├── config.json          # Sequencer configuration
+    │   ├── genesis.json         # Genesis configuration
+    │   ├── wallets.yaml         # Wallets configuration
+    │   └── zkos-l1-state.json   # L1 state for this scenario
+    ├── multi_chain/             # Multi-chain scenario
+    │   ├── README.md            # Scenario-specific documentation
+    │   ├── chain_6565.json      # Configuration for chain with ID 6565
+    │   ├── chain_6566.json      # Configuration for chain with ID 6566
+    │   ├── wallets_6565.yaml    # Wallets for chain 6565
+    │   ├── wallets_6566.yaml    # Wallets for chain 6566
+    │   ├── contracts_6565.yaml  # Contracts for chain 6565
+    │   ├── contracts_6566.yaml  # Contracts for chain 6566
+    │   └── zkos-l1-state.json   # Shared L1 state for the multi-chain scenario
+    └── versions.yaml            # Version metadata for protocol v31.0
 ```
 
 ## Configuration Files

@@ -1,0 +1,15 @@
+general:
+  protocol_version: "v30.2"
+  verification_key: "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
+
+era-contracts:
+  tag: "zkos-v0.30.2"
+  sha: "9ddc915c85d1f44c79b5d55e160d384138ed5105"
+
+zkstack-cli:
+  tag: "protocol-upgrade-v1.3.1"
+  sha: "383f48ddcd3ba6bf49666b3fefe78b7cde6f1b40"
+
+zksync-os-workflows:
+  tag: "protocol-upgrade-v1.3.1-chainid"
+  sha: "8669253f06c7bb287171c45e11e289316257f3b7"
