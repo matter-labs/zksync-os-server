@@ -42,6 +42,7 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
         gas_adjuster_config: Default::default(),
         batch_verification_config: Default::default(),
     }
+    
 });
 
 pub fn get_default_config() -> &'static Config {
@@ -94,13 +95,9 @@ pub fn get_chain_config(chain_index: usize) -> Config {
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    genesis_config.genesis_input_path = Some(
-        PathBuf::from(&workspace_dir)
-            .join("local-chains")
-            .join("v31.0")
-            .join("default")
-            .join("genesis.json"),
-    );
+    // TODO: change v31.0 to proper support of both versions
+    genesis_config.genesis_input_path =
+        Some(format!("{workspace_dir}/local-chains/v31.0/default/genesis.json").into());
 
     Config {
         genesis_config,
