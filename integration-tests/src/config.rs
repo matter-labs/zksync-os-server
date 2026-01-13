@@ -80,8 +80,9 @@ pub fn get_chain_config(chain_index: usize) -> Config {
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
+    // TODO: change v31.0 to proper support of both versions
     genesis_config.genesis_input_path = Some(
-        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/genesis.json").into(),
+        format!("{workspace_dir}/local-chains/v31.0/default/genesis.json").into(),
     );
 
     Config {
