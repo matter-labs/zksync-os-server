@@ -42,7 +42,6 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
         gas_adjuster_config: Default::default(),
         batch_verification_config: Default::default(),
     }
-    
 });
 
 pub fn get_default_config() -> &'static Config {
