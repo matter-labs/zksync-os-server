@@ -5,11 +5,10 @@ use smart_config::{ConfigRepository, ConfigSources, Json};
 use zksync_os_server::config::{Config, GenesisConfig};
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 
-static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
+fn load_default_config(version: &str) -> Config {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    let config_path =
-        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/config.json");
+    let config_path = format!("{workspace_dir}/local-chains/{version}/default/config.json");
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
     let config_contents =
@@ -21,9 +20,8 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    genesis_config.genesis_input_path = Some(
-        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/genesis.json").into(),
-    );
+    genesis_config.genesis_input_path =
+        Some(format!("{workspace_dir}/local-chains/{version}/default/genesis.json").into());
 
     Config {
         genesis_config,
@@ -42,10 +40,18 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
         gas_adjuster_config: Default::default(),
         batch_verification_config: Default::default(),
     }
-});
+}
 
-pub fn get_default_config() -> &'static Config {
-    &DEFAULT_CONFIG
+static DEFAULT_CONFIG_V30: LazyLock<Config> = LazyLock::new(|| load_default_config("v30.2"));
+
+static DEFAULT_CONFIG_V31: LazyLock<Config> = LazyLock::new(|| load_default_config("v31.0"));
+
+pub fn get_default_config_v30() -> &'static Config {
+    &DEFAULT_CONFIG_V30
+}
+
+pub fn get_default_config_v31() -> &'static Config {
+    &DEFAULT_CONFIG_V31
 }
 
 pub fn get_default_l1_state_path() -> String {
@@ -54,7 +60,6 @@ pub fn get_default_l1_state_path() -> String {
     format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/zkos-l1-state.json")
 }
 
-// TODO: change v31.0 to proper support of both versions
 pub fn get_multiple_chains_l1_state_path() -> String {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
@@ -74,7 +79,6 @@ pub fn get_chain_config(chain_index: usize) -> Config {
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
     // Map chain index to chain ID (0 -> 6565, 1 -> 6566, etc.)
     let chain_id = 6565 + chain_index as u64;
-    // TODO: change v31.0 to proper support of both versions
     let config_path = PathBuf::from(&workspace_dir)
         .join("local-chains")
         .join("v31.0")
@@ -94,7 +98,6 @@ pub fn get_chain_config(chain_index: usize) -> Config {
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    // TODO: change v31.0 to proper support of both versions
     genesis_config.genesis_input_path =
         Some(format!("{workspace_dir}/local-chains/v31.0/default/genesis.json").into());
 
