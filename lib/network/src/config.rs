@@ -14,6 +14,4 @@ pub struct NetworkConfig {
     /// All boot nodes to start network discovery with. Expected format is
     /// `enode://<node ID>@<IP address>:<port>`.
     pub boot_nodes: Vec<NodeRecord>,
-    /// Maximum number of active connections with other peers.
-    pub max_active_connections: usize,
 }

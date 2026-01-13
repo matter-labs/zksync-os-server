@@ -242,9 +242,6 @@ pub struct NetworkConfig {
         with = de::NodeRecordVec
     )]
     pub boot_nodes: Vec<NodeRecord>,
-    /// Maximum number of active connections with other peers.
-    #[config(default_t = 10)]
-    pub max_active_connections: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -809,7 +806,6 @@ impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
             address: value.address,
             port: value.port,
             boot_nodes: value.boot_nodes,
-            max_active_connections: value.max_active_connections,
         }
     }
 }

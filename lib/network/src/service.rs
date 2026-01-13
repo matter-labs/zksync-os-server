@@ -15,6 +15,9 @@ use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_storage_api::{ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord};
 use zksync_os_types::NodeRole;
 
+/// Max number of active devp2p connections.
+const MAX_ACTIVE_CONNECTIONS: usize = 10;
+
 /// Manages the entire network state including all RLPx subprotocols and discv5 peer discovery.
 ///
 /// This type is supposed to be consumed through [`NetworkService::run`] that registers it as an
@@ -90,7 +93,7 @@ impl NetworkService {
                 replay,
                 // we only want to request blocks if this is external node
                 to_request_blocks: node_role.is_external(),
-                state: ProtocolState::new(protocol_tx, 10),
+                state: ProtocolState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS),
                 replay_sender,
                 _phantom: Default::default(),
             })
