@@ -71,12 +71,12 @@ pub async fn load_remote_config(
             .genesis_input()
             .await?;
 
-        let remote_genesis_str = serde_json::to_string(&remote_genesis_input)?;
-        let local_genesis_str = serde_json::to_string(&local_genesis_input)?;
+        let remote_json = serde_json::to_string(&remote_genesis_input)?;
+        let local_json = serde_json::to_string(&local_genesis_input)?;
 
         anyhow::ensure!(
             local_genesis_input == remote_genesis_input,
-            "Genesis input mismatch: remote = {remote_genesis_str}, local = {local_genesis_str}",
+            "Genesis input mismatch: remote = {remote_json}, local = {local_json}",
         );
     }
 
