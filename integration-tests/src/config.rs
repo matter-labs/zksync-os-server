@@ -65,10 +65,9 @@ pub fn get_multiple_chains_l1_state_path() -> String {
 pub fn get_chain_config(chain_index: usize) -> Config {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    let chain_num = chain_index + 1;
     // TODO: change v31.0 to proper support of both versions
     let config_path =
-        format!("{workspace_dir}/local-chains/v31.0/multi_chain/chain_{chain_num}.json");
+        format!("{workspace_dir}/local-chains/v31.0/multi_chain/chain_{chain_index}.json");
 
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();

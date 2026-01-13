@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
-use std::{fs, future, path::Path, path::PathBuf, time::Duration};
+use std::{fs, future, path::PathBuf, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
@@ -44,27 +44,27 @@ struct Cli {
 }
 
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
-    let default_path: Option<String> = {
-        let workspace_dir = Path::new(env!("WORKSPACE_DIR"));
-        let full_path: PathBuf = workspace_dir.join(format!(
+    let config_path: Option<PathBuf> = if let Some(path) = config_path {
+        Some(PathBuf::from(path))
+    } else if let Ok(workspace_dir) = std::env::var("WORKSPACE_DIR") {
+        let default_path = PathBuf::from(workspace_dir).join(format!(
             "local-chains/{PROTOCOL_VERSION}/default/config.json"
         ));
-        full_path
-            .exists()
-            .then_some(full_path.to_string_lossy().into_owned())
+        default_path.exists().then_some(default_path)
+    } else {
+        None
     };
 
-    let config_path: Option<String> = config_path.or(default_path);
+    let Some(config_path) = config_path else {
+        return;
+    };
 
-    if let Some(config_path) = &config_path {
-        let config_contents =
-            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
-        let config_json: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&config_contents)
-                .expect("Failed to parse config file from provided path");
-        config_sources.push(Json::new(config_path, config_json));
-    }
+    let contents = fs::read_to_string(&config_path).expect("Failed to read config file");
+    let config_json: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&contents).expect("Failed to parse config file");
+    config_sources.push(Json::new(&config_path.to_string_lossy(), config_json));
 }
+
 #[tokio::main]
 pub async fn main() {
     let opt = Cli::parse();
