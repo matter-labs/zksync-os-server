@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
-use std::{fs, future, path::PathBuf, time::Duration};
+use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
@@ -15,7 +15,7 @@ use zksync_os_server::config::{
     ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
-use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
+use zksync_os_server::default_protocol_version::{PROTOCOL_VERSION, DEFAULT_ROCKS_DB_PATH};
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
@@ -44,25 +44,20 @@ struct Cli {
 }
 
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
-    let config_path: Option<PathBuf> = if let Some(path) = config_path {
-        Some(PathBuf::from(path))
-    } else if let Ok(workspace_dir) = std::env::var("WORKSPACE_DIR") {
-        let default_path = PathBuf::from(workspace_dir).join(format!(
-            "local-chains/{PROTOCOL_VERSION}/default/config.json"
-        ));
-        default_path.exists().then_some(default_path)
-    } else {
-        None
-    };
+    // Process the config file if provided or if default exists
+    let config_path: Option<String> = config_path.or_else(|| {
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.json");
+        Path::new(&default_path).exists().then_some(default_path)
+    });
 
-    let Some(config_path) = config_path else {
-        return;
-    };
-
-    let contents = fs::read_to_string(&config_path).expect("Failed to read config file");
-    let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&contents).expect("Failed to parse config file");
-    config_sources.push(Json::new(&config_path.to_string_lossy(), config_json));
+    if let Some(config_path) = &config_path {
+        let config_contents =
+            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+        let config_json: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&config_contents)
+                .expect("Failed to parse config file from provided path");
+        config_sources.push(Json::new(config_path, config_json));
+    }
 }
 
 #[tokio::main]
@@ -354,10 +349,10 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
 fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
-    if original_path.exists() {
+    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
         tracing::warn!(
             original_path = %original_path.display(),
-            "general.rocks_db_path parameter is ignored in ephemeral mode"
+            "general_rocks_db_path parameter is ignored in ephemeral mode"
         );
     }
 
