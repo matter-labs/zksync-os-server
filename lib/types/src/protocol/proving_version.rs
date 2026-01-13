@@ -56,9 +56,9 @@ impl ProvingVersion {
     const V4_VK_HASH: &'static str =
         "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5";
 
-    /// verification key hash generated from zksync-os local, zksync-airbender local and zkos-wrapper local
+    /// verification key hash generated from zksync-os v0.2.4, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
     const V5_VK_HASH: &'static str =
-        "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
+        "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581";
 
     /// verification key hash generated from zksync-os v0.2.5, zksync-airbender v0.5.2 and zkos-wrapper v0.5.4
     const V6_VK_HASH: &'static str =

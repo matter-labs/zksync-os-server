@@ -15,13 +15,13 @@ use zksync_os_server::config::{
     ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_CONFIG: &str = "local-chains/v30.2/default/config.json";
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
@@ -46,7 +46,9 @@ struct Cli {
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
     let default_path: Option<String> = {
         let workspace_dir = Path::new(env!("WORKSPACE_DIR"));
-        let full_path: PathBuf = workspace_dir.join(DEFAULT_CONFIG);
+        let full_path: PathBuf = workspace_dir.join(format!(
+            "local-chains/{PROTOCOL_VERSION}/default/config.json"
+        ));
         full_path
             .exists()
             .then_some(full_path.to_string_lossy().into_owned())

@@ -481,7 +481,7 @@ impl MultiChainTester {
 
         // Launch L2 chains using chain configurations from config files
         let mut chains = Vec::new();
-        for i in 0..num_chains {
+        for i in 6565..6566 {
             // Load the chain config to get the chain ID
             let chain_config = config::get_chain_config(i);
             let chain_id = chain_config

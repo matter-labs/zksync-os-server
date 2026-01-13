@@ -2,14 +2,13 @@ use std::sync::LazyLock;
 
 use smart_config::{ConfigRepository, ConfigSources, Json};
 use zksync_os_server::config::{Config, GenesisConfig};
-
-const CURRENT_PROTOCOL_VERSION: &str = "v30.2";
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 
 static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
     let config_path =
-        format!("{workspace_dir}/local-chains/{CURRENT_PROTOCOL_VERSION}/default/config.json");
+        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/config.json");
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
     let config_contents =
@@ -22,8 +21,7 @@ static DEFAULT_CONFIG: LazyLock<Config> = LazyLock::new(|| {
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
     genesis_config.genesis_input_path = Some(
-        format!("{workspace_dir}/local-chains/{CURRENT_PROTOCOL_VERSION}/default/genesis.json")
-            .into(),
+        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/genesis.json").into(),
     );
 
     Config {
@@ -52,13 +50,14 @@ pub fn get_default_config() -> &'static Config {
 pub fn get_default_l1_state_path() -> String {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    format!("{workspace_dir}/local-chains/{CURRENT_PROTOCOL_VERSION}/default/zkos-l1-state.json")
+    format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/zkos-l1-state.json")
 }
 
+// TODO: change v31.0 to proper support of both versions
 pub fn get_multiple_chains_l1_state_path() -> String {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/multiple-chains/zkos-l1-state.json")
+    format!("{workspace_dir}/local-chains/v31.0/multi_chain/zkos-l1-state.json")
 }
 
 /// Load chain configuration from a specific chain config file in the multiple-chains directory.
@@ -67,9 +66,9 @@ pub fn get_chain_config(chain_index: usize) -> Config {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
     let chain_num = chain_index + 1;
-    let config_path = format!(
-        "{workspace_dir}/local-chains/{PROTOCOL_VERSION}/multiple-chains/chain{chain_num}.json"
-    );
+    // TODO: change v31.0 to proper support of both versions
+    let config_path =
+        format!("{workspace_dir}/local-chains/v31.0/multi_chain/chain_{chain_num}.json");
 
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
@@ -82,8 +81,9 @@ pub fn get_chain_config(chain_index: usize) -> Config {
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    genesis_config.genesis_input_path =
-        Some(format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/genesis.json").into());
+    genesis_config.genesis_input_path = Some(
+        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/genesis.json").into(),
+    );
 
     Config {
         genesis_config,
