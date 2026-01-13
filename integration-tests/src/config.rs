@@ -88,6 +88,7 @@ pub fn get_chain_config(chain_index: usize) -> Config {
         genesis_config,
         l1_sender_config: config_repo.single().unwrap().parse().unwrap(),
         general_config: Default::default(),
+        network_config: Default::default(),
         rpc_config: Default::default(),
         mempool_config: Default::default(),
         tx_validator_config: Default::default(),
