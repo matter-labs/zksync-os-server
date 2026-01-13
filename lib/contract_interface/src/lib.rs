@@ -293,6 +293,8 @@ alloy::sol! {
     #[sol(rpc)]
     interface IChainAdminOwnable {
         function setTokenMultiplier(address _chainContract, uint128 _nominator, uint128 _denominator) external;
+        // Not present in `IChainAdminOwnable`, but `ChainAdminOwnable` which is the only implementor has it.
+        function tokenMultiplierSetter() external view returns (address);
     }
 
     // `BytecodeSupplier.sol`

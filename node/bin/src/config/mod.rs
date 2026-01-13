@@ -11,7 +11,7 @@ use smart_config::{
     ConfigRepository, ConfigSchema, ConfigSources, DescribeConfig, DeserializeConfig, EtherAmount,
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -799,7 +799,7 @@ pub struct BaseTokenPriceUpdaterConfig {
 pub struct ForcedPriceClientConfig {
     /// Map of token addresses to their forced price in USD for 1 token (not base token unit!).
     #[config(default, with = Serde![*])]
-    pub prices: Vec<(Address, f64)>,
+    pub prices: HashMap<Address, f64>,
     /// Forced fluctuation. It defines how much percent the ratio should fluctuate from its forced
     /// value. If it's 0, then the ForcedPriceClient will return the same quote every time
     /// it's called. Otherwise, ForcedPriceClient will return quote with numerator +/- fluctuation %.
@@ -820,14 +820,14 @@ pub enum ExternalPriceSource {
 }
 
 /// Configuration for external price API client.
-#[derive(Debug, Clone, PartialEq, DescribeConfig, DeserializeConfig)]
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
 pub struct ExternalPriceApiClientConfig {
     #[config(with = Serde![str])]
     pub source: ExternalPriceSource,
     /// Base URL of the external price API.
     pub base_url: Option<String>,
     /// API key for the external price API.
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
     /// Timeout for the external price API client.
     #[config(default_t = Duration::from_secs(10))]
     pub client_timeout: Duration,
@@ -1005,7 +1005,7 @@ pub fn base_token_price_updater_config(
 impl From<ForcedPriceClientConfig> for zksync_os_external_price_api::ForcedPriceClientConfig {
     fn from(c: ForcedPriceClientConfig) -> Self {
         Self {
-            prices: c.prices.into_iter().collect(),
+            prices: c.prices,
             fluctuation: c.fluctuation,
             next_value_fluctuation: c.next_value_fluctuation,
         }

@@ -92,8 +92,7 @@ async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>
     METRICS
         .l1_updater_balance
         .set(format_ether(balance).parse()?);
-    let address_string: &'static str = address.to_string().leak();
-    METRICS.l1_updater_address[&address_string].set(1);
+    METRICS.l1_updater_address[&address.to_string()].set(1);
 
     if balance.is_zero() {
         anyhow::bail!("Token multiplier setter's address {address} has zero balance");
@@ -163,9 +162,9 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         let price_api_client = match external_price_source {
             ExternalPriceSource::CoinGecko => Box::new(CoinGeckoPriceAPIClient::new(
                 external_price_api_client_config,
-            )) as Box<dyn PriceApiClient>,
+            )?) as Box<dyn PriceApiClient>,
             ExternalPriceSource::CoinMarketCap => {
-                Box::new(CmcPriceApiClient::new(external_price_api_client_config))
+                Box::new(CmcPriceApiClient::new(external_price_api_client_config)?)
                     as Box<dyn PriceApiClient>
             }
             ExternalPriceSource::Forced => {
@@ -188,6 +187,18 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         let last_l1_ratio = Ratio::new(BigUint::from(l1_nominator), BigUint::from(l1_denominator));
 
         let chain_admin_contract = IChainAdminOwnable::new(chain_admin_address, l1_provider);
+        let token_multiplier_setter_on_l1 = chain_admin_contract
+            .tokenMultiplierSetter()
+            .call()
+            .await
+            .context("Failed to call `tokenMultiplierSetter`")?;
+        if let Some(token_multiplier_setter_address) = token_multiplier_setter_address {
+            anyhow::ensure!(
+                token_multiplier_setter_address == token_multiplier_setter_on_l1,
+                "Configured token multiplier setter address {token_multiplier_setter_address} \
+                 does not match the one set on L1 chain admin contract {token_multiplier_setter_on_l1}"
+            )
+        }
 
         tracing::info!(
             ?token_multiplier_setter_address, %chain_admin_address, ?last_l1_ratio,
@@ -224,9 +235,6 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 
         let mut token_prices = HashMap::new();
         for token in tokens_to_watch {
-            if token_prices.contains_key(&token) {
-                continue;
-            }
             let ratio = self.retry_fetch_ratio(token).await?;
             token_prices.insert(token, ratio.clone());
 
@@ -243,7 +251,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         let _sl_token_ratio = token_prices.get(&self.sl_token).unwrap();
         let eth_token_ratio = token_prices.get(&APIToken::ETH).unwrap();
 
-        let eth_to_base_price = eth_token_ratio.ratio.clone() / base_token_ratio.ratio.clone();
+        let eth_to_base_price = &eth_token_ratio.ratio / &base_token_ratio.ratio;
         self.maybe_update_l1_ratio(eth_to_base_price).await?;
 
         Ok(())
@@ -276,10 +284,9 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
                 }
             }
         }
-        let error_message = "Failed to fetch base token ratio after multiple attempts";
         Err(last_error
-            .map(|x| x.context(error_message))
-            .unwrap_or_else(|| anyhow::anyhow!(error_message)))
+            .unwrap()
+            .context("Failed to fetch base token ratio after multiple attempts"))
     }
 
     /// Compares the new ratio with the current one on L1 and updates it if the deviation exceeds the configured threshold.
@@ -295,109 +302,116 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 
         // Instead of converting to signed bigint it's easier to do an if-else here.
         let diff = if new_ratio > old_ratio {
-            new_ratio.clone() - old_ratio.clone()
+            &new_ratio - &old_ratio
         } else {
-            old_ratio.clone() - new_ratio.clone()
+            &old_ratio - &new_ratio
         };
-        let deviation = (diff / old_ratio.clone()) * BigUint::from(100u32);
+        let deviation = (diff / &old_ratio) * BigUint::from(100u32);
+
         if deviation
-            >= Ratio::from_integer(BigUint::from(self.config.l1_update_deviation_percentage))
+            < Ratio::from_integer(BigUint::from(self.config.l1_update_deviation_percentage))
         {
-            tracing::info!(
-                ?old_ratio, ?new_ratio, %deviation,
-                "L1 base token ratio deviation exceeded threshold, updating L1 ratio",
-            );
-
-            let (numer, denom) = match (new_ratio.numer().to_u128(), new_ratio.denom().to_u128()) {
-                (Some(numer), Some(denom)) => (numer, denom),
-                _ => {
-                    let mut numer = new_ratio.numer().clone();
-                    let mut denom = new_ratio.denom().clone();
-
-                    // Scale down both nominator and denominator to fit into u128.
-                    while numer.to_u128().is_none() || denom.to_u128().is_none() {
-                        numer /= BigUint::from(10u32);
-                        denom /= BigUint::from(10u32);
-                    }
-
-                    if numer.clone().min(denom.clone()) < BigUint::from(100u32) {
-                        anyhow::bail!(
-                            "New ratio's nominator or denominator is too large to fit into u128 even after scaling down, ratio: {new_ratio:?}"
-                        );
-                    }
-
-                    (numer.to_u128().unwrap(), denom.to_u128().unwrap())
-                }
-            };
-
-            let eip1559_est = self
-                .chain_admin_contract
-                .provider()
-                .estimate_eip1559_fees()
-                .await?;
             tracing::debug!(
-                eip1559_est.max_priority_fee_per_gas,
-                "estimated median priority fee (20% percentile) for the last 10 blocks"
+                ?old_ratio, ?new_ratio, %deviation,
+                "L1 base token ratio deviation within threshold, not updating L1 ratio",
             );
-            if eip1559_est.max_fee_per_gas > self.config.max_fee_per_gas_wei {
-                tracing::warn!(
-                    max_fee_per_gas = self.config.max_fee_per_gas_wei,
-                    estimated_max_fee_per_gas = eip1559_est.max_fee_per_gas,
-                    "Base token updater's configured maxFeePerGas is lower than the one estimated from network"
-                );
-            }
-            if eip1559_est.max_priority_fee_per_gas > self.config.max_priority_fee_per_gas_wei {
-                tracing::warn!(
-                    max_priority_fee_per_gas = self.config.max_priority_fee_per_gas_wei,
-                    estimated_max_priority_fee_per_gas = eip1559_est.max_priority_fee_per_gas,
-                    "Base token updater's configured maxPriorityFeePerGas is lower than the one estimated from network"
-                );
-            }
-
-            let tx_request = self
-                .chain_admin_contract
-                .setTokenMultiplier(self.zk_chain_address, numer, denom)
-                .into_transaction_request()
-                .with_from(token_multiplier_setter_address)
-                .with_max_fee_per_gas(self.config.max_fee_per_gas_wei)
-                .with_max_priority_fee_per_gas(self.config.max_priority_fee_per_gas_wei);
-            // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an envelope.
-            let provider = self.chain_admin_contract.provider();
-            let tx = provider
-                .fill(tx_request)
-                .await?
-                .try_into_envelope()?
-                .try_into_pooled()?;
-
-            let tx_handle = provider.send_raw_transaction(&tx.encoded_2718()).await?;
-            let receipt = tx_handle
-                // We are being optimistic with our transaction inclusion here. But, even if
-                // reorg happens and transaction will not be included it's ok, it can be sent
-                // on the next iteration if still needed.
-                .with_required_confirmations(1)
-                // Ensure we don't wait indefinitely and crash if the transaction is not
-                // included on L1 in a reasonable time.
-                .with_timeout(Some(TRANSACTION_TIMEOUT))
-                .get_receipt()
-                .await?;
-            validate_tx_receipt(provider, receipt).await?;
-
-            let balance = format_ether(
-                provider
-                    .get_balance(token_multiplier_setter_address)
-                    .await?,
-            );
-            let nonce = provider
-                .get_transaction_count(token_multiplier_setter_address)
-                .await?;
-            METRICS.l1_updater_balance.set(balance.parse()?);
-            METRICS.l1_updater_nonce.set(nonce);
-
-            if let Some(r) = new_ratio.to_f64() {
-                METRICS.ratio_l1.set(r);
-            }
-            self.last_l1_ratio = new_ratio;
+            return Ok(());
         }
+
+        tracing::info!(
+            ?old_ratio, ?new_ratio, %deviation,
+            "L1 base token ratio deviation exceeded threshold, updating L1 ratio",
+        );
+
+        let (numer, denom) = match (new_ratio.numer().to_u128(), new_ratio.denom().to_u128()) {
+            (Some(numer), Some(denom)) => (numer, denom),
+            _ => {
+                let mut numer = new_ratio.numer().clone();
+                let mut denom = new_ratio.denom().clone();
+
+                // Scale down both nominator and denominator to fit into u128.
+                while numer.to_u128().is_none() || denom.to_u128().is_none() {
+                    numer /= BigUint::from(10u32);
+                    denom /= BigUint::from(10u32);
+                }
+
+                if (&numer).min(&denom) < &BigUint::from(100u32) {
+                    anyhow::bail!(
+                        "New ratio's nominator or denominator is too large to fit into u128 even after scaling down, ratio: {new_ratio:?}"
+                    );
+                }
+
+                (numer.to_u128().unwrap(), denom.to_u128().unwrap())
+            }
+        };
+
+        let eip1559_est = self
+            .chain_admin_contract
+            .provider()
+            .estimate_eip1559_fees()
+            .await?;
+        tracing::debug!(
+            eip1559_est.max_priority_fee_per_gas,
+            "estimated median priority fee (20% percentile) for the last 10 blocks"
+        );
+        if eip1559_est.max_fee_per_gas > self.config.max_fee_per_gas_wei {
+            tracing::warn!(
+                max_fee_per_gas = self.config.max_fee_per_gas_wei,
+                estimated_max_fee_per_gas = eip1559_est.max_fee_per_gas,
+                "Base token updater's configured maxFeePerGas is lower than the one estimated from network"
+            );
+        }
+        if eip1559_est.max_priority_fee_per_gas > self.config.max_priority_fee_per_gas_wei {
+            tracing::warn!(
+                max_priority_fee_per_gas = self.config.max_priority_fee_per_gas_wei,
+                estimated_max_priority_fee_per_gas = eip1559_est.max_priority_fee_per_gas,
+                "Base token updater's configured maxPriorityFeePerGas is lower than the one estimated from network"
+            );
+        }
+
+        let tx_request = self
+            .chain_admin_contract
+            .setTokenMultiplier(self.zk_chain_address, numer, denom)
+            .into_transaction_request()
+            .with_from(token_multiplier_setter_address)
+            .with_max_fee_per_gas(self.config.max_fee_per_gas_wei)
+            .with_max_priority_fee_per_gas(self.config.max_priority_fee_per_gas_wei);
+        // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an envelope.
+        let provider = self.chain_admin_contract.provider();
+        let tx = provider
+            .fill(tx_request)
+            .await?
+            .try_into_envelope()?
+            .try_into_pooled()?;
+
+        let tx_handle = provider.send_raw_transaction(&tx.encoded_2718()).await?;
+        let receipt = tx_handle
+            // We are being optimistic with our transaction inclusion here. But, even if
+            // reorg happens and transaction will not be included it's ok, it can be sent
+            // on the next iteration if still needed.
+            .with_required_confirmations(1)
+            // Ensure we don't wait indefinitely and crash if the transaction is not
+            // included on L1 in a reasonable time.
+            .with_timeout(Some(TRANSACTION_TIMEOUT))
+            .get_receipt()
+            .await?;
+        validate_tx_receipt(provider, receipt).await?;
+
+        let balance = format_ether(
+            provider
+                .get_balance(token_multiplier_setter_address)
+                .await?,
+        );
+        let nonce = provider
+            .get_transaction_count(token_multiplier_setter_address)
+            .await?;
+        METRICS.l1_updater_balance.set(balance.parse()?);
+        METRICS.l1_updater_nonce.set(nonce);
+
+        if let Some(r) = new_ratio.to_f64() {
+            METRICS.ratio_l1.set(r);
+        }
+        self.last_l1_ratio = new_ratio;
 
         Ok(())
     }

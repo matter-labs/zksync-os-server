@@ -1,9 +1,11 @@
-use std::collections::HashMap;
-
 use crate::{APIToken, ExternalPriceApiClientConfig, PriceApiClient};
+use anyhow::Context;
 use async_trait::async_trait;
 use reqwest;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use url::Url;
 use zksync_os_types::BaseTokenApiRatio;
 
@@ -22,33 +24,32 @@ const ETH_ID: &str = "ethereum";
 const ZKSYNC_ID: &str = "zksync";
 
 impl CoinGeckoPriceAPIClient {
-    pub fn new(config: ExternalPriceApiClientConfig) -> Self {
-        let mut headers = reqwest::header::HeaderMap::new();
+    pub fn new(config: ExternalPriceApiClientConfig) -> anyhow::Result<Self> {
+        let mut headers = HeaderMap::new();
         headers.insert(
-            reqwest::header::HeaderName::from_static(USER_AGENT_HEADER),
-            reqwest::header::HeaderValue::from_static(USER_AGENT_VALUE),
+            HeaderName::from_static(USER_AGENT_HEADER),
+            HeaderValue::from_static(USER_AGENT_VALUE),
         );
         if let Some(api_key) = &config.api_key {
-            headers.insert(
-                reqwest::header::HeaderName::from_static(COINGECKO_AUTH_HEADER),
-                reqwest::header::HeaderValue::from_str(api_key)
-                    .expect("Failed to create header value"),
-            );
+            let mut value = HeaderValue::from_str(api_key.expose_secret())
+                .context("Failed to create header value")?;
+            value.set_sensitive(true);
+            headers.insert(HeaderName::from_static(COINGECKO_AUTH_HEADER), value);
         }
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .timeout(config.client_timeout)
             .build()
-            .expect("Failed to build reqwest client");
+            .context("Failed to build reqwest client")?;
 
         let base_url = config
             .base_url
             .unwrap_or(DEFAULT_COINGECKO_API_URL.to_string());
 
-        Self {
-            base_url: Url::parse(&base_url).expect("Failed to parse CoinGecko URL"),
+        Ok(Self {
+            base_url: Url::parse(&base_url).context("Failed to parse CoinGecko URL")?,
             client,
-        }
+        })
     }
 }
 
@@ -75,19 +76,17 @@ impl PriceApiClient for CoinGeckoPriceAPIClient {
         let price_url = self.base_url.join(&path).expect("failed to join URL path");
 
         let response = self.client.get(price_url).send().await?;
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Http error while fetching token price. Status: {}, token: {token_id}, msg: {}",
-                response.status(),
-                response.text().await.unwrap_or(String::new())
-            ));
-        }
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Http error while fetching token price. Status: {}, token: {token_id}, msg: {}",
+            response.status(),
+            response.text().await.unwrap_or(String::new())
+        );
 
         let cg_response = response.json::<CoinGeckoPriceResponse>().await?;
-        let price_f64 = match cg_response.get_price(&token_id, &"usd".to_owned()) {
-            Some(&price) => price,
-            None => anyhow::bail!("Price not found for token: {token_id}"),
-        };
+        let price_f64 = cg_response
+            .get_price(&token_id, &"usd".to_owned())
+            .with_context(|| format!("Price not found for token: {token_id}"))?;
 
         Ok(BaseTokenApiRatio::from_f64_decimals_and_timestamp(
             price_f64, decimals, None,
@@ -102,10 +101,10 @@ struct CoinGeckoPriceResponse {
 }
 
 impl CoinGeckoPriceResponse {
-    fn get_price(&self, address: &String, currency: &String) -> Option<&f64> {
+    fn get_price(&self, address: &str, currency: &String) -> Option<f64> {
         self.prices
             .get(address)
-            .and_then(|price| price.get(currency))
+            .and_then(|price| price.get(currency).copied())
     }
 }
 
@@ -164,7 +163,7 @@ mod test {
     fn get_config(base_url: String, api_key: Option<String>) -> ExternalPriceApiClientConfig {
         ExternalPriceApiClientConfig {
             base_url: Some(base_url),
-            api_key,
+            api_key: api_key.map(Into::into),
             client_timeout: Duration::from_secs(1),
             forced: None,
         }
@@ -178,10 +177,9 @@ mod test {
     ) -> SetupResult {
         add_mock_by_address(server, address, Some(base_token_price), api_key.clone());
         SetupResult {
-            client: Box::new(CoinGeckoPriceAPIClient::new(get_config(
-                server.url(""),
-                api_key,
-            ))),
+            client: Box::new(
+                CoinGeckoPriceAPIClient::new(get_config(server.url(""), api_key)).unwrap(),
+            ),
         }
     }
 
@@ -217,10 +215,13 @@ mod test {
     ) -> SetupResult {
         // just don't add mock
         SetupResult {
-            client: Box::new(CoinGeckoPriceAPIClient::new(get_config(
-                server.url(""),
-                Some("FILLER".to_string()),
-            ))),
+            client: Box::new(
+                CoinGeckoPriceAPIClient::new(get_config(
+                    server.url(""),
+                    Some("FILLER".to_string()),
+                ))
+                .unwrap(),
+            ),
         }
     }
 
@@ -244,10 +245,9 @@ mod test {
 
         add_mock_by_address(server, address, None, api_key.clone());
         SetupResult {
-            client: Box::new(CoinGeckoPriceAPIClient::new(get_config(
-                server.url(""),
-                api_key,
-            ))),
+            client: Box::new(
+                CoinGeckoPriceAPIClient::new(get_config(server.url(""), api_key)).unwrap(),
+            ),
         }
     }
 

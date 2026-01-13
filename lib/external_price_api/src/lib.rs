@@ -6,6 +6,7 @@ mod tests;
 
 use alloy::primitives::{Address, address};
 use async_trait::async_trait;
+use secrecy::SecretString;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
@@ -96,7 +97,7 @@ pub struct ForcedPriceClientConfig {
 #[derive(Debug, Clone)]
 pub struct ExternalPriceApiClientConfig {
     pub base_url: Option<String>,
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
     pub client_timeout: Duration,
     pub forced: Option<ForcedPriceClientConfig>,
 }

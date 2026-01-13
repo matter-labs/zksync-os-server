@@ -87,10 +87,9 @@ impl PriceApiClient for ForcedPriceClient {
         let next_fluctuation =
             rng.random_range(-self.next_value_fluctuation_limit..self.next_value_fluctuation_limit);
         let multiplier = fluctuation_to_multiplier(next_fluctuation);
-        let mut new_ratio = previous_ratio.clone() * multiplier;
+        let mut new_ratio = previous_ratio * multiplier;
 
-        let max_ratio =
-            base_ratio.clone() * fluctuation_to_multiplier(self.total_fluctuation_limit);
+        let max_ratio = &base_ratio * fluctuation_to_multiplier(self.total_fluctuation_limit);
         let min_ratio = base_ratio * fluctuation_to_multiplier(-self.total_fluctuation_limit);
 
         new_ratio = new_ratio.clamp(min_ratio, max_ratio);

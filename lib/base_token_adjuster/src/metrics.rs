@@ -29,7 +29,7 @@ pub(crate) struct BaseTokenAdjusterMetrics {
     pub l1_updater_balance: Gauge<f64>,
     /// Used to report token multiplier setter's address. Gauge is always set to one.
     #[metrics(labels = ["address"])]
-    pub l1_updater_address: LabeledFamily<&'static str, Gauge, 1>,
+    pub l1_updater_address: LabeledFamily<String, Gauge, 1>,
     /// Ratio of ETH:base token, that is set on L1.
     pub ratio_l1: Gauge<f64>,
     /// L1 Transaction fee in Ether (i.e. total cost of `setTokenMultiplier`).

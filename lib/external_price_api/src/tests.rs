@@ -44,7 +44,7 @@ pub(crate) async fn happy_day_test(setup: SetupFn) {
         let denominator = BigInt::from(api_price.ratio.denom().to_owned());
         Ratio::new(numerator, denominator)
     };
-    let diff = (got_ratio - expected_ratio.clone()).abs() / expected_ratio;
+    let diff = (got_ratio - &expected_ratio).abs() / expected_ratio;
     assert!(diff.to_f64().unwrap() < PRICE_COMPARE_TOLERANCE);
     assert!((Utc::now() - api_price.timestamp).num_milliseconds() <= TIME_TOLERANCE_MS);
 }
@@ -63,5 +63,5 @@ pub(crate) async fn error_test(setup: SetupFn) -> anyhow::Error {
         .await;
 
     assert!(api_price.is_err());
-    api_price.err().unwrap()
+    api_price.unwrap_err()
 }

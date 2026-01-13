@@ -21,6 +21,7 @@ tracing.workspace = true
 tokio.workspace = true
 alloy.workspace = true
 num.workspace = true
+secrecy.workspace = true
 
 zksync_os_types = { workspace = true, features = ["reth"] }
 
