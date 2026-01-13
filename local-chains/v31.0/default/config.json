@@ -1,0 +1,13 @@
+{
+    "genesis": {
+        "bridgehub_address": "0x1374eb6c8ef6007bab88ec793c5fc4cef5b1f3f7",
+        "bytecode_supplier_address": "0xa82c69db19216ee50834df2500b60f3bc3dae143",
+        "genesis_input_path": "./local-chains/v31.0/default/genesis.json",
+        "chain_id": 6565
+    },
+    "l1_sender": {
+        "operator_commit_pk": "0xd94b1ec6ba57d1eecb368cbe709cb046e5042d8fa6b929878ed476d785186b66",
+        "operator_prove_pk": "0x153541b02f90ae3d5ba31b7c500a98657ddc4937d71632119440d28696c17a45",
+        "operator_execute_pk": "0x521b689e4991ba6acc53de7c5a36e9fdbd3b92eb500ef78802e7d657958ed4ab"
+    }
+}

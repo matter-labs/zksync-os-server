@@ -1,0 +1,24 @@
+deployer:
+  address: 0xe2a626f12b51c076d24c490503c6d1d29cedaf32
+  private_key: 0xe7370d8fde7b5d230b10ef9bcb3e065f8e1c718fdc614aaa73c47b937cffcf0e
+operator:
+  address: 0xbf948349645349515fc1afd90b72b25522a7f04e
+  private_key: 0x18369f0397f846b86c7b04a27f49f4bcb6bf2bfe961518bc760b8e0ded67018a
+blob_operator:
+  address: 0x31990efbea128290b6690654d171496e80820eba
+  private_key: 0xe90e4dd65168a8b79c05b18bad3daa2945b864ece3e9debb812a1d612daa6f2c
+prove_operator:
+  address: 0x05b8f623638af67754a16383092b5a506bb52e9d
+  private_key: 0x3c99c53dd0cba624cfeb2c04e9b1da168d8f8383df067e7d47f07b0de6b3da12
+execute_operator:
+  address: 0x3530ce0e3062a2724ad4dc360a5c1e127c5985dd
+  private_key: 0x13f6d9aa9af68e7d451f640184196409c29b628796e9a835f74fda5efe014619
+fee_account:
+  address: 0x60e0c206552c8eb1d8e259084f51be8d02a5bbc6
+  private_key: 0xb17e1f2732fa7b59bbb9cd920c91399febd516bcfee83c140567468dd00ce96a
+governor:
+  address: 0x9e65e611fb1a12d9dd42411206dadd1ff2cfc4d0
+  private_key: 0x265ee78a9cc4488d7cb512821900d90f233f9a68a04162e5dcc36cd1b7da4c71
+token_multiplier_setter:
+  address: 0x671872d6f550d5c79c92d70de0da4d4e4665679d
+  private_key: 0x6620b770e25de7b8cb671bcd8d264ff333539a382ec821d08e9cf31fbd2a907e

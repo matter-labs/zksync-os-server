@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
-use std::{fs, future, path::Path, time::Duration};
+use std::{fs, future, path::Path, path::PathBuf, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
@@ -9,21 +9,19 @@ use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
+use zksync_os_server::config::{
+    BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig, GeneralConfig,
+    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+};
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
-use zksync_os_server::{
-    config::{
-        BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig,
-        GeneralConfig, GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig,
-        ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-        RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
-    },
-    config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
-};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_CONFIG: &str = "local-chains/v30.2/default/config.json";
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
@@ -46,11 +44,15 @@ struct Cli {
 }
 
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
-    // Process the config file if provided or if default exists
-    let config_path: Option<String> = config_path.or_else(|| {
-        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/config.json");
-        Path::new(&default_path).exists().then_some(default_path)
-    });
+    let default_path: Option<String> = {
+        let workspace_dir = Path::new(env!("WORKSPACE_DIR"));
+        let full_path: PathBuf = workspace_dir.join(DEFAULT_CONFIG);
+        full_path
+            .exists()
+            .then_some(full_path.to_string_lossy().into_owned())
+    };
+
+    let config_path: Option<String> = config_path.or(default_path);
 
     if let Some(config_path) = &config_path {
         let config_contents =
@@ -61,7 +63,6 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<
         config_sources.push(Json::new(config_path, config_json));
     }
 }
-
 #[tokio::main]
 pub async fn main() {
     let opt = Cli::parse();
@@ -351,7 +352,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
 fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     let original_path = config.general_config.rocks_db_path.clone();
-    if original_path != Path::new(DEFAULT_ROCKS_DB_PATH) {
+    if original_path != Path::new("./db/node1") {
         tracing::warn!(
             original_path = %original_path.display(),
             "general_rocks_db_path parameter is ignored in ephemeral mode"
