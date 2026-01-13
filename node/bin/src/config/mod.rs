@@ -239,7 +239,7 @@ pub struct NetworkConfig {
         default_t = vec![
             NodeRecord::from_str("enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060").unwrap(),
         ],
-        with = de::NodeRecordVec
+        with = Delimited::repeat(de::NodeRecord, ","),
     )]
     pub boot_nodes: Vec<NodeRecord>,
 }
@@ -291,7 +291,7 @@ pub struct RebuildBlocksConfig {
     /// have different hash, have some transactions rejected etc
     pub from_block: u64,
     /// List of blocks to empty (i.e., remove all transactions from).
-    #[config(default, with = Delimited(","))]
+    #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
 }
 
@@ -436,7 +436,7 @@ pub struct RpcConfig {
     pub stale_filter_ttl: Duration,
 
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
-    #[config(default, with = Delimited(","))]
+    #[config(default, with = Delimited::new(","))]
     pub l2_signer_blacklist: HashSet<Address>,
 
     /// Default timeout for `eth_sendRawTransactionSync`
@@ -782,7 +782,7 @@ pub struct BatchVerificationConfig {
     #[config(default_t = 1)]
     pub threshold: usize,
     /// [server] Accepted signer pubkeys
-    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited(","))]
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited::new(","))]
     pub accepted_signers: Vec<String>,
     /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]

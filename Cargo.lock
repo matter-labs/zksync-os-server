@@ -11923,8 +11923,7 @@ dependencies = [
 [[package]]
 name = "smart-config"
 version = "0.4.0-pre.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad33fa97d9532efcaa05b94334c3a568a589456ceddf08b5ec046f942b1e0878"
+source = "git+https://github.com/matter-labs/smart-config/?branch=composable-delimited#db034522b8feb7ec57c63110bc5f995c156ed136"
 dependencies = [
  "alloy",
  "anyhow",
@@ -11941,8 +11940,7 @@ dependencies = [
 [[package]]
 name = "smart-config-commands"
 version = "0.4.0-pre.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84492474ef191819b3e0783c953058dfc322c72370db339b79c3c386f75fac1b"
+source = "git+https://github.com/matter-labs/smart-config/?branch=composable-delimited#db034522b8feb7ec57c63110bc5f995c156ed136"
 dependencies = [
  "anstream",
  "anstyle",
@@ -11954,8 +11952,7 @@ dependencies = [
 [[package]]
 name = "smart-config-derive"
 version = "0.4.0-pre.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c72fbbe7ee7d4b154a0c07e66c46cee67d44d8d49c480aed33f5e7da099f5a70"
+source = "git+https://github.com/matter-labs/smart-config/?branch=composable-delimited#db034522b8feb7ec57c63110bc5f995c156ed136"
 dependencies = [
  "proc-macro2 1.0.95",
  "quote 1.0.42",
