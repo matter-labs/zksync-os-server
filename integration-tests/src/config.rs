@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use smart_config::{ConfigRepository, ConfigSources, Json};
@@ -57,7 +58,13 @@ pub fn get_default_l1_state_path() -> String {
 pub fn get_multiple_chains_l1_state_path() -> String {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    format!("{workspace_dir}/local-chains/v31.0/multi_chain/zkos-l1-state.json")
+    PathBuf::from(workspace_dir)
+        .join("local-chains")
+        .join("v31.0")
+        .join("multi_chain")
+        .join("zkos-l1-state.json")
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Load chain configuration from a specific chain config file in the multiple-chains directory.
@@ -65,9 +72,16 @@ pub fn get_multiple_chains_l1_state_path() -> String {
 pub fn get_chain_config(chain_index: usize) -> Config {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
+    // Map chain index to chain ID (0 -> 6565, 1 -> 6566, etc.)
+    let chain_id = 6565 + chain_index as u64;
     // TODO: change v31.0 to proper support of both versions
-    let config_path =
-        format!("{workspace_dir}/local-chains/v31.0/multi_chain/chain_{chain_index}.json");
+    let config_path = PathBuf::from(&workspace_dir)
+        .join("local-chains")
+        .join("v31.0")
+        .join("multi_chain")
+        .join(format!("chain_{chain_id}.json"))
+        .to_string_lossy()
+        .to_string();
 
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
@@ -81,7 +95,11 @@ pub fn get_chain_config(chain_index: usize) -> Config {
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
     genesis_config.genesis_input_path = Some(
-        format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/genesis.json").into(),
+        PathBuf::from(&workspace_dir)
+            .join("local-chains")
+            .join("v31.0")
+            .join("default")
+            .join("genesis.json"),
     );
 
     Config {

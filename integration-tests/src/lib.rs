@@ -441,8 +441,44 @@ pub struct MultiChainTester {
 }
 
 impl MultiChainTester {
-    /// Create a multi-chain test environment with the specified number of L2 chains
+    pub fn builder() -> MultiChainTesterBuilder {
+        MultiChainTesterBuilder::default()
+    }
+
     pub async fn setup(num_chains: usize) -> anyhow::Result<Self> {
+        Self::builder().num_chains(num_chains).build().await
+    }
+
+    /// Get a specific chain by index
+    pub fn chain(&self, index: usize) -> &Tester {
+        &self.chains[index]
+    }
+
+    /// Get chain A (first chain)
+    pub fn chain_a(&self) -> &Tester {
+        self.chain(0)
+    }
+
+    /// Get chain B (second chain)
+    pub fn chain_b(&self) -> &Tester {
+        self.chain(1)
+    }
+}
+
+#[derive(Default)]
+pub struct MultiChainTesterBuilder {
+    num_chains: Option<usize>,
+}
+
+impl MultiChainTesterBuilder {
+    pub fn num_chains(mut self, num_chains: usize) -> Self {
+        self.num_chains = Some(num_chains);
+        self
+    }
+
+    pub async fn build(self) -> anyhow::Result<MultiChainTester> {
+        let num_chains = self.num_chains.unwrap_or(2);
+
         assert!(
             num_chains >= 2,
             "MultiChainTester requires at least 2 chains"
@@ -481,16 +517,22 @@ impl MultiChainTester {
 
         // Launch L2 chains using chain configurations from config files
         let mut chains = Vec::new();
-        for i in 6565..6566 {
-            // Load the chain config to get the chain ID
+        for i in 0..num_chains {
+            // Load the chain config to get the chain ID, operator keys, and contract addresses
             let chain_config = config::get_chain_config(i);
             let chain_id = chain_config
                 .genesis_config
                 .chain_id
                 .expect("Chain ID must be set in chain config");
+            let l1_sender_config = chain_config.l1_sender_config.clone();
+            let bridgehub_address = chain_config.genesis_config.bridgehub_address;
+            let bytecode_supplier_address = chain_config.genesis_config.bytecode_supplier_address;
 
             let chain_override = move |config: &mut Config| {
                 config.genesis_config.chain_id = Some(chain_id);
+                config.genesis_config.bridgehub_address = bridgehub_address;
+                config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
+                config.l1_sender_config = l1_sender_config.clone();
                 // Use short block time for faster tests
                 config.sequencer_config.block_time = Duration::from_millis(500);
             };
@@ -520,20 +562,5 @@ impl MultiChainTester {
             l1_wallet,
             chains,
         })
-    }
-
-    /// Get a specific chain by index
-    pub fn chain(&self, index: usize) -> &Tester {
-        &self.chains[index]
-    }
-
-    /// Get chain A (first chain)
-    pub fn chain_a(&self) -> &Tester {
-        self.chain(0)
-    }
-
-    /// Get chain B (second chain)
-    pub fn chain_b(&self) -> &Tester {
-        self.chain(1)
     }
 }
