@@ -19,7 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, ConfigFormat};
+use zksync_os_types::{ConfigFormat, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisInput {
