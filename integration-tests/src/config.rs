@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use smart_config::{ConfigRepository, ConfigSources, Json};
 use zksync_os_server::config::{Config, GenesisConfig};
-use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
+use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
 fn load_default_config(version: &str) -> Config {
     let workspace_dir =
@@ -42,9 +42,11 @@ fn load_default_config(version: &str) -> Config {
     }
 }
 
-static DEFAULT_CONFIG_V30: LazyLock<Config> = LazyLock::new(|| load_default_config("v30.2"));
+static DEFAULT_CONFIG_V30: LazyLock<Config> =
+    LazyLock::new(|| load_default_config(PROTOCOL_VERSION));
 
-static DEFAULT_CONFIG_V31: LazyLock<Config> = LazyLock::new(|| load_default_config("v31.0"));
+static DEFAULT_CONFIG_V31: LazyLock<Config> =
+    LazyLock::new(|| load_default_config(NEXT_PROTOCOL_VERSION));
 
 pub fn get_default_config_v30() -> &'static Config {
     &DEFAULT_CONFIG_V30
@@ -65,7 +67,7 @@ pub fn get_multiple_chains_l1_state_path() -> String {
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
     PathBuf::from(workspace_dir)
         .join("local-chains")
-        .join("v31.0")
+        .join(NEXT_PROTOCOL_VERSION)
         .join("multi_chain")
         .join("zkos-l1-state.json")
         .to_string_lossy()
@@ -81,7 +83,7 @@ pub fn get_chain_config(chain_index: usize) -> Config {
     let chain_id = 6565 + chain_index as u64;
     let config_path = PathBuf::from(&workspace_dir)
         .join("local-chains")
-        .join("v31.0")
+        .join(NEXT_PROTOCOL_VERSION)
         .join("multi_chain")
         .join(format!("chain_{chain_id}.json"))
         .to_string_lossy()
@@ -98,8 +100,9 @@ pub fn get_chain_config(chain_index: usize) -> Config {
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    genesis_config.genesis_input_path =
-        Some(format!("{workspace_dir}/local-chains/v31.0/default/genesis.json").into());
+    genesis_config.genesis_input_path = Some(
+        format!("{workspace_dir}/local-chains/{NEXT_PROTOCOL_VERSION}/default/genesis.json").into(),
+    );
 
     Config {
         genesis_config,
