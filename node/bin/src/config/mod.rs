@@ -24,7 +24,6 @@ use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
-mod de;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -217,9 +216,10 @@ pub struct NetworkConfig {
     pub enabled: bool,
     /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
     /// handshake.
+    #[config(secret)]
     #[config(
         default_t = SecretKey::from_str("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349").unwrap(),
-        with = de::SecretKey
+        with = Serde![str]
     )]
     pub secret_key: SecretKey,
     /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
@@ -236,7 +236,7 @@ pub struct NetworkConfig {
         default_t = vec![
             NodeRecord::from_str("enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060").unwrap(),
         ],
-        with = Delimited::repeat(de::NodeRecord, ","),
+        with = Delimited::repeat(Serde![str], ","),
     )]
     pub boot_nodes: Vec<NodeRecord>,
 }
