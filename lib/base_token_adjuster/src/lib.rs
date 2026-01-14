@@ -94,7 +94,6 @@ async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>
 impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provider<Ethereum> + Clone>
     BaseTokenPriceUpdater<F, P>
 {
-    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         base_token_address: Address,
         zk_chain_address: Address,
