@@ -125,11 +125,15 @@ async fn send_raw_transaction_sync() -> anyhow::Result<()> {
     let tester = Tester::builder().build().await?;
 
     let alice = tester.l2_wallet.default_signer().address();
+    let fees = tester.l2_provider.estimate_eip1559_fees().await?;
     // Create a transaction
     let tx = TransactionRequest::default()
         .to(alice)
         .value(U256::from(1))
-        .nonce(0);
+        .nonce(0)
+        .max_fee_per_gas(fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
+        .gas_limit(50_000);
     // Build and sign the transaction to get the envelope
     let tx_envelope = tx.build(&tester.l2_wallet).await?;
     // Encode the transaction
@@ -164,12 +168,16 @@ async fn send_raw_transaction_sync_timeout() -> anyhow::Result<()> {
     let tester = Tester::builder().build().await?;
 
     let alice = tester.l2_wallet.default_signer().address();
+    let fees = tester.l2_provider.estimate_eip1559_fees().await?;
     // Create a transaction
     let tx = TransactionRequest::default()
         .to(alice)
         .value(U256::from(1))
         // !!! NOTE !!! - nonce gap
-        .nonce(1);
+        .nonce(1)
+        .max_fee_per_gas(fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
+        .gas_limit(50_000);
     // Build and sign the transaction to get the envelope
     let tx_envelope = tx.build(&tester.l2_wallet).await?;
     // Encode the transaction
