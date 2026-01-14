@@ -45,10 +45,10 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    /// Private key to update base token price on L1.
+    /// Signing key to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_pk: Option<SecretString>,
+    pub token_multiplier_setter_sk: Option<SecretString>,
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,
     /// Max priority fee per gas we are willing to spend (in wei).
@@ -104,7 +104,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         external_price_api_client_config: ExternalPriceApiClientConfig,
     ) -> anyhow::Result<Self> {
         let token_multiplier_setter_address =
-            if let Some(pk) = &base_token_adjuster_config.token_multiplier_setter_pk {
+            if let Some(pk) = &base_token_adjuster_config.token_multiplier_setter_sk {
                 Some(register_operator(&mut l1_provider, pk).await?)
             } else {
                 None
@@ -139,7 +139,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 
         if base_token != APIToken::ETH && token_multiplier_setter_address.is_none() {
             tracing::warn!(
-                "`token_multiplier_setter_pk` is not set in the config, but base token is not ETH. \
+                "`token_multiplier_setter_sk` is not set in the config, but base token is not ETH. \
                  Base token price updater will not be able to update the base token price on L1."
             );
         }

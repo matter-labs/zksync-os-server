@@ -60,9 +60,9 @@ impl ZkStackConfig {
         let prove_operator = Self::get_private_key("prove_operator", &wallets_yaml)?;
         let execute_operator = Self::get_private_key("execute_operator", &wallets_yaml)?;
 
-        l1_sender_config.operator_commit_pk = operator.into();
-        l1_sender_config.operator_prove_pk = prove_operator.into();
-        l1_sender_config.operator_execute_pk = execute_operator.into();
+        l1_sender_config.operator_commit_sk = operator.into();
+        l1_sender_config.operator_prove_sk = prove_operator.into();
+        l1_sender_config.operator_execute_sk = execute_operator.into();
 
         let contracts_yaml = self.get_yaml_file("configs/contracts.yaml")?;
 

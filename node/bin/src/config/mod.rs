@@ -414,17 +414,20 @@ pub struct RpcConfig {
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct L1SenderConfig {
-    /// Private key to commit batches to L1
+    /// Signing key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
-    pub operator_commit_pk: SecretString,
+    #[config(alias = "operator_commit_pk")]
+    pub operator_commit_sk: SecretString,
 
-    /// Private key to use to submit proofs to L1
+    /// Signing key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
-    pub operator_prove_pk: SecretString,
+    #[config(alias = "operator_prove_pk")]
+    pub operator_prove_sk: SecretString,
 
-    /// Private key to use to execute batches on L1
+    /// Signing key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
-    pub operator_execute_pk: SecretString,
+    #[config(alias = "operator_execute_pk")]
+    pub operator_execute_sk: SecretString,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 100 * EtherUnit::Gwei)]
@@ -779,10 +782,11 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    /// Private key to update base token price on L1.
+    #[config(alias = "token_multiplier_setter_pk")]
+    /// Signing key to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_pk: Option<SecretString>,
+    pub token_multiplier_setter_sk: Option<SecretString>,
 }
 
 /// Config to force configured token prices in USD.
@@ -870,10 +874,10 @@ impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
 impl L1SenderConfig {
     fn into_lib_l1_sender_config<Input>(
         self,
-        operator_pk: SecretString,
+        operator_sk: SecretString,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
-            operator_pk,
+            operator_sk,
             max_fee_per_gas_wei: self.max_fee_per_gas.0,
             max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
@@ -886,21 +890,21 @@ impl L1SenderConfig {
 }
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let pk = c.operator_commit_pk.clone();
-        c.into_lib_l1_sender_config(pk)
+        let sk = c.operator_commit_sk.clone();
+        c.into_lib_l1_sender_config(sk)
     }
 }
 
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let pk = c.operator_prove_pk.clone();
-        c.into_lib_l1_sender_config(pk)
+        let sk = c.operator_prove_sk.clone();
+        c.into_lib_l1_sender_config(sk)
     }
 }
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let pk = c.operator_execute_pk.clone();
-        c.into_lib_l1_sender_config(pk)
+        let sk = c.operator_execute_sk.clone();
+        c.into_lib_l1_sender_config(sk)
     }
 }
 
@@ -984,7 +988,7 @@ pub fn base_token_price_updater_config(
         base_token_addr_override: c.base_token_addr_override,
         base_token_decimals_override: c.base_token_decimals_override,
         gateway_base_token_addr_override: c.gateway_base_token_addr_override,
-        token_multiplier_setter_pk: c.token_multiplier_setter_pk.clone(),
+        token_multiplier_setter_sk: c.token_multiplier_setter_sk.clone(),
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
     }

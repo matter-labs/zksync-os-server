@@ -7,7 +7,7 @@ use std::time::Duration;
 pub struct L1SenderConfig<Input> {
     /// Private key to operate from.
     /// Depending on the mode, this can be a commit/prove/execute operator.
-    pub operator_pk: SecretString,
+    pub operator_sk: SecretString,
 
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,

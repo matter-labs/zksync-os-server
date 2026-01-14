@@ -346,12 +346,12 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 
     // Validate that operator keys are different
-    if l1_sender_config.operator_commit_pk.expose_secret()
-        == l1_sender_config.operator_prove_pk.expose_secret()
-        || l1_sender_config.operator_prove_pk.expose_secret()
-            == l1_sender_config.operator_execute_pk.expose_secret()
-        || l1_sender_config.operator_execute_pk.expose_secret()
-            == l1_sender_config.operator_commit_pk.expose_secret()
+    if l1_sender_config.operator_commit_sk.expose_secret()
+        == l1_sender_config.operator_prove_sk.expose_secret()
+        || l1_sender_config.operator_prove_sk.expose_secret()
+            == l1_sender_config.operator_execute_sk.expose_secret()
+        || l1_sender_config.operator_execute_sk.expose_secret()
+            == l1_sender_config.operator_commit_sk.expose_secret()
     {
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");
