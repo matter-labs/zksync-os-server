@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use smart_config::{ConfigRepository, ConfigSources, Json};
+use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use zksync_os_server::config::{Config, GenesisConfig};
 use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use zksync_os_types::ConfigFormat;
 
 fn load_default_config(version: &str) -> Config {
     let workspace_dir =
@@ -13,11 +14,23 @@ fn load_default_config(version: &str) -> Config {
     let mut config_sources = ConfigSources::default();
     let config_contents =
         std::fs::read_to_string(&config_path).expect("Failed to read config file");
-
-    let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&config_contents).expect("Failed to parse config file");
-    config_sources.push(Json::new(&config_path, config_json));
-
+    let path = Path::new(&config_path);
+    match ConfigFormat::from_path(path) {
+        ConfigFormat::Yaml => {
+            let config_yaml: serde_yaml::Mapping = serde_yaml::from_str(&config_contents)
+                .expect("Failed to parse YAML config file from provided path");
+            config_sources.push(
+                Yaml::new(config_path.as_str(), config_yaml)
+                    .expect("Failed to create YAML config source"),
+            );
+        }
+        ConfigFormat::Json => {
+            let config_json: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&config_contents)
+                    .expect("Failed to parse JSON config file from provided path");
+            config_sources.push(Json::new(config_path.as_str(), config_json));
+        }
+    }
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
     genesis_config.genesis_input_path =

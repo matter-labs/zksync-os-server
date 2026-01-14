@@ -68,11 +68,11 @@ for entry in "${CONFIGS[@]}"; do
   ./zksync-os-server --config "${CUR_CONFIG}" > "${SERVER_LOGFILE}" 2>&1 &
   SERVER_PID=$!
 
-  RPC_PORT=$(jq -r '
-      (.rpc.address // "")
-      | split(":")[-1]
-      | select(length > 0) // "3050"
-    ' "${CUR_CONFIG}")
+  RPC_PORT=$(yq -r '
+    (.rpc.address // "")
+    | split(":") | .[-1]
+    | select(length > 0) // "3050"
+  ' "${CUR_CONFIG}")
 
   echo "Waiting for server on port ${RPC_PORT}..."
   START_TIME=$(date +%s)

@@ -15149,6 +15149,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml",
  "smart-config",
  "tempfile",
  "test-log",
