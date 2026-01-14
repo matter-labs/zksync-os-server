@@ -7,6 +7,7 @@ use zksync_os_server::config::{Config, GenesisConfig};
 use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_types::ConfigFormat;
 
+/// Layout of local chain directories.
 #[derive(Debug, Clone, Copy)]
 pub enum ChainLayout<'a> {
     /// local-chains/<version>/default/...
@@ -86,12 +87,14 @@ pub fn get_l1_state_path(layout: ChainLayout<'_>) -> String {
     layout.l1_state_path().to_string_lossy().to_string()
 }
 
+/// Workspace directory path, taken from WORKSPACE_DIR environment variable.
 static WORKSPACE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     std::env::var("WORKSPACE_DIR")
         .expect("WORKSPACE_DIR environment variable is not set")
         .into()
 });
 
+/// Preloaded default configs for known protocol versions.
 static DEFAULT_CONFIGS: LazyLock<HashMap<String, Config>> = LazyLock::new(|| {
     let mut map = HashMap::new();
     // Preload known protocol versions
@@ -106,25 +109,24 @@ static DEFAULT_CONFIGS: LazyLock<HashMap<String, Config>> = LazyLock::new(|| {
     map
 });
 
+/// Get the default config for the given protocol version.
 pub fn get_default_config(protocol_version: &str) -> &'static Config {
     DEFAULT_CONFIGS.get(protocol_version).unwrap_or_else(|| {
         panic!("No default config registered for protocol version: {protocol_version}")
     })
 }
 
+/// Get the workspace directory path.
 fn workspace_dir() -> &'static Path {
     WORKSPACE_DIR.as_path()
 }
 
+/// Load config from the given path.
 fn load_config_from_path(config_path: &Path) -> Config {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
-
-    // Read config contents once
     let config_contents = std::fs::read_to_string(config_path)
         .unwrap_or_else(|e| panic!("Failed to read config file {}: {e}", config_path.display()));
-
-    // smart_config wants a "name" string for the source
     let source_name = config_path.to_string_lossy();
 
     match ConfigFormat::from_path(config_path) {
@@ -141,8 +143,6 @@ fn load_config_from_path(config_path: &Path) -> Config {
             let config_json: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&config_contents)
                     .expect("Failed to parse JSON config file from provided path");
-
-            // Json::new returns the source directly (no Result), unlike Yaml::new
             config_sources.push(Json::new(source_name.as_ref(), config_json));
         }
     }
@@ -180,7 +180,6 @@ fn load_default_config(version: &str) -> Config {
         .join("config.yaml");
 
     let mut config = load_config_from_path(&config_path);
-
     config.genesis_config.genesis_input_path = Some(
         workspace_dir()
             .join("local-chains")
