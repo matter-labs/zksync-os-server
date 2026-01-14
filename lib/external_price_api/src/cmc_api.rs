@@ -1,14 +1,16 @@
-use std::{collections::HashMap, str::FromStr};
-
 use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
-use secrecy::ExposeSecret;
+use num::ToPrimitive;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use std::time::Duration;
+use std::{collections::HashMap, str::FromStr};
 use tokio::sync::RwLock;
 use url::Url;
 
-use crate::{APIToken, ExternalPriceApiClientConfig, PriceApiClient, TokenApiRatio, ZK_DECIMALS};
+use crate::{APIToken, PriceApiClient, TokenApiRatio, ZK_DECIMALS};
 
 const AUTH_HEADER: &str = "x-cmc_pro_api_key";
 const DEFAULT_API_URL: &str = "https://pro-api.coinmarketcap.com";
@@ -24,25 +26,25 @@ pub struct CmcPriceApiClient {
 }
 
 impl CmcPriceApiClient {
-    pub fn new(config: ExternalPriceApiClientConfig) -> anyhow::Result<Self> {
-        let client = if let Some(api_key) = &config.api_key {
-            use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    pub fn new(
+        base_url: Option<String>,
+        api_key: SecretString,
+        client_timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        tracing::debug!(?base_url, ?client_timeout, "Creating CmcPriceApiClient");
 
-            let mut value = HeaderValue::from_str(api_key.expose_secret())
-                .context("Failed to create header value")?;
-            value.set_sensitive(true);
-            let default_headers =
-                HeaderMap::from_iter([(HeaderName::from_static(AUTH_HEADER), value)]);
+        let mut header_value = HeaderValue::from_str(api_key.expose_secret())
+            .context("Failed to create header value")?;
+        header_value.set_sensitive(true);
+        let default_headers =
+            HeaderMap::from_iter([(HeaderName::from_static(AUTH_HEADER), header_value)]);
+        let client = reqwest::Client::builder()
+            .default_headers(default_headers)
+            .timeout(client_timeout)
+            .build()
+            .context("Failed to build reqwest client")?;
 
-            reqwest::Client::builder().default_headers(default_headers)
-        } else {
-            reqwest::Client::builder()
-        }
-        .timeout(config.client_timeout)
-        .build()
-        .context("Failed to build reqwest client")?;
-
-        let base_url = config.base_url.unwrap_or(DEFAULT_API_URL.to_string());
+        let base_url = base_url.unwrap_or(DEFAULT_API_URL.to_string());
         let base_url = Url::parse(&base_url).context("Failed to parse CoinMarketCap API URL")?;
 
         Ok(Self {
@@ -174,9 +176,9 @@ impl PriceApiClient for CmcPriceApiClient {
             APIToken::ZK => (self.get_token_price_by_id(ZKSYNC_ID).await?, ZK_DECIMALS),
         };
 
-        Ok(TokenApiRatio::from_f64_decimals_and_timestamp(
-            price_f64, decimals, None,
-        ))
+        let res = TokenApiRatio::from_f64_decimals_and_timestamp(price_f64, decimals, None);
+        tracing::trace!("fetch_ratio({token:?}): ratio {:?}", res.ratio.to_f64());
+        Ok(res)
     }
 }
 
@@ -192,14 +194,13 @@ mod tests {
     use super::*;
     use crate::tests::*;
 
-    fn make_client(server: &MockServer, api_key: Option<String>) -> Box<dyn PriceApiClient> {
+    fn make_client(server: &MockServer, api_key: String) -> Box<dyn PriceApiClient> {
         Box::new(
-            CmcPriceApiClient::new(ExternalPriceApiClientConfig {
-                base_url: Some(server.base_url()),
-                api_key: api_key.map(Into::into),
-                client_timeout: Duration::from_secs(5),
-                forced: None,
-            })
+            CmcPriceApiClient::new(
+                Some(server.base_url()),
+                api_key.into(),
+                Duration::from_secs(5),
+            )
             .unwrap(),
         )
     }
@@ -302,10 +303,7 @@ mod tests {
     #[tokio::test]
     async fn mock_happy() {
         let server = make_mock_server();
-        let client = make_client(
-            &server,
-            Some("00000000-0000-0000-0000-000000000000".to_string()),
-        );
+        let client = make_client(&server, "00000000-0000-0000-0000-000000000000".to_string());
 
         let address: Address = TEST_TOKEN_ADDRESS.parse().unwrap();
 
@@ -329,30 +327,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic = "Request did not match any route or mock"]
-    async fn mock_fail_no_api_key() {
-        let server = make_mock_server();
-        let client = make_client(&server, None);
-
-        let address: Address = TEST_TOKEN_ADDRESS.parse().unwrap();
-
-        client
-            .fetch_ratio(APIToken::ERC20 {
-                address,
-                decimals: 18,
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
     #[should_panic = "Token ID not found for address"]
     async fn mock_fail_not_found() {
         let server = make_mock_server();
-        let client = make_client(
-            &server,
-            Some("00000000-0000-0000-0000-000000000000".to_string()),
-        );
+        let client = make_client(&server, "00000000-0000-0000-0000-000000000000".to_string());
 
         let address: Address = Address::repeat_byte(0x42);
 
@@ -368,12 +346,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "run manually (accesses network); specify CoinMarketCap API key in env var CMC_API_KEY"]
     async fn real_cmc_tether() {
-        let client = CmcPriceApiClient::new(ExternalPriceApiClientConfig {
-            api_key: Some(std::env::var("CMC_API_KEY").unwrap().into()),
-            base_url: None,
-            client_timeout: Duration::from_secs(5),
-            forced: None,
-        })
+        let client = CmcPriceApiClient::new(
+            None,
+            std::env::var("CMC_API_KEY").unwrap().into(),
+            Duration::from_secs(5),
+        )
         .unwrap();
 
         let tether: Address = "0xdac17f958d2ee523a2206206994597c13d831ec7"

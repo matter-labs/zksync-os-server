@@ -1,12 +1,12 @@
 use alloy::primitives::Address;
 use async_trait::async_trait;
-use num::{BigInt, BigUint, rational::Ratio};
+use num::{BigInt, BigUint, ToPrimitive, rational::Ratio};
 use rand::Rng;
 use std::collections::HashMap;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 use zksync_os_types::TokenApiRatio;
 
-use crate::{APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS};
+use crate::{APIToken, ForcedPriceClientConfig, PriceApiClient, ZK_L1_ADDRESS};
 
 /// Struct for a forced price "client"
 /// (price is always a configured "forced" price with a configured fluctuation).
@@ -26,10 +26,9 @@ pub struct ForcedPriceClient {
 }
 
 impl ForcedPriceClient {
-    pub fn new(config: ExternalPriceApiClientConfig) -> Self {
-        let mut forced_config = config
-            .forced
-            .expect("forced price client started with no config");
+    pub fn new(mut forced_config: ForcedPriceClientConfig) -> Self {
+        tracing::debug!(?forced_config, "Creating ForcedPriceClient");
+
         let eth_base_ratio = forced_config
             .prices
             .remove(&Address::ZERO)
@@ -77,7 +76,10 @@ impl PriceApiClient for ForcedPriceClient {
         let Some(base_ratio) = base_ratio else {
             anyhow::bail!("No forced price configured for token: {:?}", token);
         };
-        let mut previous_ratios = self.previous_ratios.lock().await;
+        let mut previous_ratios = self
+            .previous_ratios
+            .lock()
+            .expect("Failed to lock `previous_ratios` mutex");
         let previous_ratio = previous_ratios
             .get(&token)
             .cloned()
@@ -97,6 +99,8 @@ impl PriceApiClient for ForcedPriceClient {
 
         // Adjust for decimals.
         new_ratio /= BigUint::from(10u64).pow(decimals as u32);
+
+        tracing::trace!("fetch_ratio({token:?}): ratio {:?}", new_ratio.to_f64());
         Ok(TokenApiRatio {
             ratio: new_ratio,
             timestamp: chrono::Utc::now(),

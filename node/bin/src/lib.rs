@@ -617,7 +617,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &config.base_token_price_updater_config,
                 &config.l1_sender_config,
             ),
-            config.external_price_api_client_config.source.into(),
             config.external_price_api_client_config.clone().into(),
             token_price_sender,
         )

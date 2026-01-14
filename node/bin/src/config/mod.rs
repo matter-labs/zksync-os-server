@@ -1,6 +1,8 @@
 pub use self::cli::ConfigArgs;
+use self::util::SigningKeyDeserializer;
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
+use alloy::signers::k256::ecdsa::SigningKey;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -21,6 +23,7 @@ use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_types::PubdataMode;
 
 mod cli;
+mod util;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -406,17 +409,20 @@ pub struct RpcConfig {
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 pub struct L1SenderConfig {
-    /// Private key to commit batches to L1
+    /// Signing key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
-    pub operator_commit_pk: SecretString,
+    #[config(alias = "operator_commit_pk", with = SigningKeyDeserializer)]
+    pub operator_commit_sk: SigningKey,
 
-    /// Private key to use to submit proofs to L1
+    /// Signing key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
-    pub operator_prove_pk: SecretString,
+    #[config(alias = "operator_prove_pk", with = SigningKeyDeserializer)]
+    pub operator_prove_sk: SigningKey,
 
-    /// Private key to use to execute batches on L1
+    /// Signing key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
-    pub operator_execute_pk: SecretString,
+    #[config(alias = "operator_execute_pk", with = SigningKeyDeserializer)]
+    pub operator_execute_sk: SigningKey,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 100 * EtherUnit::Gwei)]
@@ -771,10 +777,11 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    /// Private key to update base token price on L1.
+    #[config(alias = "token_multiplier_setter_pk", with = SigningKeyDeserializer)]
+    /// Signing key to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_pk: Option<SecretString>,
+    pub token_multiplier_setter_sk: Option<SigningKey>,
 }
 
 /// Config to force configured token prices in USD.
@@ -797,29 +804,33 @@ pub struct ForcedPriceClientConfig {
     pub next_value_fluctuation: f64,
 }
 
-/// Source of external price data.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum ExternalPriceSource {
-    Forced,
-    CoinGecko,
-    CoinMarketCap,
-}
-
 /// Configuration for external price API client.
 #[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
-pub struct ExternalPriceApiClientConfig {
-    #[config(with = Serde![str])]
-    pub source: ExternalPriceSource,
-    /// Base URL of the external price API.
-    pub base_url: Option<String>,
-    /// API key for the external price API.
-    pub api_key: Option<SecretString>,
-    /// Timeout for the external price API client.
-    #[config(default_t = Duration::from_secs(10))]
-    pub client_timeout: Duration,
-    /// Config for forced price client.
-    #[config(nest)]
-    pub forced: Option<ForcedPriceClientConfig>,
+#[config(tag = "source")]
+pub enum ExternalPriceApiClientConfig {
+    Forced {
+        /// Config for forced price client.
+        #[config(nest)]
+        forced: ForcedPriceClientConfig,
+    },
+    CoinGecko {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API.
+        coingecko_api_key: Option<SecretString>,
+        /// Timeout for the external price API client.
+        #[config(default_t = Duration::from_secs(10))]
+        client_timeout: Duration,
+    },
+    CoinMarketCap {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API. Required.
+        cmc_api_key: SecretString,
+        /// Timeout for the external price API client.
+        #[config(default_t = Duration::from_secs(10))]
+        client_timeout: Duration,
+    },
 }
 
 /// Fee-related configuration.
@@ -880,10 +891,10 @@ impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
 impl L1SenderConfig {
     fn into_lib_l1_sender_config<Input>(
         self,
-        operator_pk: SecretString,
+        operator_sk: SigningKey,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
-            operator_pk,
+            operator_sk,
             max_fee_per_gas_wei: self.max_fee_per_gas.0,
             max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
             max_fee_per_blob_gas_wei: self.max_fee_per_blob_gas.0,
@@ -896,21 +907,21 @@ impl L1SenderConfig {
 }
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let pk = c.operator_commit_pk.clone();
-        c.into_lib_l1_sender_config(pk)
+        let sk = c.operator_commit_sk.clone();
+        c.into_lib_l1_sender_config(sk)
     }
 }
 
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let pk = c.operator_prove_pk.clone();
-        c.into_lib_l1_sender_config(pk)
+        let sk = c.operator_prove_sk.clone();
+        c.into_lib_l1_sender_config(sk)
     }
 }
 impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
     fn from(c: L1SenderConfig) -> Self {
-        let pk = c.operator_execute_pk.clone();
-        c.into_lib_l1_sender_config(pk)
+        let sk = c.operator_execute_sk.clone();
+        c.into_lib_l1_sender_config(sk)
     }
 }
 
@@ -983,16 +994,6 @@ pub fn gas_adjuster_config(
     }
 }
 
-impl From<ExternalPriceSource> for zksync_os_base_token_adjuster::ExternalPriceSource {
-    fn from(source: ExternalPriceSource) -> Self {
-        match source {
-            ExternalPriceSource::Forced => Self::Forced,
-            ExternalPriceSource::CoinGecko => Self::CoinGecko,
-            ExternalPriceSource::CoinMarketCap => Self::CoinMarketCap,
-        }
-    }
-}
-
 pub fn base_token_price_updater_config(
     c: &BaseTokenPriceUpdaterConfig,
     l1_sender_config: &L1SenderConfig,
@@ -1004,7 +1005,7 @@ pub fn base_token_price_updater_config(
         base_token_addr_override: c.base_token_addr_override,
         base_token_decimals_override: c.base_token_decimals_override,
         gateway_base_token_addr_override: c.gateway_base_token_addr_override,
-        token_multiplier_setter_pk: c.token_multiplier_setter_pk.clone(),
+        token_multiplier_setter_sk: c.token_multiplier_setter_sk.clone(),
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
     }
@@ -1024,11 +1025,28 @@ impl From<ExternalPriceApiClientConfig>
     for zksync_os_external_price_api::ExternalPriceApiClientConfig
 {
     fn from(c: ExternalPriceApiClientConfig) -> Self {
-        Self {
-            base_url: c.base_url,
-            api_key: c.api_key,
-            client_timeout: c.client_timeout,
-            forced: c.forced.map(Into::into),
+        match c {
+            ExternalPriceApiClientConfig::Forced { forced } => Self::Forced {
+                forced: forced.into(),
+            },
+            ExternalPriceApiClientConfig::CoinGecko {
+                base_url,
+                coingecko_api_key,
+                client_timeout,
+            } => Self::CoinGecko {
+                base_url,
+                coingecko_api_key,
+                client_timeout,
+            },
+            ExternalPriceApiClientConfig::CoinMarketCap {
+                base_url,
+                cmc_api_key,
+                client_timeout,
+            } => Self::CoinMarketCap {
+                base_url,
+                cmc_api_key,
+                client_timeout,
+            },
         }
     }
 }

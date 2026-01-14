@@ -1,5 +1,4 @@
 use crate::metrics::{METRICS, OperationResult, OperationResultLabels};
-use alloy::eips::Encodable2718;
 use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder};
 use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
@@ -8,13 +7,12 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
+use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Context;
 use num::rational::Ratio;
 use num::{BigUint, ToPrimitive};
-use secrecy::{ExposeSecret, SecretString};
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_contract_interface::{
@@ -31,14 +29,6 @@ use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 
 mod metrics;
 
-/// Source of external price data.
-#[derive(Debug, Clone, Copy)]
-pub enum ExternalPriceSource {
-    Forced,
-    CoinGecko,
-    CoinMarketCap,
-}
-
 #[derive(Debug, Clone)]
 pub struct BaseTokenPriceUpdaterConfig {
     /// How often to fetch external prices.
@@ -54,10 +44,10 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    /// Private key to update base token price on L1.
+    /// Signing key to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_pk: Option<SecretString>,
+    pub token_multiplier_setter_sk: Option<SigningKey>,
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,
     /// Max priority fee per gas we are willing to spend (in wei).
@@ -82,10 +72,9 @@ pub struct BaseTokenPriceUpdater<
 
 async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
     provider: &mut P,
-    private_key: &SecretString,
+    signing_key: SigningKey,
 ) -> anyhow::Result<Address> {
-    let signer = PrivateKeySigner::from_str(private_key.expose_secret())
-        .context("failed to parse operator private key")?;
+    let signer = PrivateKeySigner::from_signing_key(signing_key);
     let address = signer.address();
     provider.wallet_mut().register_signer(signer);
 
@@ -112,16 +101,17 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         chain_admin_address: Address,
         mut l1_provider: FillProvider<F, P>,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
-        external_price_source: ExternalPriceSource,
         external_price_api_client_config: ExternalPriceApiClientConfig,
         token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
     ) -> anyhow::Result<Self> {
-        let token_multiplier_setter_address =
-            if let Some(pk) = &base_token_adjuster_config.token_multiplier_setter_pk {
-                Some(register_operator(&mut l1_provider, pk).await?)
-            } else {
-                None
-            };
+        let token_multiplier_setter_address = if let Some(sk) = base_token_adjuster_config
+            .token_multiplier_setter_sk
+            .clone()
+        {
+            Some(register_operator(&mut l1_provider, sk).await?)
+        } else {
+            None
+        };
 
         let base_token_address = base_token_adjuster_config
             .base_token_addr_override
@@ -152,7 +142,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 
         if base_token != APIToken::ETH && token_multiplier_setter_address.is_none() {
             tracing::warn!(
-                "`token_multiplier_setter_pk` is not set in the config, but base token is not ETH. \
+                "`token_multiplier_setter_sk` is not set in the config, but base token is not ETH. \
                  Base token price updater will not be able to update the base token price on L1."
             );
         }
@@ -160,18 +150,28 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         // Currently SL is always L1 and its base token is ETH.
         let sl_token = APIToken::ETH;
 
-        let price_api_client = match external_price_source {
-            ExternalPriceSource::CoinGecko => Box::new(CoinGeckoPriceAPIClient::new(
-                external_price_api_client_config,
+        let price_api_client = match external_price_api_client_config {
+            ExternalPriceApiClientConfig::Forced { forced } => {
+                Box::new(ForcedPriceClient::new(forced)) as Box<dyn PriceApiClient>
+            }
+            ExternalPriceApiClientConfig::CoinGecko {
+                base_url,
+                coingecko_api_key,
+                client_timeout,
+            } => Box::new(CoinGeckoPriceAPIClient::new(
+                base_url,
+                coingecko_api_key,
+                client_timeout,
             )?) as Box<dyn PriceApiClient>,
-            ExternalPriceSource::CoinMarketCap => {
-                Box::new(CmcPriceApiClient::new(external_price_api_client_config)?)
-                    as Box<dyn PriceApiClient>
-            }
-            ExternalPriceSource::Forced => {
-                Box::new(ForcedPriceClient::new(external_price_api_client_config))
-                    as Box<dyn PriceApiClient>
-            }
+            ExternalPriceApiClientConfig::CoinMarketCap {
+                base_url,
+                cmc_api_key,
+                client_timeout,
+            } => Box::new(CmcPriceApiClient::new(
+                base_url,
+                cmc_api_key,
+                client_timeout,
+            )?) as Box<dyn PriceApiClient>,
         };
 
         let zk_chain = IZKChain::new(zk_chain_address, l1_provider.clone());
@@ -384,15 +384,8 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             .with_from(token_multiplier_setter_address)
             .with_max_fee_per_gas(self.config.max_fee_per_gas_wei)
             .with_max_priority_fee_per_gas(self.config.max_priority_fee_per_gas_wei);
-        // Fill the transaction (e.g., nonce, gas, etc.) using the provider and convert it to an envelope.
         let provider = self.chain_admin_contract.provider();
-        let tx = provider
-            .fill(tx_request)
-            .await?
-            .try_into_envelope()?
-            .try_into_pooled()?;
-
-        let tx_handle = provider.send_raw_transaction(&tx.encoded_2718()).await?;
+        let tx_handle = provider.send_transaction(tx_request).await?;
         let receipt = tx_handle
             // We are being optimistic with our transaction inclusion here. But, even if
             // reorg happens and transaction will not be included it's ok, it can be sent

@@ -1,11 +1,12 @@
-use std::{fs, path::Path, str::FromStr};
-
 use crate::config::{
     GeneralConfig, GenesisConfig, L1SenderConfig, ObservabilityConfig, ProverApiConfig, RpcConfig,
     SequencerConfig,
 };
+use alloy::primitives::B256;
+use alloy::signers::k256::ecdsa::SigningKey;
 use anyhow::{Context, anyhow};
 use serde_yaml::Value;
+use std::{fs, path::Path, str::FromStr};
 
 pub struct ZkStackConfig {
     pub config_dir: String,
@@ -23,12 +24,13 @@ impl ZkStackConfig {
         Ok(val)
     }
 
-    fn get_private_key(name: &str, entry: &Value) -> anyhow::Result<String> {
-        entry
+    fn get_signing_key(name: &str, entry: &Value) -> anyhow::Result<SigningKey> {
+        let value = entry
             .get(name)
-            .and_then(|v| v.get("private_key").and_then(Value::as_str))
-            .map(|s| s.to_string())
-            .context(format!("Failed to parse {name} from entry"))
+            .and_then(|v| v.get("private_key"))
+            .context("`private_key` field is missing")?;
+        let b256: B256 = serde_yaml::from_value(value.clone()).context("Failed to parse B256")?;
+        SigningKey::from_slice(b256.as_slice()).context("Failed to create SigningKey")
     }
 
     /// Update the configs based off the values from the yaml files.
@@ -56,13 +58,11 @@ impl ZkStackConfig {
 
         let wallets_yaml = self.get_yaml_file("configs/wallets.yaml")?;
 
-        let operator = Self::get_private_key("operator", &wallets_yaml)?;
-        let prove_operator = Self::get_private_key("prove_operator", &wallets_yaml)?;
-        let execute_operator = Self::get_private_key("execute_operator", &wallets_yaml)?;
-
-        l1_sender_config.operator_commit_pk = operator.into();
-        l1_sender_config.operator_prove_pk = prove_operator.into();
-        l1_sender_config.operator_execute_pk = execute_operator.into();
+        l1_sender_config.operator_commit_sk = Self::get_signing_key("operator", &wallets_yaml)?;
+        l1_sender_config.operator_prove_sk =
+            Self::get_signing_key("prove_operator", &wallets_yaml)?;
+        l1_sender_config.operator_execute_sk =
+            Self::get_signing_key("execute_operator", &wallets_yaml)?;
 
         let contracts_yaml = self.get_yaml_file("configs/contracts.yaml")?;
 

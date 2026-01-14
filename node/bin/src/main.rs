@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
@@ -352,12 +351,9 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 
     // Validate that operator keys are different
-    if l1_sender_config.operator_commit_pk.expose_secret()
-        == l1_sender_config.operator_prove_pk.expose_secret()
-        || l1_sender_config.operator_prove_pk.expose_secret()
-            == l1_sender_config.operator_execute_pk.expose_secret()
-        || l1_sender_config.operator_execute_pk.expose_secret()
-            == l1_sender_config.operator_commit_pk.expose_secret()
+    if l1_sender_config.operator_commit_sk == l1_sender_config.operator_prove_sk
+        || l1_sender_config.operator_prove_sk == l1_sender_config.operator_execute_sk
+        || l1_sender_config.operator_execute_sk == l1_sender_config.operator_commit_sk
     {
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");

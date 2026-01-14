@@ -72,12 +72,6 @@ pub trait PriceApiClient: Sync + Send + fmt::Debug + 'static {
     async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio>;
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ForcedTokenPriceConfig {
-    /// Forced price in USD for 1 token (not base token unit!).
-    pub price: f64,
-}
-
 /// Config to force configured token prices in USD.
 /// E.g. if needed to force 1 TOKEN = 0.3 USD, that would be represented in a config with price=0.3 for this token.
 /// Important: price is **token** price (e.g. for USDC it would be 1), not base token unit price.
@@ -95,11 +89,27 @@ pub struct ForcedPriceClientConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExternalPriceApiClientConfig {
-    pub base_url: Option<String>,
-    pub api_key: Option<SecretString>,
-    pub client_timeout: Duration,
-    pub forced: Option<ForcedPriceClientConfig>,
+pub enum ExternalPriceApiClientConfig {
+    Forced {
+        /// Config for forced price client.
+        forced: ForcedPriceClientConfig,
+    },
+    CoinGecko {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API.
+        coingecko_api_key: Option<SecretString>,
+        /// Timeout for the external price API client.
+        client_timeout: Duration,
+    },
+    CoinMarketCap {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API. Required.
+        cmc_api_key: SecretString,
+        /// Timeout for the external price API client.
+        client_timeout: Duration,
+    },
 }
 
 #[cfg(test)]
