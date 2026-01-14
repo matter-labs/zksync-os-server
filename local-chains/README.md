@@ -83,34 +83,41 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 ### Using the `run_local.sh` Script
 
-⚠️ This script is a temporary solution that will later be replaced by a dedicated orchestrator binary. Do not depend on it in production
+⚠️ This script is a temporary solution. Do not depend on it in production.
 
 The `run_local.sh` script automates starting Anvil and chain node(s):
 
 ```bash
-# Run a single chain
-./run_local.sh ./local-chains/v30
+# Run a single chain (auto-detects latest version)
+./run_local.sh
+
+# Run a single chain (explicit path)
+./run_local.sh ./local-chains/v31.0/default
 
 # Run multiple chains
-./run_local.sh ./local-chains/v30/multiple-chains
+./run_local.sh ./local-chains/v31.0/multi_chain
+
+# Run with logging to files
+./run_local.sh ./local-chains/v31.0/multi_chain --logs-dir ./logs
 ```
 
 #### How the Script Works
 
 1. **Validates configuration directory** - Checks that the directory exists and contains `zkos-l1-state.json`
-2. **Starts Anvil** - Loads the L1 state snapshot on port 8545 (logs suppressed)
-3. **Waits for Anvil readiness** - Polls the JSON-RPC endpoint until Anvil responds (up to 30 seconds)
-4. **Detects chain mode**:
+2. **Builds ZKsync OS**
+3. **Starts Anvil** - Loads the L1 state snapshot on port 8545
+4. **Waits for Anvil readiness** - Polls the JSON-RPC endpoint until Anvil responds (up to 30 seconds)
+5. **Detects chain mode**:
    - If `config.json` exists → Starts single chain
-   - Otherwise → Starts all `chain*.json` files found
-5. **Database cleanup prompt** (single chain mode only) - If the `db/` folder contains existing data, prompts whether to clean it up before starting
-6. **Monitors processes** - If any process fails, all services are stopped
-7. **Graceful shutdown** - Press `Ctrl+C` to stop all services
+   - Otherwise → Starts all `chain_*.json` files found (e.g., `chain_6565.json`, `chain_6566.json`)
+6. **Database cleanup prompt** (single chain mode only) - If the `db/` folder contains existing data, prompts whether to clean it up before starting
+7. **Monitors processes** - If any process fails, all services are stopped
+8. **Graceful shutdown** - Press `Ctrl+C` to stop all services
 
 #### Script Output
 
-- **Anvil logs**: Suppressed
-- **Chain logs**: Displayed in terminal
+- **Anvil logs**: Suppressed (or written to `anvil-<timestamp>.log` if `--logs-dir` is specified)
+- **Chain logs**: Displayed in terminal (or written to `<config-name>-<timestamp>.log` if `--logs-dir` is specified)
 - **Script messages**: Color-coded status updates
 
 ### Manual Setup

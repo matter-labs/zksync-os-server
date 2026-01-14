@@ -12,8 +12,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}⚠️  This script is a temporary solution that will later be replaced by a dedicated orchestrator binary.${NC}"
-echo -e "${YELLOW}   Do not depend on it in production.${NC}"
+echo -e "${YELLOW}⚠️  This script is a temporary solution. Do not depend on it in production.${NC}"
 echo ""
 
 # Array to store PIDs of background processes
@@ -50,16 +49,76 @@ cleanup() {
 # Set up trap for cleanup on script exit
 trap cleanup SIGINT SIGTERM EXIT
 
-# Check if folder path is provided
-if [ -z "$1" ]; then
-    echo -e "${RED}Usage: $0 <folder-path>${NC}"
-    echo -e "Example: $0 ./local-chains/v30"
-    echo -e "Example: $0 ./local-chains/v30/multiple-chains"
-    exit 1
-fi
+# Function to find the latest version in local-chains directory
+# Supports versioning like v30, v31, v30.2, v31.0, etc.
+find_latest_version() {
+    local chains_dir="$REPO_ROOT/local-chains"
+    if [ ! -d "$chains_dir" ]; then
+        echo ""
+        return
+    fi
+    
+    # Find all version directories (v* pattern) and sort them properly
+    # Sort by major version first, then by minor version (defaulting to 0 if not present)
+    local latest=$(ls -d "$chains_dir"/v* 2>/dev/null | while read dir; do
+        basename "$dir"
+    done | sed 's/^v//' | sort -t. -k1,1n -k2,2n | tail -1)
+    
+    if [ -n "$latest" ]; then
+        echo "$chains_dir/v$latest"
+    else
+        echo ""
+    fi
+}
 
-# Resolve to absolute path
-CONFIG_DIR="$(realpath "$1")"
+# Parse command line arguments
+CONFIG_DIR=""
+LOGS_DIR=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --logs-dir)
+            if [ -z "$2" ] || [[ "$2" == --* ]]; then
+                echo -e "${RED}Error: --logs-dir requires a path argument${NC}"
+                exit 1
+            fi
+            LOGS_DIR="$2"
+            shift 2
+            ;;
+        -*)
+            echo -e "${RED}Error: Unknown option $1${NC}"
+            echo -e "Usage: $0 [folder-path] [--logs-dir <path>]"
+            exit 1
+            ;;
+        *)
+            if [ -z "$CONFIG_DIR" ]; then
+                CONFIG_DIR="$1"
+            else
+                echo -e "${RED}Error: Unexpected argument $1${NC}"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Check if folder path is provided, otherwise try to detect the latest version
+if [ -z "$CONFIG_DIR" ]; then
+    LATEST_VERSION=$(find_latest_version)
+    if [ -z "$LATEST_VERSION" ]; then
+        echo -e "${RED}Usage: $0 [folder-path] [--logs-dir <path>]${NC}"
+        echo -e "Example: $0 ./local-chains/v31.0/default"
+        echo -e "Example: $0 ./local-chains/v31.0/multi_chain"
+        echo -e "Example: $0 ./local-chains/v31.0/default --logs-dir ./logs"
+        exit 1
+    fi
+    # Default to single chain setup in the default folder
+    CONFIG_DIR="$LATEST_VERSION/default"
+    echo -e "${BLUE}No path provided, using latest version: $CONFIG_DIR${NC}"
+else
+    # Resolve to absolute path
+    CONFIG_DIR="$(realpath "$CONFIG_DIR")"
+fi
 
 # Verify the directory exists
 if [ ! -d "$CONFIG_DIR" ]; then
@@ -74,9 +133,19 @@ if [ ! -f "$L1_STATE_FILE" ]; then
     exit 1
 fi
 
+# Generate timestamp for log files (same timestamp for all logs in this session)
+LOG_TIMESTAMP=$(date +"%Y-%m-%dT%H-%M-%S")
+
+# Setup logs directory if specified
+if [ -n "$LOGS_DIR" ]; then
+    mkdir -p "$LOGS_DIR"
+    LOGS_DIR="$(realpath "$LOGS_DIR")"
+    echo -e "${BLUE}Logs will be written to: $LOGS_DIR${NC}"
+fi
+
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Starting Local Development Environment${NC}"
-echo -e "${BLUE}Config directory: $1${NC}"
+echo -e "${BLUE}Config directory: $CONFIG_DIR${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Build first
@@ -89,7 +158,13 @@ echo -e "${GREEN}Build completed${NC}"
 
 # Start Anvil
 echo -e "\n${GREEN}Starting Anvil...${NC}"
-anvil --load-state "$L1_STATE_FILE" --port 8545 > /dev/null 2>&1 &
+if [ -n "$LOGS_DIR" ]; then
+    ANVIL_LOG_FILE="$LOGS_DIR/anvil-$LOG_TIMESTAMP.log"
+    anvil --load-state "$L1_STATE_FILE" --port 8545 > "$ANVIL_LOG_FILE" 2>&1 &
+    echo -e "${GREEN}Anvil logs: $ANVIL_LOG_FILE${NC}"
+else
+    anvil --load-state "$L1_STATE_FILE" --port 8545 > /dev/null 2>&1 &
+fi
 ANVIL_PID=$!
 PIDS+=($ANVIL_PID)
 echo -e "${GREEN}Anvil started with PID $ANVIL_PID${NC}"
@@ -128,16 +203,22 @@ if [ -f "$SINGLE_CONFIG" ]; then
     fi
     
     echo -e "\n${GREEN}Starting single chain with config: $SINGLE_CONFIG${NC}"
-    cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$SINGLE_CONFIG" &
+    if [ -n "$LOGS_DIR" ]; then
+        CHAIN_LOG_FILE="$LOGS_DIR/chain-$LOG_TIMESTAMP.log"
+        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$SINGLE_CONFIG" > "$CHAIN_LOG_FILE" 2>&1 &
+        echo -e "${GREEN}Chain logs: $CHAIN_LOG_FILE${NC}"
+    else
+        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$SINGLE_CONFIG" &
+    fi
     CHAIN_PID=$!
     PIDS+=($CHAIN_PID)
     echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
 else
-    # Multiple chains mode - look for chain*.json files
-    CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain*.json 2>/dev/null | sort -V))
+    # Multiple chains mode - look for chain_<chainid>.json files
+    CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain_*.json 2>/dev/null | sort -V))
     
     if [ ${#CHAIN_CONFIGS[@]} -eq 0 ]; then
-        echo -e "${RED}Error: No config.json or chain*.json files found in '$CONFIG_DIR'${NC}"
+        echo -e "${RED}Error: No config.json or chain_*.json files found in '$CONFIG_DIR'${NC}"
         exit 1
     fi
     
@@ -145,7 +226,15 @@ else
     
     for config_file in "${CHAIN_CONFIGS[@]}"; do
         echo -e "${GREEN}Starting chain with config: $config_file${NC}"
-        cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" &
+        if [ -n "$LOGS_DIR" ]; then
+            # Extract config file name without extension for log file naming
+            CONFIG_NAME=$(basename "$config_file" .json)
+            CHAIN_LOG_FILE="$LOGS_DIR/${CONFIG_NAME}-$LOG_TIMESTAMP.log"
+            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" > "$CHAIN_LOG_FILE" 2>&1 &
+            echo -e "${GREEN}Chain logs: $CHAIN_LOG_FILE${NC}"
+        else
+            cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" &
+        fi
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)
         echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"

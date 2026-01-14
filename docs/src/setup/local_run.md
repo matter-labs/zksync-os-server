@@ -2,16 +2,22 @@
 
 ### Using the `run_local.sh` Script
 
-⚠️ This script is a temporary solution that will later be replaced by a dedicated orchestrator binary. Do not depend on it in production.
+⚠️ This script is a temporary solution. Do not depend on it in production.
 
 The `run_local.sh` script automates starting Anvil and chain node(s):
 
 ```bash
-# Run a single chain
-./run_local.sh ./local-chains/v30
+# Run a single chain (auto-detects latest version)
+./run_local.sh
+
+# Run a single chain (explicit path)
+./run_local.sh ./local-chains/v31.0/default
 
 # Run multiple chains
-./run_local.sh ./local-chains/v30/multiple-chains
+./run_local.sh ./local-chains/v31.0/multi_chain
+
+# Run with logging to files
+./run_local.sh ./local-chains/v31.0/multi_chain --logs-dir ./logs
 ```
 
 ### Manual setup
