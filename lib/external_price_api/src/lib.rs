@@ -89,11 +89,27 @@ pub struct ForcedPriceClientConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExternalPriceApiClientConfig {
-    pub base_url: Option<String>,
-    pub api_key: Option<SecretString>,
-    pub client_timeout: Duration,
-    pub forced: Option<ForcedPriceClientConfig>,
+pub enum ExternalPriceApiClientConfig {
+    Forced {
+        /// Config for forced price client.
+        forced: ForcedPriceClientConfig,
+    },
+    CoinGecko {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API.
+        coingecko_api_key: Option<SecretString>,
+        /// Timeout for the external price API client.
+        client_timeout: Duration,
+    },
+    CoinMarketCap {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API. Required.
+        cmc_api_key: SecretString,
+        /// Timeout for the external price API client.
+        client_timeout: Duration,
+    },
 }
 
 #[cfg(test)]

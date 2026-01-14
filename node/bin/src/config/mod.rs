@@ -805,29 +805,33 @@ pub struct ForcedPriceClientConfig {
     pub next_value_fluctuation: f64,
 }
 
-/// Source of external price data.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum ExternalPriceSource {
-    Forced,
-    CoinGecko,
-    CoinMarketCap,
-}
-
 /// Configuration for external price API client.
 #[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
-pub struct ExternalPriceApiClientConfig {
-    #[config(with = Serde![str])]
-    pub source: ExternalPriceSource,
-    /// Base URL of the external price API.
-    pub base_url: Option<String>,
-    /// API key for the external price API.
-    pub api_key: Option<SecretString>,
-    /// Timeout for the external price API client.
-    #[config(default_t = Duration::from_secs(10))]
-    pub client_timeout: Duration,
-    /// Config for forced price client.
-    #[config(nest)]
-    pub forced: Option<ForcedPriceClientConfig>,
+#[config(tag = "source")]
+pub enum ExternalPriceApiClientConfig {
+    Forced {
+        /// Config for forced price client.
+        #[config(nest)]
+        forced: ForcedPriceClientConfig,
+    },
+    CoinGecko {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API.
+        coingecko_api_key: Option<SecretString>,
+        /// Timeout for the external price API client.
+        #[config(default_t = Duration::from_secs(10))]
+        client_timeout: Duration,
+    },
+    CoinMarketCap {
+        /// Base URL of the external price API.
+        base_url: Option<String>,
+        /// API key for the external price API. Required.
+        cmc_api_key: SecretString,
+        /// Timeout for the external price API client.
+        #[config(default_t = Duration::from_secs(10))]
+        client_timeout: Duration,
+    },
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
@@ -969,16 +973,6 @@ pub fn gas_adjuster_config(
     }
 }
 
-impl From<ExternalPriceSource> for zksync_os_base_token_adjuster::ExternalPriceSource {
-    fn from(source: ExternalPriceSource) -> Self {
-        match source {
-            ExternalPriceSource::Forced => Self::Forced,
-            ExternalPriceSource::CoinGecko => Self::CoinGecko,
-            ExternalPriceSource::CoinMarketCap => Self::CoinMarketCap,
-        }
-    }
-}
-
 pub fn base_token_price_updater_config(
     c: &BaseTokenPriceUpdaterConfig,
     l1_sender_config: &L1SenderConfig,
@@ -1010,11 +1004,28 @@ impl From<ExternalPriceApiClientConfig>
     for zksync_os_external_price_api::ExternalPriceApiClientConfig
 {
     fn from(c: ExternalPriceApiClientConfig) -> Self {
-        Self {
-            base_url: c.base_url,
-            api_key: c.api_key,
-            client_timeout: c.client_timeout,
-            forced: c.forced.map(Into::into),
+        match c {
+            ExternalPriceApiClientConfig::Forced { forced } => Self::Forced {
+                forced: forced.into(),
+            },
+            ExternalPriceApiClientConfig::CoinGecko {
+                base_url,
+                coingecko_api_key,
+                client_timeout,
+            } => Self::CoinGecko {
+                base_url,
+                coingecko_api_key,
+                client_timeout,
+            },
+            ExternalPriceApiClientConfig::CoinMarketCap {
+                base_url,
+                cmc_api_key,
+                client_timeout,
+            } => Self::CoinMarketCap {
+                base_url,
+                cmc_api_key,
+                client_timeout,
+            },
         }
     }
 }
