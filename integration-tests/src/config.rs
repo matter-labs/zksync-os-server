@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use zksync_os_server::config::{Config, GenesisConfig};
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_types::ConfigFormat;
 
 /// Layout of local chain directories.
@@ -65,7 +63,6 @@ impl<'a> ChainLayout<'a> {
     }
 
     /// Genesis input is always taken from `<version>/default/genesis.json`
-    /// (note: even when reading a multi_chain config).
     fn genesis_input_path(self) -> PathBuf {
         workspace_dir()
             .join("local-chains")
@@ -95,26 +92,26 @@ static WORKSPACE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 });
 
 /// Preloaded default configs for known protocol versions.
-static DEFAULT_CONFIGS: LazyLock<HashMap<String, Config>> = LazyLock::new(|| {
-    let mut map = HashMap::new();
-    // Preload known protocol versions
-    map.insert(
-        PROTOCOL_VERSION.to_string(),
-        load_default_config(PROTOCOL_VERSION),
-    );
-    map.insert(
-        NEXT_PROTOCOL_VERSION.to_string(),
-        load_default_config(NEXT_PROTOCOL_VERSION),
-    );
-    map
-});
+// static DEFAULT_CONFIGS: LazyLock<HashMap<String, Config>> = LazyLock::new(|| {
+//     let mut map = HashMap::new();
+//     // Preload known protocol versions
+//     map.insert(
+//         PROTOCOL_VERSION.to_string(),
+//         load_default_config(PROTOCOL_VERSION),
+//     );
+//     map.insert(
+//         NEXT_PROTOCOL_VERSION.to_string(),
+//         load_default_config(NEXT_PROTOCOL_VERSION),
+//     );
+//     map
+// });
 
 /// Get the default config for the given protocol version.
-pub fn get_default_config(protocol_version: &str) -> &'static Config {
-    DEFAULT_CONFIGS.get(protocol_version).unwrap_or_else(|| {
-        panic!("No default config registered for protocol version: {protocol_version}")
-    })
-}
+// pub fn get_default_config(protocol_version: &str) -> &'static Config {
+//     DEFAULT_CONFIGS.get(protocol_version).unwrap_or_else(|| {
+//         panic!("No default config registered for protocol version: {protocol_version}")
+//     })
+// }
 
 /// Get the workspace directory path.
 fn workspace_dir() -> &'static Path {
@@ -172,21 +169,21 @@ fn load_config_from_path(config_path: &Path) -> Config {
     }
 }
 
-fn load_default_config(version: &str) -> Config {
-    let config_path = workspace_dir()
-        .join("local-chains")
-        .join(version)
-        .join("default")
-        .join("config.yaml");
-
-    let mut config = load_config_from_path(&config_path);
-    config.genesis_config.genesis_input_path = Some(
-        workspace_dir()
-            .join("local-chains")
-            .join(version)
-            .join("default")
-            .join("genesis.json")
-            .into(),
-    );
-    config
-}
+// fn load_default_config(version: &str) -> Config {
+//     let config_path = workspace_dir()
+//         .join("local-chains")
+//         .join(version)
+//         .join("default")
+//         .join("config.yaml");
+//
+//     let mut config = load_config_from_path(&config_path);
+//     config.genesis_config.genesis_input_path = Some(
+//         workspace_dir()
+//             .join("local-chains")
+//             .join(version)
+//             .join("default")
+//             .join("genesis.json")
+//             .into(),
+//     );
+//     config
+// }
