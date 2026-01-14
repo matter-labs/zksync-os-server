@@ -1,8 +1,5 @@
 pub use self::cli::ConfigArgs;
-use crate::{
-    command_source::RebuildOptions,
-    config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
-};
+use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
@@ -218,15 +215,12 @@ pub struct GenesisConfig {
 
     /// L1 address of the `BytecodeSupplier` contract. This address right now cannot be discovered through `Bridgehub`,
     /// so it has to be provided explicitly.
-    // For updating state.json: you can check the `deployedBytecode` in `BytecodesSupplier.json` artifact and then
-    // find it in `./local-chains/<protocol_version>/zkos-l1-state.json`
     pub bytecode_supplier_address: Option<Address>,
 
     /// Chain ID of the chain node operates on.
     pub chain_id: Option<u64>,
 
     /// Path to the file with genesis input.
-    #[config(default_t = Some(format!("./local-chains/{PROTOCOL_VERSION}/genesis.json").into()))]
     pub genesis_input_path: Option<PathBuf>,
 }
 

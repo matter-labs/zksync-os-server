@@ -174,7 +174,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Run anvil L1
-        run: anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545 &
+        run: anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545 &
 
       - name: Build server
         run: cargo build --release --bin zksync-os-server
@@ -189,9 +189,18 @@ jobs:
 
       - name: Wait for zksync OS to start
         run: |
+          TIMEOUT=300
+          INTERVAL=3
+          START_TIME=$(date +%s)
           while ! nc -z localhost 3050; do
-            echo "Waiting for zksync OS to start..."
-            sleep 3
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+              echo "Timed out after ${TIMEOUT}s waiting for zksync OS on port 3050"
+              exit 1
+            fi
+            echo "Waiting for ZKsync OS Server to start... (${ELAPSED}s elapsed)"
+            sleep $INTERVAL
           done
           echo "Sequencer is up and running."
 
