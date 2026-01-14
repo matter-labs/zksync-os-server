@@ -8,9 +8,7 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 use url::Url;
 
-use crate::{
-    APIToken, BaseTokenApiRatio, ExternalPriceApiClientConfig, PriceApiClient, ZK_DECIMALS,
-};
+use crate::{APIToken, ExternalPriceApiClientConfig, PriceApiClient, TokenApiRatio, ZK_DECIMALS};
 
 const AUTH_HEADER: &str = "x-cmc_pro_api_key";
 const DEFAULT_API_URL: &str = "https://pro-api.coinmarketcap.com";
@@ -167,7 +165,7 @@ struct CryptocurrencyPlatform {
 
 #[async_trait]
 impl PriceApiClient for CmcPriceApiClient {
-    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<BaseTokenApiRatio> {
+    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio> {
         let (price_f64, decimals) = match token {
             APIToken::ETH => (self.get_token_price_by_id(ETHEREUM_ID).await?, ZK_DECIMALS),
             APIToken::ERC20 { address, decimals } => {
@@ -176,7 +174,7 @@ impl PriceApiClient for CmcPriceApiClient {
             APIToken::ZK => (self.get_token_price_by_id(ZKSYNC_ID).await?, ZK_DECIMALS),
         };
 
-        Ok(BaseTokenApiRatio::from_f64_decimals_and_timestamp(
+        Ok(TokenApiRatio::from_f64_decimals_and_timestamp(
             price_f64, decimals, None,
         ))
     }

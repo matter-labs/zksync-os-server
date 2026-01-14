@@ -27,7 +27,7 @@ use zksync_os_external_price_api::forced_price_client::ForcedPriceClient;
 use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
-use zksync_os_types::BaseTokenApiRatio;
+use zksync_os_types::TokenApiRatio;
 
 mod metrics;
 
@@ -255,7 +255,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         Ok(())
     }
 
-    async fn retry_fetch_ratio(&self, token: APIToken) -> anyhow::Result<BaseTokenApiRatio> {
+    async fn retry_fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio> {
         let max_retries = self.config.price_fetching_max_attempts;
         let mut last_error = None;
 

@@ -10,7 +10,7 @@ use secrecy::SecretString;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
-use zksync_os_types::BaseTokenApiRatio;
+use zksync_os_types::TokenApiRatio;
 
 /// ZK token address on Ethereum Mainnet
 pub const ZK_L1_ADDRESS: Address = address!("0x66a5cfb2e9c529f14fe6364ad1075df3a649c0a5");
@@ -69,13 +69,7 @@ pub trait PriceApiClient: Sync + Send + fmt::Debug + 'static {
     /// Base unit is the smallest indivisible unit of the token (wei for ETH, 10^(-decimals) of the token for ERC20).
     /// The returned value is rational number X such that 1 base units = X USD.
     /// Example if 1 token base unit = 0.002 USD, then ratio is 1/500 (1 base unit = 1/500 USD)
-    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<BaseTokenApiRatio>;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ForcedTokenPriceConfig {
-    /// Forced price in USD for 1 token (not base token unit!).
-    pub price: f64,
+    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio>;
 }
 
 /// Config to force configured token prices in USD.

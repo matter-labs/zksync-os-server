@@ -31,4 +31,4 @@ pub use protocol::{
 };
 
 mod base_token_price;
-pub use base_token_price::BaseTokenApiRatio;
+pub use base_token_price::TokenApiRatio;
