@@ -14902,7 +14902,6 @@ dependencies = [
  "clap",
  "tokio",
  "zksync_os_contract_interface",
- "zksync_os_server",
  "zksync_os_types",
 ]
 
@@ -14917,6 +14916,7 @@ dependencies = [
  "blake2 0.10.6",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tokio",
  "zksync_os_api",
  "zksync_os_contract_interface",

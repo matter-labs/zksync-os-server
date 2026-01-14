@@ -5,7 +5,7 @@ mod batch_sink;
 pub mod batcher;
 mod command_source;
 pub mod config;
-pub mod config_constants;
+pub mod default_protocol_version;
 mod en_remote_config;
 mod l1_provider;
 mod node_state_on_startup;
