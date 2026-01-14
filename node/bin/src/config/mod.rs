@@ -433,7 +433,7 @@ pub struct L1SenderConfig {
     pub operator_execute_sk: SigningKey,
 
     /// Max fee per gas we are willing to spend.
-    #[config(default_t = 100 * EtherUnit::Gwei)]
+    #[config(default_t = 200 * EtherUnit::Gwei)]
     pub max_fee_per_gas: EtherAmount,
 
     /// Max priority fee per gas we are willing to spend.

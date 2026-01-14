@@ -15,7 +15,7 @@ use alloy::eips::eip7594::BlobTransactionSidecarVariant;
 use alloy::eips::{BlockId, Encodable2718};
 use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844};
 use alloy::primitives::Address;
-use alloy::primitives::utils::format_ether;
+use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
@@ -139,6 +139,8 @@ pub async fn run_l1_sender<Input: SendToL1>(
 
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         let fee_per_blob_gas = provider.get_blob_base_fee().await?;
+                        L1_SENDER_METRICS
+                            .report_blob_base_fee(fee_per_blob_gas)?;
                         let max_fee_per_blob_gas = config.max_fee_per_blob_gas_wei;
 
                         if fee_per_blob_gas > max_fee_per_blob_gas {
@@ -277,9 +279,11 @@ async fn tx_request_with_gas_fields(
     max_priority_fee_per_gas: u128,
 ) -> anyhow::Result<TransactionRequest> {
     let eip1559_est = provider.estimate_eip1559_fees().await?;
+    L1_SENDER_METRICS.report_l1_eip_1559_estimation(eip1559_est)?;
     tracing::debug!(
-        eip1559_est.max_priority_fee_per_gas,
-        "estimated median priority fee (20% percentile) for the last 10 blocks"
+        max_priority_fee_per_gas_gwei = ?format_units(eip1559_est.max_priority_fee_per_gas, "gwei"),
+        max_fee_per_gas_gwei = ?format_units(eip1559_est.max_fee_per_gas, "gwei"),
+        "estimated priority and max fees"
     );
     if eip1559_est.max_fee_per_gas > max_fee_per_gas {
         tracing::warn!(
@@ -341,41 +345,7 @@ async fn validate_tx_receipt<Input: SendToL1>(
 ) -> anyhow::Result<()> {
     if receipt.status() {
         // Transaction succeeded - log output and return OK(())
-
-        // We could also look at tx receipt's logs for a corresponding
-        // `BlockCommit` / `BlockProve`/ etc event but
-        // not sure if this is 100% necessary yet.
-
-        let l2_txs_count: usize = command
-            .as_ref()
-            .iter()
-            .map(|envelope| envelope.batch.tx_count)
-            .sum();
-        let l1_transaction_fee = receipt.gas_used as u128 * receipt.effective_gas_price;
-
-        let l1_transaction_fee_ether_per_l2_tx = l1_transaction_fee
-            .checked_div(l2_txs_count as u128)
-            .map(format_ether);
-        tracing::info!(
-            %command,
-            tx_hash = ?receipt.transaction_hash,
-            l1_block_number = receipt.block_number.unwrap(),
-            gas_used = receipt.gas_used,
-            gas_used_per_l2_tx = receipt.gas_used.checked_div(l2_txs_count as u64),
-            l1_transaction_fee_ether = format_ether(l1_transaction_fee),
-            l1_transaction_fee_ether_per_l2_tx,
-            "succeeded on L1",
-        );
-        L1_SENDER_METRICS.gas_used[&Input::NAME].observe(receipt.gas_used);
-        if let Some(gas_used_per_l2_tx) = receipt.gas_used.checked_div(l2_txs_count as u64) {
-            L1_SENDER_METRICS.gas_used_per_l2_tx[&Input::NAME].observe(gas_used_per_l2_tx);
-        }
-        L1_SENDER_METRICS.l1_transaction_fee_ether[&Input::NAME]
-            .observe(format_ether(l1_transaction_fee).parse()?);
-        if let Some(l1_transaction_fee_per_l2_tx) = l1_transaction_fee_ether_per_l2_tx {
-            L1_SENDER_METRICS.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
-                .observe(l1_transaction_fee_per_l2_tx.parse()?);
-        }
+        L1_SENDER_METRICS.report_tx_receipt(command, receipt)?;
         Ok(())
     } else {
         tracing::error!(
