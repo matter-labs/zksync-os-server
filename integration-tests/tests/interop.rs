@@ -1,16 +1,23 @@
 //! Interop integration tests for cross-chain token transfers.
 
 use alloy::{
+    eips::eip1559::Eip1559Estimation,
     primitives::{Address, Bytes, FixedBytes, U256, address, keccak256},
-    providers::Provider,
+    providers::utils::Eip1559Estimator,
+    providers::{PendingTransactionBuilder, Provider},
+    rpc::types::TransactionRequest,
     sol,
     sol_types::{SolCall, SolType, SolValue},
 };
 use anyhow::{Context, Result};
 use test_log::test;
+use zksync_os_contract_interface::Bridgehub;
+use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::{
-    MultiChainTester, assert_traits::ReceiptAssert, contracts::TestERC20, provider::ZksyncApi,
+    MultiChainTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
+    provider::ZksyncApi,
 };
+use zksync_os_types::{L1PriorityTxType, L1TxType, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE};
 
 const L2_INTEROP_CENTER_ADDRESS: Address = address!("0000000000000000000000000000000000010010");
 const L2_INTEROP_HANDLER_ADDRESS: Address = address!("000000000000000000000000000000000001000d");
@@ -248,6 +255,84 @@ async fn relayer_get_message_proof(
     Ok(log_proof)
 }
 
+/// Fund a wallet on L2 via L1 deposit
+async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U256) -> Result<()> {
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+
+    let bridgehub = Bridgehub::new(
+        tester.l2_zk_provider.get_bridgehub_contract().await?,
+        tester.l1_provider.clone(),
+        chain_id,
+    );
+
+    let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;
+    let base_l1_fees_data = tester
+        .l1_provider
+        .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
+            Eip1559Estimation {
+                max_fee_per_gas: base_fee_per_gas * 3 / 2,
+                max_priority_fee_per_gas: 0,
+            }
+        }))
+        .await?;
+    let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
+    let gas_limit = tester
+        .l2_provider
+        .estimate_gas(
+            TransactionRequest::default()
+                .transaction_type(L1PriorityTxType::TX_TYPE)
+                .from(wallet)
+                .to(wallet)
+                .value(amount),
+        )
+        .await?;
+
+    let tx_base_cost = bridgehub
+        .l2_transaction_base_cost(
+            max_fee_per_gas + max_priority_fee_per_gas,
+            gas_limit,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+        )
+        .await?;
+
+    let l1_deposit_request = bridgehub
+        .request_l2_transaction_direct(
+            amount + tx_base_cost,
+            wallet,
+            amount,
+            vec![],
+            gas_limit,
+            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+            wallet,
+        )
+        .value(amount + tx_base_cost)
+        .max_fee_per_gas(max_fee_per_gas)
+        .max_priority_fee_per_gas(max_priority_fee_per_gas)
+        .into_transaction_request();
+
+    let l1_deposit_receipt = tester
+        .l1_provider
+        .send_transaction(l1_deposit_request)
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let l1_to_l2_tx_log = l1_deposit_receipt
+        .logs()
+        .iter()
+        .filter_map(|log| log.log_decode::<NewPriorityRequest>().ok())
+        .next()
+        .expect("no L1->L2 logs produced by deposit tx");
+    let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
+
+    // Wait for L2 transaction to be included
+    PendingTransactionBuilder::new(tester.l2_zk_provider.root().clone(), l2_tx_hash)
+        .expect_successful_receipt()
+        .await?;
+
+    Ok(())
+}
+
 #[test(tokio::test)]
 async fn test_interop_bundle_send() -> Result<()> {
     // This test validates the first part of the interop flow:
@@ -262,6 +347,11 @@ async fn test_interop_bundle_send() -> Result<()> {
     let chain_b_id = chain_b.l2_provider.get_chain_id().await?;
 
     let sender = chain_a.l2_wallet.default_signer().address();
+
+    // Fund sender wallet on both chains via L1 deposits
+    let deposit_amount = U256::from(1000) * U256::from(10).pow(U256::from(18)); // 1000 ETH
+    fund_wallet_via_l1_deposit(chain_a, sender, deposit_amount).await?;
+    fund_wallet_via_l1_deposit(chain_b, sender, deposit_amount).await?;
 
     let (token, _initial_supply, asset_id) =
         setup_token_on_chain_a(&chain_a.l2_provider, sender).await?;

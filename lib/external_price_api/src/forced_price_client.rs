@@ -4,7 +4,7 @@ use num::{BigInt, BigUint, rational::Ratio};
 use rand::Rng;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use zksync_os_types::BaseTokenApiRatio;
+use zksync_os_types::TokenApiRatio;
 
 use crate::{APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS};
 
@@ -34,18 +34,18 @@ impl ForcedPriceClient {
             .prices
             .remove(&Address::ZERO)
             .or_else(|| forced_config.prices.remove(&Address::with_last_byte(0x01)))
-            .map(|p| BaseTokenApiRatio::from_f64_decimals_and_timestamp(p, 0, None).ratio);
+            .map(|p| TokenApiRatio::from_f64_decimals_and_timestamp(p, 0, None).ratio);
         let zk_base_ratio = forced_config
             .prices
             .remove(&ZK_L1_ADDRESS)
-            .map(|p| BaseTokenApiRatio::from_f64_decimals_and_timestamp(p, 0, None).ratio);
+            .map(|p| TokenApiRatio::from_f64_decimals_and_timestamp(p, 0, None).ratio);
         let erc20_base_ratios = forced_config
             .prices
             .into_iter()
             .map(|(k, v)| {
                 (
                     k,
-                    BaseTokenApiRatio::from_f64_decimals_and_timestamp(v, 0, None).ratio,
+                    TokenApiRatio::from_f64_decimals_and_timestamp(v, 0, None).ratio,
                 )
             })
             .collect();
@@ -67,7 +67,7 @@ impl ForcedPriceClient {
 #[async_trait]
 impl PriceApiClient for ForcedPriceClient {
     /// Returns the configured ratio with fluctuation applied if enabled
-    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<BaseTokenApiRatio> {
+    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio> {
         let base_ratio = match &token {
             APIToken::ETH => self.eth_base_ratio.clone(),
             APIToken::ZK => self.zk_base_ratio.clone(),
@@ -97,7 +97,7 @@ impl PriceApiClient for ForcedPriceClient {
 
         // Adjust for decimals.
         new_ratio /= BigUint::from(10u64).pow(decimals as u32);
-        Ok(BaseTokenApiRatio {
+        Ok(TokenApiRatio {
             ratio: new_ratio,
             timestamp: chrono::Utc::now(),
         })

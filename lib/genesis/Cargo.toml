@@ -19,6 +19,7 @@ zksync_os_interface.workspace = true
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "serde"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 blake2.workspace = true
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true

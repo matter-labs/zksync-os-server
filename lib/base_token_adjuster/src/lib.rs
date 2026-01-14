@@ -27,7 +27,7 @@ use zksync_os_external_price_api::forced_price_client::ForcedPriceClient;
 use zksync_os_external_price_api::{
     APIToken, ExternalPriceApiClientConfig, PriceApiClient, ZK_L1_ADDRESS,
 };
-use zksync_os_types::BaseTokenApiRatio;
+use zksync_os_types::{TokenApiRatio, TokenPricesForFees};
 
 mod metrics;
 
@@ -77,6 +77,7 @@ pub struct BaseTokenPriceUpdater<
     chain_admin_contract: IChainAdminOwnableInstance<FillProvider<F, P>, Ethereum>,
     token_multiplier_setter_address: Option<Address>,
     zk_chain_address: Address,
+    token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
 }
 
 async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
@@ -104,6 +105,7 @@ async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>
 impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provider<Ethereum> + Clone>
     BaseTokenPriceUpdater<F, P>
 {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         base_token_address: Address,
         zk_chain_address: Address,
@@ -112,6 +114,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_source: ExternalPriceSource,
         external_price_api_client_config: ExternalPriceApiClientConfig,
+        token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
     ) -> anyhow::Result<Self> {
         let token_multiplier_setter_address =
             if let Some(pk) = &base_token_adjuster_config.token_multiplier_setter_pk {
@@ -212,6 +215,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             chain_admin_contract,
             token_multiplier_setter_address,
             zk_chain_address,
+            token_price_sender,
         })
     }
 
@@ -246,8 +250,14 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         }
 
         let base_token_ratio = token_prices.get(&self.base_token).unwrap();
-        let _sl_token_ratio = token_prices.get(&self.sl_token).unwrap();
+        let sl_token_ratio = token_prices.get(&self.sl_token).unwrap();
         let eth_token_ratio = token_prices.get(&APIToken::ETH).unwrap();
+
+        self.token_price_sender
+            .send_replace(Some(TokenPricesForFees {
+                base_token_usd_price: base_token_ratio.clone(),
+                sl_token_usd_price: sl_token_ratio.clone(),
+            }));
 
         let eth_to_base_price = &eth_token_ratio.ratio / &base_token_ratio.ratio;
         self.maybe_update_l1_ratio(eth_to_base_price).await?;
@@ -255,7 +265,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         Ok(())
     }
 
-    async fn retry_fetch_ratio(&self, token: APIToken) -> anyhow::Result<BaseTokenApiRatio> {
+    async fn retry_fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio> {
         let max_retries = self.config.price_fetching_max_attempts;
         let mut last_error = None;
 

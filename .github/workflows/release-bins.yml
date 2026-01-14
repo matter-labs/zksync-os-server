@@ -23,9 +23,9 @@ env:
   ZKSYNC_OS_SERVER_BIN: 'zksync-os-server'
   RELEASE_PROFILE: 'maxperf'
   SERVER_LOGFILE: zksync-os-server.log.txt
-  FOUNDRY_VERSION: 'v1.3.4'
-  L1_STATE_JSON: 'local-chains/v30/zkos-l1-state.json'
-  GENESIS_JSON: 'local-chains/v30/genesis.json'
+  FOUNDRY_VERSION: 'v1.5.1'
+  L1_STATE_JSON: 'local-chains/v30.2/default/zkos-l1-state.json'
+  GENESIS_JSON: 'local-chains/v30.2/default/genesis.json'
 
 defaults:
   run:

@@ -4,13 +4,13 @@ use num::{BigInt, BigUint};
 
 /// Struct to represent API response containing denominator, numerator, and timestamp.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BaseTokenApiRatio {
+pub struct TokenApiRatio {
     pub ratio: Ratio<BigUint>,
     // Either the timestamp of the quote or the timestamp of the request.
     pub timestamp: DateTime<Utc>,
 }
 
-impl BaseTokenApiRatio {
+impl TokenApiRatio {
     pub fn from_f64_decimals_and_timestamp(
         value: f64,
         decimals: u8,
@@ -38,4 +38,10 @@ impl BaseTokenApiRatio {
             timestamp: self.timestamp,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenPricesForFees {
+    pub base_token_usd_price: TokenApiRatio,
+    pub sl_token_usd_price: TokenApiRatio,
 }

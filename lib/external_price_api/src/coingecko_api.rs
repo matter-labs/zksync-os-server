@@ -7,7 +7,7 @@ use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
-use zksync_os_types::BaseTokenApiRatio;
+use zksync_os_types::TokenApiRatio;
 
 #[derive(Debug)]
 pub struct CoinGeckoPriceAPIClient {
@@ -55,7 +55,7 @@ impl CoinGeckoPriceAPIClient {
 
 #[async_trait]
 impl PriceApiClient for CoinGeckoPriceAPIClient {
-    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<BaseTokenApiRatio> {
+    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio> {
         let (path, token_id) = match &token {
             APIToken::ETH => (
                 format!("/api/v3/simple/price?ids={ETH_ID}&vs_currencies=usd"),
@@ -88,7 +88,7 @@ impl PriceApiClient for CoinGeckoPriceAPIClient {
             .get_price(&token_id, &"usd".to_owned())
             .with_context(|| format!("Price not found for token: {token_id}"))?;
 
-        Ok(BaseTokenApiRatio::from_f64_decimals_and_timestamp(
+        Ok(TokenApiRatio::from_f64_decimals_and_timestamp(
             price_f64, decimals, None,
         ))
     }

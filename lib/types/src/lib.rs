@@ -1,3 +1,6 @@
+mod config_format;
+pub use config_format::ConfigFormat;
+
 mod transaction_acceptance_state;
 pub use transaction_acceptance_state::{NotAcceptingReason, TransactionAcceptanceState};
 
@@ -27,5 +30,5 @@ pub use protocol::{
     ProvingVersion, ProvingVersionError,
 };
 
-mod base_token_price;
-pub use base_token_price::BaseTokenApiRatio;
+mod token_price;
+pub use token_price::{TokenApiRatio, TokenPricesForFees};
