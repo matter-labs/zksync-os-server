@@ -69,9 +69,12 @@ for entry in "${CONFIGS[@]}"; do
   SERVER_PID=$!
 
   RPC_PORT=$(yq -r '
-    (.rpc.address // "")
+    (
+      (.rpc.address // "")
+      | select(length > 0)
+      // "0.0.0.0:3050"
+    )
     | split(":") | .[-1]
-    | select(length > 0) // "3050"
   ' "${CUR_CONFIG}")
 
   echo "Waiting for server on port ${RPC_PORT}..."
