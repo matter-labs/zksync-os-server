@@ -8,7 +8,7 @@ use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL
 fn load_default_config(version: &str) -> Config {
     let workspace_dir =
         std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    let config_path = format!("{workspace_dir}/local-chains/{version}/default/config.json");
+    let config_path = format!("{workspace_dir}/local-chains/{version}/default/config.yaml");
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
     let config_contents =

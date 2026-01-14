@@ -10,15 +10,15 @@ local-chains/
 ├── v30.2/                       # Protocol version v30.2
 │   ├── default/                 # Default (single-chain) setup
 │   │   ├── README.md            # Scenario-specific documentation
-│   │   ├── config.json          # Sequencer configuration
+│   │   ├── config.yaml          # Sequencer configuration
 │   │   ├── genesis.json         # Genesis configuration
 │   │   ├── wallets.yaml         # Wallets configuration
 │   │   ├── contracts.yaml       # Contracts configuration
 │   │   └── zkos-l1-state.json   # L1 state for this scenario
 │   ├── multi_chain/             # Multi-chain scenario
 │   │   ├── README.md            # Scenario-specific documentation
-│   │   ├── chain_6565.json      # Configuration for chain with ID 6565
-│   │   ├── chain_6566.json      # Configuration for chain with ID 6566
+│   │   ├── chain_6565.yaml      # Configuration for chain with ID 6565
+│   │   ├── chain_6566.yaml      # Configuration for chain with ID 6566
 │   │   ├── wallets_6565.yaml    # Wallets for chain 6565
 │   │   ├── wallets_6566.yaml    # Wallets for chain 6566
 │   │   ├── contracts_6565.yaml  # Contracts for chain 6565
@@ -28,14 +28,14 @@ local-chains/
 └── v31.0/                       # Protocol version v31.0
     ├── default/                 # Default (single-chain) setup
     │   ├── README.md            # Scenario-specific documentation
-    │   ├── config.json          # Sequencer configuration
+    │   ├── config.yaml          # Sequencer configuration
     │   ├── genesis.json         # Genesis configuration
     │   ├── wallets.yaml         # Wallets configuration
     │   └── zkos-l1-state.json   # L1 state for this scenario
     ├── multi_chain/             # Multi-chain scenario
     │   ├── README.md            # Scenario-specific documentation
-    │   ├── chain_6565.json      # Configuration for chain with ID 6565
-    │   ├── chain_6566.json      # Configuration for chain with ID 6566
+    │   ├── chain_6565.yaml      # Configuration for chain with ID 6565
+    │   ├── chain_6566.yaml      # Configuration for chain with ID 6566
     │   ├── wallets_6565.yaml    # Wallets for chain 6565
     │   ├── wallets_6566.yaml    # Wallets for chain 6566
     │   ├── contracts_6565.yaml  # Contracts for chain 6565
@@ -54,7 +54,7 @@ L1 state snapshot for Anvil. Contains the deployed L1 contracts state that can b
 anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545
 ```
 
-### `config.json`
+### `config.yaml`
 
 Node configuration file used to override the default values defined in the [config module](../node/bin/src/config).
 Commonly modified values include:
