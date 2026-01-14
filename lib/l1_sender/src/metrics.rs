@@ -1,10 +1,10 @@
+use crate::commands::SendToL1;
 use alloy::primitives::utils::{format_ether, format_units};
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::rpc::types::TransactionReceipt;
 use anyhow::Context;
 use vise::{Buckets, EncodeLabelValue, Gauge, Histogram, LabeledFamily, Metrics};
 use zksync_os_observability::{GenericComponentState, StateLabel};
-use crate::commands::SendToL1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "seal_reason", rename_all = "snake_case")]
@@ -104,7 +104,7 @@ impl L1SenderMetrics {
     pub fn report_tx_receipt<Input: SendToL1>(
         &self,
         command: &Input,
-        receipt: TransactionReceipt
+        receipt: TransactionReceipt,
     ) -> anyhow::Result<()> {
         let l2_txs_count: usize = command
             .as_ref()
@@ -139,19 +139,27 @@ impl L1SenderMetrics {
             self.l1_transaction_fee_per_l2_tx_ether[&Input::NAME]
                 .observe(l1_transaction_fee_per_l2_tx.parse()?);
         }
-        self.effective_gas_price_gwei[&Input::NAME].set(Self::wei_to_gwei(receipt.effective_gas_price)?);
+        self.effective_gas_price_gwei[&Input::NAME]
+            .set(Self::wei_to_gwei(receipt.effective_gas_price)?);
         if let Some(blob_gas_price) = receipt.blob_gas_price {
-            self.effective_blob_gas_price_gwei.set(Self::wei_to_gwei(blob_gas_price)?);
+            self.effective_blob_gas_price_gwei
+                .set(Self::wei_to_gwei(blob_gas_price)?);
         }
         Ok(())
     }
-    pub fn report_l1_eip_1559_estimation(&self, eip1559_est: Eip1559Estimation) -> anyhow::Result<()> {
-        self.estimated_max_fee_per_gas_gwei.set(Self::wei_to_gwei(eip1559_est.max_fee_per_gas)?);
-        self.estimated_max_priority_fee_per_gas_gwei.set(Self::wei_to_gwei(eip1559_est.max_priority_fee_per_gas)?);
+    pub fn report_l1_eip_1559_estimation(
+        &self,
+        eip1559_est: Eip1559Estimation,
+    ) -> anyhow::Result<()> {
+        self.estimated_max_fee_per_gas_gwei
+            .set(Self::wei_to_gwei(eip1559_est.max_fee_per_gas)?);
+        self.estimated_max_priority_fee_per_gas_gwei
+            .set(Self::wei_to_gwei(eip1559_est.max_priority_fee_per_gas)?);
         Ok(())
     }
     pub fn report_blob_base_fee(&self, base_fee_wei: u128) -> anyhow::Result<()> {
-        self.blob_base_fee_gwei.set(Self::wei_to_gwei(base_fee_wei)?);
+        self.blob_base_fee_gwei
+            .set(Self::wei_to_gwei(base_fee_wei)?);
         Ok(())
     }
 
