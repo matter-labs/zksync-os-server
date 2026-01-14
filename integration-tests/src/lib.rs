@@ -509,7 +509,7 @@ impl MultiChainTesterBuilder {
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
                 .arg(get_l1_state_path(ChainLayout::MultiChain {
-                    protocol_version: PROTOCOL_VERSION,
+                    protocol_version: NEXT_PROTOCOL_VERSION,
                     chain_index: 0,
                 }))
         })?;
@@ -538,7 +538,7 @@ impl MultiChainTesterBuilder {
         for i in 0..num_chains {
             // Load the chain config to get the chain ID, operator keys, and contract addresses
             let chain_config = load_chain_config(ChainLayout::MultiChain {
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version: NEXT_PROTOCOL_VERSION,
                 chain_index: i,
             });
             let chain_id = chain_config

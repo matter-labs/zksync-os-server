@@ -75,7 +75,7 @@ impl<'a> ChainLayout<'a> {
 /// Load a `Config` from either default or multi-chain layout.
 pub fn load_chain_config(layout: ChainLayout<'_>) -> Config {
     let mut config = load_config_from_path(&layout.config_path());
-    config.genesis_config.genesis_input_path = Some(layout.genesis_input_path().into());
+    config.genesis_config.genesis_input_path = Some(layout.genesis_input_path());
     config
 }
 
