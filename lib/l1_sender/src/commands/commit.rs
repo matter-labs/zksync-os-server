@@ -93,8 +93,8 @@ impl CommitCommand {
                 // Prefixed by current encoding version as expected by protocol
                 [[V29_ENCODING_VERSION].to_vec(), encoded_data].concat()
             }
-            // 32 needed for upgrade integration test
-            30..=32 => {
+            // 31 needed for upgrade integration test
+            30..=31 => {
                 const V30_ENCODING_VERSION: u8 = 3;
 
                 let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(

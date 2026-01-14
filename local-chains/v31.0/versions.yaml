@@ -1,0 +1,19 @@
+general:
+  protocol_version: "v31.0"
+  verification_key: "TBD"
+
+era-contracts:
+  # TODO: remove branch and put tag and sha when the release is done
+  branch: "zksync-os-with-kl-medium-interop"
+  # tag: "TBD"
+  sha: "1ce59003a4796aa59a8a1ae69c7bf6d2dbb2a8f7"
+
+zkstack-cli:
+  # TODO: remove branch and put tag and sha when the release is done
+  branch: "kl/medium-interop-support"
+  # tag: "TBD"
+  sha: "98af441ec0bd850656630b1739ff8a7c93da1752"
+
+zksync-os-workflows:
+  tag: "TBD"
+  sha: "TBD"

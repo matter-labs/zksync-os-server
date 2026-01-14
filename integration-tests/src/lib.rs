@@ -1,9 +1,9 @@
-use crate::config::{get_default_config, get_default_l1_state_path};
+use crate::config::{get_default_config_v30, get_default_config_v31, get_default_l1_state_path};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
 use crate::utils::LockedPort;
-use alloy::network::{EthereumWallet, TxSigner};
+use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
@@ -19,6 +19,7 @@ use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
     ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
+use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
 
 pub mod assert_traits;
@@ -89,6 +90,10 @@ impl Tester {
         Self::builder().build().await
     }
 
+    pub fn l2_rpc_url(&self) -> &str {
+        &self.l2_rpc_address
+    }
+
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
         // Due to type inference issue, we need to specify None type here and this whole function if a de-facto helper for this
         self.launch_external_node_inner(None::<fn(&mut Config)>)
@@ -123,6 +128,7 @@ impl Tester {
             false,
             Some(overrides_fun),
             Some(self.main_node_tempdir.clone()),
+            PROTOCOL_VERSION,
         )
         .await
     }
@@ -134,6 +140,7 @@ impl Tester {
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
+        protocol_version: &str,
     ) -> anyhow::Result<Self> {
         (|| async {
             // Wait for L1 node to get up and be able to respond.
@@ -230,7 +237,11 @@ impl Tester {
             address: status_address,
         };
 
-        let default_config = get_default_config();
+        let default_config = if protocol_version == NEXT_PROTOCOL_VERSION {
+            get_default_config_v31()
+        } else {
+            get_default_config_v30()
+        };
         let mut config = Config {
             general_config,
             genesis_config: default_config.genesis_config.clone(),
@@ -311,25 +322,29 @@ impl Tester {
         })
         .await?;
 
-        // Wait for all L1 priority transaction to get executed and for our L2 account to become rich
-        (|| async {
-            let balance = l2_provider
-                .get_balance(l2_wallet.default_signer().address())
-                .await?;
-            if balance == U256::ZERO {
-                anyhow::bail!("L2 rich wallet balance is zero")
-            }
-            Ok(())
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_secs(1))
-                .with_max_times(10),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(%err, ?dur, "waiting for L2 account to become rich");
-        })
-        .await?;
+        // Note: Balance check is disabled for v31.0 genesis which doesn't pre-fund L2 wallets.
+        // Tests using v31.0 should fund wallets themselves via L1 deposits if needed.
+        if protocol_version != NEXT_PROTOCOL_VERSION {
+            // Wait for all L1 priority transaction to get executed and for our L2 account to become rich
+            (|| async {
+                let balance = l2_provider
+                    .get_balance(l2_wallet.default_signer().address())
+                    .await?;
+                if balance == U256::ZERO {
+                    anyhow::bail!("L2 rich wallet balance is zero")
+                }
+                Ok(())
+            })
+            .retry(
+                ConstantBuilder::default()
+                    .with_delay(Duration::from_secs(1))
+                    .with_max_times(10),
+            )
+            .notify(|err: &anyhow::Error, dur: Duration| {
+                tracing::info!(%err, ?dur, "waiting for L2 account to become rich");
+            })
+            .await?;
+        }
 
         let l2_zk_provider = ProviderBuilder::new_with_network::<Zksync>()
             .wallet(l2_wallet.clone())
@@ -415,6 +430,7 @@ impl TesterBuilder {
             self.enable_prover,
             Some(overrides_fun),
             None,
+            PROTOCOL_VERSION,
         )
         .await
     }
@@ -423,7 +439,141 @@ impl TesterBuilder {
 impl Drop for Tester {
     fn drop(&mut self) {
         // Send stop signal to main node
-        self.stop_sender.send(true).unwrap();
+        // Ignore error if receiver is already dropped (service already stopped)
+        let _ = self.stop_sender.send(true);
         self.main_task.abort();
+    }
+}
+
+/// Multi-chain test environment with multiple L2 chains sharing the same L1
+pub struct MultiChainTester {
+    pub l1_provider: EthDynProvider,
+    pub l1_wallet: EthereumWallet,
+    pub chains: Vec<Tester>,
+}
+
+impl MultiChainTester {
+    pub fn builder() -> MultiChainTesterBuilder {
+        MultiChainTesterBuilder::default()
+    }
+
+    pub async fn setup(num_chains: usize) -> anyhow::Result<Self> {
+        Self::builder().num_chains(num_chains).build().await
+    }
+
+    /// Get a specific chain by index
+    pub fn chain(&self, index: usize) -> &Tester {
+        &self.chains[index]
+    }
+
+    /// Get chain A (first chain)
+    pub fn chain_a(&self) -> &Tester {
+        self.chain(0)
+    }
+
+    /// Get chain B (second chain)
+    pub fn chain_b(&self) -> &Tester {
+        self.chain(1)
+    }
+}
+
+#[derive(Default)]
+pub struct MultiChainTesterBuilder {
+    num_chains: Option<usize>,
+}
+
+impl MultiChainTesterBuilder {
+    pub fn num_chains(mut self, num_chains: usize) -> Self {
+        self.num_chains = Some(num_chains);
+        self
+    }
+
+    pub async fn build(self) -> anyhow::Result<MultiChainTester> {
+        let num_chains = self.num_chains.unwrap_or(2);
+
+        assert!(
+            num_chains >= 2,
+            "MultiChainTester requires at least 2 chains"
+        );
+
+        // Set up shared L1 with multiple-chains state
+        let l1_locked_port = LockedPort::acquire_unused().await?;
+        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
+
+        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
+            anvil
+                .port(l1_locked_port.port)
+                .chain_id(L1_CHAIN_ID)
+                .arg("--load-state")
+                .arg(config::get_multiple_chains_l1_state_path())
+        })?;
+
+        let l1_wallet = l1_provider.wallet().clone();
+
+        // Wait for L1 to be ready
+        (|| async {
+            l1_provider.clone().get_chain_id().await?;
+            Ok(())
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(%err, ?dur, "retrying connection to L1 node");
+        })
+        .await?;
+
+        tracing::info!("L1 chain started on {}", l1_address);
+
+        // Launch L2 chains using chain configurations from config files
+        let mut chains = Vec::new();
+        for i in 0..num_chains {
+            // Load the chain config to get the chain ID, operator keys, and contract addresses
+            let chain_config = config::get_chain_config(i);
+            let chain_id = chain_config
+                .genesis_config
+                .chain_id
+                .expect("Chain ID must be set in chain config");
+            let l1_sender_config = chain_config.l1_sender_config.clone();
+            let bridgehub_address = chain_config.genesis_config.bridgehub_address;
+            let bytecode_supplier_address = chain_config.genesis_config.bytecode_supplier_address;
+
+            let chain_override = move |config: &mut Config| {
+                config.genesis_config.chain_id = Some(chain_id);
+                config.genesis_config.bridgehub_address = bridgehub_address;
+                config.genesis_config.bytecode_supplier_address = bytecode_supplier_address;
+                config.l1_sender_config = l1_sender_config.clone();
+                // Use short block time for faster tests
+                config.sequencer_config.block_time = Duration::from_millis(500);
+            };
+
+            let tester = Tester::launch_node(
+                l1_address.clone(),
+                EthDynProvider::new(l1_provider.clone()),
+                l1_wallet.clone(),
+                false, // disable prover for faster tests
+                Some(chain_override),
+                None,
+                NEXT_PROTOCOL_VERSION,
+            )
+            .await?;
+
+            tracing::info!(
+                "L2 chain {} started with chain_id {} on {}",
+                i,
+                chain_id,
+                tester.l2_rpc_address
+            );
+
+            chains.push(tester);
+        }
+
+        Ok(MultiChainTester {
+            l1_provider: EthDynProvider::new(l1_provider),
+            l1_wallet,
+            chains,
+        })
     }
 }
