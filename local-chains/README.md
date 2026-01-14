@@ -1,27 +1,47 @@
-
-
 # Local Chains
 
-This directory contains configuration files for running ZKsync OS nodes locally, organized by protocol version.
+This directory contains configuration files for running ZKsync OS nodes locally.
 
 ## Directory Structure
 
 ```
 local-chains/
-├── v30/                        # Current protocol version
-│   ├── zkos-l1-state.json      # Base L1 state for this version
-│   ├── genesis.json            # Base genesis configuration
-│   ├── config.json             # Base node configuration
-│   └── multiple-chains/        # Scenario-specific subfolder
-│       ├── zkos-l1-state.json  # Shared L1 state for multiple chains
-│       ├── genesis.json        # Shared genesis configuration
-│       ├── chain1.json         # Configuration for chain #1
-│       ├── chain2.json         # Configuration for chain #2
-│       └── chain3.json         # Configuration for chain #3
-└── v31/                        # Next protocol version
-    ├── zkos-l1-state.json      # Base L1 state for this version
-    ├── genesis.json            # Base genesis configuration
-    └── config.json             # Base node configuration
+├── README.md                    # Top-level documentation for local chain configurations
+├── v30.2/                       # Protocol version v30.2
+│   ├── default/                 # Default (single-chain) setup
+│   │   ├── README.md            # Scenario-specific documentation
+│   │   ├── config.json          # Sequencer configuration
+│   │   ├── genesis.json         # Genesis configuration
+│   │   ├── wallets.yaml         # Wallets configuration
+│   │   ├── contracts.yaml       # Contracts configuration
+│   │   └── zkos-l1-state.json   # L1 state for this scenario
+│   ├── multi_chain/             # Multi-chain scenario
+│   │   ├── README.md            # Scenario-specific documentation
+│   │   ├── chain_6565.json      # Configuration for chain with ID 6565
+│   │   ├── chain_6566.json      # Configuration for chain with ID 6566
+│   │   ├── wallets_6565.yaml    # Wallets for chain 6565
+│   │   ├── wallets_6566.yaml    # Wallets for chain 6566
+│   │   ├── contracts_6565.yaml  # Contracts for chain 6565
+│   │   ├── contracts_6566.yaml  # Contracts for chain 6566
+│   │   └── zkos-l1-state.json   # Shared L1 state for the multi-chain scenario
+│   └── versions.yaml            # Version metadata for protocol v30.2
+└── v31.0/                       # Protocol version v31.0
+    ├── default/                 # Default (single-chain) setup
+    │   ├── README.md            # Scenario-specific documentation
+    │   ├── config.json          # Sequencer configuration
+    │   ├── genesis.json         # Genesis configuration
+    │   ├── wallets.yaml         # Wallets configuration
+    │   └── zkos-l1-state.json   # L1 state for this scenario
+    ├── multi_chain/             # Multi-chain scenario
+    │   ├── README.md            # Scenario-specific documentation
+    │   ├── chain_6565.json      # Configuration for chain with ID 6565
+    │   ├── chain_6566.json      # Configuration for chain with ID 6566
+    │   ├── wallets_6565.yaml    # Wallets for chain 6565
+    │   ├── wallets_6566.yaml    # Wallets for chain 6566
+    │   ├── contracts_6565.yaml  # Contracts for chain 6565
+    │   ├── contracts_6566.yaml  # Contracts for chain 6566
+    │   └── zkos-l1-state.json   # Shared L1 state for the multi-chain scenario
+    └── versions.yaml            # Version metadata for protocol v31.0
 ```
 
 ## Configuration Files
@@ -31,12 +51,13 @@ local-chains/
 L1 state snapshot for Anvil. Contains the deployed L1 contracts state that can be loaded with:
 
 ```bash
-anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
+anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545
 ```
 
 ### `config.json`
 
-Node configuration file used to override the default values defined in `node/sequencer/config.rs`. Commonly modified values include:
+Node configuration file used to override the default values defined in the [config module](../node/bin/src/config).
+Commonly modified values include:
 
 - `genesis.chain_id` — Chain ID of the chain node operates on
 - `genesis.bridgehub_address` — Address of the Bridgehub contract on L1
@@ -62,43 +83,20 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 ### Running a Single Chain
 
-1. Start Anvil with the L1 state:
-   ```bash
-   anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545
-   ```
-
-2. Run the ZKsync OS server:
-   ```bash
-   cargo run --release
-   ```
+Follow the instructions in the [v30.2/single_chain/README.md](./v30.2/default/README.md).
 
 ### Running Multiple Chains
 
-The `multiple-chains/` subfolder contains configurations for running multiple chain instances against a shared L1 state.
+Follow the instructions in the [v30.2/multi_chain/README.md](./v30.2/multi_chain/README.md).
 
-1. Start Anvil with the shared L1 state:
-   ```bash
-   anvil --load-state ./local-chains/v30/multiple-chains/zkos-l1-state.json --port 8545
-   ```
+## Adding a new protocol version
 
-2. Run each chain instance in separate terminals:
-   ```bash
-   # Terminal 1
-   cargo run -- --config ./local-chains/v30/multiple-chains/chain1.json
-   
-   # Terminal 2
-   cargo run -- --config ./local-chains/v30/multiple-chains/chain2.json
-   
-   # Terminal 3
-   cargo run -- --config ./local-chains/v30/multiple-chains/chain3.json
-   ```
-
-## Adding a New Protocol Version
-
-When a new protocol version is released:
-
-1. Create a new directory (e.g., `v31/`)
-2. Generate new L1 state with updated contracts
-3. Create appropriate `genesis.json` and `config.json` files
-4. Optionally add scenario-specific subfolders (e.g., `multiple-chains/`)
-5. Add a README.md with general information and the era-contracts branch used. Feel free to check existing files for the template.
+1. Create a new directory (e.g., `v31.1/`)
+2. Use [upgrade scripts](https://github.com/matter-labs/zksync-os-workflows) to regenerate single and multi-chain configurations
+3. Optionally add new scenario-specific subfolders if required
+4. Update [protocol upgrade tests](../integration-tests/src/upgrade) to support the update to the new version
+5. When upgrade is fully finalized, make sure:
+   * The new default config in [main.rs](../node/bin/src/main.rs) is updated to point to the new version
+   * `genesis.json` path in the [Dockerfile](../Dockerfile) is updated to point to the new version
+   * `CURRENT_PROTOCOL_VERSION` constant in [integration tests](../integration-tests/src/config.rs) is updated to the new version.
+   * [`test-configs.sh`](../.github/scripts/test-configs.sh) script is updated to properly test the new version.

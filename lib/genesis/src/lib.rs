@@ -19,7 +19,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion};
+use zksync_os_types::{ConfigFormat, L1UpgradeEnvelope, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisInput {
@@ -58,7 +58,15 @@ pub struct GenesisInput {
 impl GenesisInput {
     pub fn load_from_file(path: &Path) -> anyhow::Result<Self> {
         let file = std::fs::File::open(path).context("Failed to open genesis input file")?;
-        serde_json::from_reader(file).context("Failed to parse genesis input file")
+
+        match ConfigFormat::from_path(path) {
+            ConfigFormat::Yaml => {
+                serde_yaml::from_reader(file).context("Failed to parse YAML genesis input file")
+            }
+            ConfigFormat::Json => {
+                serde_json::from_reader(file).context("Failed to parse JSON genesis input file")
+            }
+        }
     }
 }
 

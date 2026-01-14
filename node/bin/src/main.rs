@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use smart_config::value::ExposeSecret;
-use smart_config::{ConfigRepository, ConfigSources, Environment, Json};
+use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::signal::unix::{SignalKind, signal};
@@ -9,20 +9,19 @@ use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
+use zksync_os_server::config::{
+    BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
+    ExternalPriceApiClientConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig,
+    L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+};
+use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
-use zksync_os_server::{
-    config::{
-        BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
-        ExternalPriceApiClientConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
-        L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
-        ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
-        StateBackendConfig, StatusServerConfig, TxValidatorConfig,
-    },
-    config_constants::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION},
-};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
+use zksync_os_types::ConfigFormat;
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -35,10 +34,10 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Path to a JSON config file. If not specified, default config will attempted to be loaded to fill in the config
+    /// Path to a JSON or YAML config file. If not specified, default config will attempted to be loaded to fill in the config
     /// values for local setup. If default config is missing, no configs will be loaded, and they must be explicitly set
     /// via other configuration means (e.g. environment variables). Env variables override config settings from the file
-    /// if both are provided.
+    /// if both are provided. The file format is detected based on the file extension (.json, .yaml, or .yml).
     #[arg(long)]
     config: Option<String>,
 
@@ -49,17 +48,32 @@ struct Cli {
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
     // Process the config file if provided or if default exists
     let config_path: Option<String> = config_path.or_else(|| {
-        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/config.json");
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.json");
         Path::new(&default_path).exists().then_some(default_path)
     });
 
     if let Some(config_path) = &config_path {
         let config_contents =
             fs::read_to_string(config_path).expect("Failed to read config file from provided path");
-        let config_json: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&config_contents)
-                .expect("Failed to parse config file from provided path");
-        config_sources.push(Json::new(config_path, config_json));
+
+        // Detect file format based on extension
+        let path = Path::new(config_path);
+        match ConfigFormat::from_path(path) {
+            ConfigFormat::Yaml => {
+                let config_yaml: serde_yaml::Mapping = serde_yaml::from_str(&config_contents)
+                    .expect("Failed to parse YAML config file from provided path");
+                config_sources.push(
+                    Yaml::new(config_path, config_yaml)
+                        .expect("Failed to create YAML config source"),
+                );
+            }
+            ConfigFormat::Json => {
+                let config_json: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_str(&config_contents)
+                        .expect("Failed to parse JSON config file from provided path");
+                config_sources.push(Json::new(config_path, config_json));
+            }
+        }
     }
 }
 
@@ -301,7 +315,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse batch verification config");
 
-    let base_token_updater_config = repo
+    let base_token_price_updater_config = repo
         .single::<BaseTokenPriceUpdaterConfig>()
         .expect("Failed to load base token price updater config")
         .parse()
@@ -359,7 +373,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
-        base_token_price_updater_config: base_token_updater_config,
+        base_token_price_updater_config,
         external_price_api_client_config,
     }
 }

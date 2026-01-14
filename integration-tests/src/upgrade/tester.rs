@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
-use crate::config::get_default_config;
+use crate::config::get_default_config_v30;
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use alloy::network::TransactionBuilder;
@@ -29,11 +29,6 @@ pub struct UpgradeTester {
     pub bridgehub: interfaces::Bridgehub::BridgehubInstance<EthDynProvider>,
     // Bridgehub owner address
     pub bridgehub_owner: Address,
-    // ChainAssetHandler contract
-    pub chain_asset_handler:
-        interfaces::ChainAssetHandler::ChainAssetHandlerInstance<EthDynProvider>,
-    // ChainAssetHandler owner address
-    pub chain_asset_handler_owner: Address,
     // CTM contract
     pub ctm: interfaces::ChainTypeManager::ChainTypeManagerInstance<EthDynProvider>,
     // CTM owner address
@@ -75,7 +70,7 @@ impl UpgradeTester {
         tracing::info!("DefaultUpgrade contract deployed");
 
         // Send pause migration to Bridgehub
-        self.pause_chain_asset_handler_migrations().await?;
+        self.pause_bridgehub_migrations().await?;
         tracing::info!("Bridgehub migrations are paused");
 
         // CTM upgrade, `setNewVersionUpgrade` call;
@@ -156,7 +151,7 @@ impl UpgradeTester {
 
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
-        let default_config: &zksync_os_server::config::Config = get_default_config();
+        let default_config: &zksync_os_server::config::Config = get_default_config_v30();
         let chain_id = default_config
             .genesis_config
             .chain_id
@@ -164,10 +159,6 @@ impl UpgradeTester {
 
         let bridgehub = tester.l2_zk_provider.get_bridgehub_contract().await?;
         let bridgehub = interfaces::Bridgehub::new(bridgehub, tester.l1_provider.clone());
-        let chain_asset_handler = bridgehub.chainAssetHandler().call().await?;
-        let chain_asset_handler =
-            interfaces::ChainAssetHandler::new(chain_asset_handler, tester.l1_provider.clone());
-        let chain_asset_handler_owner = chain_asset_handler.owner().call().await?;
         let ctm = bridgehub
             .chainTypeManager(U256::from(chain_id))
             .call()
@@ -221,8 +212,6 @@ impl UpgradeTester {
             l1_chain_admin_owner,
             bytecode_supplier,
             protocol_version,
-            chain_asset_handler,
-            chain_asset_handler_owner,
         })
     }
 
@@ -303,9 +292,9 @@ impl UpgradeTester {
         Ok(())
     }
 
-    pub async fn pause_chain_asset_handler_migrations(&self) -> anyhow::Result<()> {
+    pub async fn pause_bridgehub_migrations(&self) -> anyhow::Result<()> {
         let pause_migration_tx = self
-            .chain_asset_handler
+            .bridgehub
             .pauseMigration()
             .into_transaction_request()
             .with_from(self.bridgehub_owner);

@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Basic Commands
 - **Build**: `cargo build` or `cargo build --release`
-- **Run locally**: `cargo run` (requires `anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545` running first)
+- **Run locally**: `cargo run` (requires `anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545` running first)
 - **Format**: `cargo fmt --all -- --check`
 - **Lint**: `cargo clippy --all-targets --all-features --workspace --exclude zksync_os_integration_tests -- -D warnings`
 - **Unit tests**: `cargo nextest run --workspace --exclude zksync_os_integration_tests`
 - **Integration tests**: `cargo nextest run --profile ci -p zksync_os_integration_tests`
 
 ### Local Development Setup
-1. Start anvil: `anvil --load-state ./local-chains/v30/zkos-l1-state.json --port 8545`
+1. Start anvil: `anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545`
 2. Run server: `cargo run`
 3. To restart chain: `rm -rf db/*` then restart anvil
 
