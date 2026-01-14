@@ -41,6 +41,8 @@ zksync_os_internal_config.workspace = true
 # Unused for now but forces the crate to compile
 zksync_os_network.workspace = true
 zksync_os_metadata.workspace = true
+zksync_os_base_token_adjuster.workspace = true
+zksync_os_external_price_api.workspace = true
 
 zk_os_forward_system_0_1_0.workspace = true
 zk_ee_0_1_0.workspace = true

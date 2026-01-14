@@ -9,11 +9,15 @@
         "chain_id": 6565
     },
     "l1_sender": {
-        "operator_commit_pk": "0xee44f90761c63cba27d80594b214d9895a8c059613c51f40f250d05390485678",
-        "operator_prove_pk": "0xf339d672723b57c77c1e8bfa9d9dba21abeff460995c35f845d9c488fc541606",
-        "operator_execute_pk": "0xaf673da5733198775c4f5705de936a99b6777a1f44a4841c08fe39b877252d3e"
+        "operator_commit_sk": "0xee44f90761c63cba27d80594b214d9895a8c059613c51f40f250d05390485678",
+        "operator_prove_sk": "0xf339d672723b57c77c1e8bfa9d9dba21abeff460995c35f845d9c488fc541606",
+        "operator_execute_sk": "0xaf673da5733198775c4f5705de936a99b6777a1f44a4841c08fe39b877252d3e"
     },
     "rpc": {
         "address": "0.0.0.0:3050"
+    },
+    "external_price_api_client": {
+        "source": "Forced",
+        "forced_prices": {"0x0000000000000000000000000000000000000001": 3000}
     }
 }

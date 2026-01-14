@@ -20,7 +20,9 @@ pub mod zkstack_config;
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
-use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
+use crate::config::{
+    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -53,6 +55,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::BatchDaInputMode;
@@ -579,6 +582,37 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .map(|_| tracing::warn!("state.compact_periodically() unexpectedly exited"))
             .await;
     });
+
+    if config.sequencer_config.is_main_node() {
+        let mut base_token_price_updater = BaseTokenPriceUpdater::new(
+            l1_state
+                .diamond_proxy
+                .get_base_token_address()
+                .await
+                .expect("Failed to get base token address"),
+            *l1_state.diamond_proxy.address(),
+            l1_state
+                .diamond_proxy
+                .get_admin()
+                .await
+                .expect("Failed to get chain admin address"),
+            l1_provider.clone(),
+            base_token_price_updater_config(
+                &config.base_token_price_updater_config,
+                &config.l1_sender_config,
+            ),
+            config.external_price_api_client_config.clone().into(),
+        )
+        .await
+        .expect("Failed to initialize BaseTokenPriceUpdater");
+        let stop_receiver_ = stop_receiver.clone();
+        tasks.spawn(async move {
+            base_token_price_updater
+                .run(stop_receiver_)
+                .map(|_| tracing::warn!("base_token_price_updater.run() unexpectedly exited"))
+                .await;
+        });
+    }
 
     if config.sequencer_config.is_main_node() {
         // Main Node

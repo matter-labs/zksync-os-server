@@ -21,12 +21,11 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{PendingTransactionError, Provider, WalletProvider};
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
+use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Context;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use secrecy::{ExposeSecret, SecretString};
-use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
@@ -78,8 +77,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;
 
-    let operator_address =
-        register_operator::<_, Input>(&mut provider, config.operator_pk.clone()).await?;
+    let operator_address = register_operator::<_, Input>(&mut provider, config.operator_sk).await?;
     let mut cmd_buffer = Vec::with_capacity(config.command_limit);
 
     // Process all potential passthrough commands first
@@ -312,10 +310,9 @@ async fn register_operator<
     Input: SendToL1,
 >(
     provider: &mut P,
-    private_key: SecretString,
+    signing_key: SigningKey,
 ) -> anyhow::Result<Address> {
-    let signer = PrivateKeySigner::from_str(private_key.expose_secret())
-        .context("failed to parse operator private key")?;
+    let signer = PrivateKeySigner::from_signing_key(signing_key);
     let address = signer.address();
     provider.wallet_mut().register_signer(signer);
 

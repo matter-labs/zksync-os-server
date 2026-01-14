@@ -62,9 +62,9 @@ Commonly modified values include:
 - `genesis.chain_id` — Chain ID of the chain node operates on
 - `genesis.bridgehub_address` — Address of the Bridgehub contract on L1
 - `genesis.bytecode_supplier_address` — Address of the bytecode supplier contract
-- `l1_sender.operator_commit_pk` — Private key for committing batches
-- `l1_sender.operator_prove_pk` — Private key for proving batches
-- `l1_sender.operator_execute_pk` — Private key for executing batches
+- `l1_sender.operator_commit_sk` — Private key for committing batches
+- `l1_sender.operator_prove_sk` — Private key for proving batches
+- `l1_sender.operator_execute_sk` — Private key for executing batches
 
 ### `genesis.json`
 
