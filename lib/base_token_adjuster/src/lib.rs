@@ -7,13 +7,12 @@ use alloy::providers::fillers::{FillProvider, TxFiller};
 use alloy::providers::{Provider, WalletProvider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
+use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::Context;
 use num::rational::Ratio;
 use num::{BigUint, ToPrimitive};
-use secrecy::{ExposeSecret, SecretString};
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_contract_interface::{
@@ -48,7 +47,7 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Signing key to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_sk: Option<SecretString>,
+    pub token_multiplier_setter_sk: Option<SigningKey>,
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,
     /// Max priority fee per gas we are willing to spend (in wei).
@@ -72,10 +71,9 @@ pub struct BaseTokenPriceUpdater<
 
 async fn register_operator<P: Provider + WalletProvider<Wallet = EthereumWallet>>(
     provider: &mut P,
-    private_key: &SecretString,
+    signing_key: SigningKey,
 ) -> anyhow::Result<Address> {
-    let signer = PrivateKeySigner::from_str(private_key.expose_secret())
-        .context("failed to parse operator private key")?;
+    let signer = PrivateKeySigner::from_signing_key(signing_key);
     let address = signer.address();
     provider.wallet_mut().register_signer(signer);
 
@@ -103,12 +101,14 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,
     ) -> anyhow::Result<Self> {
-        let token_multiplier_setter_address =
-            if let Some(pk) = &base_token_adjuster_config.token_multiplier_setter_sk {
-                Some(register_operator(&mut l1_provider, pk).await?)
-            } else {
-                None
-            };
+        let token_multiplier_setter_address = if let Some(sk) = base_token_adjuster_config
+            .token_multiplier_setter_sk
+            .clone()
+        {
+            Some(register_operator(&mut l1_provider, sk).await?)
+        } else {
+            None
+        };
 
         let base_token_address = base_token_adjuster_config
             .base_token_addr_override

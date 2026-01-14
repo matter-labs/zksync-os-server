@@ -1,6 +1,8 @@
 pub use self::cli::ConfigArgs;
+use self::util::SigningKeyDeserializer;
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
+use alloy::signers::k256::ecdsa::SigningKey;
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -21,6 +23,7 @@ use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_types::PubdataMode;
 
 mod cli;
+mod util;
 
 /// Configuration for the sequencer node.
 /// Includes configurations of all subsystems.
@@ -416,18 +419,18 @@ pub struct RpcConfig {
 pub struct L1SenderConfig {
     /// Signing key to commit batches to L1
     /// Must be consistent with the operator key set on the contract (permissioned!)
-    #[config(alias = "operator_commit_pk")]
-    pub operator_commit_sk: SecretString,
+    #[config(alias = "operator_commit_pk", with = SigningKeyDeserializer)]
+    pub operator_commit_sk: SigningKey,
 
     /// Signing key to use to submit proofs to L1
     /// Can be arbitrary funded address - proof submission is permissionless.
-    #[config(alias = "operator_prove_pk")]
-    pub operator_prove_sk: SecretString,
+    #[config(alias = "operator_prove_pk", with = SigningKeyDeserializer)]
+    pub operator_prove_sk: SigningKey,
 
     /// Signing key to use to execute batches on L1
     /// Can be arbitrary funded address - execute submission is permissionless.
-    #[config(alias = "operator_execute_pk")]
-    pub operator_execute_sk: SecretString,
+    #[config(alias = "operator_execute_pk", with = SigningKeyDeserializer)]
+    pub operator_execute_sk: SigningKey,
 
     /// Max fee per gas we are willing to spend.
     #[config(default_t = 100 * EtherUnit::Gwei)]
@@ -782,11 +785,11 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_decimals_override: Option<u8>,
     /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
     pub gateway_base_token_addr_override: Option<Address>,
-    #[config(alias = "token_multiplier_setter_pk")]
+    #[config(alias = "token_multiplier_setter_pk", with = SigningKeyDeserializer)]
     /// Signing key to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    pub token_multiplier_setter_sk: Option<SecretString>,
+    pub token_multiplier_setter_sk: Option<SigningKey>,
 }
 
 /// Config to force configured token prices in USD.
@@ -874,7 +877,7 @@ impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
 impl L1SenderConfig {
     fn into_lib_l1_sender_config<Input>(
         self,
-        operator_sk: SecretString,
+        operator_sk: SigningKey,
     ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
         zksync_os_l1_sender::config::L1SenderConfig {
             operator_sk,
