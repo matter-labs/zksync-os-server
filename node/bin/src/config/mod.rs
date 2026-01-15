@@ -782,6 +782,9 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
     pub token_multiplier_setter_sk: Option<SigningKey>,
+    /// Predefined fallback prices for tokens in case external API fetching fails on startup.
+    #[config(default, with = Serde![*])]
+    pub fallback_prices: HashMap<Address, f64>,
 }
 
 /// Config to force configured token prices in USD.
@@ -1008,6 +1011,7 @@ pub fn base_token_price_updater_config(
         token_multiplier_setter_sk: c.token_multiplier_setter_sk.clone(),
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
+        fallback_prices: c.fallback_prices.clone(),
     }
 }
 

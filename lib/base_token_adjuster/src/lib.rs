@@ -52,6 +52,26 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub max_fee_per_gas_wei: u128,
     /// Max priority fee per gas we are willing to spend (in wei).
     pub max_priority_fee_per_gas_wei: u128,
+    /// Predefined fallback prices for tokens in case external API fetching fails on startup.
+    pub fallback_prices: HashMap<Address, f64>,
+}
+
+impl BaseTokenPriceUpdaterConfig {
+    pub fn fallback_price(&self, token: APIToken) -> Option<TokenApiRatio> {
+        let price_f64 = match token {
+            APIToken::ETH => self
+                .fallback_prices
+                .get(&Address::ZERO)
+                .or_else(|| self.fallback_prices.get(&Address::with_last_byte(0x01)))
+                .copied()?,
+            APIToken::ZK => self.fallback_prices.get(&ZK_L1_ADDRESS).copied()?,
+            APIToken::ERC20 { address, .. } => self.fallback_prices.get(&address).copied()?,
+        };
+        let decimals = token.decimals();
+        Some(TokenApiRatio::from_f64_decimals_and_timestamp(
+            price_f64, decimals, None,
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -227,6 +247,36 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
 
             if let Err(err) = self.loop_iteration().await {
                 tracing::warn!("Error in the `base_token_price_updater`'s loop iteration {err}");
+
+                // Token prices are required for fee calculation, so block production is blocked till
+                // `token_price_sender` is populated. In case first loop iteration fails we populate it
+                // with predefined config values if available.
+                if self.token_price_sender.borrow().is_none() {
+                    let base_token_ratio = self.config.fallback_price(self.base_token);
+                    let sl_token_ratio = self.config.fallback_price(self.sl_token);
+
+                    if let Some(base_token_usd_price) = base_token_ratio
+                        && let Some(sl_token_usd_price) = sl_token_ratio
+                    {
+                        tracing::warn!(
+                            ?base_token_usd_price,
+                            ?sl_token_usd_price,
+                            "Populating token prices for fees with fallback config values"
+                        );
+                        self.token_price_sender
+                            .send_replace(Some(TokenPricesForFees {
+                                base_token_usd_price,
+                                sl_token_usd_price,
+                            }));
+                    } else {
+                        tracing::error!(
+                            base_token = ?self.base_token,
+                            sl_token = ?self.sl_token,
+                            "Initial token price fetch iteration failed and no fallback prices are configured, \
+                                token prices for fees remain unset, blocking sequencer"
+                        );
+                    }
+                }
             }
         }
     }
