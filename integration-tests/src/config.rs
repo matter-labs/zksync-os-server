@@ -1,110 +1,130 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use smart_config::{ConfigRepository, ConfigSources, Json};
+use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use zksync_os_server::config::{Config, GenesisConfig};
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use zksync_os_types::ConfigFormat;
 
-fn load_default_config(version: &str) -> Config {
-    let workspace_dir =
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    let config_path = format!("{workspace_dir}/local-chains/{version}/default/config.json");
-    let config_schema = Config::schema();
-    let mut config_sources = ConfigSources::default();
-    let config_contents =
-        std::fs::read_to_string(&config_path).expect("Failed to read config file");
+/// Layout of local chain directories.
+#[derive(Debug, Clone, Copy)]
+pub enum ChainLayout<'a> {
+    /// local-chains/<version>/default/...
+    Default { protocol_version: &'a str },
+    /// local-chains/<version>/multi_chain/...
+    MultiChain {
+        protocol_version: &'a str,
+        chain_index: usize, // 0 -> 6565, 1 -> 6566, ...
+    },
+}
 
-    let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&config_contents).expect("Failed to parse config file");
-    config_sources.push(Json::new(&config_path, config_json));
+impl<'a> ChainLayout<'a> {
+    fn chain_id(self) -> Option<u64> {
+        match self {
+            ChainLayout::Default { .. } => None,
+            ChainLayout::MultiChain { chain_index, .. } => Some(6565u64 + chain_index as u64),
+        }
+    }
 
-    let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
-    let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    genesis_config.genesis_input_path =
-        Some(format!("{workspace_dir}/local-chains/{version}/default/genesis.json").into());
+    fn protocol_version(self) -> &'a str {
+        match self {
+            ChainLayout::Default { protocol_version } => protocol_version,
+            ChainLayout::MultiChain {
+                protocol_version, ..
+            } => protocol_version,
+        }
+    }
 
-    Config {
-        genesis_config,
-        l1_sender_config: config_repo.single().unwrap().parse().unwrap(),
-        general_config: Default::default(),
-        rpc_config: Default::default(),
-        mempool_config: Default::default(),
-        tx_validator_config: Default::default(),
-        sequencer_config: Default::default(),
-        l1_watcher_config: Default::default(),
-        batcher_config: Default::default(),
-        prover_input_generator_config: Default::default(),
-        prover_api_config: Default::default(),
-        status_server_config: Default::default(),
-        observability_config: Default::default(),
-        gas_adjuster_config: Default::default(),
-        batch_verification_config: Default::default(),
-        base_token_price_updater_config: config_repo.single().unwrap().parse().unwrap(),
-        external_price_api_client_config: config_repo.single().unwrap().parse().unwrap(),
+    fn dir(self) -> &'static str {
+        match self {
+            ChainLayout::Default { .. } => "default",
+            ChainLayout::MultiChain { .. } => "multi_chain",
+        }
+    }
+
+    fn base_dir(self) -> PathBuf {
+        workspace_dir()
+            .join("local-chains")
+            .join(self.protocol_version())
+            .join(self.dir())
+    }
+
+    fn config_path(self) -> PathBuf {
+        match self {
+            ChainLayout::Default { .. } => self.base_dir().join("config.yaml"),
+            ChainLayout::MultiChain { .. } => {
+                let chain_id = self.chain_id().expect("multi-chain always has chain_id");
+                self.base_dir().join(format!("chain_{chain_id}.yaml"))
+            }
+        }
+    }
+
+    fn l1_state_path(self) -> PathBuf {
+        self.base_dir().join("zkos-l1-state.json")
+    }
+
+    /// Genesis input is always taken from `<version>/default/genesis.json`
+    fn genesis_input_path(self) -> PathBuf {
+        workspace_dir()
+            .join("local-chains")
+            .join(self.protocol_version())
+            .join("default")
+            .join("genesis.json")
     }
 }
 
-static DEFAULT_CONFIG_V30: LazyLock<Config> =
-    LazyLock::new(|| load_default_config(PROTOCOL_VERSION));
-
-static DEFAULT_CONFIG_V31: LazyLock<Config> =
-    LazyLock::new(|| load_default_config(NEXT_PROTOCOL_VERSION));
-
-pub fn get_default_config_v30() -> &'static Config {
-    &DEFAULT_CONFIG_V30
+/// Load a `Config` from either default or multi-chain layout.
+pub fn load_chain_config(layout: ChainLayout<'_>) -> Config {
+    let mut config = load_config_from_path(&layout.config_path());
+    config.genesis_config.genesis_input_path = Some(layout.genesis_input_path());
+    config
 }
 
-pub fn get_default_config_v31() -> &'static Config {
-    &DEFAULT_CONFIG_V31
+/// Get L1 state path for either default or multi-chain layout.
+pub fn get_l1_state_path(layout: ChainLayout<'_>) -> String {
+    layout.l1_state_path().to_string_lossy().to_string()
 }
 
-pub fn get_default_l1_state_path() -> String {
-    let workspace_dir =
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    format!("{workspace_dir}/local-chains/{PROTOCOL_VERSION}/default/zkos-l1-state.json")
+/// Workspace directory path, taken from WORKSPACE_DIR environment variable.
+static WORKSPACE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    std::env::var("WORKSPACE_DIR")
+        .expect("WORKSPACE_DIR environment variable is not set")
+        .into()
+});
+
+/// Get the workspace directory path.
+fn workspace_dir() -> &'static Path {
+    WORKSPACE_DIR.as_path()
 }
 
-pub fn get_multiple_chains_l1_state_path() -> String {
-    let workspace_dir =
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    PathBuf::from(workspace_dir)
-        .join("local-chains")
-        .join(NEXT_PROTOCOL_VERSION)
-        .join("multi_chain")
-        .join("zkos-l1-state.json")
-        .to_string_lossy()
-        .to_string()
-}
-
-/// Load chain configuration from a specific chain config file in the multiple-chains directory.
-/// Returns the Config with the chain ID and other settings from the file.
-pub fn get_chain_config(chain_index: usize) -> Config {
-    let workspace_dir =
-        std::env::var("WORKSPACE_DIR").expect("WORKSPACE_DIR environment variable is not set");
-    // Map chain index to chain ID (0 -> 6565, 1 -> 6566, etc.)
-    let chain_id = 6565 + chain_index as u64;
-    let config_path = PathBuf::from(&workspace_dir)
-        .join("local-chains")
-        .join(NEXT_PROTOCOL_VERSION)
-        .join("multi_chain")
-        .join(format!("chain_{chain_id}.json"))
-        .to_string_lossy()
-        .to_string();
-
+/// Load config from the given path.
+fn load_config_from_path(config_path: &Path) -> Config {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
-    let config_contents = std::fs::read_to_string(&config_path)
-        .unwrap_or_else(|_| panic!("Failed to read config file: {config_path}"));
+    let config_contents = std::fs::read_to_string(config_path)
+        .unwrap_or_else(|e| panic!("Failed to read config file {}: {e}", config_path.display()));
+    let source_name = config_path.to_string_lossy();
 
-    let config_json: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&config_contents).expect("Failed to parse config file");
-    config_sources.push(Json::new(&config_path, config_json));
+    match ConfigFormat::from_path(config_path) {
+        ConfigFormat::Yaml => {
+            let config_yaml: serde_yaml::Mapping = serde_yaml::from_str(&config_contents)
+                .expect("Failed to parse YAML config file from provided path");
+
+            config_sources.push(
+                Yaml::new(source_name.as_ref(), config_yaml)
+                    .expect("Failed to create YAML config source"),
+            );
+        }
+        ConfigFormat::Json => {
+            let config_json: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&config_contents)
+                    .expect("Failed to parse JSON config file from provided path");
+            config_sources.push(Json::new(source_name.as_ref(), config_json));
+        }
+    }
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
-    let mut genesis_config: GenesisConfig = config_repo.single().unwrap().parse().unwrap();
-    genesis_config.genesis_input_path = Some(
-        format!("{workspace_dir}/local-chains/{NEXT_PROTOCOL_VERSION}/default/genesis.json").into(),
-    );
+    let single = config_repo.single().unwrap();
+    let genesis_config: GenesisConfig = single.parse().unwrap();
 
     Config {
         genesis_config,

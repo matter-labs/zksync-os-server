@@ -185,7 +185,7 @@ for i in {1..30}; do
 done
 
 # Determine which chain configs to use
-SINGLE_CONFIG="$CONFIG_DIR/config.json"
+SINGLE_CONFIG="$CONFIG_DIR/config.yaml"
 
 if [ -f "$SINGLE_CONFIG" ]; then
     # Single chain mode
@@ -214,11 +214,11 @@ if [ -f "$SINGLE_CONFIG" ]; then
     PIDS+=($CHAIN_PID)
     echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
 else
-    # Multiple chains mode - look for chain_<chainid>.json files
-    CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain_*.json 2>/dev/null | sort -V))
+    # Multiple chains mode - look for chain_<chainid>.yaml files
+    CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain_*.yaml 2>/dev/null | sort -V))
     
     if [ ${#CHAIN_CONFIGS[@]} -eq 0 ]; then
-        echo -e "${RED}Error: No config.json or chain_*.json files found in '$CONFIG_DIR'${NC}"
+        echo -e "${RED}Error: No config.yaml or chain_*.yaml files found in '$CONFIG_DIR'${NC}"
         exit 1
     fi
     
@@ -228,7 +228,7 @@ else
         echo -e "${GREEN}Starting chain with config: $config_file${NC}"
         if [ -n "$LOGS_DIR" ]; then
             # Extract config file name without extension for log file naming
-            CONFIG_NAME=$(basename "$config_file" .json)
+            CONFIG_NAME=$(basename "$config_file" .yaml)
             CHAIN_LOG_FILE="$LOGS_DIR/${CONFIG_NAME}-$LOG_TIMESTAMP.log"
             cargo run --release --manifest-path "$REPO_ROOT/Cargo.toml" -- --config "$config_file" > "$CHAIN_LOG_FILE" 2>&1 &
             echo -e "${GREEN}Chain logs: $CHAIN_LOG_FILE${NC}"

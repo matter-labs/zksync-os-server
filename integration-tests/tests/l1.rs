@@ -9,9 +9,11 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::config::get_default_config_v30;
+use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
 use zksync_os_integration_tests::provider::ZksyncApi;
+use zksync_os_server::config::Config;
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType,
 };
@@ -24,7 +26,9 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let alice_l1_initial_balance = tester.l1_provider.get_balance(alice).await?;
     let alice_l2_initial_balance = tester.l2_provider.get_balance(alice).await?;
 
-    let default_config: &zksync_os_server::config::Config = get_default_config_v30();
+    let default_config: Config = load_chain_config(ChainLayout::Default {
+        protocol_version: PROTOCOL_VERSION,
+    });
     let chain_id = default_config
         .genesis_config
         .chain_id

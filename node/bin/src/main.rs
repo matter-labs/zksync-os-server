@@ -47,7 +47,7 @@ struct Cli {
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
     // Process the config file if provided or if default exists
     let config_path: Option<String> = config_path.or_else(|| {
-        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.json");
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.yaml");
         Path::new(&default_path).exists().then_some(default_path)
     });
 

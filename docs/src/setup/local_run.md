@@ -60,7 +60,7 @@ cast send -r http://localhost:3050 0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0 --
 
 See `node/sequencer/config.rs` for config options and defaults. Use a JSON configuration file to override the defaults, e.g.:
 ```
-cargo run --release -- --config ./local-chains/v30.2/default/config.json
+cargo run --release -- --config ./local-chains/v30.2/default/config.yaml
 ```
 Explore the `local-chains` folder for additional chain configs grouped by protocol version. Detailed information is available in `local-chains/README.md`.
 

@@ -1,4 +1,4 @@
-use crate::config::{get_default_config_v30, get_default_config_v31, get_default_l1_state_path};
+use crate::config::{ChainLayout, get_l1_state_path, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
@@ -237,11 +237,8 @@ impl Tester {
             address: status_address,
         };
 
-        let default_config = if protocol_version == NEXT_PROTOCOL_VERSION {
-            get_default_config_v31()
-        } else {
-            get_default_config_v30()
-        };
+        let default_config = load_chain_config(ChainLayout::Default { protocol_version });
+
         let mut config = Config {
             general_config,
             genesis_config: default_config.genesis_config.clone(),
@@ -328,7 +325,7 @@ impl Tester {
 
         // Note: Balance check is disabled for v31.0 genesis which doesn't pre-fund L2 wallets.
         // Tests using v31.0 should fund wallets themselves via L1 deposits if needed.
-        if protocol_version != NEXT_PROTOCOL_VERSION {
+        if protocol_version == PROTOCOL_VERSION {
             // Wait for all L1 priority transaction to get executed and for our L2 account to become rich
             (|| async {
                 let balance = l2_provider
@@ -412,7 +409,9 @@ impl TesterBuilder {
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg(get_default_l1_state_path())
+                .arg(get_l1_state_path(ChainLayout::Default {
+                    protocol_version: PROTOCOL_VERSION,
+                }))
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
@@ -509,7 +508,10 @@ impl MultiChainTesterBuilder {
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg(config::get_multiple_chains_l1_state_path())
+                .arg(get_l1_state_path(ChainLayout::MultiChain {
+                    protocol_version: NEXT_PROTOCOL_VERSION,
+                    chain_index: 0,
+                }))
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
@@ -535,7 +537,10 @@ impl MultiChainTesterBuilder {
         let mut chains = Vec::new();
         for i in 0..num_chains {
             // Load the chain config to get the chain ID, operator keys, and contract addresses
-            let chain_config = config::get_chain_config(i);
+            let chain_config = load_chain_config(ChainLayout::MultiChain {
+                protocol_version: NEXT_PROTOCOL_VERSION,
+                chain_index: i,
+            });
             let chain_id = chain_config
                 .genesis_config
                 .chain_id
