@@ -24,6 +24,7 @@ impl CommittedBatchProvider {
         load_genesis_batch_info: impl AsyncFn() -> StoredBatchInfo,
     ) -> anyhow::Result<Self> {
         let mut inner = Inner::default();
+        // todo: this can take a while and should ideally happen in the background
         for batch_number in l1_state.last_executed_batch..=l1_state.last_committed_batch {
             if batch_number == 0 {
                 inner.batches.insert(
@@ -50,6 +51,10 @@ impl CommittedBatchProvider {
             )
             .await?
             .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
+            tracing::info!(
+                batch_number = discovered_batch.number(),
+                "discovered committed batch on startup"
+            );
             inner.batches.insert(batch_number, discovered_batch);
         }
 
