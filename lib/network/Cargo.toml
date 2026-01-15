@@ -14,6 +14,7 @@ categories.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types = { workspace = true, features = ["reth"] }
 zksync_os_metadata.workspace = true
+zksync_os_reth_compat.workspace = true
 
 zksync_os_interface.workspace = true
 
@@ -30,10 +31,14 @@ semver.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+secrecy.workspace = true
 
 reth-network.workspace = true
 reth-network-peers.workspace = true
+reth-net-nat.workspace = true
 reth-eth-wire.workspace = true
+reth-discv5.workspace = true
+reth-chainspec.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true

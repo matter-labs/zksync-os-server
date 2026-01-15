@@ -287,7 +287,7 @@ impl<P: AnyZksProtocolVersion, Replay: ReadReplay> Stream for ZksConnection<P, R
                 }
                 ZksMessage::BlockReplays(message) => {
                     for record in message.records {
-                        tracing::info!(
+                        tracing::debug!(
                             block_number = record.block_number(),
                             "received block replay"
                         );

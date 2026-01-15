@@ -75,9 +75,11 @@ use zksync_os_l1_watcher::{
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
+use zksync_os_network::service::NetworkService;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
+use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
@@ -104,6 +106,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
+    let mut tasks: JoinSet<()> = JoinSet::new();
+
     let role: &'static str = if config.sequencer_config.is_main_node() {
         "main_node"
     } else {
@@ -251,13 +255,39 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let state = State::new(&config.general_config, &genesis).await;
 
     tracing::info!("Initializing mempools");
+    let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
     let l2_mempool = zksync_os_mempool::in_memory(
-        state.clone(),
-        repositories.clone(),
-        chain_id,
+        zk_provider_factory.clone(),
         config.mempool_config.clone().into(),
         config.tx_validator_config.clone().into(),
     );
+
+    if config.network_config.enabled {
+        tracing::info!("Initializing p2p networking");
+        // Channel between NetworkService and Sequencer (not actually used by sequencer for now)
+        let (replay_sender, mut replays_for_sequencer) = tokio::sync::mpsc::unbounded_channel();
+
+        let network_service = NetworkService::new(
+            config.network_config.clone().into(),
+            config.sequencer_config.node_role(),
+            block_replay_storage.clone(),
+            zk_provider_factory,
+            replay_sender,
+        )
+        .await
+        .expect("failed to create network service");
+        network_service.run(&mut tasks, stop_receiver.clone());
+
+        // Consume replays to avoid channel from growing unbounded
+        tasks.spawn(async move {
+            while let Some(replay) = replays_for_sequencer.recv().await {
+                tracing::info!(
+                    block_number = replay.block_context.block_number,
+                    "received p2p replay record"
+                );
+            }
+        });
+    }
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
@@ -337,7 +367,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     tracing::info!("Initializing L1 Watchers");
-    let mut tasks: JoinSet<()> = JoinSet::new();
     tasks.spawn(
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),

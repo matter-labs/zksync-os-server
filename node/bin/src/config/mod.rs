@@ -11,16 +11,19 @@ use smart_config::{
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
+use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
+use zksync_os_network::{NodeRecord, SecretKey};
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
-use zksync_os_types::PubdataMode;
+use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
 mod util;
@@ -31,6 +34,7 @@ mod util;
 #[derive(Debug)]
 pub struct Config {
     pub general_config: GeneralConfig,
+    pub network_config: NetworkConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
     pub mempool_config: MempoolConfig,
@@ -55,6 +59,9 @@ impl Config {
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
+        schema
+            .insert(&NetworkConfig::DESCRIPTION, "network")
+            .expect("Failed to insert network config");
         schema
             .insert(&GenesisConfig::DESCRIPTION, "genesis")
             .expect("Failed to insert genesis config");
@@ -218,6 +225,39 @@ pub struct GeneralConfig {
     pub ephemeral: bool,
 }
 
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct NetworkConfig {
+    /// Whether devp2p-based networking should be enabled.
+    #[config(default_t = false)]
+    pub enabled: bool,
+    /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
+    /// handshake.
+    #[config(secret)]
+    #[config(
+        default_t = SecretKey::from_str("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349").unwrap(),
+        with = Serde![str]
+    )]
+    pub secret_key: SecretKey,
+    /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    #[config(default_t = Ipv4Addr::LOCALHOST, with = Serde![str])]
+    pub address: Ipv4Addr,
+    /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    #[config(default_t = 3060)]
+    pub port: u16,
+    /// All boot nodes to start network discovery with. Expected format is
+    /// `enode://<node ID>@<IP address>:<port>`.
+    // Default value corresponds to the default value of `secret_key` above. This is needed so local
+    // ENs can connect to local MN with zero configuration.
+    #[config(
+        default_t = vec![
+            NodeRecord::from_str("enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060").unwrap(),
+        ],
+        with = Delimited::repeat(Serde![str], ","),
+    )]
+    pub boot_nodes: Vec<NodeRecord>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum StateBackendConfig {
     FullDiffs,
@@ -262,7 +302,7 @@ pub struct RebuildBlocksConfig {
     /// have different hash, have some transactions rejected etc
     pub from_block: u64,
     /// List of blocks to empty (i.e., remove all transactions from).
-    #[config(default, with = Delimited(","))]
+    #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
 }
 
@@ -361,6 +401,14 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
+
+    pub fn node_role(&self) -> NodeRole {
+        if self.is_main_node() {
+            NodeRole::MainNode
+        } else {
+            NodeRole::ExternalNode
+        }
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -399,7 +447,7 @@ pub struct RpcConfig {
     pub stale_filter_ttl: Duration,
 
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
-    #[config(default, with = Delimited(","))]
+    #[config(default, with = Delimited::new(","))]
     pub l2_signer_blacklist: HashSet<Address>,
 
     /// Default timeout for `eth_sendRawTransactionSync`
@@ -748,7 +796,7 @@ pub struct BatchVerificationConfig {
     #[config(default_t = 1)]
     pub threshold: usize,
     /// [server] Accepted signer pubkeys
-    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited(","))]
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited::new(","))]
     pub accepted_signers: Vec<String>,
     /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]
@@ -839,6 +887,17 @@ pub enum ExternalPriceApiClientConfig {
         #[config(default_t = Duration::from_secs(10))]
         client_timeout: Duration,
     },
+}
+
+impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
+    fn from(value: NetworkConfig) -> Self {
+        Self {
+            secret_key: value.secret_key,
+            address: value.address,
+            port: value.port,
+            boot_nodes: value.boot_nodes,
+        }
+    }
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
