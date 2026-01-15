@@ -32,8 +32,6 @@ impl CommittedBatchProvider {
                     DiscoveredCommittedBatch {
                         batch_info: load_genesis_batch_info().await,
                         block_range: 0..=0,
-                        // Shouldn't matter?
-                        commit_l1_block_number: 0,
                     },
                 );
                 continue;
@@ -80,8 +78,6 @@ pub struct DiscoveredCommittedBatch {
     pub batch_info: StoredBatchInfo,
     /// Range of L2 blocks that belong to this batch.
     pub block_range: ops::RangeInclusive<BlockNumber>,
-    /// L1 block number where this batch was committed.
-    pub commit_l1_block_number: BlockNumber,
 }
 
 impl DiscoveredCommittedBatch {

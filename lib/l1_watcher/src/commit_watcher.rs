@@ -97,9 +97,6 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
             let committed_batch = DiscoveredCommittedBatch {
                 batch_info,
                 block_range: report.firstBlockNumber..=report.lastBlockNumber,
-                commit_l1_block_number: log
-                    .block_number
-                    .expect("indexed log without l1 block number"),
             };
 
             let last_committed_block = committed_batch.last_block();
