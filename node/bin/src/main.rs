@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use smart_config::value::ExposeSecret;
 use smart_config::{ConfigRepository, ConfigSources, Environment, Json, Yaml};
 use std::{fs, future, path::Path, time::Duration};
 use tempfile::TempDir;
@@ -10,10 +9,11 @@ use zksync_os_metadata::NODE_VERSION;
 use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    BatchVerificationConfig, BatcherConfig, Config, ConfigArgs, GasAdjusterConfig, GeneralConfig,
-    GenesisConfig, L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig,
-    ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig,
-    RpcConfig, SequencerConfig, StateBackendConfig, StatusServerConfig, TxValidatorConfig,
+    BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
+    ExternalPriceApiClientConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig,
+    L1WatcherConfig, MempoolConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::zkstack_config::ZkStackConfig;
@@ -47,7 +47,7 @@ struct Cli {
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
     // Process the config file if provided or if default exists
     let config_path: Option<String> = config_path.or_else(|| {
-        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.json");
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.yaml");
         Path::new(&default_path).exists().then_some(default_path)
     });
 
@@ -320,6 +320,18 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse batch verification config");
 
+    let base_token_price_updater_config = repo
+        .single::<BaseTokenPriceUpdaterConfig>()
+        .expect("Failed to load base token price updater config")
+        .parse()
+        .expect("Failed to parse base token price updater config");
+
+    let external_price_api_client_config = repo
+        .single::<ExternalPriceApiClientConfig>()
+        .expect("Failed to load external price API client config")
+        .parse()
+        .expect("Failed to parse external price API client config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -339,12 +351,9 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     }
 
     // Validate that operator keys are different
-    if l1_sender_config.operator_commit_pk.expose_secret()
-        == l1_sender_config.operator_prove_pk.expose_secret()
-        || l1_sender_config.operator_prove_pk.expose_secret()
-            == l1_sender_config.operator_execute_pk.expose_secret()
-        || l1_sender_config.operator_execute_pk.expose_secret()
-            == l1_sender_config.operator_commit_pk.expose_secret()
+    if l1_sender_config.operator_commit_sk == l1_sender_config.operator_prove_sk
+        || l1_sender_config.operator_prove_sk == l1_sender_config.operator_execute_sk
+        || l1_sender_config.operator_execute_sk == l1_sender_config.operator_commit_sk
     {
         // important: don't replace this with `assert_ne` etc - it may expose private keys in logs
         panic!("Operator addresses for commit, prove and execute must be different");
@@ -367,6 +376,8 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         observability_config,
         gas_adjuster_config,
         batch_verification_config,
+        base_token_price_updater_config,
+        external_price_api_client_config,
     }
 }
 

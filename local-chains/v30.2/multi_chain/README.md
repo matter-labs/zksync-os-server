@@ -6,8 +6,8 @@ Configuration for running multiple ZKsync OS chains against a shared L1.
 
 | Config            | Chain ID | RPC Port |
 |-------------------|----------|----------|
-| `chain_6565.json` | 6565     | 3050     |
-| `chain_6566.json` | 6566     | 3051     |
+| `chain_6565.yaml` | 6565     | 3050     |
+| `chain_6566.yaml` | 6566     | 3051     |
 
 ## Quick Start
 
@@ -16,10 +16,10 @@ Configuration for running multiple ZKsync OS chains against a shared L1.
 anvil --load-state ./local-chains/v30.2/multi_chain/zkos-l1-state.json --port 8545
 
 # Terminal 2: Chain 1
-cargo run --release -- --config ./local-chains/v30.2/multi_chain/chain_6565.json
+cargo run --release -- --config ./local-chains/v30.2/multi_chain/chain_6565.yaml
 
 # Terminal 3: Chain 2
-cargo run --release -- --config ./local-chains/v30.2/multi_chain/chain_6566.json
+cargo run --release -- --config ./local-chains/v30.2/multi_chain/chain_6566.yaml
 ```
 
 ## Wallets
@@ -32,8 +32,8 @@ for the corresponding chain.
 ## Contract Addresses
 
 For contract addresses, please refer to `genesis` section of:
-* [chain_6565.json](./chain_6565.json)
-* [chain_6566.json](./chain_6566.json)
+* [chain_6565.yaml](./chain_6565.yaml)
+* [chain_6566.yaml](./chain_6566.yaml)
 for the corresponding chain.
 
 ## Versions

@@ -1,6 +1,26 @@
 ## Run
 
-### Local
+### Using the `run_local.sh` Script
+
+⚠️ This script is a temporary solution. Do not depend on it in production.
+
+The `run_local.sh` script automates starting Anvil and chain node(s):
+
+```bash
+# Run a single chain (auto-detects latest version)
+./run_local.sh
+
+# Run a single chain (explicit path)
+./run_local.sh ./local-chains/v31.0/default
+
+# Run multiple chains
+./run_local.sh ./local-chains/v31.0/multi_chain
+
+# Run with logging to files
+./run_local.sh ./local-chains/v31.0/multi_chain --logs-dir ./logs
+```
+
+### Manual setup
 
 To run node locally, first launch `anvil`:
 
@@ -40,7 +60,7 @@ cast send -r http://localhost:3050 0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0 --
 
 See `node/sequencer/config.rs` for config options and defaults. Use a JSON configuration file to override the defaults, e.g.:
 ```
-cargo run --release -- --config ./local-chains/v30.2/default/config.json
+cargo run --release -- --config ./local-chains/v30.2/default/config.yaml
 ```
 Explore the `local-chains` folder for additional chain configs grouped by protocol version. Detailed information is available in `local-chains/README.md`.
 

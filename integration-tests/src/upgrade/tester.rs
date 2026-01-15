@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
-use crate::config::get_default_config_v30;
+use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
 use alloy::network::TransactionBuilder;
@@ -11,6 +11,8 @@ use alloy::providers::ext::AnvilApi;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use anyhow::Context;
+use zksync_os_server::config::Config;
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 use zksync_os_types::ProtocolSemanticVersion;
 
 use super::ProtocolUpgradeBuilder;
@@ -151,7 +153,9 @@ impl UpgradeTester {
 
     // Fetch the contracts configuration from the tester.
     async fn fetch(tester: Tester) -> anyhow::Result<Self> {
-        let default_config: &zksync_os_server::config::Config = get_default_config_v30();
+        let default_config: Config = load_chain_config(ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        });
         let chain_id = default_config
             .genesis_config
             .chain_id
