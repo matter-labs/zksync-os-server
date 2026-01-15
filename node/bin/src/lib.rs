@@ -244,6 +244,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await;
 
+    // todo: this can take a while; ideally committed batches should be loaded in the background
+    //       and then `get()` method can be made async so that it waits for relevant batch to load
     let committed_batch_provider = CommittedBatchProvider::init(
         &l1_state,
         config.l1_watcher_config.max_blocks_to_process,
