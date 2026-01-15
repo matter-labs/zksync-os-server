@@ -116,7 +116,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
                 finality.last_committed_batch = batch_number;
                 finality.last_committed_block = last_committed_block;
             });
-            self.committed_batch_provider.add(committed_batch);
+            self.committed_batch_provider.insert(committed_batch);
         }
         Ok(())
     }

@@ -11,18 +11,18 @@ pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
 }
 
+#[derive(Debug, Default)]
+struct Inner {
+    batches: HashMap<u64, DiscoveredCommittedBatch>,
+}
+
 impl CommittedBatchProvider {
-    pub async fn init<F>(
+    pub async fn init(
         l1_state: &L1State,
         max_l1_blocks_to_scan: u64,
-        load_genesis_batch_info: impl Fn() -> F,
-    ) -> anyhow::Result<Self>
-    where
-        F: Future<Output = StoredBatchInfo>,
-    {
-        let mut inner = Inner {
-            batches: Default::default(),
-        };
+        load_genesis_batch_info: impl AsyncFn() -> StoredBatchInfo,
+    ) -> anyhow::Result<Self> {
+        let mut inner = Inner::default();
         for batch_number in l1_state.last_executed_batch..=l1_state.last_committed_batch {
             if batch_number == 0 {
                 inner.batches.insert(
@@ -66,7 +66,7 @@ impl CommittedBatchProvider {
         })
     }
 
-    pub(crate) fn add(&self, batch: DiscoveredCommittedBatch) {
+    pub(crate) fn insert(&self, batch: DiscoveredCommittedBatch) {
         let mut inner = self.inner.write().expect("lock poisoned");
         inner.batches.insert(batch.batch_info.batch_number, batch);
     }
@@ -75,11 +75,6 @@ impl CommittedBatchProvider {
         let inner = self.inner.read().expect("lock poisoned");
         inner.batches.get(&batch_number).cloned()
     }
-}
-
-#[derive(Debug)]
-struct Inner {
-    batches: HashMap<u64, DiscoveredCommittedBatch>,
 }
 
 #[derive(Debug, Clone)]
