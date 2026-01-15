@@ -1,4 +1,4 @@
-use crate::batch_provider::CommittedBatchProvider;
+use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{DiscoveredCommittedBatch, L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::Address;
