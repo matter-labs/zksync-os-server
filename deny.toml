@@ -8,7 +8,10 @@ feature-depth = 1
 
 [advisories]
 ignore = [
-    "RUSTSEC-2025-0137",  # Unsoundness in reciprocal_mg10 - not used by our code
+    # Unsoundness in lru <0.16.3. Waiting for:
+    #  * aws-sdk-s3 to upgrade (https://github.com/smithy-lang/smithy-rs/pull/4470)
+    #  * alloy-provider to upgrade (https://github.com/alloy-rs/alloy/pull/3460)
+    "RUSTSEC-2026-0002",
 ]
 
 [bans]

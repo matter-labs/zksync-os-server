@@ -44,6 +44,14 @@ jobs:
       - name: Build server
         run: cargo build --release --bin zksync-os-server
 
+      - name: Upload server binary
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f3 # v6.0.0
+        with:
+          name: zksync-os-server-${{ github.sha }}
+          path: target/release/zksync-os-server
+          if-no-files-found: error
+          retention-days: 1
+
 
   ############################
   #     Format and lint      #
@@ -91,35 +99,38 @@ jobs:
           compare_to_earlier_commit: false # Do not compare with `main` due to different number of iterations
 
 
+  # Temporary disable code coverage measurements in main due to llvm-cov issue with rustc v1.89:
+  # https://github.com/rust-lang/rust/issues/141577
+  # TODO: re-enable the job after upgrading Rust to >=1.90
   ######################################
   # Measure code coverage on main push #
   ######################################
-  code-coverage:
-    # Code coverage is measured only on push to main branch
-    # as it slows down PR testing significantly (2m -> 15m for tests execution)
-    # due to overhead with LLVM instrumentation.
-    # So, we keep the main numbers, but not force every PR to wait for it.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: matterlabs-ci-runner-high-performance
-    env:
-      RUSTC_BOOTSTRAP: 1
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Setup runner
-        uses: ./.github/actions/runner-setup
-
-      - name: Measure coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace --release --profile coverage
-
-      - name: Generate codecov report
-        uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
-        if: always() && !cancelled()
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          slug: ${{ github.repository }}
+  # code-coverage:
+  #   # Code coverage is measured only on push to main branch
+  #   # as it slows down PR testing significantly (2m -> 15m for tests execution)
+  #   # due to overhead with LLVM instrumentation.
+  #   # So, we keep the main numbers, but not force every PR to wait for it.
+  #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  #   runs-on: matterlabs-ci-runner-high-performance
+  #   env:
+  #     RUSTC_BOOTSTRAP: 1
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  #
+  #     - name: Setup runner
+  #       uses: ./.github/actions/runner-setup
+  #
+  #     - name: Measure coverage
+  #       run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace --release --profile coverage
+  #
+  #     - name: Generate codecov report
+  #       uses: codecov/codecov-action@fdcc8476540edceab3de004e990f80d881c6cc00 # v5.5.0
+  #       if: always() && !cancelled()
+  #       with:
+  #         token: ${{ secrets.CODECOV_TOKEN }}
+  #         files: lcov.info
+  #         slug: ${{ github.repository }}
 
 
   ############################################
@@ -168,10 +179,6 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-        with:
-          enable_cache: 'true'
-          cache_shared_key: 'prover-tests'
-          save_cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check CUDA version
         run: |
@@ -216,7 +223,7 @@ jobs:
             --features gpu-prover-tests --test prover --archive-file ${PROVER_GPU_TESTS}.tar.zst
 
       - name: Upload tests
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f3 # v6.0.0
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
           path: ${{ env.PROVER_GPU_TESTS }}.tar.zst
@@ -244,7 +251,7 @@ jobs:
           nvidia-smi
 
       - name: Download prebuilt tests
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
@@ -267,6 +274,31 @@ jobs:
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE}
 
+  ###############################
+  #     Configs smoke test      #
+  ###############################
+  config-tests:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+
+      - name: Download server binary
+        uses: actions/download-artifact@v4
+        with:
+          name: zksync-os-server-${{ github.sha }}
+          path: .
+
+      - name: Run config smoke test
+        env:
+          LOG_USE_COLOR: false
+          SERVER_LOGFILE: server.log
+        run: ./.github/scripts/test-configs.sh
+
 
   ###############################
   #  Mandatory CI status check  #
@@ -283,6 +315,7 @@ jobs:
         build-prover-tests,
         prover-tests,
         check-wire-version,
+        config-tests,
       ]
     steps:
       - name: Status

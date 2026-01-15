@@ -1,0 +1,31 @@
+[package]
+name = "zksync_os_external_price_api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+anyhow.workspace = true
+url.workspace = true
+chrono = { workspace = true, default-features = false, features = ["now"] }
+serde.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+rand.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+alloy.workspace = true
+num.workspace = true
+secrecy.workspace = true
+
+zksync_os_types = { workspace = true, features = ["reth"] }
+
+[dev-dependencies]
+httpmock.workspace = true
+serde_json.workspace = true
+assert_matches.workspace = true
