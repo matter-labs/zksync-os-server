@@ -83,8 +83,8 @@ impl PipelineComponent for Batcher {
                     self.startup_config.last_executed_batch
                 )
             })?;
+        let first_expected_block = last_executed_batch.last_block() + 1;
         let mut prev_batch_info = last_executed_batch.batch_info;
-        let first_expected_block = last_executed_batch.last_block_number + 1;
 
         // We might receive some blocks that belong to already executed batches. We can skip these
         // as there is no need to perform any L1 operations on them.
@@ -133,9 +133,9 @@ impl PipelineComponent for Batcher {
                     })?;
                 // Validate that the existing batch's first block matches the next block in the stream
                 anyhow::ensure!(
-                    committed_batch.first_block_number == next_block_number,
+                    committed_batch.first_block() == next_block_number,
                     "Existing batch first block ({}) does not match next block in stream ({})",
-                    committed_batch.first_block_number,
+                    committed_batch.first_block(),
                     next_block_number
                 );
 
@@ -341,15 +341,14 @@ impl Batcher {
 
         tracing::info!(
             batch_number,
-            first_block = existing_batch.first_block_number,
-            last_block = existing_batch.last_block_number,
+            first_block = existing_batch.first_block(),
+            last_block = existing_batch.last_block(),
             "Recreating existing batch"
         );
 
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
 
-        let expected_block_count =
-            existing_batch.last_block_number - existing_batch.first_block_number + 1;
+        let expected_block_count = existing_batch.block_count();
         // Collect all blocks in this batch
         while blocks.len() < expected_block_count as usize {
             latency_tracker.enter_state(GenericComponentState::WaitingRecv);
@@ -375,7 +374,8 @@ impl Batcher {
         }
         let last_block_number = blocks.last().unwrap().0.header.number;
         assert_eq!(
-            last_block_number, existing_batch.last_block_number,
+            last_block_number,
+            existing_batch.last_block(),
             "Block number mismatch in last block of a rebuilt batch"
         );
 

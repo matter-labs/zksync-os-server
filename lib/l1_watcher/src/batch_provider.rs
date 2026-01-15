@@ -2,6 +2,7 @@ use crate::util;
 use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use std::collections::HashMap;
+use std::ops;
 use std::sync::{Arc, RwLock};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
@@ -29,8 +30,7 @@ impl CommittedBatchProvider {
                     0,
                     DiscoveredCommittedBatch {
                         batch_info: load_genesis_batch_info().await,
-                        first_block_number: 0,
-                        last_block_number: 0,
+                        block_range: 0..=0,
                         // Shouldn't matter?
                         commit_l1_block_number: 0,
                     },
@@ -43,22 +43,14 @@ impl CommittedBatchProvider {
                 max_l1_blocks_to_scan,
             )
             .await?;
-            let stored_batch_data = util::fetch_stored_batch_data(
+            let discovered_batch = util::fetch_stored_batch_data(
                 &l1_state.diamond_proxy,
                 l1_block_with_commit,
                 batch_number,
             )
             .await?
             .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
-            inner.batches.insert(
-                batch_number,
-                DiscoveredCommittedBatch {
-                    batch_info: stored_batch_data.batch_info,
-                    first_block_number: stored_batch_data.first_block_number,
-                    last_block_number: stored_batch_data.last_block_number,
-                    commit_l1_block_number: l1_block_with_commit,
-                },
-            );
+            inner.batches.insert(batch_number, discovered_batch);
         }
 
         Ok(Self {
@@ -81,10 +73,8 @@ impl CommittedBatchProvider {
 pub struct DiscoveredCommittedBatch {
     /// Information about committed batch as was discovered on-chain.
     pub batch_info: StoredBatchInfo,
-    /// First L2 block that belongs to this batch.
-    pub first_block_number: BlockNumber,
-    /// Last L2 block that belongs to this batch.
-    pub last_block_number: BlockNumber,
+    /// Range of L2 blocks that belong to this batch.
+    pub block_range: ops::RangeInclusive<BlockNumber>,
     /// L1 block number where this batch was committed.
     pub commit_l1_block_number: BlockNumber,
 }
@@ -92,5 +82,17 @@ pub struct DiscoveredCommittedBatch {
 impl DiscoveredCommittedBatch {
     pub fn number(&self) -> u64 {
         self.batch_info.batch_number
+    }
+
+    pub fn first_block(&self) -> BlockNumber {
+        *self.block_range.start()
+    }
+
+    pub fn last_block(&self) -> BlockNumber {
+        *self.block_range.end()
+    }
+
+    pub fn block_count(&self) -> u64 {
+        self.block_range.end() - self.block_range.start() + 1
     }
 }

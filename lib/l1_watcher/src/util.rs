@@ -271,8 +271,7 @@ pub async fn fetch_stored_batch_data(
 
     Ok(Some(DiscoveredCommittedBatch {
         batch_info,
-        first_block_number: log.firstBlockNumber,
-        last_block_number: log.lastBlockNumber,
+        block_range: log.firstBlockNumber..=log.lastBlockNumber,
         commit_l1_block_number: l1_block_number,
     }))
 }
