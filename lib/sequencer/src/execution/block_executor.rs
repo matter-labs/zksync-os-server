@@ -76,7 +76,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                 },
                 if deadline.is_some()
             => {
-                tracing::debug!(block = ctx.block_number,
+                tracing::debug!(block_number = ctx.block_number,
                                txs = executed_txs.len(),
                                "deadline reached → sealing");
                 break SealReason::Timeout;                                     // leave the loop ⇒ seal
@@ -133,18 +133,18 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 if tx_type == ZkTxType::Upgrade {
                                     match &command.seal_policy {
                                         SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
-                                            tracing::debug!(block = ctx.block_number, "sealing block as upgrade tx was executed");
+                                            tracing::debug!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
                                             break SealReason::UpgradeTx;
                                         }
                                         SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
                                             // We trust that the execution stream will not break protocol invariants.
-                                            tracing::info!(block = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
+                                            tracing::info!(block_number = ctx.block_number, "upgrade tx executed, but seal policy requires full exhaustion");
                                         }
                                     }
                                 }
                                 match command.seal_policy {
                                     SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
-                                    tracing::debug!(block = ctx.block_number,
+                                    tracing::debug!(block_number = ctx.block_number,
                                                    txs = executed_txs.len(),
                                                    "tx limit reached → sealing");
                                         break SealReason::TxCountLimit
@@ -172,24 +172,24 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                         match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
                                             (TxRejectionMethod::Purge, _, _) => {
                                                 purged_txs.push((*tx.hash(), e.clone()));
-                                                tracing::info!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → purged");
+                                                tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, "invalid tx → purged");
                                             }
                                             (TxRejectionMethod::Skip, _, _) => {
-                                                tracing::info!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, "invalid tx → skipped");
+                                                tracing::info!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, "invalid tx → skipped");
                                             },
                                             // For Produce, don't seal if no transactions have been executed yet
                                             (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
                                                     purged_txs.push((*tx.hash(), e.clone()));
                                                     tracing::info!(
                                                         tx_hash = %tx.hash(),
-                                                        block = ctx.block_number,
+                                                        block_number = ctx.block_number,
                                                         ?e,
                                                         ?reason,
                                                         "block limit reached on first tx for Produce → rejecting tx instead of sealing",
                                                     );
                                             }
                                             (TxRejectionMethod::SealBlock(reason), _, _) => {
-                                                tracing::debug!(tx_hash = %tx.hash(), block = ctx.block_number, ?e, ?reason, "sealing block by criterion");
+                                                tracing::debug!(tx_hash = %tx.hash(), block_number = ctx.block_number, ?e, ?reason, "sealing block by criterion");
                                                     break reason;
                                             }
                                         }
@@ -209,13 +209,13 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     }
                     /* ----- got a transaction that cannot be included because of gas --- */
                     Some(_tx) => {
-                        tracing::debug!(block = ctx.block_number, "sealing block as next tx cannot be included");
+                        tracing::debug!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
                         break SealReason::GasLimit;
                     }
                     /* ----- tx stream was exhausted  --------------------------- */
                     None => {
                         tracing::debug!(
-                            block = ctx.block_number,
+                            block_number = ctx.block_number,
                             txs = executed_txs.len(),
                             "stream exhausted → sealing"
                         );
