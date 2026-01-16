@@ -366,7 +366,7 @@ impl WriteReplay for BlockReplayStorage {
                     .collect();
                 let old_record_hex_db_key = alloy::hex::encode_prefixed(&db_key);
                 tracing::warn!(
-                    block = record.block_context.block_number,
+                    block_number = record.block_context.block_number,
                     old_record_hex_db_key,
                     "Overriding existing block replay record",
                 );

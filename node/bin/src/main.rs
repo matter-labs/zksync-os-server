@@ -11,8 +11,8 @@ use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
     ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
-    L1SenderConfig, L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig, ObservabilityConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
@@ -47,7 +47,7 @@ struct Cli {
 fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
     // Process the config file if provided or if default exists
     let config_path: Option<String> = config_path.or_else(|| {
-        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.json");
+        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.yaml");
         Path::new(&default_path).exists().then_some(default_path)
     });
 
@@ -230,6 +230,12 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse general config");
 
+    let network_config = repo
+        .single::<NetworkConfig>()
+        .expect("Failed to load network config")
+        .parse()
+        .expect("Failed to parse network config");
+
     let mut genesis_config = repo
         .single::<GenesisConfig>()
         .expect("Failed to load genesis config")
@@ -361,6 +367,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
     Config {
         general_config,
+        network_config,
         genesis_config,
         rpc_config,
         mempool_config,

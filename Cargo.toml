@@ -35,6 +35,7 @@ members = [
     "lib/metadata",
     "lib/external_price_api",
     "lib/base_token_adjuster",
+    "lib/reth_compat",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -130,8 +131,8 @@ futures = "0.3"
 vise = "0.3.0"
 vise-exporter = "0.3.0"
 bincode = { version = "2.0.1", features = ["serde"] }
-smart-config = "=0.4.0-pre.1"
-smart-config-commands = "=0.4.0-pre.1"
+smart-config = { version = "0.4.0-pre.2"}
+smart-config-commands = { version = "0.4.0-pre.2" }
 thiserror = "2.0.12"
 clap = "4.2.2"
 insta = "1.29.0"
@@ -204,7 +205,9 @@ reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-net-nat = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.2" }
@@ -243,6 +246,7 @@ zksync_os_network = { version = "=0.13.0-non-semver-compat", path = "lib/network
 zksync_os_metadata = { version = "=0.13.0-non-semver-compat", path = "lib/metadata" }
 zksync_os_external_price_api = { version = "=0.13.0-non-semver-compat", path = "lib/external_price_api" }
 zksync_os_base_token_adjuster = { version = "=0.13.0-non-semver-compat", path = "lib/base_token_adjuster" }
+zksync_os_reth_compat = { version = "=0.13.0-non-semver-compat", path = "lib/reth_compat" }
 
 zksync_os_server = { version = "=0.13.0-non-semver-compat", path = "node/bin" }
 

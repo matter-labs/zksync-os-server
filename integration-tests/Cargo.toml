@@ -41,6 +41,7 @@ smart-config.workspace = true
 # Needed for upgrade functionality tests
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true
+serde_yaml.workspace = true
 
 [dev-dependencies]
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }

@@ -10,15 +10,15 @@ local-chains/
 ├── v30.2/                       # Protocol version v30.2
 │   ├── default/                 # Default (single-chain) setup
 │   │   ├── README.md            # Scenario-specific documentation
-│   │   ├── config.json          # Sequencer configuration
+│   │   ├── config.yaml          # Sequencer configuration
 │   │   ├── genesis.json         # Genesis configuration
 │   │   ├── wallets.yaml         # Wallets configuration
 │   │   ├── contracts.yaml       # Contracts configuration
 │   │   └── zkos-l1-state.json   # L1 state for this scenario
 │   ├── multi_chain/             # Multi-chain scenario
 │   │   ├── README.md            # Scenario-specific documentation
-│   │   ├── chain_6565.json      # Configuration for chain with ID 6565
-│   │   ├── chain_6566.json      # Configuration for chain with ID 6566
+│   │   ├── chain_6565.yaml      # Configuration for chain with ID 6565
+│   │   ├── chain_6566.yaml      # Configuration for chain with ID 6566
 │   │   ├── wallets_6565.yaml    # Wallets for chain 6565
 │   │   ├── wallets_6566.yaml    # Wallets for chain 6566
 │   │   ├── contracts_6565.yaml  # Contracts for chain 6565
@@ -28,14 +28,14 @@ local-chains/
 └── v31.0/                       # Protocol version v31.0
     ├── default/                 # Default (single-chain) setup
     │   ├── README.md            # Scenario-specific documentation
-    │   ├── config.json          # Sequencer configuration
+    │   ├── config.yaml          # Sequencer configuration
     │   ├── genesis.json         # Genesis configuration
     │   ├── wallets.yaml         # Wallets configuration
     │   └── zkos-l1-state.json   # L1 state for this scenario
     ├── multi_chain/             # Multi-chain scenario
     │   ├── README.md            # Scenario-specific documentation
-    │   ├── chain_6565.json      # Configuration for chain with ID 6565
-    │   ├── chain_6566.json      # Configuration for chain with ID 6566
+    │   ├── chain_6565.yaml      # Configuration for chain with ID 6565
+    │   ├── chain_6566.yaml      # Configuration for chain with ID 6566
     │   ├── wallets_6565.yaml    # Wallets for chain 6565
     │   ├── wallets_6566.yaml    # Wallets for chain 6566
     │   ├── contracts_6565.yaml  # Contracts for chain 6565
@@ -54,7 +54,7 @@ L1 state snapshot for Anvil. Contains the deployed L1 contracts state that can b
 anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545
 ```
 
-### `config.json`
+### `config.yaml`
 
 Node configuration file used to override the default values defined in the [config module](../node/bin/src/config).
 Commonly modified values include:
@@ -81,11 +81,49 @@ If you are changing source code of any of the `initial_contracts` you should als
 
 ## Usage
 
-### Running a Single Chain
+### Using the `run_local.sh` Script
+
+⚠️ This script is a temporary solution. Do not depend on it in production.
+
+The `run_local.sh` script automates starting Anvil and chain node(s):
+
+```bash
+# Run a single chain
+./run_local.sh ./local-chains/v30.2/default
+
+# Run multiple chains
+./run_local.sh ./local-chains/v30.2/multi_chain
+
+# Run with logging to files
+./run_local.sh ./local-chains/v30.2/multi_chain --logs-dir ./logs
+```
+
+#### How the Script Works
+
+1. **Validates configuration directory** - Checks that the directory exists and contains `zkos-l1-state.json`
+2. **Builds ZKsync OS**
+3. **Starts Anvil** - Loads the L1 state snapshot on port 8545
+4. **Waits for Anvil readiness** - Polls the JSON-RPC endpoint until Anvil responds (up to 30 seconds)
+5. **Detects chain mode**:
+   - If `config.json` exists → Starts single chain
+   - Otherwise → Starts all `chain_*.json` files found (e.g., `chain_6565.json`, `chain_6566.json`)
+6. **Database cleanup prompt** (single chain mode only) - If the `db/` folder contains existing data, prompts whether to clean it up before starting
+7. **Monitors processes** - If any process fails, all services are stopped
+8. **Graceful shutdown** - Press `Ctrl+C` to stop all services
+
+#### Script Output
+
+- **Anvil logs**: Suppressed (or written to `anvil-<timestamp>.log` if `--logs-dir` is specified)
+- **Chain logs**: Displayed in terminal (or written to `<config-name>-<timestamp>.log` if `--logs-dir` is specified)
+- **Script messages**: Color-coded status updates
+
+### Manual Setup
+
+#### Running a Single Chain
 
 Follow the instructions in the [v30.2/single_chain/README.md](./v30.2/default/README.md).
 
-### Running Multiple Chains
+#### Running Multiple Chains
 
 Follow the instructions in the [v30.2/multi_chain/README.md](./v30.2/multi_chain/README.md).
 
@@ -100,3 +138,21 @@ Follow the instructions in the [v30.2/multi_chain/README.md](./v30.2/multi_chain
    * `genesis.json` path in the [Dockerfile](../Dockerfile) is updated to point to the new version
    * `CURRENT_PROTOCOL_VERSION` constant in [integration tests](../integration-tests/src/config.rs) is updated to the new version.
    * [`test-configs.sh`](../.github/scripts/test-configs.sh) script is updated to properly test the new version.
+
+## Troubleshooting
+
+### Anvil failed to start
+
+- Check if port 8545 is already in use: `lsof -i :8545`
+- Verify `zkos-l1-state.json` exists and is valid JSON
+
+### Chain fails to start
+
+- Check for port conflicts between chains
+- Verify all required config fields are present
+- Check the terminal output for specific error messages
+
+### Multiple chains: port conflicts
+
+- Each chain config must specify unique ports. `rpc.address` - JSON-RPC port (e.g., 3050, 3051, 3052)
+- Chains should be run in ephemeral mode or use unique directory paths for RocksDB and file storage to avoid interfering with one another.

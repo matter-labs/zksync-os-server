@@ -9,12 +9,12 @@ chmod a+x ./zksync-os-server
 
 # name|state|config
 CONFIGS=(
-  "v30 default|local-chains/v30.2/default/zkos-l1-state.json|local-chains/v30.2/default/config.json"
-  "v30 multi-chain 1|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6565.json"
-  "v30 multi-chain 2|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6566.json"
-  "v31 default|local-chains/v31.0/default/zkos-l1-state.json|local-chains/v31.0/default/config.json"
-  "v31 multi-chain 1|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6565.json"
-  "v31 multi-chain 2|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6566.json"
+  "v30 default|local-chains/v30.2/default/zkos-l1-state.json|local-chains/v30.2/default/config.yaml"
+  "v30 multi-chain 1|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6565.yaml"
+  "v30 multi-chain 2|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6566.yaml"
+  "v31 default|local-chains/v31.0/default/zkos-l1-state.json|local-chains/v31.0/default/config.yaml"
+  "v31 multi-chain 1|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
+  "v31 multi-chain 2|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
 )
 
 cleanup() {
@@ -68,11 +68,14 @@ for entry in "${CONFIGS[@]}"; do
   ./zksync-os-server --config "${CUR_CONFIG}" > "${SERVER_LOGFILE}" 2>&1 &
   SERVER_PID=$!
 
-  RPC_PORT=$(jq -r '
+  RPC_PORT=$(yq -r '
+    (
       (.rpc.address // "")
-      | split(":")[-1]
-      | select(length > 0) // "3050"
-    ' "${CUR_CONFIG}")
+      | select(length > 0)
+      // "0.0.0.0:3050"
+    )
+    | split(":") | .[-1]
+  ' "${CUR_CONFIG}")
 
   echo "Waiting for server on port ${RPC_PORT}..."
   START_TIME=$(date +%s)

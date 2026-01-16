@@ -25,9 +25,9 @@ struct Args {
     /// Private key for the L1 wallet
     #[arg(short, long)]
     private_key: Option<String>,
-    /// Deposit amount in wei
+    /// Deposit amount in ether
     #[arg(short, long)]
-    amount: Option<U256>,
+    amount: Option<f64>,
 }
 
 /// Submits an L1->L2 deposit transaction to local L1
@@ -41,10 +41,9 @@ async fn main() -> anyhow::Result<()> {
         // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
         "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".to_owned()
     });
-    // Deposit 10k ETH by default
-    let amount = args
-        .amount
-        .unwrap_or_else(|| U256::from(100u128 * 10u128.pow(18)));
+    // Deposit 0.01 ETH by default
+    let amount_ether = args.amount.unwrap_or(0.01);
+    let amount = U256::from((amount_ether * 1e18) as u128);
 
     let l1_wallet = EthereumWallet::new(LocalSigner::from_str(&private_key).unwrap());
     let l1_provider = ProviderBuilder::new()
@@ -56,7 +55,8 @@ async fn main() -> anyhow::Result<()> {
     let l1_balance = l1_provider
         .get_balance(l1_wallet.default_signer().address())
         .await?;
-    println!("L1 balance: {l1_balance}");
+    let l1_balance_ether = l1_balance.to::<u128>() as f64 / 1e18;
+    println!("L1 balance: {l1_balance_ether:.6} ETH");
 
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(args.bridgehub, l1_provider.clone(), args.chain_id);
