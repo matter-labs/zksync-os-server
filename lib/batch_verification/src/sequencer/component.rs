@@ -50,12 +50,12 @@ impl<E> BatchVerificationPipelineStep<E> {
             .map(|s| s.parse().unwrap())
             .collect();
         // If on L1 batch verifiers re configured, we use that configuration instead
-        let (threshold, validators) = match l1_state.batch_verification.clone() {
+        let (threshold, validators) = match &l1_state.batch_verification {
             BatchVerificationL1::Enabled(l1_config) => {
                 if !l1_config.validators.is_empty() || l1_config.threshold > 0 {
                     (
                         config.threshold.max(l1_config.threshold),
-                        l1_config.validators,
+                        l1_config.validators.clone(),
                     )
                 } else {
                     (config.threshold, config_validators)

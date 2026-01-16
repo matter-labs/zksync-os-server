@@ -76,8 +76,8 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
             && !l1_config.validators.contains(&signer.address())
         {
             tracing::warn!(
-                "Your address {} is not authorized to verify batches on L1",
-                signer.address()
+                address = %signer.address(),
+                "Your address is not authorized to verify batches on L1",
             );
         }
 
