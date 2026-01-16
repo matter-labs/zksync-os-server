@@ -1,11 +1,9 @@
-use alloy::primitives::{
-    Address, B256, Signature as AlloySignature, SignatureError, U256, keccak256,
-};
+use alloy::primitives::{Address, B256, Signature as AlloySignature, SignatureError, U256};
 use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol_types::{SolValue, eip712_domain};
+use alloy::sol;
+use alloy::sol_types::{Eip712Domain, SolStruct};
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
 use zksync_os_contract_interface::calldata::encode_commit_batch_data;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_types::ProtocolSemanticVersion;
@@ -112,8 +110,15 @@ impl BatchSignature {
     }
 }
 
-const TYPEHASH_BYTES: &[u8] = b"CommitBatchesMultisig(address chainAddress,uint256 processBatchFrom,uint256 processBatchTo,bytes batchData)";
-static TYPEHASH: LazyLock<B256> = LazyLock::new(|| keccak256(TYPEHASH_BYTES));
+sol! {
+    #[derive(Debug)]
+    struct CommitBatchesMultisig {
+        address chainAddress;
+        uint256 processBatchFrom;
+        uint256 processBatchTo;
+        bytes batchData;
+    }
+}
 
 /// Compute the full EIP-712 digest used by the `MultisigCommitter` contract
 /// for the `commitBatchesMultisig` typed data, based on the given batch info
@@ -125,45 +130,28 @@ fn eip712_multisig_digest(
     multisig_committer: Address,
     protocol_version: &ProtocolSemanticVersion,
 ) -> B256 {
-    let typehash = *TYPEHASH;
-
     let batch_data = encode_commit_batch_data(
         prev_batch_info,
         batch_info.commit_info.clone(),
         protocol_version.minor,
     );
 
-    let batch_data_hash = keccak256(batch_data);
-
-    let encoded = (
-        typehash,
-        batch_info.chain_address,
-        U256::from(batch_info.batch_number), // processBatchFrom
-        U256::from(batch_info.batch_number), // processBatchTo
-        batch_data_hash,
-    )
-        .abi_encode_params();
-
-    let struct_hash = keccak256(encoded);
-
-    // Those name and version are currently used in contracts. This will need
-    // to be updated if at some point we decide to change them
-    let domain = eip712_domain! {
-        name: "MultisigCommitter",
-        version: "1",
-        chain_id: l1_chain_id,
-        verifying_contract: multisig_committer,
+    let message = CommitBatchesMultisig {
+        chainAddress: batch_info.chain_address,
+        processBatchFrom: U256::from(batch_info.batch_number),
+        processBatchTo: U256::from(batch_info.batch_number),
+        batchData: batch_data.into(),
     };
-    let domain_separator = domain.separator();
 
-    keccak256(
-        [
-            &[0x19, 0x01],
-            domain_separator.as_slice(),
-            struct_hash.as_slice(),
-        ]
-        .concat(),
-    )
+    let domain = Eip712Domain {
+        name: Some("MultisigCommitter".into()),
+        version: Some("1".into()),
+        chain_id: Some(U256::from(l1_chain_id)),
+        verifying_contract: Some(multisig_committer),
+        salt: None,
+    };
+
+    message.eip712_signing_hash(&domain)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
