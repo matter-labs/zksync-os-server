@@ -23,7 +23,11 @@ impl RpcBlockConvert for Sealed<alloy::consensus::Block<TxHash>> {
         let block = self.unseal();
         let rlp_length = block.rlp_length();
         ZkApiBlock::new(
-            ZkHeader::from_consensus(block.header.seal(hash), None, Some(U256::from(rlp_length))),
+            ZkHeader::from_consensus(
+                block.header.seal(hash),
+                Some(U256::ZERO),
+                Some(U256::from(rlp_length)),
+            ),
             BlockTransactions::Hashes(block.body.transactions),
         )
     }
