@@ -216,6 +216,7 @@ impl Batcher {
         let mut blocks: Vec<(BlockOutput, ReplayRecord, TreeBatchOutput, ProverInput)> = vec![];
         let mut accumulator = BatchInfoAccumulator::new(
             self.batcher_config.blocks_per_batch_limit,
+            self.batcher_config.tx_per_batch_limit,
             self.pubdata_limit_bytes,
         );
 
