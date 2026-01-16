@@ -1,5 +1,5 @@
 use crate::models::{CommitBatchInfo, StoredBatchInfo};
-use crate::{IExecutor, IExecutorV29};
+use crate::{IExecutor, IExecutorV29, IMultisigCommitter};
 use alloy::primitives::Address;
 use alloy::sol_types::{SolCall, SolValue};
 
@@ -16,8 +16,40 @@ pub struct CommitCalldata {
 
 impl CommitCalldata {
     pub fn decode(data: &[u8]) -> anyhow::Result<Self> {
-        let commit_call = <IExecutor::commitBatchesSharedBridgeCall as SolCall>::abi_decode(data)?;
-        let commit_data = commit_call._commitData;
+        // Check if data is long enough to contain a selector
+        if data.len() < 4 {
+            anyhow::bail!("data too short to contain function selector");
+        }
+
+        // Extract the 4-byte function selector
+        let selector = &data[0..4];
+
+        let (chain_address, process_from, process_to, commit_data) =
+            if selector == IExecutor::commitBatchesSharedBridgeCall::SELECTOR {
+                let commit_call =
+                    <IExecutor::commitBatchesSharedBridgeCall as SolCall>::abi_decode(data)?;
+                (
+                    commit_call._chainAddress,
+                    commit_call._processFrom.to(),
+                    commit_call._processTo.to(),
+                    commit_call._commitData,
+                )
+            } else if selector == IMultisigCommitter::commitBatchesMultisigCall::SELECTOR {
+                let commit_call =
+                    <IMultisigCommitter::commitBatchesMultisigCall as SolCall>::abi_decode(data)?;
+                (
+                    commit_call.chainAddress,
+                    commit_call._processBatchFrom.to(),
+                    commit_call._processBatchTo.to(),
+                    commit_call._batchData,
+                )
+            } else {
+                anyhow::bail!(
+                    "unknown function selector: 0x{}",
+                    alloy::hex::encode(selector)
+                );
+            };
+
         if commit_data[0] != V30_ENCODING_VERSION {
             anyhow::bail!("unexpected encoding version: {}", commit_data[0]);
         }
@@ -36,9 +68,9 @@ impl CommitCalldata {
         let stored_batch_info = StoredBatchInfo::from(stored_batch_info);
         let commit_batch_info = CommitBatchInfo::from(commit_batch_infos.remove(0));
         Ok(Self {
-            chain_address: commit_call._chainAddress,
-            process_from: commit_call._processFrom.to(),
-            process_to: commit_call._processTo.to(),
+            chain_address,
+            process_from,
+            process_to,
             stored_batch_info,
             commit_batch_info,
         })
