@@ -572,6 +572,10 @@ pub struct BatcherConfig {
     #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
 
+    /// Max number of transactions per batch
+    #[config(default_t = 10000)]
+    pub tx_per_batch_limit: u64,
+
     /// Whether to verify that rebuilt batches match stored batches by comparing hashes.
     /// Enabled by default for safety. Disabling this check can be useful for debugging or
     /// when recovering from corrupted state.
