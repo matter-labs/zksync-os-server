@@ -547,16 +547,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     let (token_price_sender, token_price_receiver) = watch::channel(None);
-    let previous_block_fee_params = first_replay_record
-        .as_ref()
-        .and_then(|record| {
-            block_replay_storage.get_replay_record(record.block_context.block_number - 1)
+    let previous_block_fee_params = if starting_block == 1 {
+        None
+    } else {
+        let prev_record = block_replay_storage
+            .get_replay_record(starting_block - 1)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Missing replay record for block `starting_block - 1` = {}",
+                    starting_block - 1
+                )
+            });
+        Some(FeeParams {
+            eip1559_basefee: prev_record.block_context.eip1559_basefee,
+            native_price: prev_record.block_context.native_price,
+            pubdata_price: prev_record.block_context.pubdata_price,
         })
-        .map(|record| FeeParams {
-            eip1559_basefee: record.block_context.eip1559_basefee,
-            native_price: record.block_context.native_price,
-            pubdata_price: record.block_context.pubdata_price,
-        });
+    };
 
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
