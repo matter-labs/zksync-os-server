@@ -8,7 +8,7 @@ inputs:
     description: 'Version of foundry to use.'
     required: false
     # Pinned to a specific stable version to avoid breaking changes.
-    default: 'v1.3.4'
+    default: 'v1.5.1'
   enable_cache:
     type: string
     description: 'Whether to enable cache.'

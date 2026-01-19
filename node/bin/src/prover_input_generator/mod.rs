@@ -73,6 +73,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 let block_number = replay_record.block_context.block_number;
 
                 tracing::debug!(
+                    block_number,
                     "ProverInputGenerator started processing block {} with {} transactions",
                     block_number,
                     replay_record.transactions.len(),

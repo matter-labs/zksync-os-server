@@ -55,6 +55,7 @@ impl BatchInfo {
 
             for tx in transactions {
                 match tx.envelope() {
+                    ZkEnvelope::InteropRoots(_) => {}
                     ZkEnvelope::L1(l1_tx) => {
                         let onchain_data_hash = l1_tx.hash();
                         priority_operations_hash =
@@ -179,7 +180,7 @@ impl BatchInfo {
                 B256::from(system_batch_output.hash())
             }
             // 31 needed for upgrade integration test
-            30 | 31 => {
+            30..=31 => {
                 use zk_ee::utils::Bytes32;
                 let system_batch_output =
                     zk_os_basic_system::system_implementation::system::BatchOutput {

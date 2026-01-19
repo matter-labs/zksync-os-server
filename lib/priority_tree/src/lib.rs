@@ -73,10 +73,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                     format!("cannot re-build priority tree: missing replay block {block_number}")
                 })?;
             for tx in block.transactions {
-                match tx.into_envelope() {
-                    ZkEnvelope::L1(l1_tx) => merkle_tree.push_hash(*l1_tx.hash()),
-                    ZkEnvelope::L2(_) => {}
-                    ZkEnvelope::Upgrade(_) => {}
+                if let ZkEnvelope::L1(l1_tx) = tx.into_envelope() {
+                    merkle_tree.push_hash(*l1_tx.hash());
                 }
             }
         }
@@ -202,15 +200,11 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                     // Block is not guaranteed to be present in the replay storage for EN, so we use `wait_for_replay_record`.
                     let replay = self.wait_for_replay_record(block_number).await;
                     for tx in replay.transactions {
-                        match tx.into_envelope() {
-                            ZkEnvelope::L1(l1_tx) => {
-                                first_priority_op_id_in_batch
-                                    .get_or_insert(l1_tx.priority_id() as usize);
-                                priority_op_count += 1;
-                                merkle_tree.push_hash(l1_tx.hash().0.into());
-                            }
-                            ZkEnvelope::L2(_) => {}
-                            ZkEnvelope::Upgrade(_) => {}
+                        if let ZkEnvelope::L1(l1_tx) = tx.into_envelope() {
+                            first_priority_op_id_in_batch
+                                .get_or_insert(l1_tx.priority_id() as usize);
+                            priority_op_count += 1;
+                            merkle_tree.push_hash(l1_tx.hash().0.into());
                         }
                     }
                 }

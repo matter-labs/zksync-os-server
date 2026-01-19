@@ -1,13 +1,13 @@
-use secrecy::SecretString;
+use alloy::signers::k256::ecdsa::SigningKey;
 use std::marker::PhantomData;
 use std::time::Duration;
 
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
 pub struct L1SenderConfig<Input> {
-    /// Private key to operate from.
+    /// Signing key to operate from.
     /// Depending on the mode, this can be a commit/prove/execute operator.
-    pub operator_pk: SecretString,
+    pub operator_sk: SigningKey,
 
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,

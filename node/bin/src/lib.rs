@@ -5,10 +5,9 @@ mod batch_sink;
 pub mod batcher;
 mod command_source;
 pub mod config;
-pub mod config_constants;
+pub mod default_protocol_version;
 mod en_remote_config;
 mod l1_provider;
-pub mod metadata;
 mod node_state_on_startup;
 mod priority_tree_steps;
 pub mod prover_api;
@@ -21,10 +20,11 @@ pub mod zkstack_config;
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
-use crate::config::{Config, ProverApiConfig, gas_adjuster_config};
+use crate::config::{
+    Config, ProverApiConfig, base_token_price_updater_config, gas_adjuster_config,
+};
 use crate::en_remote_config::load_remote_config;
 use crate::l1_provider::build_node_l1_provider;
-use crate::metadata::NODE_VERSION;
 use crate::node_state_on_startup::NodeStateOnStartup;
 use crate::priority_tree_steps::priority_tree_en_step::PriorityTreeENStep;
 use crate::priority_tree_steps::priority_tree_pipeline_step::PriorityTreePipelineStep;
@@ -55,6 +55,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
+use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::BatchDaInputMode;
@@ -73,9 +74,12 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_metadata::NODE_VERSION;
+use zksync_os_network::service::NetworkService;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
+use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
@@ -102,7 +106,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     stop_receiver: watch::Receiver<bool>,
     config: Config,
 ) {
-    let node_version: semver::Version = NODE_VERSION.parse().unwrap();
+    let mut tasks: JoinSet<()> = JoinSet::new();
+
     let role: &'static str = if config.sequencer_config.is_main_node() {
         "main_node"
     } else {
@@ -124,7 +129,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if !config.l1_sender_config.enabled {
         unimplemented!("running without L1 Senders is temporarily not supported");
     }
-    tracing::info!(version = %node_version, role, "Initializing Node");
+    tracing::info!(version = NODE_VERSION, role, "Initializing Node");
 
     let (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source) =
         if config.sequencer_config.is_main_node() {
@@ -168,6 +173,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // Channel between L1TxWatcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
+
+    // Channel between InteropRootsWatcher and Sequencer
+    // todo: implement InteropRootsWatcher
+    let (_interop_transactions_sender, interop_transactions_receiver) =
+        tokio::sync::mpsc::channel(5);
 
     // Channel between L1UpgradeWatcher and Sequencer
     let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
@@ -224,7 +234,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .rocks_db_path
             .join(BLOCK_REPLAY_WAL_DB_NAME),
         &genesis,
-        node_version.clone(),
     )
     .await;
 
@@ -246,13 +255,39 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let state = State::new(&config.general_config, &genesis).await;
 
     tracing::info!("Initializing mempools");
+    let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
     let l2_mempool = zksync_os_mempool::in_memory(
-        state.clone(),
-        repositories.clone(),
-        chain_id,
+        zk_provider_factory.clone(),
         config.mempool_config.clone().into(),
         config.tx_validator_config.clone().into(),
     );
+
+    if config.network_config.enabled {
+        tracing::info!("Initializing p2p networking");
+        // Channel between NetworkService and Sequencer (not actually used by sequencer for now)
+        let (replay_sender, mut replays_for_sequencer) = tokio::sync::mpsc::unbounded_channel();
+
+        let network_service = NetworkService::new(
+            config.network_config.clone().into(),
+            config.sequencer_config.node_role(),
+            block_replay_storage.clone(),
+            zk_provider_factory,
+            replay_sender,
+        )
+        .await
+        .expect("failed to create network service");
+        network_service.run(&mut tasks, stop_receiver.clone());
+
+        // Consume replays to avoid channel from growing unbounded
+        tasks.spawn(async move {
+            while let Some(replay) = replays_for_sequencer.recv().await {
+                tracing::info!(
+                    block_number = replay.block_context.block_number,
+                    "received p2p replay record"
+                );
+            }
+        });
+    }
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
@@ -332,7 +367,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     tracing::info!("Initializing L1 Watchers");
-    let mut tasks: JoinSet<()> = JoinSet::new();
     tasks.spawn(
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
@@ -414,13 +448,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ======== Start Status Server ========
-    tasks.spawn(
-        run_status_server(
-            config.status_server_config.address.clone(),
-            stop_receiver.clone(),
-        )
-        .map(report_exit("Status server")),
-    );
+    if config.status_server_config.enabled {
+        tasks.spawn(
+            run_status_server(
+                config.status_server_config.address.clone(),
+                stop_receiver.clone(),
+            )
+            .map(report_exit("Status server")),
+        );
+    }
 
     // =========== Start JSON RPC ========
 
@@ -450,7 +486,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         None
     };
 
-    let (pending_block_context_sender, pending_block_context_receiver) = watch::channel(None);
+    let (last_constructed_block_ctx_sender, last_constructed_block_ctx_receiver) =
+        watch::channel(None);
     tasks.spawn(
         run_jsonrpsee_server(
             config.rpc_config.clone().into(),
@@ -461,7 +498,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l2_mempool.clone(),
             genesis_input_source,
             tx_acceptance_state_receiver,
-            pending_block_context_receiver,
+            last_constructed_block_ctx_receiver,
             main_node_provider,
         )
         .map(report_exit("JSON-RPC server")),
@@ -515,13 +552,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         next_l1_priority_id,
         l1_transactions_for_sequencer,
         l1_upgrade_transactions_receiver,
+        interop_transactions_receiver,
         l2_mempool,
         block_hashes_for_next_block,
         previous_block_timestamp,
         chain_id,
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
-        node_version,
         current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
         config.sequencer_config.base_fee_override,
@@ -529,7 +566,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.native_price_override,
         pubdata_price_receiver,
         blob_fill_ratio_receiver,
-        pending_block_context_sender,
+        last_constructed_block_ctx_sender,
         config.l1_sender_config.pubdata_mode,
     );
 
@@ -550,13 +587,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
-    tasks.spawn(
-        replay_server(
-            block_replay_storage.clone(),
-            config.sequencer_config.block_replay_server_address.clone(),
-        )
-        .map(report_exit("replay server")),
-    );
+    if config.sequencer_config.block_replay_server_enabled {
+        tasks.spawn(
+            replay_server(
+                block_replay_storage.clone(),
+                config.sequencer_config.block_replay_server_address.clone(),
+            )
+            .map(report_exit("replay server")),
+        );
+    }
 
     let repositories_clone = repositories.clone();
     tasks.spawn(async move {
@@ -572,6 +611,37 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .map(|_| tracing::warn!("state.compact_periodically() unexpectedly exited"))
             .await;
     });
+
+    if config.sequencer_config.is_main_node() {
+        let mut base_token_price_updater = BaseTokenPriceUpdater::new(
+            l1_state
+                .diamond_proxy
+                .get_base_token_address()
+                .await
+                .expect("Failed to get base token address"),
+            *l1_state.diamond_proxy.address(),
+            l1_state
+                .diamond_proxy
+                .get_admin()
+                .await
+                .expect("Failed to get chain admin address"),
+            l1_provider.clone(),
+            base_token_price_updater_config(
+                &config.base_token_price_updater_config,
+                &config.l1_sender_config,
+            ),
+            config.external_price_api_client_config.clone().into(),
+        )
+        .await
+        .expect("Failed to initialize BaseTokenPriceUpdater");
+        let stop_receiver_ = stop_receiver.clone();
+        tasks.spawn(async move {
+            base_token_price_updater
+                .run(stop_receiver_)
+                .map(|_| tracing::warn!("base_token_price_updater.run() unexpectedly exited"))
+                .await;
+        });
+    }
 
     if config.sequencer_config.is_main_node() {
         // Main Node
@@ -649,6 +719,7 @@ async fn run_main_node_pipeline(
 ) {
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
+        node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
     );
@@ -660,15 +731,17 @@ async fn run_main_node_pipeline(
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    tasks.spawn(
-        prover_server::run(
-            fri_job_manager.clone(),
-            snark_job_manager.clone(),
-            batch_storage.clone(),
-            config.prover_api_config.address.clone(),
-        )
-        .map(report_exit("prover_server_job")),
-    );
+    if config.prover_api_config.enabled {
+        tasks.spawn(
+            prover_server::run(
+                fri_job_manager.clone(),
+                snark_job_manager.clone(),
+                batch_storage.clone(),
+                config.prover_api_config.address.clone(),
+            )
+            .map(report_exit("prover_server_job")),
+        );
+    }
 
     if config.prover_api_config.fake_fri_provers.enabled {
         run_fake_fri_provers(&config.prover_api_config, tasks, fri_job_manager);

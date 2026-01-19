@@ -1,0 +1,372 @@
+use alloy::primitives::Address;
+use anyhow::Context;
+use async_trait::async_trait;
+use num::ToPrimitive;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
+use std::time::Duration;
+use std::{collections::HashMap, str::FromStr};
+use tokio::sync::RwLock;
+use url::Url;
+
+use crate::{APIToken, PriceApiClient, TokenApiRatio, ZK_DECIMALS};
+
+const AUTH_HEADER: &str = "x-cmc_pro_api_key";
+const DEFAULT_API_URL: &str = "https://pro-api.coinmarketcap.com";
+const ALLOW_TOKENS_ONLY_ON_PLATFORM_ID: i32 = 1; // 1 = Ethereum
+const ETHEREUM_ID: i32 = 1027;
+const ZKSYNC_ID: i32 = 24091;
+
+#[derive(Debug)]
+pub struct CmcPriceApiClient {
+    base_url: Url,
+    client: reqwest::Client,
+    cache_token_id_by_address: RwLock<HashMap<Address, i32>>,
+}
+
+impl CmcPriceApiClient {
+    pub fn new(
+        base_url: Option<String>,
+        api_key: SecretString,
+        client_timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        tracing::debug!(?base_url, ?client_timeout, "Creating CmcPriceApiClient");
+
+        let mut header_value = HeaderValue::from_str(api_key.expose_secret())
+            .context("Failed to create header value")?;
+        header_value.set_sensitive(true);
+        let default_headers =
+            HeaderMap::from_iter([(HeaderName::from_static(AUTH_HEADER), header_value)]);
+        let client = reqwest::Client::builder()
+            .default_headers(default_headers)
+            .timeout(client_timeout)
+            .build()
+            .context("Failed to build reqwest client")?;
+
+        let base_url = base_url.unwrap_or(DEFAULT_API_URL.to_string());
+        let base_url = Url::parse(&base_url).context("Failed to parse CoinMarketCap API URL")?;
+
+        Ok(Self {
+            base_url,
+            client,
+            cache_token_id_by_address: RwLock::default(),
+        })
+    }
+
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .get(self.base_url.join(path).expect("Failed to join URL path"))
+    }
+
+    async fn get_token_id(&self, address: Address) -> anyhow::Result<i32> {
+        if let Some(x) = self.cache_token_id_by_address.read().await.get(&address) {
+            return Ok(*x);
+        }
+
+        let response = self.get("/v1/cryptocurrency/map").send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "Http error while fetching token id. Status: {status}, token: {address}, msg: {}",
+                response.text().await.unwrap_or_default(),
+            ));
+        }
+
+        let parsed = response.json::<V1CryptocurrencyMapResponse>().await?;
+        for token_info in parsed.data {
+            if let Some(platform) = token_info.platform
+                && platform.id == ALLOW_TOKENS_ONLY_ON_PLATFORM_ID
+                && Address::from_str(&platform.token_address).is_ok_and(|a| a == address)
+            {
+                if token_info.is_active != 1 {
+                    tracing::warn!(
+                        "CoinMarketCap API reports token {address} ({}) on platform {} ({}) is not active",
+                        token_info.name,
+                        platform.id,
+                        platform.name,
+                    );
+                }
+
+                self.cache_token_id_by_address
+                    .write()
+                    .await
+                    .insert(address, token_info.id);
+                return Ok(token_info.id);
+            }
+        }
+
+        Err(anyhow::anyhow!("Token ID not found for address {address}"))
+    }
+
+    async fn get_token_price_by_address(&self, address: Address) -> anyhow::Result<f64> {
+        let id = self.get_token_id(address).await?;
+        self.get_token_price_by_id(id).await
+    }
+
+    async fn get_token_price_by_id(&self, id: i32) -> anyhow::Result<f64> {
+        let response = self
+            .get("/v2/cryptocurrency/quotes/latest")
+            .query(&[("id", id)])
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "Http error while fetching token price. Status: {status}, token: {id}, msg: {}",
+                response.text().await.unwrap_or_default(),
+            ));
+        }
+
+        response
+            .json::<V2CryptocurrencyQuotesLatestResponse>()
+            .await?
+            .data
+            .get(&id)
+            .and_then(|data| data.quote.get("USD"))
+            .map(|mq| mq.price)
+            .with_context(|| format!("Price not found for token: {id}"))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct V2CryptocurrencyQuotesLatestResponse {
+    data: HashMap<i32, CryptocurrencyQuoteObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CryptocurrencyQuoteObject {
+    quote: HashMap<String, MarketQuote>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MarketQuote {
+    price: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct V1CryptocurrencyMapResponse {
+    data: Vec<CryptocurrencyObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CryptocurrencyObject {
+    id: i32,
+    name: String,
+    is_active: u8,
+    platform: Option<CryptocurrencyPlatform>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CryptocurrencyPlatform {
+    id: i32,
+    name: String,
+    token_address: String,
+}
+
+#[async_trait]
+impl PriceApiClient for CmcPriceApiClient {
+    async fn fetch_ratio(&self, token: APIToken) -> anyhow::Result<TokenApiRatio> {
+        let (price_f64, decimals) = match token {
+            APIToken::ETH => (self.get_token_price_by_id(ETHEREUM_ID).await?, ZK_DECIMALS),
+            APIToken::ERC20 { address, decimals } => {
+                (self.get_token_price_by_address(address).await?, decimals)
+            }
+            APIToken::ZK => (self.get_token_price_by_id(ZKSYNC_ID).await?, ZK_DECIMALS),
+        };
+
+        let res = TokenApiRatio::from_f64_decimals_and_timestamp(price_f64, decimals, None);
+        tracing::trace!("fetch_ratio({token:?}): ratio {:?}", res.ratio.to_f64());
+        Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use httpmock::prelude::*;
+    use num::rational::Ratio;
+    use num::{BigInt, Signed, ToPrimitive};
+    use serde_json::json;
+
+    use super::*;
+    use crate::tests::*;
+
+    fn make_client(server: &MockServer, api_key: String) -> Box<dyn PriceApiClient> {
+        Box::new(
+            CmcPriceApiClient::new(
+                Some(server.base_url()),
+                api_key.into(),
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn make_mock_server() -> MockServer {
+        let mock_server = MockServer::start();
+        // cryptocurrency map
+        mock_server.mock(|when, then| {
+            when.method(GET)
+                .header_exists(AUTH_HEADER)
+                .path("/v1/cryptocurrency/map");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "status": {
+                        "timestamp": "2024-09-25T11:29:38.440Z",
+                        "error_code": 0,
+                        "error_message": null,
+                        "elapsed": 351,
+                        "credit_count": 1,
+                        "notice": null
+                    },
+                    "data": [
+                        {
+                            "id": 7083,
+                            "rank": 26,
+                            "name": "Uniswap",
+                            "symbol": "UNI",
+                            "slug": "uniswap",
+                            "is_active": 1,
+                            "first_historical_data": "2020-09-17T01:10:00.000Z",
+                            "last_historical_data": "2024-09-25T11:25:00.000Z",
+                            "platform": {
+                                "id": 1,
+                                "name": "Ethereum",
+                                "symbol": "ETH",
+                                "slug": "ethereum",
+                                "token_address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+                            }
+                        }
+                    ]
+                }));
+        });
+
+        // cryptocurrency quote
+        mock_server.mock(|when, then| {
+            // TODO: check for api authentication header
+            when.method(GET)
+                .header_exists(AUTH_HEADER)
+                .path("/v2/cryptocurrency/quotes/latest")
+                .query_param("id", "7083"); // Uniswap
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "status": {
+                        "timestamp": "2024-10-02T14:15:07.189Z",
+                        "error_code": 0,
+                        "error_message": null,
+                        "elapsed": 39,
+                        "credit_count": 1,
+                        "notice": null
+                    },
+                    "data": {
+                        "7083": {
+                            "id": 7083,
+                            "name": "Uniswap",
+                            "symbol": "UNI",
+                            "slug": "uniswap",
+                            "date_added": "2020-09-17T00:00:00.000Z",
+                            "tags": [],
+                            "max_supply": null,
+                            "circulating_supply": 600294743.71,
+                            "total_supply": 1000000000,
+                            "platform": {
+                                "id": 1027,
+                                "name": "Ethereum",
+                                "symbol": "ETH",
+                                "slug": "ethereum",
+                                "token_address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+                            },
+                            "is_active": 1,
+                            "infinite_supply": false,
+                            "cmc_rank": 22,
+                            "is_fiat": 0,
+                            "last_updated": "2024-10-02T14:13:00.000Z",
+                            "quote": {
+                                "USD": {
+                                    "price": 5.4629605366589855,
+                                    "last_updated": "2024-10-02T14:12:00.000Z"
+                                }
+                            }
+                        }
+                    }
+                }));
+        });
+
+        mock_server
+    }
+
+    #[tokio::test]
+    async fn mock_happy() {
+        let server = make_mock_server();
+        let client = make_client(&server, "00000000-0000-0000-0000-000000000000".to_string());
+
+        let address: Address = TEST_TOKEN_ADDRESS.parse().unwrap();
+
+        let api_price = client
+            .fetch_ratio(APIToken::ERC20 {
+                address,
+                decimals: 18,
+            })
+            .await
+            .unwrap();
+
+        let expected_ratio = Ratio::from_float(5.4629605366589855).unwrap()
+            / Ratio::from_integer(BigInt::from(10u64).pow(18u32));
+        let got_ratio = {
+            let numerator = BigInt::from(api_price.ratio.numer().to_owned());
+            let denominator = BigInt::from(api_price.ratio.denom().to_owned());
+            Ratio::new(numerator, denominator)
+        };
+        let diff = (got_ratio - &expected_ratio).abs() / expected_ratio;
+        assert!(diff.to_f64().unwrap() < 0.01);
+    }
+
+    #[tokio::test]
+    #[should_panic = "Token ID not found for address"]
+    async fn mock_fail_not_found() {
+        let server = make_mock_server();
+        let client = make_client(&server, "00000000-0000-0000-0000-000000000000".to_string());
+
+        let address: Address = Address::repeat_byte(0x42);
+
+        client
+            .fetch_ratio(APIToken::ERC20 {
+                address,
+                decimals: 18,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "run manually (accesses network); specify CoinMarketCap API key in env var CMC_API_KEY"]
+    async fn real_cmc_tether() {
+        let client = CmcPriceApiClient::new(
+            None,
+            std::env::var("CMC_API_KEY").unwrap().into(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+
+        let tether: Address = "0xdac17f958d2ee523a2206206994597c13d831ec7"
+            .parse()
+            .unwrap();
+
+        let r = client.get_token_price_by_address(tether).await.unwrap();
+        println!("token price: {r}");
+
+        let r = client
+            .fetch_ratio(APIToken::ERC20 {
+                address: tether,
+                decimals: 18,
+            })
+            .await
+            .unwrap();
+        println!("token unit price: {}", r.ratio.to_f64().unwrap());
+    }
+}

@@ -10,10 +10,13 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::config::{ChainLayout, load_chain_config};
 use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
 use zksync_os_integration_tests::contracts::{IL2AssetRouter, L1AssetRouter, TestERC20};
 use zksync_os_integration_tests::dyn_wallet_provider::EthDynProvider;
 use zksync_os_integration_tests::provider::ZksyncApi;
+use zksync_os_server::config::Config;
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType};
 
 #[test_log::test(tokio::test)]
@@ -181,11 +184,18 @@ async fn deposit_erc20(
     to: Address,
     amount: U256,
 ) -> anyhow::Result<TransactionReceipt> {
+    let default_config: Config = load_chain_config(ChainLayout::Default {
+        protocol_version: PROTOCOL_VERSION,
+    });
+    let chain_id = default_config
+        .genesis_config
+        .chain_id
+        .expect("Chain id is missing in the config");
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
         tester.l1_provider.clone(),
-        zksync_os_server::config_constants::CHAIN_ID,
+        chain_id,
     );
 
     let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;

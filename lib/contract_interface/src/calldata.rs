@@ -100,7 +100,7 @@ pub fn encode_commit_batch_data(
             [[V29_ENCODING_VERSION].to_vec(), encoded_data].concat()
         }
         // 31 needed for upgrade integration test
-        30 | 31 => {
+        30..=31 => {
             let commit_batch_info = IExecutor::CommitBatchInfoZKsyncOS::from(commit_info.clone());
             tracing::debug!(
                 last_batch_hash = ?prev_batch_info.hash(),

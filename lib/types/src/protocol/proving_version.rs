@@ -33,6 +33,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
             (30, 2) => Ok(ProvingVersion::V6),
             (31, 0) => Ok(ProvingVersion::V6),
             (31, 1) => Ok(ProvingVersion::V6),
+            (32, 0) => Ok(ProvingVersion::V6),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -54,6 +55,7 @@ impl ProvingVersion {
     /// verification key hash generated from zksync-os v0.1.0, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
     const V4_VK_HASH: &'static str =
         "0xa385a997a63cc78e724451dca8b044b5ef29fcdc9d8b6ced33d9f58de531faa5";
+
     /// verification key hash generated from zksync-os v0.2.4, zksync-airbender v0.5.1 and zkos-wrapper v0.5.3
     const V5_VK_HASH: &'static str =
         "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581";
@@ -112,6 +114,7 @@ mod tests {
             ((0, 30, 1), ProvingVersion::V6),
             ((0, 31, 0), ProvingVersion::V6),
             ((0, 31, 1), ProvingVersion::V6),
+            ((0, 32, 0), ProvingVersion::V6),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -121,7 +124,7 @@ mod tests {
             assert_eq!(&proving_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 32, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 33, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

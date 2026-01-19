@@ -30,6 +30,7 @@ impl TryFrom<ProtocolSemanticVersion> for ExecutionVersion {
             29 => Ok(ExecutionVersion::V4),
             30 => Ok(ExecutionVersion::V5),
             31 => Ok(ExecutionVersion::V5),
+            32 => Ok(ExecutionVersion::V5),
             _ => Err(ExecutionVersionError::UnsupportedVersion(version)),
         }
     }
@@ -57,6 +58,8 @@ mod tests {
             ((0, 30, 1), ExecutionVersion::V5),
             ((0, 31, 0), ExecutionVersion::V5),
             ((0, 31, 1), ExecutionVersion::V5),
+            ((0, 32, 0), ExecutionVersion::V5),
+            ((0, 32, 1), ExecutionVersion::V5),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -66,7 +69,7 @@ mod tests {
             assert_eq!(&exec_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 32, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 33, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
