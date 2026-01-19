@@ -44,7 +44,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
                         notification.block.as_ref().header.clone(),
                         notification.block.hash(),
                     ),
-                    None,
+                    Some(U256::ZERO),
                     Some(U256::from(notification.block.as_ref().deref().rlp_length())),
                 )
             })
