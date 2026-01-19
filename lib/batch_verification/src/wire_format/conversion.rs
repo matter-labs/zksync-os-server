@@ -55,7 +55,7 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
         } = value;
         let commit_data_alloy = CommitBatchInfoZKsyncOS::from(commit_data);
         let encoded_commit_data = commit_data_alloy.abi_encode();
-        // last_commit_timestamp is used in transport, but it is fine, because it is unused in L1
+        // StoredBatchInfo conversion is not lossless last_commit_timestamp is zeroed. It is fine, because it is a legacy field unused in L1.
         let prev_commit_data_alloy = IExecutor::StoredBatchInfo::from(&prev_commit_data);
         let encoded_prev_commit_data = prev_commit_data_alloy.abi_encode();
         Self {
