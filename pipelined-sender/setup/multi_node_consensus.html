@@ -1,0 +1,343 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Multi-Node Consensus - ZKsync OS Server Developer Docs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../css/version-box.css">
+        <link rel="stylesheet" href=".././css/mdbook-admonish.css">
+
+        <!-- MathJax -->
+        <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">ZKsync OS Server Developer Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/zksync-os-server/tree/main/docs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/zksync-os-server/tree/main/docs/src/setup/multi_node_consensus.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="multi-node-consensus"><a class="header" href="#multi-node-consensus">Multi-node consensus</a></h1>
+<p>This document describes the two node roles in a multi-node setup:</p>
+<ol>
+<li><strong>ConsensusNode</strong>: participates in Raft consensus and can become leader at any time.</li>
+<li><strong>ExternalNode</strong>: does <strong>not</strong> participate in consensus; it downloads canonized blocks from <code>ZksProtocol</code> and replays them locally.</li>
+</ol>
+<p>A ConsensusNode will propose blocks when it is leader and will follow canonized blocks when it is a replica. An ExternalNode only replays canonized blocks and never proposes.</p>
+<blockquote>
+<p><strong>Batcher subsystem (L1 settlement) is not yet highly available.</strong> The batcher pipeline — proof generation, L1 batch submission — must be enabled on exactly one consensus node via <code>batcher_enabled=true</code> (which is the default). The other consensus nodes should set <code>batcher_enabled=false</code>. This choice is independent of <code>consensus_bootstrap</code> and the current Raft leader: the batcher-enabled node may be a leader or a follower. Leader failover works for block production. If the node running the batcher fails, another node will be elected leader and continue producing blocks, but those blocks will not be submitted to L1 until the original batcher node restarts or the cluster is manually reconfigured to enable the batcher on a different node.</p>
+</blockquote>
+<h3 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h3>
+<p>Before starting any node, an L1 must be running at <code>general_l1_rpc_url</code> (defaults to <code>http://localhost:8545</code>) with the chain’s contract state preloaded. The <code>run_local.sh</code> script does this automatically; to do it manually for the v30.2 default chain:</p>
+<pre><code class="language-bash">gzip -d &lt; ./local-chains/v30.2/l1-state.json.gz &gt; /tmp/l1-state.json
+anvil --load-state /tmp/l1-state.json --port 8545 --block-time 0.25 --mixed-mining --slots-in-an-epoch 10
+</code></pre>
+<p>The default ports used by ConsensusNode #1 below (<code>3050</code> RPC, <code>3060</code> p2p, <code>3071</code> status server, <code>3124</code> prover API, <code>3312</code> Prometheus) must be free on the host. In this example ConsensusNode #1 is also the only batcher-enabled node, so ConsensusNode #2 and #3 set <code>BATCHER_ENABLED=false</code> and <code>PROVER_API_ENABLED=false</code>. Each node keeps its status server enabled on a unique port so failover can be checked through <code>/status</code>.</p>
+<p><strong>ConsensusNode</strong></p>
+<p>Requirements:</p>
+<ul>
+<li>Networking must be enabled (Raft RPC is transported over <code>lib/network</code>).</li>
+<li><code>consensus_enabled=true</code> and a list of Raft peer IDs (<code>consensus_peer_ids</code>).</li>
+<li>Set <code>consensus_bootstrap=true</code> on each consensus node that may initialize cluster membership.
+It is safe to set this on all consensus nodes; the first initializer wins.</li>
+<li>Local Raft node ID is always derived from <code>network_secret_key</code>.</li>
+<li><code>consensus_peer_ids</code> must include that derived local ID.</li>
+</ul>
+<p>Example: three-node consensus (local dev, leader failover)</p>
+<p>Use three enodes in <code>network_boot_nodes</code> and three peer IDs in <code>consensus_peer_ids__json</code>.
+All three nodes may use <code>consensus_bootstrap=true</code>, and exactly one consensus node should leave <code>batcher_enabled=true</code>.</p>
+<p>For convenience, define these first:</p>
+<pre><code class="language-bash">ENODE_1="enode://246e07030b4c48b8f28ab1fdf797a02308b0ca724696b695aabee48ea48298ff221144a0c0f14ebf030aea6d5fb6b31bd3a02676204bb13e78336bb824e32f1d@127.0.0.1:3060"
+ENODE_2="enode://d2db8005d59694a5b79b7c58d4d375c60c9323837e852bbbfd05819621c48a4218cefa37baf39a164e2a6f6c1b34c379c4a72c7480b5fbcc379d1befb881e8fc@127.0.0.1:3061"
+ENODE_3="enode://2991880ae3ff81b881c86f54d2af0ee85a325231bb75f903f06f432020101614dbfbc75ddec885f5e101fed272bee661f492fb6dd80147b656da990635a7e581@127.0.0.1:3062"
+PEER_IDS_JSON='[
+  "0x246e07030b4c48b8f28ab1fdf797a02308b0ca724696b695aabee48ea48298ff221144a0c0f14ebf030aea6d5fb6b31bd3a02676204bb13e78336bb824e32f1d",
+  "0xd2db8005d59694a5b79b7c58d4d375c60c9323837e852bbbfd05819621c48a4218cefa37baf39a164e2a6f6c1b34c379c4a72c7480b5fbcc379d1befb881e8fc",
+  "0x2991880ae3ff81b881c86f54d2af0ee85a325231bb75f903f06f432020101614dbfbc75ddec885f5e101fed272bee661f492fb6dd80147b656da990635a7e581"
+]'
+BOOT_NODES="${ENODE_1},${ENODE_2},${ENODE_3}"
+</code></pre>
+<p>ConsensusNode #1:</p>
+<pre><code class="language-bash">NETWORK_ENABLED=true \
+NETWORK_SECRET_KEY=0af6153646bbf600f55ce455e1995283542b1ae25ce2622ce1fda443927c5308 \
+NETWORK_ADDRESS=127.0.0.1 \
+NETWORK_PORT=3060 \
+NETWORK_BOOT_NODES="${BOOT_NODES}" \
+CONSENSUS_ENABLED=true \
+CONSENSUS_BOOTSTRAP=true \
+CONSENSUS_PEER_IDS__JSON="${PEER_IDS_JSON}" \
+GENERAL_ROCKS_DB_PATH="db/en-1" \
+cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
+</code></pre>
+<p>ConsensusNode #2:</p>
+<pre><code class="language-bash">NETWORK_ENABLED=true \
+NETWORK_SECRET_KEY=c2c8042b03801e2e14b395ed24f970ead7646a9ff315b54f747bcefdb99afda7 \
+NETWORK_ADDRESS=127.0.0.1 \
+NETWORK_PORT=3061 \
+NETWORK_BOOT_NODES="${BOOT_NODES}" \
+CONSENSUS_ENABLED=true \
+CONSENSUS_BOOTSTRAP=true \
+CONSENSUS_PEER_IDS__JSON="${PEER_IDS_JSON}" \
+BATCHER_ENABLED=false \
+PROVER_API_ENABLED=false \
+STATUS_SERVER_ADDRESS=0.0.0.0:3072 \
+RPC_ADDRESS=0.0.0.0:3051 \
+OBSERVABILITY_PROMETHEUS_PORT=3313 \
+GENERAL_ROCKS_DB_PATH="db/en-2" \
+cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
+</code></pre>
+<p>ConsensusNode #3:</p>
+<pre><code class="language-bash">NETWORK_ENABLED=true \
+NETWORK_SECRET_KEY=8b50ece5c94762fb0b8dcd2f859fb0132b86c0540c388806b6a03e0b1c25978d \
+NETWORK_ADDRESS=127.0.0.1 \
+NETWORK_PORT=3062 \
+NETWORK_BOOT_NODES="${BOOT_NODES}" \
+CONSENSUS_ENABLED=true \
+CONSENSUS_BOOTSTRAP=true \
+CONSENSUS_PEER_IDS__JSON="${PEER_IDS_JSON}" \
+BATCHER_ENABLED=false \
+PROVER_API_ENABLED=false \
+STATUS_SERVER_ADDRESS=0.0.0.0:3073 \
+RPC_ADDRESS=0.0.0.0:3052 \
+OBSERVABILITY_PROMETHEUS_PORT=3314 \
+GENERAL_ROCKS_DB_PATH="db/en-3" \
+cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
+</code></pre>
+<p>Failover check:</p>
+<ol>
+<li>Start all three nodes and wait until one is leader.</li>
+<li>Stop the leader process.</li>
+<li>Verify one of the remaining two nodes becomes leader (after election timeout).</li>
+<li>Restart the stopped node and verify it rejoins as follower.</li>
+</ol>
+<p><strong>ExternalNode</strong></p>
+<p>External nodes do not participate in Raft. They download canonized blocks using the existing p2p protocol and replay them locally.</p>
+<p>Example (local dev):</p>
+<p>Main Node:</p>
+<pre><code class="language-bash">network_enabled=true \
+network_secret_key=0af6153646bbf600f55ce455e1995283542b1ae25ce2622ce1fda443927c5308 \
+network_boot_nodes=enode://246e07030b4c48b8f28ab1fdf797a02308b0ca724696b695aabee48ea48298ff221144a0c0f14ebf030aea6d5fb6b31bd3a02676204bb13e78336bb824e32f1d@127.0.0.1:3060,enode://d2db8005d59694a5b79b7c58d4d375c60c9323837e852bbbfd05819621c48a4218cefa37baf39a164e2a6f6c1b34c379c4a72c7480b5fbcc379d1befb881e8fc@127.0.0.1:3060 \
+cargo run
+</code></pre>
+<p>External Node:</p>
+<pre><code class="language-bash">RUST_LOG="info,zksync_os_storage_api=debug" \
+network_enabled=true \
+network_secret_key=c2c8042b03801e2e14b395ed24f970ead7646a9ff315b54f747bcefdb99afda7 \
+network_address=127.0.0.1 \
+network_port=3061 \
+network_boot_nodes="enode://246e07030b4c48b8f28ab1fdf797a02308b0ca724696b695aabee48ea48298ff221144a0c0f14ebf030aea6d5fb6b31bd3a02676204bb13e78336bb824e32f1d@127.0.0.1:3060,enode://d2db8005d59694a5b79b7c58d4d375c60c9323837e852bbbfd05819621c48a4218cefa37baf39a164e2a6f6c1b34c379c4a72c7480b5fbcc379d1befb881e8fc@127.0.0.1:3060" \
+general_main_node_rpc_url="http://127.0.0.1:3050" \
+general_node_role=external \
+observability_prometheus_port=3313 \
+general_rocks_db_path="db/en" \
+status_server_enabled=false \
+rpc_address=0.0.0.0:3051 \
+cargo run
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../setup/docker.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../setup/batch_verification.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../setup/docker.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../setup/batch_verification.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+        <script>
+            window.playground_line_numbers = true;
+        </script>
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+        <script src="../ace.js"></script>
+        <script src="../editor.js"></script>
+        <script src="../mode-rust.js"></script>
+        <script src="../theme-dawn.js"></script>
+        <script src="../theme-tomorrow_night.js"></script>
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../js/version-box.js"></script>
+        <script src="../js/mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>

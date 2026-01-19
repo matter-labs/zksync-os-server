@@ -1,0 +1,336 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Besu Network - ZKsync OS Server Developer Docs</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../css/version-box.css">
+        <link rel="stylesheet" href=".././css/mdbook-admonish.css">
+
+        <!-- MathJax -->
+        <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">ZKsync OS Server Developer Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/zksync-os-server/tree/main/docs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/zksync-os-server/tree/main/docs/src/setup/besu.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="besu-network"><a class="header" href="#besu-network">Besu Network</a></h1>
+<p>ZKsync OS can settle to a <a href="https://besu.hyperledger.org/">Besu</a> L1 (for example a private QBFT
+network) instead of Anvil. Two conditions must hold for the node to run against it.</p>
+<h2 id="archive-node"><a class="header" href="#archive-node">Archive node</a></h2>
+<p>Besu must run as an <strong>archive node</strong> (<code>--data-storage-format=FOREST</code>). On startup the server
+discovers each L1 contract’s deployment block by binary-searching historical <code>eth_getCode</code> calls,
+which a pruned node (the default <code>BONSAI</code> format) cannot answer.</p>
+<h2 id="forks"><a class="header" href="#forks">Forks</a></h2>
+<p>Enable all forks <strong>up to and including Cancun</strong>. On a Cancun chain the server posts pubdata as
+<strong>EIP-4844 blobs</strong>.</p>
+<p><strong>Fusaka (Osaka) is optional.</strong> If you also enable it, the server switches to the newer <strong>EIP-7594</strong>
+blob transaction format. The node detects the chain’s active fork through <code>eth_config</code> at startup
+and picks the matching blob format automatically — no configuration needed.</p>
+<h3 id="genesis-up-to-cancun"><a class="header" href="#genesis-up-to-cancun">Genesis up to Cancun</a></h3>
+<p>A complete Besu QBFT genesis with forks enabled through Cancun, ready to copy into a
+<code>qbftConfigFile.json</code>:</p>
+<pre><code class="language-json">{
+    "genesis": {
+        "config": {
+            "chainId": 31337,
+            "homesteadBlock": 0,
+            "eip150Block": 0,
+            "eip158Block": 0,
+            "byzantiumBlock": 0,
+            "constantinopleBlock": 0,
+            "constantinopleFixBlock": 0,
+            "istanbulBlock": 0,
+            "berlinBlock": 0,
+            "londonBlock": 0,
+            "shanghaiTime": 0,
+            "cancunTime": 0,
+            "zeroBaseFee": true,
+            "qbft": {
+                "blockperiodseconds": 2,
+                "epochlength": 30000,
+                "requesttimeoutseconds": 4
+            }
+        },
+        "nonce": "0x0",
+        "timestamp": "0x58ee40ba",
+        "gasLimit": "0x1c9c380",
+        "baseFeePerGas": "0x0",
+        "blobGasUsed": "0x0",
+        "excessBlobGas": "0x0",
+        "parentBeaconBlockRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "difficulty": "0x1",
+        "mixHash": "0x63746963616c2062797a616e74696e65206661756c7420746f6c6572616e6365",
+        "coinbase": "0x0000000000000000000000000000000000000000",
+        "alloc": {
+            "fe3b557e8fb62b89f4916b721be55ceb828dbd73": {
+                "privateKey": "8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63",
+                "comment": "Testing only. Besu ignores this privateKey field in alloc.",
+                "balance": "0xad78ebc5ac6200000"
+            },
+            "627306090abaB3A6e1400e9345bC60c78a8BEf57": {
+                "privateKey": "c87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3",
+                "comment": "Testing only. Besu ignores this privateKey field in alloc.",
+                "balance": "90000000000000000000000"
+            },
+            "f17f52151EbEF6C7334FAD080c5704D77216b732": {
+                "privateKey": "ae6ae8e5ccbfb04590405997ee2d52d2b330726137b875053c36d94e974d162f",
+                "comment": "Testing only. Besu ignores this privateKey field in alloc.",
+                "balance": "90000000000000000000000"
+            },
+            "a61464658afeaf65cccaafd3a512b69a83b77618": {
+                "privateKey": "ac1e735be8536c6534bb4f17f06f6afc73b2b5ba84ac2cfb12f7461b20c0bbe3",
+                "comment": "zksync-os-scripts rich account. Besu ignores this privateKey field in alloc.",
+                "balance": "90000000000000000000000"
+            },
+            "36615cf349d7f6344891b1e7ca7c72883f5dc049": {
+                "privateKey": "7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110",
+                "comment": "zksync-os-scripts rich account. Besu ignores this privateKey field in alloc.",
+                "balance": "90000000000000000000000"
+            },
+            "4e59b44847b379578588920cA78FbF26c0B4956C": {
+                "comment": "Foundry deterministic deployment proxy (CREATE2 factory)",
+                "balance": "0x0",
+                "code": "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
+            }
+        }
+    },
+    "blockchain": {
+        "nodes": {
+            "generate": true,
+            "count": 4
+        }
+    }
+}
+</code></pre>
+<p>The <code>alloc</code> predeploys the CREATE2 factory at <code>0x4e59b44847b379578588920cA78FbF26c0B4956C</code>, which the
+deployer relies on. The <code>privateKey</code> fields are ignored by Besu and are only there for test tooling.</p>
+<h3 id="enabling-fusaka"><a class="header" href="#enabling-fusaka">Enabling Fusaka</a></h3>
+<p>To move the chain to Fusaka, add Prague and Osaka activation plus a blob schedule to <code>config</code>:</p>
+<pre><code class="language-json">{
+  "config": {
+    "...": "... forks up to cancunTime as above ...",
+    "cancunTime": 0,
+    "pragueTime": 0,
+    "osakaTime": 0,
+    "blobSchedule": {
+      "osaka": {
+        "target": 6,
+        "max": 9,
+        "baseFeeUpdateFraction": 5007716
+      }
+    }
+  }
+}
+</code></pre>
+<p>With Osaka active, the server sends EIP-7594 blob transactions instead of EIP-4844.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../setup/local_run.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../setup/docker.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../setup/local_run.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../setup/docker.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+        <script>
+            window.playground_line_numbers = true;
+        </script>
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+        <script src="../ace.js"></script>
+        <script src="../editor.js"></script>
+        <script src="../mode-rust.js"></script>
+        <script src="../theme-dawn.js"></script>
+        <script src="../theme-tomorrow_night.js"></script>
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../js/version-box.js"></script>
+        <script src="../js/mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>

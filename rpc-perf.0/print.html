@@ -1,0 +1,934 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ZKsync OS Server Developer Docs</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="css/version-box.css">
+        <link rel="stylesheet" href="./css/mdbook-admonish.css">
+
+        <!-- MathJax -->
+        <script async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">ZKsync OS Server Developer Docs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/matter-labs/zksync-os-server/tree/main/docs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="zksync-os-server-developer-documentation"><a class="header" href="#zksync-os-server-developer-documentation">ZKsync OS Server Developer Documentation</a></h1>
+<p>This book guides you through running, understanding, and extending the <strong>ZKsync OS Server</strong>.</p>
+<h2 id="understanding-the-system"><a class="header" href="#understanding-the-system">Understanding the System</a></h2>
+<p>Deep dives into internal components and lifecycle.</p>
+<ul>
+<li><a href="design/db.html">Database Layout</a></li>
+<li><a href="design/state.html">State Model</a></li>
+<li><a href="design/tree.html">Merkle Tree Structure</a></li>
+<li><a href="design/genesis.html">Genesis Process</a></li>
+</ul>
+<h2 id="running-the-system"><a class="header" href="#running-the-system">Running the System</a></h2>
+<p>These guides help you set up and operate the server in different environments.</p>
+<ul>
+<li><a href="./guides/local_setup_update.html">Updating local chains: genesis and L1 state</a> - local chain and setup, genesis and L1 state update guide.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="setup"><a class="header" href="#setup">Setup</a></h1>
+<ul>
+<li><a href="setup/prerequisites.html">Prerequisites</a></li>
+<li><a href="setup/local_run.html">Local Run</a></li>
+<li><a href="setup/docker.html">Docker Setup</a></li>
+<li><a href="setup/external_node.html">External Node</a></li>
+<li><a href="setup/local_explorer.html">Otterscan (Local Explorer)</a></li>
+<li><a href="setup/exposed_ports.html">Exposed Ports</a></li>
+<li><a href="setup/faq.html">FAQ</a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>This project requires:</p>
+<ul>
+<li>The <strong>Foundry nightly toolchain</strong></li>
+<li>The <strong>Rust toolchain</strong></li>
+</ul>
+<h3 id="install-foundry-v151"><a class="header" href="#install-foundry-v151">Install Foundry (v1.5.1)</a></h3>
+<p>Install <a href="https://getfoundry.sh/">Foundry</a> v1.5.1:</p>
+<pre><code class="language-bash"># Download the Foundry installer
+curl -L https://foundry.paradigm.xyz | bash
+
+# Install forge, cast, anvil, chisel
+# Ensure you are using the 1.5.1 stable release
+foundryup -i 1.5.1
+</code></pre>
+<p>Verify your installation:</p>
+<pre><code class="language-bash">anvil --version
+</code></pre>
+<p>The output should include a <code>anvil Version: 1.5.1</code>.</p>
+<h3 id="install-rust"><a class="header" href="#install-rust">Install Rust</a></h3>
+<p>Install <a href="https://www.rust-lang.org/tools/install">Rust</a> using <code>rustup</code>:</p>
+<pre><code class="language-bash">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+</code></pre>
+<p>After installation, ensure Rust is available:</p>
+<pre><code class="language-bash">rustc --version
+</code></pre>
+<h3 id="linux-packages"><a class="header" href="#linux-packages">Linux packages</a></h3>
+<pre><code class="language-bash"># essentials
+sudo apt-get install -y build-essential pkg-config cmake clang lldb lld libssl-dev apt-transport-https ca-certificates curl software-properties-common git    
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h2 id="run"><a class="header" href="#run">Run</a></h2>
+<h3 id="using-the-run_localsh-script"><a class="header" href="#using-the-run_localsh-script">Using the <code>run_local.sh</code> Script</a></h3>
+<p>⚠️ This script is a temporary solution. Do not depend on it in production.</p>
+<p>The <code>run_local.sh</code> script automates starting Anvil and chain node(s):</p>
+<pre><code class="language-bash"># Run a single chain
+./run_local.sh ./local-chains/v30.2/default
+
+# Run multiple chains
+./run_local.sh ./local-chains/v30.2/multi_chain
+
+# Run with logging to files
+./run_local.sh ./local-chains/v30.2/multi_chain --logs-dir ./logs
+</code></pre>
+<h3 id="manual-setup"><a class="header" href="#manual-setup">Manual setup</a></h3>
+<p>To run node locally, first decompress state and launch <code>anvil</code>:</p>
+<pre><code>gzip -dfk ./local-chains/v30.2/l1-state.json.gz
+anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545
+</code></pre>
+<p>then launch the server:</p>
+<pre><code>cargo run
+</code></pre>
+<p>To restart the chain, erase the local DB and re-run anvil:</p>
+<pre><code>rm -rf db/*
+</code></pre>
+<p>By default, fake (dummy) proofs are used both for FRI and SNARK proofs.</p>
+<p><strong>Rich account:</strong></p>
+<pre><code>PRIVATE_KEY=0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+ACCOUNT_ID=0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
+</code></pre>
+<p>Example transaction to send:</p>
+<pre><code>cast send -r http://localhost:3050 0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0 --value 
+100 --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+</code></pre>
+<p><strong>Config options</strong></p>
+<p>See <code>node/sequencer/config.rs</code> for config options and defaults. Use a JSON configuration file to override the defaults, e.g.:</p>
+<pre><code>cargo run --release -- --config ./local-chains/v30.2/default/config.yaml
+</code></pre>
+<p>Explore the <code>local-chains</code> folder for additional chain configs grouped by protocol version. Detailed information is available in <code>local-chains/README.md</code>.</p>
+<p>You can also use environment variables to override the default settings:</p>
+<pre><code>prover_api_fake_provers_enabled=false cargo run --release
+</code></pre>
+<p>If both the JSON config file and environment variables are set, the latter takes precedence.</p>
+<p><strong>Ephemeral mode</strong>
+Ephemeral mode runs the node using a temporary, isolated state directory, allowing you to spin up one or more local chains without them interfering with the same folder. When enabled, the node creates a temporary base directory for RocksDB and the file-backed object store, this directory is automatically removed on shutdown. To remain as lightweight as possible, Ephemeral mode disables all APIs except for JSON-RPC (status, prometheus APIs etc are unavailable). It can be used for quick local testing and multi-chain setups.</p>
+<p>The <code>ephemeral</code> setting is part of the general config and can be set like any other config value:</p>
+<pre><code>general_ephemeral=true cargo run --release
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="docker"><a class="header" href="#docker">Docker</a></h1>
+<pre><code>sudo docker build -t zksync_os_sequencer .
+sudo docker run -d --name sequencer -p 3050:3050 -p 3124:3124 -p 3312:3312 -e batcher_maximum_in_flight_blocks=15  -v /mnt/localssd/db:/db   zksync_os_sequencer
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="external-node"><a class="header" href="#external-node">External node</a></h1>
+<p>Setting the <code>general_node_role=external</code> environment variable puts the node in external node mode, which means it
+receives block replays from another node instead of producing its own blocks. The node will get priority transactions
+from L1 and check that they match the ones in the replay but it won’t change L1 state.</p>
+<p>To run the external node locally, you need to enable networking on both main node and external node. Then set external node’s services’ ports so they don’t overlap with the main node.</p>
+<p>For example:</p>
+<pre><code class="language-bash">network_enabled=true \
+network_secret_key=9cc842aaeb1492e567d989a34367c7239d1db21bad31557689c3d9d16e45b0b3 \
+network_address=127.0.0.1 \
+network_port=3061 \
+network_boot_nodes=enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060 \
+sequencer_rocks_db_path=./db/en \
+sequencer_prometheus_port=3313 \
+rpc_address=0.0.0.0:3051 \
+cargo run --release
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="batch-verification-2fa"><a class="header" href="#batch-verification-2fa">Batch verification (2FA)</a></h1>
+<p>Batch verification requires each batch generated by main node to be signed-of by
+certain number of designated ENs before its committed on L1. To enable it configure as follows.</p>
+<p>Main node / sequencer:</p>
+<ul>
+<li><code>batch_verification_server_enabled=true</code> – enable</li>
+<li><code>batch_verification_threshold</code> – required number of ENs to sign each batch</li>
+<li><code>batch_verification_accepted_signers</code> – comma separated list of eth addresses corresponding to EN keys</li>
+</ul>
+<p>Participating ENs:</p>
+<ul>
+<li><code>batch_verification_client_enabled=true</code> – enable</li>
+<li><code>batch_verification_connect_address</code> – ip and port of main node verification server (eg. <code>10.10.1.1:1234</code>)</li>
+<li><code>batch_verification_signing_key</code> – EN private key</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="otterscan-local-explorer"><a class="header" href="#otterscan-local-explorer">Otterscan (Local Explorer)</a></h1>
+<p>Server supports <code>ots_</code> namespace and hence can be used in combination
+with <a href="https://github.com/otterscan/otterscan">Otterscan</a>
+block explorer. To run a local instance as a Docker container (bound to <code>http://localhost:5100</code>):</p>
+<pre><code>docker run --rm -p 5100:80 --name otterscan -d --env ERIGON_URL="http://127.0.0.1:3050" otterscan/otterscan
+</code></pre>
+<p>See Otterscan’s <a href="https://docs.otterscan.io/intro/">docs</a> for other running options.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="exposed-ports"><a class="header" href="#exposed-ports">Exposed Ports</a></h1>
+<ul>
+<li><code>3050</code> - L2 JSON RPC</li>
+<li><code>3060</code> - P2P communication (e.g. replay transport)</li>
+<li><code>3124</code> - Prover API (e.g. <code>127.0.0.1/prover-jobs/status</code>) (only enabled if <code>prover_api_component_enabled</code> is set to
+<code>true</code>)</li>
+<li><code>3312</code> - Prometheus</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="faq"><a class="header" href="#faq">FAQ</a></h1>
+<p><strong>Failed to read L1 state: contract call to <code>getAllZKChainChainIDs</code> returned no data (“0x”); the called address might
+not be a contract</strong></p>
+<p>Something went wrong with L1 - check that you’re really running the anvil with the proper state on the right port.</p>
+<p><strong>Failed to deserialize context</strong></p>
+<p>If you hit this error when starting, check if you don’t have some ‘old’ rocksDB data in db/node1 directory.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="design-principles"><a class="header" href="#design-principles">Design principles</a></h1>
+<ul>
+<li>Minimal, async persistence
+<ul>
+<li>to meet throughput and latency requirements, we avoid synchronous persistence at the critical path. Additionally,
+we aim at storing only the data that is strictly needed - minimizing the potential for state inconsistency</li>
+</ul>
+</li>
+<li>Easy to replay arbitrary blocks
+<ul>
+<li>Sequencer: components are idempotent</li>
+<li>Batcher: <code>batcher</code> component skips all blocks until the first uncommitted batch.
+Thus, downstream components only receive batches that they need to act upon</li>
+</ul>
+</li>
+<li>State - strong separation between
+<ul>
+<li>Actual state - data needed to execute VM: key-value storage and preimages map</li>
+<li>Receipts repositories - data only needed in API</li>
+<li>Data related to Proofs and L1 - not needed by sequencer / JSON RPC - only introduced downstream from <code>batcher</code></li>
+</ul>
+</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="subsystems"><a class="header" href="#subsystems">Subsystems</a></h1>
+<ul>
+<li><strong>Sequencer</strong> subsystem — mandatory for every node. Executes transactions in VM, sends results downstream to other
+components.
+<ul>
+<li>Handles <code>Produce</code> and <code>Replay</code> commands in an uniform way (see <code>model/mod.rs</code> and <code>execution/block_executor.rs</code>)</li>
+<li>For each block: (1) persists it in WAL (see <code>block_replay_storage.rs</code>), (2) pushes to <code>state</code> (see <code>state</code>
+crate), (3) exposes the block and tx receipts to API (see <code>repositories/mod.rs</code>), (4) pushes to async channels for
+downstream subsystems. Waits on backpressure.</li>
+</ul>
+</li>
+<li><strong>API</strong> subsystem — optional (not configurable atm). Has shared access to <code>state</code>. Exposes ethereum-compatible JSON
+RPC</li>
+<li><strong>Batcher</strong> subsystem — runs for the main node - most of it is disabled for ENs.
+<ul>
+<li>Turns a stream of blocks into a stream of batches (1 batch = 1 proof = 1 L1 commit); exposes Prover APIs; submits
+batches and proofs to L1.</li>
+<li>For each batch, computes the Prover Input (runs RiscV binary (<code>app.bin</code>) and records its input as a stream of
+<code>Vec&lt;u32&gt;</code> - see <code>batcher/mod.rs</code>)</li>
+<li>This process requires Merkle Tree with materialized root hashes and proofs at every block boundary.</li>
+<li>Runs L1 senders for each of <code>commit</code> / <code>prove</code> / <code>execute</code></li>
+<li>Runs Priority Tree Manager that applies new L1-&gt;L2 transactions to the dynamic Merkle tree and prepares <code>execute</code> commands.
+It’s run both for main node and ENs. ENs don’t send <code>execute</code> txs to L1, but they need to keep the tree up to date,
+so that if the node become main, it doesn’t need to build the tree from scratch.</li>
+</ul>
+</li>
+</ul>
+<p>Note on <strong>Persistent Tree</strong> — it is only necessary for Batcher Subsystem. Sequencer doesn’t need the tree — block hashes
+don’t include root hash. Still, even when batcher subsystem is not enabled, we want to run the tree for potential
+failover.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="component-details"><a class="header" href="#component-details">Component Details</a></h1>
+<img width="1549" height="658" alt="Screenshot 2025-07-24 at 15 00 55" src="https://github.com/user-attachments/assets/e1a472bd-d14b-4840-bd89-223347bebccf" />
+<p>See individual components and state recovery details in the table below. Note that most components have little to no
+internal state or persistence — this is one of the design principles.</p>
+<div class="table-wrapper"><table><thead><tr><th>Component</th><th>In-memory state</th><th>Persistence</th><th>State Recovery</th></tr></thead><tbody>
+<tr><td><strong>Command Source</strong></td><td><code>starting_block</code> (only used on startup)</td><td>none</td><td><code>starting_block</code> is the first block <strong>after</strong> the compacted block stored in <code>state</code>, i.e., <code>starting_block = highest_block - blocks_to_retain_in_memory</code>.</td></tr>
+<tr><td><strong>BlockContextProvider</strong></td><td><code>next_l1_priority_id</code>; <code>block_hashes_for_next_block</code> (last 256 block hashes)</td><td>none</td><td><code>next_l1_priority_id</code>: take from <code>ReplayRecord</code> of <code>starting_block - 1</code>; <code>block_hashes_for_next_block</code>: take from 256 <code>ReplayRecord</code>s before <code>starting_block</code></td></tr>
+<tr><td><strong>L1Watcher</strong></td><td>Gapless list of Priority transactions - starting from the last committed to L1</td><td>none</td><td>none - recovers itself from L1</td></tr>
+<tr><td><strong>L2Mempool</strong> <em>(RETH crate)</em></td><td>prepared list of pending L2 transactions</td><td>none</td><td>none (consider persisting mempool transactions in the future)</td></tr>
+<tr><td><strong>BlockExecutor</strong></td><td>none 🔥</td><td>none</td><td>none</td></tr>
+<tr><td><strong>Repositories</strong> (API subsystem)</td><td>BlockHeaders and Transactions for ~<code>blocks_to_retain_in_memory</code> blocks</td><td>Historical BlockHeaders and Transactions</td><td>none - recovers naturally when replaying blocks from <code>starting_block</code></td></tr>
+<tr><td><strong>State</strong></td><td>All Storage Logs and Preimages for <code>blocks_to_retain_in_memory</code> last blocks</td><td>Compacted state at some older block (<code>highest_block - blocks_to_retain_in_memory</code>): full state map and all preimages</td><td>none - recovers naturally when replaying blocks from <code>starting_block</code></td></tr>
+<tr><td><strong>Merkle Tree</strong></td><td>Only persistence</td><td>Full Merkle tree - including previous values on each leaf</td><td>none</td></tr>
+<tr><td>⬇️ <em>Batcher Subsystem Components</em></td><td>⬇️ <em>Components below operate on Batches - not Blocks️</em></td><td>⬇️ <em>Components below must not rely on persistence - otherwise failover is not possible</em></td><td>⬇️</td></tr>
+<tr><td><strong>Batcher</strong></td><td>startup: <code>starting_batch</code> and <code>batcher_starting_block</code>; <br/> operation: Trailing Batch’s <code>CommitBatchInfo</code>;</td><td>none</td><td><code>first_block_to_process</code>: block <strong>after</strong> the last block in the last committed L1 batch;<br/> <code>last_persisted_block</code>: the block after which we start checking for batch timeouts <br/> <code>StoredBatchInfo</code> in <code>run_loop</code>: Currently: from FRI cache; todo - Load last committed <code>StoredBatchInfo</code> from L1 OR reprocess last committed batch</td></tr>
+<tr><td><strong>Prover Input Generator</strong></td><td></td><td>none</td><td>none</td></tr>
+<tr><td><strong>FRI Job Manager</strong></td><td>Gapless List of unproved batches with <code>ProverInput</code> and prover assignment info</td><td>none</td><td>none - batches before <code>starting_batch</code> are guaranteed to have FRI proofs, batches after will go through the pipeline again</td></tr>
+<tr><td><strong>FRI Store/Cache</strong></td><td>none</td><td><code>Map&lt;BatchNumber, FRIProof&gt;</code> (todo: extract from the node process to enable failover)</td><td>none</td></tr>
+<tr><td><strong>L1 Committer</strong></td><td>none*</td><td>none</td><td>none - recovers itself from L1</td></tr>
+<tr><td><strong>L1 Proof Submitter</strong></td><td>none*</td><td>none</td><td>none - recovers itself from L1</td></tr>
+<tr><td><strong>L1 Executor</strong></td><td>none*</td><td>none</td><td>none - recovers itself from L1</td></tr>
+<tr><td><strong>SNARK Job Manager</strong> (TODO - missing)</td><td>Gapless list of batches with their FRI proofs and prover assignment info</td><td>none</td><td>Load batches that are committed but not proved on L1 yet. Load their FRI proofs from FRI cache (TODO)</td></tr>
+<tr><td><strong>Priority Tree Manager</strong></td><td>Dynamic Merkle tree with L1-&gt;L2 transaction hashes</td><td>Compressed data needed to rebuild the tree, see <code>CachedTreeData</code> for more details</td><td>none - recovers itself from replay storage</td></tr>
+</tbody></table>
+</div><div style="break-before: page; page-break-before: always;"></div><h1 id="rpc"><a class="header" href="#rpc">RPC</a></h1>
+<ul>
+<li>All standard <code>eth_</code> methods are supported (except those specific to EIP-2930, EIP-4844 and EIP-7702). Block tags have
+a special meaning:
+<ul>
+<li><code>earliest</code> - not supported yet (will return genesis or first uncompressed block)</li>
+<li><code>pending</code> - the latest produced block</li>
+<li><code>latest</code> - same as <code>pending</code> (consider taking consensus into account here)</li>
+<li><code>safe</code> - the latest block that has been committed to L1</li>
+<li><code>finalized</code> - not supported yet (will return the latest block that has been executed on L1)</li>
+</ul>
+</li>
+<li><code>zks_</code> namespace is kept to the minimum right now to avoid legacy from Era. Only following methods are supported:
+<ul>
+<li><code>zks_getBridgehubContract</code></li>
+</ul>
+</li>
+<li><code>ots_</code> namespace is used for Otterscan integration (meant for local development only)</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="prover-api"><a class="header" href="#prover-api">Prover API</a></h1>
+<pre><code>        .route("/prover-jobs/v1/status", get(status))
+        .route("/prover-jobs/v1/FRI/pick", post(pick_fri_job))
+        .route("/prover-jobs/v1/FRI/submit", post(submit_fri_proof))
+        .route("/prover-jobs/v1/SNARK/pick", post(pick_snark_job))
+        .route("/prover-jobs/v1/SNARK/submit", post(submit_snark_proof))
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="database-schema-overview"><a class="header" href="#database-schema-overview">Database Schema Overview</a></h1>
+<p>All persistent data is stored across multiple RocksDB databases:</p>
+<ul>
+<li>block_replay_wal</li>
+<li>preimages</li>
+<li>repository</li>
+<li>state</li>
+<li>tree</li>
+<li>proofs (JSON files, not RocksDB)</li>
+</ul>
+<hr />
+<h2 id="1-block_replay_wal"><a class="header" href="#1-block_replay_wal">1. block_replay_wal</a></h2>
+<p>Write-ahead log containing recent (non-compacted) block data.</p>
+<div class="table-wrapper"><table><thead><tr><th>Column</th><th>Key</th><th>Value</th></tr></thead><tbody>
+<tr><td>block_output_hash</td><td>block number</td><td>Block output hash</td></tr>
+<tr><td>context</td><td>block number</td><td>Binary-encoded BlockContext (BlockMetadataFromOracle)</td></tr>
+<tr><td>last_processed_l1_tx_id</td><td>block number</td><td>ID (u64) of the last processed L1 tx in the block</td></tr>
+<tr><td>txs</td><td>block number</td><td>Vector of EIP-2718 encoded transactions</td></tr>
+<tr><td>node_version</td><td>block number</td><td>Node version that produced the block</td></tr>
+<tr><td>latest</td><td>‘latest_block’</td><td>Latest block number</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="2-preimages"><a class="header" href="#2-preimages">2. preimages</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Column</th><th>Key</th><th>Value</th></tr></thead><tbody>
+<tr><td>meta</td><td>‘block’</td><td>Latest block ID</td></tr>
+<tr><td>storage</td><td>hash</td><td>Preimage for the hash</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="3-repository"><a class="header" href="#3-repository">3. repository</a></h2>
+<p>Canonical blocks and transactions.</p>
+<div class="table-wrapper"><table><thead><tr><th>Column</th><th>Key</th><th>Value</th></tr></thead><tbody>
+<tr><td>initiator_and_nonce_to_hash</td><td>address (20 bytes) + nonce (u64)</td><td>Transaction hash</td></tr>
+<tr><td>tx_meta</td><td>transaction hash</td><td>Binary TxMeta (hash, number, gas used, etc.)</td></tr>
+<tr><td>block_data</td><td>block hash</td><td>Alloy-serialized block</td></tr>
+<tr><td>tx_receipt</td><td>transaction hash</td><td>Binary EIP-2718 receipt</td></tr>
+<tr><td>meta</td><td>‘block_number’</td><td>Latest block number</td></tr>
+<tr><td>tx</td><td>transaction hash</td><td>EIP-2718 encoded bytes</td></tr>
+<tr><td>block_number_to_hash</td><td>block number</td><td>Block hash</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="4-state"><a class="header" href="#4-state">4. state</a></h2>
+<p>Data compacted from the write-ahead log.</p>
+<div class="table-wrapper"><table><thead><tr><th>Column</th><th>Key</th><th>Value</th></tr></thead><tbody>
+<tr><td>meta</td><td>‘base_block’</td><td>Base block number for this state snapshot</td></tr>
+<tr><td>storage</td><td>key</td><td>Value (compacted storage)</td></tr>
+</tbody></table>
+</div>
+<hr />
+<h2 id="5-tree"><a class="header" href="#5-tree">5. tree</a></h2>
+<p>Merkle-like structure.</p>
+<div class="table-wrapper"><table><thead><tr><th>Column</th><th>Key</th><th>Value</th></tr></thead><tbody>
+<tr><td>default</td><td>composite (version + nibble + index)</td><td>Serialized Leaf or Internal node</td></tr>
+<tr><td>key_indices</td><td>hash</td><td>Key index</td></tr>
+</tbody></table>
+</div>
+<p>Note: The ‘default’ column also stores a serialized Manifest at key ‘0’.</p>
+<hr />
+<h2 id="6-proofs"><a class="header" href="#6-proofs">6. proofs</a></h2>
+<p>Stored as JSON files in a separate directory:
+../shared/fri_batch_envelopes</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="state"><a class="header" href="#state">State</a></h1>
+<p>The global state is a set of key/value pairs:</p>
+<ul>
+<li>key = keccak(address, slot)</li>
+<li>value = a single 32-byte word (U256)</li>
+</ul>
+<p>All such pairs are stored (committed) in the Merkle tree (see tree.md).</p>
+<h2 id="account-metadata-accountproperties"><a class="header" href="#account-metadata-accountproperties">Account metadata (AccountProperties)</a></h2>
+<p>Account-related data (balance, nonce, deployed bytecode hash, etc.) is grouped into an AccountProperties struct. We do NOT store every field directly in the tree. Instead:</p>
+<ul>
+<li>We hash the AccountProperties struct.</li>
+<li>That hash (a single U256) is what appears in the Merkle tree.</li>
+<li>The full struct is retrievable from a separate preimage store.</li>
+</ul>
+<h2 id="special-address-account_storage-0x8003"><a class="header" href="#special-address-account_storage-0x8003">Special address: ACCOUNT_STORAGE (0x8003)</a></h2>
+<p>We reserve the synthetic address 0x8003 to map account addresses to their AccountProperties hash. Concretely:
+value at key = keccak(0x8003, user_address) = hash(AccountProperties(user_address))</p>
+<h2 id="example-fetching-the-nonce-for-address-0x1234"><a class="header" href="#example-fetching-the-nonce-for-address-0x1234">Example: fetching the nonce for address 0x1234</a></h2>
+<ol>
+<li>Compute key = keccak(0x8003, 0x1234)</li>
+<li>Read the U256 value H from the Merkle tree at that key</li>
+<li>Look up preimage(H) to get AccountProperties</li>
+<li>Take the nonce field from that struct</li>
+</ol>
+<p>This indirection:</p>
+<ul>
+<li>Keeps the Merkle tree smaller (one leaf per account metadata bundle)</li>
+<li>Avoids multiple leaf updates when several account fields change at once.</li>
+</ul>
+<h2 id="bytecodes"><a class="header" href="#bytecodes">Bytecodes</a></h2>
+<p>We track two related things:</p>
+<ol>
+<li>What the outside world sees (the deployed / observable bytecode).</li>
+<li>An internal, enriched form that adds execution helpers (artifacts).</li>
+</ol>
+<h3 id="terminology"><a class="header" href="#terminology">Terminology</a></h3>
+<ul>
+<li>Observable (deployed) bytecode:
+The exact bytes you get from an RPC call like eth_getCode or cast code.</li>
+<li>Observable bytecode hash (observable_bytecode_hash):
+keccak256(observable bytecode). This matches Ethereum conventions.</li>
+<li>Internal extended representation:
+observable bytecode
+<ul>
+<li>padding (if any, e.g. to align)</li>
+<li>artifacts (pre‑computed data used to speed execution, e.g. jumpdest map).</li>
+</ul>
+</li>
+<li>Internal bytecode hash (bytecode_hash):
+blake2 hash of the full extended representation above. The extended blob itself lives in the preimage store; only the blake hash is stored in AccountProperties.</li>
+</ul>
+<h3 id="stored-fields-in-accountproperties"><a class="header" href="#stored-fields-in-accountproperties">Stored fields in AccountProperties</a></h3>
+<ul>
+<li>bytecode_hash (Bytes32):
+blake2 hash of <code>[observable bytecode | padding | artifacts]</code>.</li>
+<li>unpadded_code_len (u32):
+Length (in bytes) of the original observable bytecode, before any internal padding or artifacts.</li>
+<li>artifacts_len (u32):
+Length (in bytes) of the artifacts segment appended after padding.</li>
+<li>observable_bytecode_hash (Bytes32):
+keccak256 of the observable (deployed) bytecode.</li>
+<li>observable_bytecode_len (u32):
+Length of the observable (deployed) bytecode. (Currently mirrors unpadded_code_len; kept explicitly for clarity / future evolution.)</li>
+</ul>
+<h3 id="why-two-hashes"><a class="header" href="#why-two-hashes">Why two hashes?</a></h3>
+<ul>
+<li>keccak (observable_bytecode_hash) is what external tooling expects and can independently recompute.</li>
+<li>blake (bytecode_hash) commits to the richer internal representation the node actually executes against (including acceleration data), avoiding recomputing artifacts on every access.</li>
+</ul>
+<h3 id="lookup-workflow-simplified"><a class="header" href="#lookup-workflow-simplified">Lookup workflow (simplified)</a></h3>
+<ol>
+<li>From AccountProperties get:
+<ul>
+<li>bytecode_hash → fetch extended blob via preimage store.</li>
+<li>observable_bytecode_hash → verify against externally visible code if needed.</li>
+</ul>
+</li>
+<li>Use lengths (unpadded_code_len, artifacts_len) to slice:
+[0 .. unpadded_code_len) → observable code
+[end of padding .. end) → artifacts</li>
+</ol>
+<p>This separation keeps the Merkle tree lean while enabling fast execution.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="tree"><a class="header" href="#tree">Tree</a></h1>
+<p>State is stored in a binary Merkle‑like tree. In production the logical tree depth is 64 (root at depth 0, leaves at depth 63). We use Blake2 as a tree hashing algorithm.</p>
+<p>Optimization:</p>
+<ul>
+<li>Instead of persisting every individual leaf, we group (package) 8 consecutive leaves together.</li>
+<li>8 leaves form a perfectly balanced subtree of height 3 (because 2^3 = 8).</li>
+<li>One such packaged subtree is stored as a single DB record.</li>
+</ul>
+<p>Terminology:</p>
+<ul>
+<li>We call each 3-level chunk of the logical tree a nibble (note: this is an internal term here).</li>
+<li>Effective path length (number of nibbles) = ceil(64 / 3) = 22.</li>
+</ul>
+<p>So:</p>
+<ul>
+<li>Logical depth: 64 levels.</li>
+<li>Physical traversal steps: 22 nibbles.</li>
+<li>Each nibble lookup loads or updates one packaged subtree (8 leaves).</li>
+</ul>
+<p>Result: fewer DB reads/writes while preserving a logical depth of 64.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="genesis-and-block-0"><a class="header" href="#genesis-and-block-0">Genesis and Block 0</a></h1>
+<p>Genesis is the one-time process of starting a new chain and producing its first block.</p>
+<h2 id="what-happens-at-genesis"><a class="header" href="#what-happens-at-genesis">What happens at genesis</a></h2>
+<ol>
+<li>The sequencer starts with an empty database.</li>
+<li>It loads a hardcoded file (genesis.json) that defines the initial on-chain state.</li>
+<li>This file deploys exactly three system contracts:
+<ul>
+<li>GenesisUpgrade</li>
+<li>L2WrappedBase</li>
+<li>ForceDeployer</li>
+</ul>
+</li>
+<li>After loading these, the sequencer begins listening to L1 events that describe the first actual L2 block:
+<ul>
+<li>Bytecodes to deploy additional contracts (ForceDeployer enables this)</li>
+<li>Parameters passed to GenesisUpgrade to finish remaining initialization steps</li>
+</ul>
+</li>
+</ol>
+<h2 id="why-these-contracts-exist"><a class="header" href="#why-these-contracts-exist">Why these contracts exist</a></h2>
+<ul>
+<li>ForceDeployer: Allows forced deployment of predefined contract bytecode needed at boot.</li>
+<li>GenesisUpgrade: Finalizes system configuration after initial contract deployment.</li>
+<li>L2WrappedBase: Provides a required base implementation (infrastructure dependency).</li>
+</ul>
+<h2 id="security-perspective"><a class="header" href="#security-perspective">Security perspective</a></h2>
+<p>L1 already knows the exact expected initial L2 state (the three contracts and their storage layout).<br />
+This state is defined in zksync-era’s genesis.json and is consumed by the zkStack tooling when setting up the ecosystem on L1.<br />
+Because L1 has this canonical reference, it can validate that the L2 started correctly.</p>
+<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
+<p>Genesis = load predefined state from genesis.json -&gt; deploy 3 core contracts -&gt; process L1 events to finalize initialization -&gt; produce block 0.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="base-token-price-updater"><a class="header" href="#base-token-price-updater">Base token price updater</a></h1>
+<p>Base token price updater is a service that periodically fetches USD prices of tokens that are required to properly
+calculate fee parameters. There are 3 options for token price source: CoinGecko, CoinMarketCap (3rd party APIs),
+or Forced  which instantiates a client that returns prices that are configured, by default price randomly fluctuate a
+little to simulate real world scenario (fluctuation can be disabled).</p>
+<h2 id="price-source-configuration"><a class="header" href="#price-source-configuration">Price source configuration</a></h2>
+<p>Source is configured in <code>ExternalPriceApiClientConfig</code>. For example, CoinGecko can be configured as follows:</p>
+<pre><code class="language-yaml">external_price_api_client:
+  source: "Coingecko"
+  coingecko_api_key: "&lt;key&gt;"
+</code></pre>
+<p>For forced config it’s essential to provide prices for all required tokens:</p>
+<ul>
+<li>chain base token</li>
+<li>base token of the settlement layer (ETH for L1, ZK for Gateway)</li>
+<li>ETH</li>
+</ul>
+<p>So for the chain that uses USDC as base token and settles on gateway forced configuration can look like this:</p>
+<pre><code class="language-yaml">external_price_api_client:
+  source: "Forced"
+  forced_prices:
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 1.0    # USDC
+    "0x0000000000000000000000000000000000000001": 3000.0 # ETH
+    "0x66a5cfb2e9c529f14fe6364ad1075df3a649c0a5": 0.035  # ZK
+</code></pre>
+<p>In simple case, when chain base token is ETH and settlement layer is L1, only ETH price is required:</p>
+<pre><code class="language-yaml">external_price_api_client:
+  source: "Forced"
+  forced_prices:
+    "0x0000000000000000000000000000000000000001": 3000.0 # ETH
+</code></pre>
+<h2 id="token-multiplier-setter"><a class="header" href="#token-multiplier-setter">Token multiplier setter</a></h2>
+<p>For chains with base token different from ETH it’s recommended to configure a token multiplier setter signer,
+then the component will also periodically update “ETH:token” price ratio on L1. Component and node will
+still work without it but there will be a warning in logs and ratio on L1 won’t change meaning that price
+for L1-&gt;L2 txs can eventually get outdated.</p>
+<p>You can use either a local private key or a GCP KMS key via the <code>token_multiplier_setter_sk</code> field:</p>
+<pre><code class="language-yaml"># Option 1: Local private key (plain hex string)
+base_token_price_updater:
+  token_multiplier_setter_sk: "&lt;private_key_in_hex&gt;"
+
+# Option 2: GCP KMS key (structured object)
+base_token_price_updater:
+  token_multiplier_setter_sk:
+    type: gcp_kms
+    resource: "projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}"
+</code></pre>
+<h2 id="mainnet-recommendation"><a class="header" href="#mainnet-recommendation">Mainnet recommendation</a></h2>
+<p>For mainnet it’s recommended to use one of 3rd party sources so that the fees are accurate
+and correspond to an up-to-date token price; and provide an API key to avoid getting rate-limited.</p>
+<p><strong>Also, it’s highly recommended to set <code>fallback_prices</code> configuration.</strong>
+It sets predefined fallback prices for tokens in case external API fetching fails on startup.
+If it’s missing and the price fetching fails on startup, then <strong>block sequencing will be blocked</strong>.</p>
+<p>Configuration is similar to <code>forced_prices</code>. And should contain prices for all required tokens.</p>
+<pre><code class="language-yaml">base_token_price_updater:
+  fallback_prices:
+    "0x0000000000000000000000000000000000000001": 3000.0 # ETH
+</code></pre>
+<h2 id="testnet-recommendation"><a class="header" href="#testnet-recommendation">Testnet recommendation</a></h2>
+<p>For testnets it’s usually acceptable to use Forced source with reasonable prices configured.
+In case you want fees to behave as on mainnet, you can still use 3rd party source and set config:</p>
+<ul>
+<li><code>base_token_addr_override</code> - mainnet token address that source can provide price for; in case base token is ETH it can be omitted.</li>
+<li><code>base_token_decimals_override</code> - token decimals (since token is on mainnet but node connects to testnet it cannot get the decimals from L1);
+in case base token is ETH or ZK it can be omitted.
+Similarly, you can set <code>gateway_base_token_addr_override</code> to ZK mainnet address in case settlement layer is Gateway.</li>
+</ul>
+<p>Example configuration for a chain that settles to Gateway, and chain’s base token is USDC:</p>
+<pre><code class="language-yaml">base_token_price_updater:
+  base_token_addr_override: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" # USDC
+  base_token_decimals_override: 6 # USDC decimals
+  gateway_base_token_addr_override: "0x66a5cfb2e9c529f14fe6364ad1075df3a649c0a5" # ZK
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="zksync-os-fee-model"><a class="header" href="#zksync-os-fee-model">ZKSync OS Fee model</a></h1>
+<p>ZKSync OS fee model is designed in a way to ensure that it describes well L2-specific costs (pubdata costs, ZK proving costs),
+while trying to keep it both simple and similar to Ethereum model. Internally VM keeps track of three resources:
+gas (similar to EVM), native (resource that reflects proving costs), pubdata (number of bytes to be posted on L1).</p>
+<p>There are three parameters in block context that define fees:</p>
+<ul>
+<li><code>native_price</code> – price for one unit of native</li>
+<li><code>eip1559_basefee</code> – price for one unit of gas</li>
+<li><code>pubdata_price</code> – price for one byte of pubdata
+All three are specified in base token units, e.g. wei for ETH-based chains.</li>
+</ul>
+<p>VM uses the following reasoning when calculating <code>gas_used</code>. Firstly, it calculates EVM gas used and effective gas price.
+<code>evm_gas_used * effective_gas_price</code> gives it a number of base token units to be charged in EVM case. Secondly, it calculates native and pubdata costs:
+<code>native_price * native_used + pubdata_price * pubdata_used</code>. Finally, it takes the maximum of two values and uses it as total fee and returns
+<code>gas_used</code> such that <code>gas_used * effective_gas_price</code> equals total fee.</p>
+<h2 id="fee-configuration-and-calculation"><a class="header" href="#fee-configuration-and-calculation">Fee configuration and calculation</a></h2>
+<h3 id="native-price"><a class="header" href="#native-price">Native price</a></h3>
+<p>Since native reflects ZK proving costs, it should be calculated based on 2 things:</p>
+<ul>
+<li>prover machine cost</li>
+<li>prover performance (how many native units it processes per second)</li>
+</ul>
+<p>Native price is configured with <code>FeeConfig::native_price_usd</code> (<code>fee_native_price_usd</code>).
+Node converts config parameter to base token units and uses the result as <code>native_price</code>.</p>
+<h3 id="base-fee"><a class="header" href="#base-fee">Base fee</a></h3>
+<p>The idea behind calculating base fee is to choose it in a way such that in most cases</p>
+<ul>
+<li>the resulting gas used should be equal to evm gas used</li>
+<li>total fee should not be much higher than what operator spends in reality</li>
+</ul>
+<p>Luckily, for the most opcodes the ratio between evm gas cost and native cost does not differ a lot.
+However, for some precompiles, e.g. modexp, the ratio native:gas is higher than for regular opcodes.</p>
+<p>So, base fee is calculated as <code>eip1559_basefee = native_price * native_per_gas</code>,
+where <code>native_per_gas</code> can be configured via <code>FeeConfig::native_per_gas</code> (<code>fee_native_per_gas</code>).
+The default value is chosen such that the two properties above hold in most cases,
+that is if a transaction doesn’t use many precompiles that are expensive in terms of native and does not require publishing a lot of pubdata.</p>
+<h3 id="pubdata-price"><a class="header" href="#pubdata-price">Pubdata price</a></h3>
+<p>Pubdata price depends on what DA chain uses. If chain is a validium then price is set to 0.
+For rollups that settle to L1:</p>
+<ul>
+<li>if blobs are used, then L1 blob price is used for calculation</li>
+<li>if calldata is used, then L1 gas price is used for calculation
+If rollup settles to Gateway, then gateway pubdate price is used.</li>
+</ul>
+<p>Pricing for blobs case is special because calculation of blob commitments is proven so it results in additional proving costs,
+thus pubdata price also depends on native price.
+Also, if chain settles frequently and posts blob that is not full then operator still needs to pay for the full blob.
+Node calculates a statistic for a fill ratio of submitted blobs and uses it to adjust pubdata price accordingly.</p>
+<p>Blob price is not stable on Ethereum testnets, and can grow a lot sometimes.
+At some point it can be the case that pubdata price is high enough so that gas costs for small transactions are higher than block gas limit.
+To circumvent this issue, node has a configuration parameter <code>FeeConfig::pubdata_price_cap</code> (<code>fee_pubdata_price_cap</code>).
+If it’s set, then pubdata price is capped by the value, allowing the node to operate normally even if blob price is very high.
+For ETH-based testnet chains we recommend to set <code>10_000_000_000_000</code>. If base token price is different from ETH, then the value should be adjusted accordingly.</p>
+<h3 id="config-overrides"><a class="header" href="#config-overrides">Config overrides</a></h3>
+<p>Config allows to set constant overrides for base_fee, native_price, and pubdata_price.
+Config variable are <code>fee_base_fee_override</code>, <code>fee_native_price_override</code>, and <code>fee_pubdata_price_override</code> respectively.
+If set, node uses the override values instead of calculating the parameters as described above.
+It can be used if operator prefers to not have a dynamic fee model, or for testing purposes.</p>
+<h3 id="eip-1559"><a class="header" href="#eip-1559">EIP-1559</a></h3>
+<p>EIP-1559 rules for base fee calculation does not make much sense for ZKSync OS,
+because the operator costs doesn’t depend on block gas usage and sequencer supports big max TPS that should be enough for most situations.
+However, a small part of EIP-1559 is still applied:</p>
+<ul>
+<li><code>native_price</code> and <code>base_fee</code> can change between subsequent blocks max by 12.5%</li>
+<li><code>pubdata_price</code> can increase between subsequent blocks max by 50%
+It’s needed for smooth transitions in case of sudden changes in parameters that affect fee calculation,
+otherwise it may lead to poor UX, e.g. txs can stuck in mempool, fail with out of gas, etc.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="guides"><a class="header" href="#guides">Guides</a></h1>
+<ul>
+<li><a href="guides/./local_setup_update.html">Update local setup: genesis and L1 state</a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="updating-local-chains-with-new-genesis-and-l1-state"><a class="header" href="#updating-local-chains-with-new-genesis-and-l1-state">Updating local chains with new genesis and L1 state</a></h1>
+<p>This guide describes how to update <a href="https://github.com/matter-labs/zksync-os-server/tree/main/local-chains">local chains</a>
+setup for a particular protocol version with the new genesis, L1 state, and all required dependencies including
+chain configs, wallets and contracts YAML files.</p>
+<p>There are two ways to update the local setup:</p>
+<ol>
+<li><a href="guides/local_setup_update.html#updating-with-github-actions">using GitHub Actions (recommended way for most users)</a></li>
+<li><a href="guides/local_setup_update.html#updating-locally">running the update scripts locally (on self-hosted setups, next protocol version development, or when experimenting with custom contracts)</a></li>
+</ol>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="guides/local_setup_update.html#admonition-info"></a>
+</div>
+<div>
+<p><strong>Use automated update through GitHub Actions if:</strong></p>
+<ul>
+<li>you’re iterating on the next protocol version and need to update the server setup with the new version of contracts</li>
+<li>you need to regenerate local chains setup due to the tooling changes, e.g. anvil updates, new scripts, etc.</li>
+</ul>
+<p><strong>Run scripts locally if:</strong></p>
+<ul>
+<li>you are experimenting with custom contracts locally and want to update your local setup</li>
+<li>you are self-hosted user wanting to update your server setup with the custom version of contracts</li>
+</ul>
+</div>
+</div>
+<p>Follow the appropriate section below depending on your use case.</p>
+<hr />
+<h2 id="updating-with-github-actions"><a class="header" href="#updating-with-github-actions">Updating with GitHub Actions</a></h2>
+<p>For the general guidelines about the GitHub Actions workflow to perform the local chains update, please refer to the
+<strong><a href="https://matter-labs.github.io/zksync-os-scripts/latest/github-actions.html">General GitHub Actions guidelines</a></strong>.
+Especially important are the sections about:</p>
+<ul>
+<li><a href="https://matter-labs.github.io/zksync-os-scripts/latest/github-actions.html#how-to-run-the-workflows">how to run the workflows</a></li>
+<li><a href="https://matter-labs.github.io/zksync-os-scripts/latest/github-actions.html#outputs-and-artifacts">outputs and artifacts</a></li>
+</ul>
+<p>Then, follow the instructions in the <strong><a href="https://matter-labs.github.io/zksync-os-scripts/latest/scripts/update_server.html#github-actions">Server Update GitHub workflow guide</a></strong>
+to perform the update of the local chains setup through GitHub Actions.</p>
+<p>As the result of the workflow execution, you will get the updated local chains setup available as:</p>
+<ul>
+<li>git patch published as a workflow artifact that you can download and apply locally using <code>git apply</code> command</li>
+<li>new commit on your custom development branch</li>
+<li>new pull request with the update</li>
+</ul>
+<div id="admonition-tip" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-title">
+<div class="admonition-title">
+<div id="admonition-tip-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="guides/local_setup_update.html#admonition-tip"></a>
+</div>
+<div>
+<p>If you are planning to merge your local chains update into the <code>main</code> branch,
+please prefer automated update through GitHub Actions
+as it is more reliable, tested in CI and less error-prone than the manual update.</p>
+</div>
+</div>
+<hr />
+<h2 id="updating-locally"><a class="header" href="#updating-locally">Updating locally</a></h2>
+<p>To perform a local update of the local chains setup, you can run the update scripts locally on your machine.</p>
+<h3 id="compatibility-between-protocol-versions"><a class="header" href="#compatibility-between-protocol-versions">Compatibility between protocol versions</a></h3>
+<p>Before performing the update, please make sure to check the
+<strong><a href="https://matter-labs.github.io/zksync-os-scripts/latest/protocol-compatibility.html">protocol compatibility</a></strong>
+tables to make sure that you are using compatible versions of the protocol (contracts), server, and tooling.</p>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="guides/local_setup_update.html#admonition-warning"></a>
+</div>
+<div>
+<p><strong>Using incompatible versions of the protocol, server, or tooling may lead to unexpected errors during the update process.</strong>
+Carefully check the compatibility tables and make sure to use compatible versions of all components before proceeding with the update.</p>
+<p>These tables are <strong>the source of truth</strong> for the compatibility of different versions of the protocol, server, and tooling.
+If you notice that the tables are outdated, please report it to the team, and/or contribute to updating the documentation with the correct information.</p>
+</div>
+</div>
+<h3 id="prerequisites-and-environment"><a class="header" href="#prerequisites-and-environment">Prerequisites and environment</a></h3>
+<p>The scripts are located in the <a href="https://github.com/matter-labs/zksync-os-scripts">matter-labs/zksync-os-scripts</a> repository.</p>
+<p>Go through the <a href="https://matter-labs.github.io/zksync-os-scripts/latest/prerequisites.html">Prerequisites</a> guide to set up your environment.</p>
+<div id="admonition-info-1" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-1-title">
+<div class="admonition-title">
+<div id="admonition-info-1-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="guides/local_setup_update.html#admonition-info-1"></a>
+</div>
+<div>
+<p>There is a <a href="https://matter-labs.github.io/zksync-os-scripts/latest/prerequisites.html#quick-install-recommended">Quick install</a> section
+that goes through all required dependencies setup for Unix-like system, and it is recommended to use it as a reference.</p>
+</div>
+</div>
+<h3 id="re-generate-local-state"><a class="header" href="#re-generate-local-state">Re-generate local state</a></h3>
+<p>It is recommended to go through the full <strong><a href="https://matter-labs.github.io/zksync-os-scripts/latest/scripts/update_server.html">Server Update guide</a></strong> first.</p>
+<div id="admonition-tip-1" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-1-title">
+<div class="admonition-title">
+<div id="admonition-tip-1-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="guides/local_setup_update.html#admonition-tip-1"></a>
+</div>
+<div>
+<p>You can directly jump to the <strong><a href="https://matter-labs.github.io/zksync-os-scripts/latest/scripts/update_server.html#local-use">Local Use</a></strong>
+section of the guide if you already know what the script does.</p>
+</div>
+</div>
+<p>As the result, you will get the updated local chains setup available in the <code>local-chains/</code> directory of your server repository.</p>
+<hr />
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+        <script>
+            window.playground_line_numbers = true;
+        </script>
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+        <script src="ace.js"></script>
+        <script src="editor.js"></script>
+        <script src="mode-rust.js"></script>
+        <script src="theme-dawn.js"></script>
+        <script src="theme-tomorrow_night.js"></script>
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="js/version-box.js"></script>
+        <script src="js/mermaid-init.js"></script>
+
+        <script>
+        window.addEventListener('load', function() {
+            MathJax.Hub.Register.StartupHook('End', function() {
+                window.setTimeout(window.print, 100);
+            });
+        });
+        </script>
+
+    </div>
+    </body>
+</html>
