@@ -2,7 +2,7 @@ use crate::execution::metrics::EXECUTION_METRICS;
 use alloy::eips::eip4844::FIELD_ELEMENTS_PER_BLOB;
 use alloy::primitives::{U128, U256};
 use num::rational::Ratio;
-use num::{BigInt, BigUint, ToPrimitive};
+use num::{BigUint, ToPrimitive};
 use tokio::sync::watch;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{PubdataMode, TokenPricesForFees};
@@ -12,7 +12,7 @@ use zksync_os_types::{PubdataMode, TokenPricesForFees};
 pub struct FeeConfig {
     /// Price for one unit of native resource in USD.
     /// Default is set based on the current estimate of proving price.
-    pub native_price_usd: f64,
+    pub native_price_usd: Ratio<BigUint>,
     /// Override for base fee (in base token units).
     /// If set, base fee will be constant and equal to this value.
     pub base_fee_override: Option<U128>,
@@ -101,14 +101,7 @@ impl FeeProvider {
             return BigUint::from(o.to::<u128>());
         }
 
-        let desired_native_price_usd = {
-            let r = Ratio::<BigInt>::from_float(self.fee_config.native_price_usd)
-                .expect("Failed to convert native_price_usd to ratio");
-            Ratio::new(
-                r.numer().to_biguint().unwrap(),
-                r.denom().to_biguint().unwrap(),
-            )
-        };
+        let desired_native_price_usd = &self.fee_config.native_price_usd;
 
         // Convert USD price to base token price.
         let desired_native_price = {
@@ -144,10 +137,10 @@ impl FeeProvider {
             .clone()
             .clamp(min_native_price.clone(), max_native_price.clone());
         tracing::debug!(
-            ?native_price,
-            ?desired_native_price,
-            ?min_native_price,
-            ?max_native_price,
+            %native_price,
+            %desired_native_price,
+            %min_native_price,
+            %max_native_price,
             "Calculated native price",
         );
 
@@ -218,10 +211,10 @@ impl FeeProvider {
             };
 
             tracing::debug!(
-                desired_pubdata_price = ?pubdata_price,
-                ?base_pubdata_price,
-                ?native_overhead,
-                ?fill_ratio,
+                desired_pubdata_price = %pubdata_price,
+                %base_pubdata_price,
+                %native_overhead,
+                %fill_ratio,
                 "Calculated desired pubdata price for blobs"
             );
             if let Some(r) = fill_ratio.to_f64() {
@@ -248,9 +241,9 @@ impl FeeProvider {
 
             if capped_price < desired_pubdata_price {
                 tracing::debug!(
-                    ?capped_price,
-                    ?prev_pubdata_price,
-                    ?desired_pubdata_price,
+                    %capped_price,
+                    %prev_pubdata_price,
+                    %desired_pubdata_price,
                     "Capping pubdata price to 1.5*prev_pubdata_price",
                 );
             }

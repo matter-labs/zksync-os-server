@@ -3,6 +3,7 @@ use self::util::SigningKeyDeserializer;
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
+use num::{BigInt, rational::Ratio};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -1116,8 +1117,17 @@ impl From<ExternalPriceApiClientConfig>
 
 impl From<FeeConfig> for zksync_os_sequencer::execution::FeeConfig {
     fn from(c: FeeConfig) -> Self {
+        let native_price_usd = {
+            let r = Ratio::<BigInt>::from_float(c.native_price_usd)
+                .expect("Failed to convert native_price_usd to ratio");
+            Ratio::new(
+                r.numer().to_biguint().unwrap(),
+                r.denom().to_biguint().unwrap(),
+            )
+        };
+
         Self {
-            native_price_usd: c.native_price_usd,
+            native_price_usd,
             base_fee_override: c.base_fee_override,
             native_per_gas: c.native_per_gas,
             pubdata_price_override: c.pubdata_price_override,

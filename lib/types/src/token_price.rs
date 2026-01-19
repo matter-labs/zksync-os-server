@@ -2,11 +2,12 @@ use chrono::{DateTime, Utc};
 use num::rational::Ratio;
 use num::{BigInt, BigUint};
 
-/// Struct to represent API response containing denominator, numerator, and timestamp.
+/// Struct to represent API response containing ratio and timestamp.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TokenApiRatio {
+    /// Ratio representing the USD price of the token unit.
     pub ratio: Ratio<BigUint>,
-    // Either the timestamp of the quote or the timestamp of the request.
+    /// Either the timestamp of the quote or the timestamp of the request.
     pub timestamp: DateTime<Utc>,
 }
 
