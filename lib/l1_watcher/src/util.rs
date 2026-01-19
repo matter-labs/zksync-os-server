@@ -82,7 +82,9 @@ async fn find_latest_l1_revert(
     // Early return if latest block is behind start block. This can happen if we hit different
     // L1 nodes between calls where the second node is behind the first.
     if latest_block < start_block_number {
-        tracing::info!("latest block is behind start block (hitting different L1 nodes?), skipping revert checks");
+        tracing::info!(
+            "latest block is behind start block (hitting different L1 nodes?), skipping revert checks"
+        );
         return Ok(None);
     }
 
