@@ -13,6 +13,7 @@
   - [Otterscan (Local Explorer)](setup/local_explorer.md)
   - [Exposed Ports](setup/exposed_ports.md)
   - [FAQ](setup/faq.md)
+  - [Base token price updater](setup/base_token_price_updater.md)
 
 ---
 

@@ -17,8 +17,11 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
+pub use fee_provider::{FeeConfig, FeeParams, FeeProvider};
+
 pub mod block_context_provider;
 pub mod block_executor;
+mod fee_provider;
 pub(crate) mod metrics;
 pub(crate) mod utils;
 pub mod vm_wrapper;

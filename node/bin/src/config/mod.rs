@@ -3,6 +3,7 @@ use self::util::SigningKeyDeserializer;
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
+use num::{BigInt, rational::Ratio};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -51,6 +52,7 @@ pub struct Config {
     pub batch_verification_config: BatchVerificationConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
     pub external_price_api_client_config: ExternalPriceApiClientConfig,
+    pub fee_config: FeeConfig,
 }
 
 impl Config {
@@ -119,6 +121,9 @@ impl Config {
                 "external_price_api_client",
             )
             .expect("Failed to insert external price api client config");
+        schema
+            .insert(&FeeConfig::DESCRIPTION, "fee")
+            .expect("Failed to insert fee config");
         schema
     }
 
@@ -349,18 +354,6 @@ pub struct SequencerConfig {
     /// Address that receives the transaction fees.
     #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
     pub fee_collector_address: Address,
-
-    /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    #[config(default_t = None)]
-    pub base_fee_override: Option<U128>,
-
-    /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    #[config(default_t = None)]
-    pub pubdata_price_override: Option<U128>,
-
-    /// Override for native price (in wei). If set, native price will be constant and equal to this value.
-    #[config(default_t = None)]
-    pub native_price_override: Option<U128>,
 
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
@@ -842,6 +835,9 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
     pub token_multiplier_setter_sk: Option<SigningKey>,
+    /// Predefined fallback prices for tokens in case external API fetching fails on startup.
+    #[config(default, with = Serde![*])]
+    pub fallback_prices: HashMap<Address, f64>,
 }
 
 /// Config to force configured token prices in USD.
@@ -891,6 +887,28 @@ pub enum ExternalPriceApiClientConfig {
         #[config(default_t = Duration::from_secs(10))]
         client_timeout: Duration,
     },
+}
+
+/// Fee-related configuration.
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct FeeConfig {
+    /// Price for one unit of native resource in USD.
+    /// Default is set based on the current estimate of proving price.
+    #[config(default_t = 3e-9)]
+    pub native_price_usd: f64,
+    /// Override for base fee (in base token units).
+    /// If set, base fee will be constant and equal to this value.
+    pub base_fee_override: Option<U128>,
+    /// Defines how many native resource units are equivalent to one gas unit in terms of price.
+    #[config(default_t = 100)]
+    pub native_per_gas: u64,
+    /// Override for pubdata price (in base token units).
+    /// If set, pubdata price will be constant and equal to this value.
+    pub pubdata_price_override: Option<U128>,
+    /// Override for native price (in base token units).
+    /// If set, native price will be constant and equal to this value.
+    pub native_price_override: Option<U128>,
 }
 
 impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
@@ -1057,6 +1075,7 @@ pub fn base_token_price_updater_config(
         token_multiplier_setter_sk: c.token_multiplier_setter_sk.clone(),
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
+        fallback_prices: c.fallback_prices.clone(),
     }
 }
 
@@ -1096,6 +1115,27 @@ impl From<ExternalPriceApiClientConfig>
                 cmc_api_key,
                 client_timeout,
             },
+        }
+    }
+}
+
+impl From<FeeConfig> for zksync_os_sequencer::execution::FeeConfig {
+    fn from(c: FeeConfig) -> Self {
+        let native_price_usd = {
+            let r = Ratio::<BigInt>::from_float(c.native_price_usd)
+                .expect("Failed to convert native_price_usd to ratio");
+            Ratio::new(
+                r.numer().to_biguint().unwrap(),
+                r.denom().to_biguint().unwrap(),
+            )
+        };
+
+        Self {
+            native_price_usd,
+            base_fee_override: c.base_fee_override,
+            native_per_gas: c.native_per_gas,
+            pubdata_price_override: c.pubdata_price_override,
+            native_price_override: c.native_price_override,
         }
     }
 }

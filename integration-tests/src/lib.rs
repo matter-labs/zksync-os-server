@@ -263,6 +263,7 @@ impl Tester {
             external_price_api_client_config: default_config
                 .external_price_api_client_config
                 .clone(),
+            fee_config: Default::default(),
         };
         if let Some(f) = config_overrides {
             f(&mut config)

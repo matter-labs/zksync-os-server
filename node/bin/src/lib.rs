@@ -83,8 +83,8 @@ use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
-use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
+use zksync_os_sequencer::execution::{FeeParams, FeeProvider, Sequencer};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage::in_memory::Finality;
@@ -540,14 +540,42 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
-    let current_protocol_version = if let Some(record) = first_replay_record {
+    let current_protocol_version = if let Some(record) = &first_replay_record {
         record.protocol_version.clone()
     } else {
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
+    let (token_price_sender, token_price_receiver) = watch::channel(None);
+    let previous_block_fee_params = if starting_block == 1 {
+        None
+    } else {
+        let prev_record = block_replay_storage
+            .get_replay_record(starting_block - 1)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Missing replay record for block `starting_block - 1` = {}",
+                    starting_block - 1
+                )
+            });
+        Some(FeeParams {
+            eip1559_basefee: prev_record.block_context.eip1559_basefee,
+            native_price: prev_record.block_context.native_price,
+            pubdata_price: prev_record.block_context.pubdata_price,
+        })
+    };
+
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
+    let fee_provider = FeeProvider::new(
+        config.fee_config.clone().into(),
+        previous_block_fee_params,
+        pubdata_price_receiver,
+        blob_fill_ratio_receiver,
+        token_price_receiver,
+        config.l1_sender_config.pubdata_mode,
+    );
+
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions_for_sequencer,
@@ -561,13 +589,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_pubdata_limit_bytes,
         current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
-        config.sequencer_config.base_fee_override,
-        config.sequencer_config.pubdata_price_override,
-        config.sequencer_config.native_price_override,
-        pubdata_price_receiver,
-        blob_fill_ratio_receiver,
         last_constructed_block_ctx_sender,
-        config.l1_sender_config.pubdata_mode,
+        fee_provider,
     );
 
     // ========== Start L1 Upgrade Watcher ===========
@@ -631,6 +654,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &config.l1_sender_config,
             ),
             config.external_price_api_client_config.clone().into(),
+            token_price_sender,
         )
         .await
         .expect("Failed to initialize BaseTokenPriceUpdater");
