@@ -1,19 +1,13 @@
 use alloy::primitives::{B256, U256, keccak256};
 use blake2::{Blake2s256, Digest};
 use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
-use zksync_os_storage_api::RepositoryBlock;
+use zksync_os_genesis::GenesisState;
 
 pub async fn load_genesis_stored_batch_info(
-    genesis_block: RepositoryBlock,
-    tree: MerkleTree<RocksDBWrapper>,
-    expected_genesis_root: B256,
+    genesis_state: &GenesisState,
+    genesis_root_hash: B256,
+    genesis_root_leaves: u64,
 ) -> anyhow::Result<StoredBatchInfo> {
-    let tree_at_genesis = MerkleTreeVersion { tree, block: 0 };
-    let genesis_root_info = tree_at_genesis
-        .root_info()
-        .expect("Failed to get genesis root info");
-
     let number = 0u64;
     let timestamp = 0u64;
 
@@ -22,22 +16,23 @@ pub async fn load_genesis_stored_batch_info(
         for _ in 0..255 {
             blocks_hasher.update([0u8; 32]);
         }
-        blocks_hasher.update(genesis_block.hash());
+        blocks_hasher.update(genesis_state.header.hash());
 
         blocks_hasher.finalize()
     };
 
     let mut hasher = Blake2s256::new();
-    hasher.update(genesis_root_info.0.as_slice());
-    hasher.update(genesis_root_info.1.to_be_bytes());
+    hasher.update(genesis_root_hash.as_slice());
+    hasher.update(genesis_root_leaves.to_be_bytes());
     hasher.update(number.to_be_bytes());
     hasher.update(last_256_block_hashes_blake);
     hasher.update(timestamp.to_be_bytes());
     let state_commitment = B256::from_slice(&hasher.finalize());
 
     anyhow::ensure!(
-        expected_genesis_root == state_commitment,
-        "Genesis state commitment mismatch, expected from genesis.json {expected_genesis_root:?}, calculated {state_commitment:?}"
+        genesis_state.expected_genesis_root == state_commitment,
+        "Genesis state commitment mismatch, expected from genesis.json {:?}, calculated {state_commitment:?}",
+        genesis_state.expected_genesis_root
     );
 
     Ok(StoredBatchInfo {

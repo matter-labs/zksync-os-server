@@ -59,7 +59,6 @@ use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::BatchDaInputMode;
-use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
@@ -72,7 +71,7 @@ use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_mempool::L2TransactionPool;
-use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
@@ -244,12 +243,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await;
 
+    let tree_at_genesis = MerkleTreeVersion {
+        tree: tree_db,
+        block: 0,
+    };
+    let (genesis_root_hash, genesis_root_leaves) = tree_at_genesis
+        .root_info()
+        .expect("Failed to get genesis root info");
+    let tree_db = tree_at_genesis.tree;
+
     // todo: this can take a while; ideally committed batches should be loaded in the background
     //       and then `get()` method can be made async so that it waits for relevant batch to load
     let committed_batch_provider = CommittedBatchProvider::init(
         &l1_state,
         config.l1_watcher_config.max_blocks_to_process,
-        || genesis_stored_batch_info(&repositories, &tree_db, &genesis),
+        || async {
+            let genesis_state = genesis.state().await;
+            load_genesis_stored_batch_info(genesis_state, genesis_root_hash, genesis_root_leaves)
+                .await
+                .unwrap()
+        },
     )
     .await
     .expect("failed to init CommittedBatchProvider");
@@ -1146,24 +1159,4 @@ async fn find_last_matching_main_node_block(
         }
     }
     Ok(left)
-}
-
-// Implementation node: it's awkward that we need all these arguments to get the genesis StoredBatchInfo.
-// Consider addressing this if refactoring the genesis.
-pub async fn genesis_stored_batch_info(
-    repositories: &impl ReadRepository,
-    tree_db: &MerkleTree<RocksDBWrapper>,
-    genesis: &Genesis,
-) -> StoredBatchInfo {
-    let genesis_block = repositories
-        .get_block_by_number(0)
-        .expect("Failed to read genesis block from repositories")
-        .expect("Missing genesis block in repositories");
-    load_genesis_stored_batch_info(
-        genesis_block,
-        tree_db.clone(),
-        genesis.state().await.expected_genesis_root,
-    )
-    .await
-    .unwrap()
 }

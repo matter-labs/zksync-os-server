@@ -21,21 +21,22 @@ impl CommittedBatchProvider {
     pub async fn init(
         l1_state: &L1State,
         max_l1_blocks_to_scan: u64,
-        load_genesis_batch_info: impl AsyncFn() -> StoredBatchInfo,
+        load_genesis_batch_info: impl AsyncFnOnce() -> StoredBatchInfo,
     ) -> anyhow::Result<Self> {
         let mut inner = Inner::default();
+        // Special case for genesis
+        if l1_state.last_executed_batch == 0 {
+            inner.batches.insert(
+                0,
+                DiscoveredCommittedBatch {
+                    batch_info: load_genesis_batch_info().await,
+                    block_range: 0..=0,
+                },
+            );
+        }
         // todo: this can take a while and should ideally happen in the background
-        for batch_number in l1_state.last_executed_batch..=l1_state.last_committed_batch {
-            if batch_number == 0 {
-                inner.batches.insert(
-                    0,
-                    DiscoveredCommittedBatch {
-                        batch_info: load_genesis_batch_info().await,
-                        block_range: 0..=0,
-                    },
-                );
-                continue;
-            }
+        // Ignore genesis here as it was handled above
+        for batch_number in l1_state.last_executed_batch.max(1)..=l1_state.last_committed_batch {
             let l1_block_with_commit = util::find_l1_commit_block_by_batch_number(
                 l1_state.diamond_proxy.clone(),
                 batch_number,

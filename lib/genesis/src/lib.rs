@@ -1,6 +1,6 @@
 use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header};
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
-use alloy::primitives::{Address, B64, B256, Bloom, U256};
+use alloy::primitives::{Address, B64, B256, Bloom, Sealable, Sealed, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
@@ -178,7 +178,7 @@ pub struct GenesisState {
     /// see `genesis_upgrade_tx` method for details
     pub preimages: Vec<(B256, Vec<u8>)>,
     /// The header of the genesis block.
-    pub header: Header,
+    pub header: Sealed<Header>,
     /// Context of the genesis block.
     pub context: BlockContext,
     /// Expected genesis root (state commitment).
@@ -305,7 +305,7 @@ async fn build_genesis(
     Ok(GenesisState {
         storage_logs: storage_logs.into_iter().collect(),
         preimages,
-        header,
+        header: header.seal_slow(),
         context,
         expected_genesis_root: genesis_input.genesis_root,
     })
