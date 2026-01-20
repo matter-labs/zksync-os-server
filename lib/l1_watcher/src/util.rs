@@ -2,11 +2,12 @@ use crate::DiscoveredCommittedBatch;
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
-use alloy::primitives::{B256, BlockNumber, TxHash};
+use alloy::primitives::{Address, B256, BlockNumber, TxHash};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
+use std::fmt::Debug;
 use std::sync::Arc;
 use zksync_os_batch_types::BatchInfo;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
@@ -67,40 +68,37 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
     Ok(lo)
 }
 
-/// Looks for an L1 batch revert event that happened in block range `[start_block_number; latest_block]`
-/// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
+/// Looks for an L1 event that happened in block range `[start_block_number; latest_block]`
+/// and matching provided predicate. Returns latest L1 block that contains such an event or `None`
 /// if there is not any.
-///
-/// Batch `batch_number` MUST have been committed before `start_block_number`.
-async fn find_latest_l1_revert(
-    zk_chain: &ZkChain<DynProvider>,
-    batch_number: u64,
+async fn find_last_matching_event<E: SolEvent + Debug>(
+    address: Address,
+    provider: &DynProvider,
     start_block_number: BlockNumber,
     max_blocks_to_scan: u64,
+    predicate: impl Fn(&E) -> bool,
 ) -> anyhow::Result<Option<BlockNumber>> {
-    let provider = zk_chain.provider();
     let mut current_block = start_block_number;
     let latest_block = provider.get_block_number().await?;
+
     tracing::debug!(
-        address = %zk_chain.address(),
+        %address,
         start_block_number,
         latest_block,
         max_blocks_to_scan,
-        "checking for revert events"
+        signature = E::SIGNATURE,
+        "looking for last matching event"
     );
 
     let blocks_to_scan = latest_block - start_block_number + 1;
     if blocks_to_scan > MAX_L1_BLOCKS_TO_SCAN_LINEARLY {
-        tracing::warn!(
-            blocks_to_scan,
-            "scanning a lot of L1 blocks; last commit must have happened a long time ago"
-        );
+        tracing::warn!(blocks_to_scan, "scanning a lot of L1 blocks");
     }
 
     let mut filter = Filter::new()
-        .address(*zk_chain.address())
-        .event_signature(IExecutor::BlocksRevert::SIGNATURE_HASH);
-    let mut last_block_with_revert = None;
+        .address(address)
+        .event_signature(E::SIGNATURE_HASH);
+    let mut last_block_with_event = None;
     while current_block < latest_block {
         // Inspect up to `max_blocks_to_scan` L1 blocks at a time
         let filter_to_block = latest_block.min(current_block + max_blocks_to_scan - 1);
@@ -113,23 +111,43 @@ async fn find_latest_l1_revert(
             "fetched logs"
         );
         for log in logs {
-            let event = IExecutor::BlocksRevert::decode_log(&log.inner)?.data;
-            if event.totalBatchesCommitted < batch_number {
+            let event = E::decode_log(&log.inner)?.data;
+            if predicate(&event) {
                 let l1_block = log
                     .block_number
-                    .expect("indexed revert log without block number");
-                tracing::info!(
-                    %event.totalBatchesCommitted,
-                    l1_block,
-                    "found batch revert event on L1"
+                    .expect("indexed event log without block number");
+                tracing::debug!(
+                    %address,
+                    ?event,
+                    "found new matching event on L1"
                 );
-                last_block_with_revert = Some(l1_block)
+                last_block_with_event = Some(l1_block);
             }
         }
         current_block = filter_to_block + 1;
     }
+    Ok(last_block_with_event)
+}
 
-    Ok(last_block_with_revert)
+/// Looks for an L1 batch revert event that happened in block range `[start_block_number; latest_block]`
+/// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
+/// if there is not any.
+///
+/// Batch `batch_number` MUST have been committed before `start_block_number`.
+async fn find_latest_l1_revert(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    start_block_number: BlockNumber,
+    max_blocks_to_scan: u64,
+) -> anyhow::Result<Option<BlockNumber>> {
+    find_last_matching_event::<IExecutor::BlocksRevert>(
+        *zk_chain.address(),
+        zk_chain.provider(),
+        start_block_number,
+        max_blocks_to_scan,
+        |e| e.totalBatchesCommitted < batch_number,
+    )
+    .await
 }
 
 /// Finds first L1 block that contains **non-reverted** batch commitment event on L1 matching
@@ -145,6 +163,27 @@ pub async fn find_l1_commit_block_by_batch_number(
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
+    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
+        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
+        // for historical blocks. We run linear search as a fallback.
+        if batch_number == 0 {
+            // For genesis we must return L1 block where `zk_chain` got deployed. For Anvil it's okay
+            // to return 0 here as the chain should not be long anyway.
+            return Ok(0);
+        }
+        return find_last_matching_event::<ReportCommittedBatchRangeZKsyncOS>(
+            *zk_chain.address(),
+            zk_chain.provider(),
+            0,
+            max_l1_blocks_to_scan,
+            |e| e.batchNumber == batch_number,
+        )
+        .await?
+        .with_context(|| {
+            format!("linear search failed to find where batch {batch_number} was committed")
+        });
+    }
+
     let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)

@@ -232,11 +232,13 @@ alloy::sol! {
 
         event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
         event BlockExecution(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
+        #[derive(Debug)]
         event ReportCommittedBatchRangeZKsyncOS(
             uint64 indexed batchNumber,
             uint64 indexed firstBlockNumber,
             uint64 indexed lastBlockNumber
         );
+        #[derive(Debug)]
         event BlocksRevert(uint256 totalBatchesCommitted, uint256 totalBatchesVerified, uint256 totalBatchesExecuted);
 
         function commitBatchesSharedBridge(
