@@ -1,4 +1,3 @@
-use crate::reth_state::ZkClient;
 use crate::transaction::L2PooledTransaction;
 use reth_transaction_pool::blobstore::NoopBlobStore;
 use reth_transaction_pool::{
@@ -6,11 +5,12 @@ use reth_transaction_pool::{
     PoolTransaction, TransactionOrigin, TransactionPoolExt,
 };
 use std::fmt::Debug;
+use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_storage_api::{ReadRepository, ReadStateHistory};
 use zksync_os_types::L2Transaction;
 
 pub(crate) type RethPool<State, Repository> = Pool<
-    EthTransactionValidator<ZkClient<State, Repository>, L2PooledTransaction>,
+    EthTransactionValidator<ZkProviderFactory<State, Repository>, L2PooledTransaction>,
     CoinbaseTipOrdering<L2PooledTransaction>,
     NoopBlobStore,
 >;

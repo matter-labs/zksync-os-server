@@ -12,20 +12,13 @@ categories.workspace = true
 [dependencies]
 zksync_os_types = { workspace = true, features = ["reth"] }
 zksync_os_storage_api.workspace = true
+zksync_os_reth_compat.workspace = true
 
-zk_os_api.workspace = true
-
-reth-chainspec = { workspace = true }
-reth-storage-api = { workspace = true }
 reth-transaction-pool = { workspace = true }
-reth-trie-common = { workspace = true }
 reth-primitives-traits = { workspace = true }
-reth-revm = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips"] }
-anyhow.workspace = true
 auto_impl.workspace = true
-dashmap.workspace = true
 futures.workspace = true
 tokio.workspace = true
 tracing.workspace = true

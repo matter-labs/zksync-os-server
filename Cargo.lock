@@ -3144,7 +3144,7 @@ version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.26-rc2#2d60650b4f91fd03f595b45981856e8f5e1c4900"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.26-rc2)",
- "num-bigint 0.3.3",
+ "num-bigint 0.4.6",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.26-rc2)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -3159,7 +3159,7 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1#19ec28c281
 dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
- "num-bigint 0.3.3",
+ "num-bigint 0.4.6",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -3176,7 +3176,7 @@ dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
  "c-kzg",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "num-bigint 0.3.3",
+ "num-bigint 0.4.6",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -7811,7 +7811,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 3.3.0",
  "proc-macro2 1.0.95",
  "quote 1.0.42",
  "syn 2.0.104",
@@ -12069,9 +12069,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config"
-version = "0.4.0-pre.1"
+version = "0.4.0-pre.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad33fa97d9532efcaa05b94334c3a568a589456ceddf08b5ec046f942b1e0878"
+checksum = "570c50fee3c860c15fdfeb3b6171041ea83e40e731b25a18f97f2cd00ecbc961"
 dependencies = [
  "alloy",
  "anyhow",
@@ -12087,9 +12087,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-commands"
-version = "0.4.0-pre.1"
+version = "0.4.0-pre.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84492474ef191819b3e0783c953058dfc322c72370db339b79c3c386f75fac1b"
+checksum = "22793fb71a9f2751308846d09f70dee804e70d4f686620e31ae8d47c82718b24"
 dependencies = [
  "anstream",
  "anstyle",
@@ -12100,9 +12100,9 @@ dependencies = [
 
 [[package]]
 name = "smart-config-derive"
-version = "0.4.0-pre.1"
+version = "0.4.0-pre.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c72fbbe7ee7d4b154a0c07e66c46cee67d44d8d49c480aed33f5e7da099f5a70"
+checksum = "42ca44e2f43adc461f96da7cf5ffdb1ab5c1439bb2d86aaf05fbc0b98b56c48d"
 dependencies = [
  "proc-macro2 1.0.95",
  "quote 1.0.42",
@@ -14847,7 +14847,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-revm?tag=v0.0.2#ddf34b7d8bc0396148bce47464e838d7ebad09a0"
+source = "git+https://github.com/matter-labs/zksync-os-revm?tag=v0.0.3#063e00193f143c30af7bfe7aa6f85d8d54967c5b"
 dependencies = [
  "auto_impl",
  "revm",
@@ -15249,21 +15249,15 @@ name = "zksync_os_mempool"
 version = "0.13.0-non-semver-compat"
 dependencies = [
  "alloy",
- "anyhow",
  "auto_impl",
- "dashmap",
  "futures",
  "metrics",
- "reth-chainspec",
  "reth-primitives-traits",
- "reth-revm",
- "reth-storage-api",
  "reth-transaction-pool",
- "reth-trie-common",
  "tokio",
  "tracing",
  "vise",
- "zksync_os_api",
+ "zksync_os_reth_compat",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15347,10 +15341,14 @@ dependencies = [
  "alloy-rlp",
  "assert_matches",
  "futures",
+ "reth-chainspec",
+ "reth-discv5",
  "reth-eth-wire",
+ "reth-net-nat",
  "reth-network",
  "reth-network-peers",
  "reth-provider",
+ "secrecy",
  "semver 1.0.26",
  "test-log",
  "thiserror 2.0.17",
@@ -15358,6 +15356,7 @@ dependencies = [
  "tracing",
  "zksync_os_interface",
  "zksync_os_metadata",
+ "zksync_os_reth_compat",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15463,6 +15462,20 @@ dependencies = [
  "zksync_os_fri_prover",
  "zksync_os_snark_prover",
  "zksync_sequencer_proof_client",
+]
+
+[[package]]
+name = "zksync_os_reth_compat"
+version = "0.13.0-non-semver-compat"
+dependencies = [
+ "alloy",
+ "reth-chainspec",
+ "reth-primitives-traits",
+ "reth-revm",
+ "reth-storage-api",
+ "reth-trie-common",
+ "zksync_os_api",
+ "zksync_os_storage_api",
 ]
 
 [[package]]
@@ -15708,6 +15721,7 @@ dependencies = [
  "zksync_os_observability",
  "zksync_os_pipeline",
  "zksync_os_priority_tree",
+ "zksync_os_reth_compat",
  "zksync_os_revm_consistency_checker",
  "zksync_os_rocksdb",
  "zksync_os_rpc",

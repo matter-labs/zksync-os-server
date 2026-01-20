@@ -24,6 +24,9 @@ pub use transaction::{
 mod pubdata_mode;
 pub use pubdata_mode::PubdataMode;
 
+mod node;
+pub use node::NodeRole;
+
 mod protocol;
 pub use protocol::{
     ExecutionVersion, ExecutionVersionError, ProtocolSemanticVersion, ProtocolSemanticVersionError,
