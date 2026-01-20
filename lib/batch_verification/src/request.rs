@@ -1,6 +1,6 @@
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{self, LengthDelimitedCodec};
-use zksync_os_contract_interface::models::CommitBatchInfo;
+use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_types::PubdataMode;
 
 /// Request sent from main sequencer to external nodes for batch verification
@@ -12,6 +12,7 @@ pub struct BatchVerificationRequest {
     pub pubdata_mode: PubdataMode,
     pub request_id: u64,
     pub commit_data: CommitBatchInfo,
+    pub prev_commit_data: StoredBatchInfo,
 }
 
 impl std::fmt::Debug for BatchVerificationRequest {

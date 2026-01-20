@@ -72,7 +72,7 @@ fn default_protocol_version() -> ProtocolSemanticVersion {
 #[derive(Debug)]
 pub struct MissingSignature;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub enum BatchSignatureData {
     Signed {
         signatures: BatchSignatureSet,

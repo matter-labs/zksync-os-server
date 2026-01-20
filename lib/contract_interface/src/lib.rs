@@ -7,6 +7,7 @@ use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, L2TransactionRequestTwoBridgesOuter,
     requestL2TransactionDirectCall, requestL2TransactionTwoBridgesCall,
 };
+use crate::IMultisigCommitter::IMultisigCommitterInstance;
 use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
@@ -319,6 +320,27 @@ alloy::sol! {
     }
 
     #[sol(rpc)]
+    interface IMultisigCommitter {
+
+        function commitBatchesMultisig(
+            address chainAddress,
+            uint256 _processBatchFrom,
+            uint256 _processBatchTo,
+            bytes calldata _batchData,
+            address[] calldata signers,
+            bytes[] calldata signatures
+        ) external;
+
+        function getSigningThreshold(address chainAddress) external view returns (uint64);
+
+        function isValidator(address chainAddress, address validator) external view returns (bool);
+
+        function getValidatorsCount(address chainAddress) external view returns (uint256);
+
+        function getValidatorsMember(address chainAddress, uint256 index) external view returns (address);
+    }
+
+    #[sol(rpc)]
     interface IERC20 {
         function decimals() external view returns (uint8);
     }
@@ -444,6 +466,87 @@ impl<P: Provider + Clone> Bridgehub<P> {
 
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
         self.instance.getAllZKChainChainIDs().call().await
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MultisigCommitter<P: Provider> {
+    instance: IMultisigCommitterInstance<P, Ethereum>,
+    chain_address: Address,
+}
+
+impl<P: Provider> MultisigCommitter<P> {
+    pub fn new(address: Address, provider: P, chain_address: Address) -> Self {
+        let instance = IMultisigCommitter::new(address, provider);
+        Self {
+            instance,
+            chain_address,
+        }
+    }
+
+    /// Checks if the contract at the given address implements the `IMultisigCommitter` interface
+    /// by calling `getSigningThreshold`. Returns `Some(Self)` if successful, `None` if the call
+    /// reverts (indicating the contract doesn't implement the interface), or an error for other
+    /// failures (e.g., network errors).
+    pub async fn try_new(
+        address: Address,
+        provider: P,
+        chain_address: Address,
+    ) -> core::result::Result<Option<Self>, alloy::contract::Error> {
+        let instance = IMultisigCommitter::new(address, provider);
+        let result = instance.getSigningThreshold(chain_address).call().await;
+        match result {
+            Ok(_) => Ok(Some(Self {
+                instance,
+                chain_address,
+            })),
+            Err(e) if e.as_revert_data().is_some() => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn get_signing_threshold(&self) -> Result<u64> {
+        self.instance
+            .getSigningThreshold(self.chain_address)
+            .call()
+            .await
+            .enrich("getSigningThreshold", None)
+    }
+
+    pub async fn is_validator(&self, validator: Address) -> Result<bool> {
+        self.instance
+            .isValidator(self.chain_address, validator)
+            .call()
+            .await
+            .enrich("isValidator", None)
+    }
+
+    pub async fn get_validators_count(&self) -> Result<U256> {
+        self.instance
+            .getValidatorsCount(self.chain_address)
+            .call()
+            .await
+            .enrich("getValidatorsCount", None)
+    }
+
+    pub async fn get_validator(&self, index: U256) -> Result<Address> {
+        self.instance
+            .getValidatorsMember(self.chain_address, index)
+            .call()
+            .await
+            .enrich("getValidatorsMember", None)
+    }
+
+    /// Returns the list of all validators for the chain.
+    pub async fn get_validators(&self) -> Result<Vec<Address>> {
+        let count = self.get_validators_count().await?;
+        let count: u64 = count.saturating_to();
+        let mut validators = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let validator = self.get_validator(U256::from(i)).await?;
+            validators.push(validator);
+        }
+        Ok(validators)
     }
 }
 

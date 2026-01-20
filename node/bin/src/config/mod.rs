@@ -791,7 +791,7 @@ pub struct BatchVerificationConfig {
     pub connect_address: String,
     /// [server] Threshold (number of needed signatures)
     #[config(default_t = 1)]
-    pub threshold: usize,
+    pub threshold: u64,
     /// [server] Accepted signer pubkeys
     #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited::new(","))]
     pub accepted_signers: Vec<String>,

@@ -832,6 +832,7 @@ async fn run_main_node_pipeline(
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
+            node_state_on_startup.l1_state.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
         ))
         .pipe(fri_proving_step)
@@ -839,6 +840,7 @@ async fn run_main_node_pipeline(
             next_expected_batch_number: node_state_on_startup.l1_state.last_executed_batch + 1,
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage: batch_storage.clone(),
+            batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),
@@ -939,11 +941,12 @@ async fn run_en_pipeline(
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationClient::new(
-                finality.clone(),
-                config.batch_verification_config.signing_key.clone(),
                 chain_id,
                 *node_state_on_startup.l1_state.diamond_proxy.address(),
                 config.batch_verification_config.connect_address,
+                config.batch_verification_config.signing_key.clone(),
+                finality.clone(),
+                node_state_on_startup.l1_state.clone(),
             ),
             NoOpSink::new(),
         )
