@@ -445,7 +445,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     fn estimate_gas_with_view<V: ViewState + Clone>(
         &self,
         mut request: TransactionRequest,
-        block_context: BlockContext,
+        mut block_context: BlockContext,
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
@@ -511,6 +511,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .min(highest_gas_limit),
         );
         let tx = self.create_tx_from_request(request, &block_context, true)?;
+
+        // The basefee should be ignored for eth_estimateGas
+        // See:
+        // <https://github.com/ethereum/go-ethereum/blob/ee8e83fa5f6cb261dad2ed0a7bbcde4930c41e6c/internal/ethapi/api.go#L985>
+        block_context.eip1559_basefee = U256::from(0);
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
