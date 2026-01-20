@@ -3,8 +3,8 @@ use crate::eth_call_handler::EthCallHandler;
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
 use crate::tx_handler::TxHandler;
+use alloy::consensus::Account;
 use alloy::consensus::transaction::Recovered;
-use alloy::consensus::{Account, Transaction};
 use alloy::dyn_abi::TypedData;
 use alloy::eips::eip2930::AccessListResult;
 use alloy::eips::{BlockId, BlockNumberOrTag, Encodable2718};
@@ -32,7 +32,7 @@ use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
     RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
 };
-use zksync_os_storage_api::{RepositoryError, StateError, StoredTxData, TxMeta, ViewState};
+use zksync_os_storage_api::{RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkReceiptEnvelope};
 
 pub struct EthNamespace<RpcStorage, Mempool> {
@@ -356,24 +356,28 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             return Err(EthError::BlockNotFound(newest_block.into()));
         };
 
-        let end_block_plus = end_block + 1;
-        // Ensure that we would not be querying outside of genesis
-        let mut block_count = end_block_plus.min(block_count.try_into().unwrap());
-
         const MAX_FEE_HISTORY_BLOCKS: u64 = 1024;
+        // Ensure that we query at most `MAX_FEE_HISTORY_BLOCKS` block and that we do not query outside of genesis
+        let end_block_plus = end_block + 1;
+        let block_count = [
+            end_block_plus,
+            block_count.try_into().unwrap(),
+            MAX_FEE_HISTORY_BLOCKS,
+        ]
+        .into_iter()
+        .min()
+        .unwrap();
+
         const MAX_REWARD_PERCENTILE_COUNT: usize = 100;
-        if block_count > MAX_FEE_HISTORY_BLOCKS {
-            block_count = MAX_FEE_HISTORY_BLOCKS;
-        }
         if reward_percentiles.as_ref().map(|perc| perc.len()) > Some(MAX_REWARD_PERCENTILE_COUNT) {
             return Err(EthError::InvalidRewardPercentiles);
         }
         // If reward percentiles were specified, we
         // need to validate that they are monotonically
         // increasing and 0 <= p <= 100
-        // Note: The types used ensure that the percentiles are never < 0
         if let Some(percentiles) = &reward_percentiles
-            && percentiles.windows(2).any(|w| w[0] > w[1] || w[0] > 100.)
+            && (percentiles.windows(2).any(|w| w[0] > w[1] || w[0] > 100.)
+                || percentiles.first().is_some_and(|w| *w > 100.0 || *w < 0.0))
         {
             return Err(EthError::InvalidRewardPercentiles);
         }
@@ -381,8 +385,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         let start_block = end_block_plus - block_count;
 
         let mut base_fee_per_gas = Vec::with_capacity(block_count as usize + 1);
-        let mut rewards =
-            Vec::with_capacity(block_count as usize * (reward_percentiles.is_some() as usize));
         for block in start_block..=end_block {
             let base_fee = self
                 .storage
@@ -393,34 +395,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
                     BlockNumberOrTag::Number(block),
                 )))?;
             base_fee_per_gas.push(base_fee.saturating_to());
-
-            if let Some(percentiles) = &reward_percentiles {
-                let repository_block = self
-                    .storage
-                    .repository()
-                    .get_block_by_number(block)?
-                    .ok_or(EthError::BlockNotFound(BlockId::Number(
-                        BlockNumberOrTag::Number(block),
-                    )))?;
-                let mut stored_txs = Vec::with_capacity(repository_block.body.transactions.len());
-                for tx_hash in &repository_block.body.transactions {
-                    stored_txs.push(
-                        self.storage
-                            .repository()
-                            .get_stored_transaction(*tx_hash)?
-                            .ok_or(EthError::BlockNotFound(BlockId::Number(
-                                BlockNumberOrTag::Number(block),
-                            )))?,
-                    );
-                }
-                let r = Self::calculate_reward_percentiles_for_block(
-                    percentiles,
-                    repository_block.header.gas_used,
-                    base_fee.saturating_to(),
-                    &stored_txs,
-                );
-                rewards.push(r);
-            }
         }
         if let Some(base_fee) = self
             .storage
@@ -445,80 +419,8 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             gas_used_ratio: vec![0.5; block_count as usize],
             base_fee_per_blob_gas: vec![],
             blob_gas_used_ratio: vec![],
-            reward: reward_percentiles.map(|_| rewards),
+            reward: reward_percentiles.map(|p| vec![vec![0; p.len()]; block_count as usize]),
         })
-    }
-
-    /// Calculates reward percentiles for transactions in a block.
-    /// Given a list of percentiles and a list of transactions, this function computes
-    /// the corresponding rewards for the transactions at each percentile.
-    ///
-    /// The results are returned as a vector of U256 values.
-    ///
-    /// Implementation is copied from reth.
-    fn calculate_reward_percentiles_for_block(
-        percentiles: &[f64],
-        gas_used: u64,
-        base_fee_per_gas: u64,
-        transactions: &[StoredTxData],
-    ) -> Vec<u128> {
-        struct TxGasAndReward {
-            gas_used: u64,
-            reward: u128,
-        }
-
-        let mut transactions = transactions
-            .iter()
-            .scan(0, |previous_gas, tx| {
-                // Convert the cumulative gas used in the receipts
-                // to the gas usage by the transaction
-                //
-                // While we will sum up the gas again later, it is worth
-                // noting that the order of the transactions will be different,
-                // so the sum will also be different for each receipt.
-                let gas_used = tx.receipt.cumulative_gas_used() - *previous_gas;
-                *previous_gas = tx.receipt.cumulative_gas_used();
-
-                Some(TxGasAndReward {
-                    gas_used,
-                    reward: tx
-                        .tx
-                        .inner
-                        .effective_tip_per_gas(base_fee_per_gas)
-                        .unwrap_or_default(),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        // Sort the transactions by their rewards in ascending order
-        transactions.sort_by_key(|tx| tx.reward);
-
-        // Find the transaction that corresponds to the given percentile
-        //
-        // We use a `tx_index` here that is shared across all percentiles, since we know
-        // the percentiles are monotonically increasing.
-        let mut tx_index = 0;
-        let mut cumulative_gas_used = transactions
-            .first()
-            .map(|tx| tx.gas_used)
-            .unwrap_or_default();
-        let mut rewards_in_block = Vec::with_capacity(percentiles.len());
-        for percentile in percentiles {
-            // Empty blocks should return in a zero row
-            if transactions.is_empty() {
-                rewards_in_block.push(0);
-                continue;
-            }
-
-            let threshold = (gas_used as f64 * percentile / 100.) as u64;
-            while cumulative_gas_used < threshold && tx_index < transactions.len() - 1 {
-                tx_index += 1;
-                cumulative_gas_used += transactions[tx_index].gas_used;
-            }
-            rewards_in_block.push(transactions[tx_index].reward);
-        }
-
-        rewards_in_block
     }
 }
 
