@@ -40,3 +40,9 @@ impl TokenApiRatio {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct TokenPricesForFees {
+    pub base_token_usd_price: TokenApiRatio,
+    pub sl_token_usd_price: TokenApiRatio,
+}

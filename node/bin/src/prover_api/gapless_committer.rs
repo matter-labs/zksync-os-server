@@ -1,7 +1,9 @@
 use crate::prover_api::proof_storage::{ProofStorage, StoredBatch};
+use anyhow::Context;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use tokio::sync::mpsc;
+use zksync_os_contract_interface::l1_discovery::BatchVerificationL1;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_l1_sender::commands::L1SenderCommand;
@@ -20,6 +22,7 @@ pub struct GaplessCommitter {
     pub next_expected_batch_number: u64,
     pub last_committed_batch_number: u64,
     pub proof_storage: ProofStorage,
+    pub batch_verification_l1_config: BatchVerificationL1,
 }
 
 #[async_trait]
@@ -76,9 +79,12 @@ impl PipelineComponent for GaplessCommitter {
                                     stored_batch.batch_envelope(),
                                 ))
                             } else {
-                                L1SenderCommand::SendToL1(CommitCommand::new(
+                                CommitCommand::try_new(
+                                    &self.batch_verification_l1_config,
                                     stored_batch.batch_envelope(),
-                                ))
+                                )
+                                .map(L1SenderCommand::SendToL1)
+                                .context("Committer batch signature failure")?
                             };
                             latency_tracker.enter_state(GenericComponentState::WaitingSend);
                             output.send(result).await?;

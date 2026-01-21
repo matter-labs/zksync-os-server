@@ -210,7 +210,7 @@ reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.2" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.3" }
 
 # "Local" dependencies
 zksync_os_contract_interface = { version = "=0.13.0-non-semver-compat", path = "lib/contract_interface" }

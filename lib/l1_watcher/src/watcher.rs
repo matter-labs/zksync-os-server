@@ -37,18 +37,10 @@ impl L1Watcher {
 impl L1Watcher {
     pub async fn run(mut self) -> Result<(), L1WatcherError> {
         let mut timer = tokio::time::interval(self.poll_interval);
-        while self.processor.should_continue() {
+        loop {
             timer.tick().await;
             self.poll().await?;
         }
-        tracing::info!(
-            event_name = &self.processor.name(),
-            "finished processing events"
-        );
-        // Drop processor to close potential channels and free up resources
-        drop(self.processor);
-
-        futures::future::pending().await
     }
 
     async fn poll(&mut self) -> Result<(), L1WatcherError> {

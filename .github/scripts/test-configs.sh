@@ -98,11 +98,26 @@ for entry in "${CONFIGS[@]}"; do
   TO=0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0
 
   echo "Sending test transaction..."
-  cast send \
-    --private-key "${TEST_PRIVATE_KEY}" \
-    --rpc-url "http://localhost:${RPC_PORT}" \
-    "${TO}" \
-    --value 100
+  MAX_RETRIES=5
+  RETRY_DELAY=2  # seconds
+  attempt=1
+  while true; do
+    if cast send \
+      --private-key "${TEST_PRIVATE_KEY}" \
+      --rpc-url "http://localhost:${RPC_PORT}" \
+      "${TO}" \
+      --value 100; then
+      echo "✅ Test transaction succeeded!"
+      break
+    fi
+    if [ "${attempt}" -ge "${MAX_RETRIES}" ]; then
+      echo "❌ Test transaction failed after ${MAX_RETRIES} attempts!"
+      exit 1
+    fi
+    echo "⚠️  Cast send failed (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RETRY_DELAY}s..."
+    attempt=$((attempt + 1))
+    sleep "${RETRY_DELAY}"
+  done
 
   echo "✅ ${CUR_NAME} passed"
 done

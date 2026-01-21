@@ -263,6 +263,7 @@ impl Tester {
             external_price_api_client_config: default_config
                 .external_price_api_client_config
                 .clone(),
+            fee_config: Default::default(),
         };
         if let Some(f) = config_overrides {
             f(&mut config)
@@ -381,7 +382,7 @@ impl Tester {
 pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
-    batch_verification_threshold: Option<usize>,
+    batch_verification_threshold: Option<u64>,
 }
 
 impl TesterBuilder {
@@ -396,7 +397,7 @@ impl TesterBuilder {
         self
     }
 
-    pub fn batch_verification(mut self, threshold: usize) -> Self {
+    pub fn batch_verification(mut self, threshold: u64) -> Self {
         self.batch_verification_threshold = Some(threshold);
         self
     }

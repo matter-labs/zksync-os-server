@@ -33,7 +33,7 @@ pub enum BatchDaInputMode {
 
 /// User-friendly version of [`IExecutor::StoredBatchInfo`] containing
 /// fields that are relevant for ZKsync OS.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredBatchInfo {
     pub batch_number: u64,
     pub state_commitment: B256,

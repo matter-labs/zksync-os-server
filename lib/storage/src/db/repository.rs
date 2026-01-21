@@ -84,8 +84,7 @@ impl RepositoryDb {
         let latest_block_number = if let Some(n) = latest_block_number {
             n
         } else {
-            let header = genesis.state().await.header.clone();
-            let hash = header.hash_slow();
+            let (header, hash) = genesis.state().await.header.clone().into_parts();
             let block = Sealed::new_unchecked(
                 Block {
                     header,

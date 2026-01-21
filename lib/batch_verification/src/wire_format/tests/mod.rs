@@ -3,7 +3,7 @@ use crate::{
     BatchVerificationResult,
 };
 use zksync_os_batch_types::BatchSignature;
-use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme};
+use zksync_os_contract_interface::models::{CommitBatchInfo, DACommitmentScheme, StoredBatchInfo};
 use zksync_os_types::PubdataMode;
 
 fn create_sample_request() -> BatchVerificationRequest {
@@ -30,6 +30,16 @@ fn create_sample_request() -> BatchVerificationRequest {
             last_block_number: Some(2),
             chain_id: 6565,
             operator_da_input: vec![],
+        },
+        prev_commit_data: StoredBatchInfo {
+            batch_number: 41,
+            state_commitment: B256::ZERO,
+            number_of_layer1_txs: 0,
+            priority_operations_hash: B256::ZERO,
+            dependency_roots_rolling_hash: B256::ZERO,
+            l2_to_l1_logs_root_hash: B256::ZERO,
+            commitment: B256::ZERO,
+            last_block_timestamp: 0, //intentionally set to 0, this is unused in L1 and loosing it in transport is fine
         },
     }
 }

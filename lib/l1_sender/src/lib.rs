@@ -135,7 +135,7 @@ pub async fn run_l1_sender<Input: SendToL1>(
                     )
                     .await?
                     .with_to(to_address)
-                    .with_call(&cmd.solidity_call());
+                    .with_input(cmd.solidity_call());
 
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         let fee_per_blob_gas = provider.get_blob_base_fee().await?;
