@@ -316,9 +316,7 @@ where
         + Eq
         + PartialEq
         + alloy::eips::Decodable2718
-        + alloy::rlp::Decodable
-        + reth_primitives_traits::InMemorySize
-        + reth_primitives_traits::MaybeSerde,
+        + alloy::rlp::Decodable,
     T: RlpEcdsaEncodableTx + SignableTransaction<Signature> + Unpin,
 {
     fn tx_hash(&self) -> &TxHash {
