@@ -1,6 +1,6 @@
 use alloy::eips::Encodable2718;
 use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{TxHash, U256};
+use alloy::primitives::{TxHash, U256, address, bytes};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use regex::Regex;
@@ -193,5 +193,20 @@ async fn send_raw_transaction_sync_timeout() -> anyhow::Result<()> {
             .contains("The transaction was added to the mempool but wasn't processed within")
     );
 
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn estimate_gas_without_balance() -> anyhow::Result<()> {
+    // Test that the node can estimate transaction's gas even if sender does not have enough balance.
+    let tester = Tester::setup().await?;
+    let _estimated_gas = tester
+        .l2_provider
+        .estimate_gas(
+            TransactionRequest::default()
+                .to(address!("0x6e3338eB78A71C5FfF5Cd2673f9C63b7229fAa0b"))
+                .input(bytes!("0x38711eC715A5A32180427792Dc0e97f8E3303071").into()),
+        )
+        .await?;
     Ok(())
 }
