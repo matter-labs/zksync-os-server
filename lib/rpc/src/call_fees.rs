@@ -31,6 +31,11 @@ impl CallFees {
                 // either legacy transaction or no fee fields are specified
                 // when no fields are specified, set gas price to zero
                 let gas_price = gas_price.unwrap_or_default();
+                // only enforce the fee cap if provided input is not zero
+                // this is consistent with reth/geth behavior: https://github.com/ethereum/go-ethereum/blob/0dd173a727dd2d2409b8e401b22e85d20c25b71f/internal/ethapi/transaction_args.go#L443-L447
+                if gas_price != 0 && gas_price < block_base_fee {
+                    return Err(CallFeesError::FeeCapTooLow);
+                }
                 Ok(Self {
                     gas_price,
                     max_priority_fee_per_gas: None,
@@ -42,6 +47,7 @@ impl CallFees {
                         let max_priority_fee_per_gas = max_priority_fee_per_gas.unwrap_or_default();
 
                         // only enforce the fee cap if provided input is not zero
+                        // this is consistent with reth/geth behavior: https://github.com/ethereum/go-ethereum/blob/0dd173a727dd2d2409b8e401b22e85d20c25b71f/internal/ethapi/transaction_args.go#L443-L447
                         if !(max_fee_per_gas == 0 && max_priority_fee_per_gas == 0)
                             && max_fee_per_gas < block_base_fee
                         {
