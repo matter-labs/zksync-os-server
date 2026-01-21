@@ -66,7 +66,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
-        for_estimate_gas: bool,
     ) -> Result<ZkTransaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
@@ -112,7 +111,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
-            for_estimate_gas,
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
@@ -278,7 +276,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
 
         let block_context = self.resolve_block_context(block)?;
-        let transaction = self.create_tx_from_request(request, &block_context, false)?;
+        let transaction = self.create_tx_from_request(request, &block_context)?;
 
         Ok(ExecutionEnv {
             transaction,
@@ -510,7 +508,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .unwrap_or(highest_gas_limit)
                 .min(highest_gas_limit),
         );
-        let tx = self.create_tx_from_request(request, &block_context, true)?;
+        let tx = self.create_tx_from_request(request, &block_context)?;
 
         // The basefee should be ignored for eth_estimateGas
         // See:

@@ -19,8 +19,6 @@ impl CallFees {
         call_max_fee_per_gas: Option<u128>,
         call_max_priority_fee_per_gas: Option<u128>,
         block_base_fee: u128,
-        // todo: remove once confirmed that this is not needed
-        _for_estimate_gas: bool,
     ) -> Result<Self, CallFeesError> {
         match (
             call_gas_price,
