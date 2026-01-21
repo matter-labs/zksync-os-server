@@ -1,6 +1,6 @@
 use alloy::eips::Encodable2718;
 use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{Address, TxHash, U256, address, bytes};
+use alloy::primitives::{TxHash, U256, address, bytes};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use regex::Regex;
