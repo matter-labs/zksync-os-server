@@ -235,7 +235,7 @@ jobs:
   #  Run prover integration tests on GPU machine  #
   #################################################
   prover-tests:
-    runs-on: [matterlabs-ci-gpu-runner, hetzner]
+    runs-on: [matterlabs-ci-hetzner-rtx6000-gpu]
     needs: build-prover-tests
     steps:
       - name: Checkout code
