@@ -403,8 +403,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1ExecuteWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
+            committed_batch_provider.clone(),
             finality_storage.clone(),
-            batch_storage.clone(),
         )
         .await
         .expect("failed to start L1 execute watcher")

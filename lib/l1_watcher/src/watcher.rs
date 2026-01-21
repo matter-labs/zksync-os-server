@@ -107,6 +107,8 @@ impl L1Watcher {
 pub enum L1WatcherError {
     #[error("L1 does not have any blocks")]
     NoL1Blocks,
+    #[error("batch {0} was not discovered as committed")]
+    BatchNotCommitted(u64),
     #[error(transparent)]
     Sol(#[from] alloy::sol_types::Error),
     #[error(transparent)]
