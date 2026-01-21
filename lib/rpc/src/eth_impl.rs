@@ -375,11 +375,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         // If reward percentiles were specified, we
         // need to validate that they are monotonically
         // increasing and 0 <= p <= 100
-        if let Some(percentiles) = &reward_percentiles
-            && (percentiles.windows(2).any(|w| w[0] > w[1] || w[0] > 100.)
-                || percentiles.first().is_some_and(|w| *w > 100.0 || *w < 0.0))
-        {
-            return Err(EthError::InvalidRewardPercentiles);
+        if let Some(percentiles) = &reward_percentiles {
+            let sorted = percentiles.is_sorted();
+            let range_is_correct = percentiles.iter().all(|&p| (0.0..=100.0).contains(&p));
+            if !sorted || !range_is_correct {
+                return Err(EthError::InvalidRewardPercentiles);
+            }
         }
 
         let start_block = end_block_plus - block_count;
@@ -412,6 +413,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             base_fee_per_gas.push(*base_fee_per_gas.last().unwrap());
         }
 
+        // ZKsync OS chains are not fully EIP-1559 compliant and using 0 as a priority fee should always work,
+        // so we return zeroes to keep code simpler.
+        let reward = reward_percentiles.map(|p| vec![vec![0; p.len()]; block_count as usize]);
+
         Ok(FeeHistory {
             base_fee_per_gas,
             oldest_block: start_block,
@@ -419,7 +424,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             gas_used_ratio: vec![0.5; block_count as usize],
             base_fee_per_blob_gas: vec![],
             blob_gas_used_ratio: vec![],
-            reward: reward_percentiles.map(|p| vec![vec![0; p.len()]; block_count as usize]),
+            reward,
         })
     }
 }
