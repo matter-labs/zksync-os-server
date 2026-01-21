@@ -312,11 +312,7 @@ impl<T: reth_primitives_traits::InMemorySize> reth_primitives_traits::InMemorySi
 
 impl<T> TxHashRef for L2EnvelopeInner<T>
 where
-    Self: Clone
-        + Eq
-        + PartialEq
-        + alloy::eips::Decodable2718
-        + alloy::rlp::Decodable,
+    Self: Clone + Eq + PartialEq + alloy::eips::Decodable2718 + alloy::rlp::Decodable,
     T: RlpEcdsaEncodableTx + SignableTransaction<Signature> + Unpin,
 {
     fn tx_hash(&self) -> &TxHash {
