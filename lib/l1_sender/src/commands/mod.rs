@@ -1,7 +1,7 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use alloy::consensus::BlobTransactionSidecar;
-use alloy::sol_types::SolCall;
+use alloy::primitives::Bytes;
 use itertools::Itertools;
 use std::fmt::Display;
 
@@ -43,7 +43,8 @@ pub trait SendToL1:
     const SENT_STAGE: BatchExecutionStage;
     const MINED_STAGE: BatchExecutionStage;
     const PASSTHROUGH_STAGE: BatchExecutionStage;
-    fn solidity_call(&self) -> impl SolCall;
+    /// We use `Bytes` instead of `SolCall`, because SolCall is a trait that cannot be dyn
+    fn solidity_call(&self) -> Bytes;
 
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
         None

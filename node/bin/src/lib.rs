@@ -59,7 +59,6 @@ use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
 use zksync_os_batch_verification::{BatchVerificationClient, BatchVerificationPipelineStep};
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::BatchDaInputMode;
-use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_interface::types::BlockHashes;
@@ -69,11 +68,10 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    BatchRangeWatcher, BatchRangeWatcherInit, CommittedBatch, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher, StoredBatchData,
+    CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_mempool::L2TransactionPool;
-use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
+use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::service::NetworkService;
 use zksync_os_object_store::ObjectStoreFactory;
@@ -83,8 +81,8 @@ use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{RpcStorage, run_jsonrpsee_server};
 use zksync_os_rpc_api::eth::EthApiClient;
-use zksync_os_sequencer::execution::Sequencer;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
+use zksync_os_sequencer::execution::{FeeParams, FeeProvider, Sequencer};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage::in_memory::Finality;
@@ -183,9 +181,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
         tokio::sync::mpsc::channel(5);
 
-    // Channel between BatchRangeWatcher and Batcher
-    let (batch_ranges_sender, batch_ranges_for_batcher) = tokio::sync::mpsc::channel(5);
-
     tracing::info!("Initializing BatchStorage");
     let batch_storage = ProofStorage::new(
         ObjectStoreFactory::new(config.prover_api_config.object_store.clone())
@@ -251,6 +246,30 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis,
     )
     .await;
+
+    let tree_at_genesis = MerkleTreeVersion {
+        tree: tree_db,
+        block: 0,
+    };
+    let (genesis_root_hash, genesis_root_leaves) = tree_at_genesis
+        .root_info()
+        .expect("Failed to get genesis root info");
+    let tree_db = tree_at_genesis.tree;
+
+    // todo: this can take a while; ideally committed batches should be loaded in the background
+    //       and then `get()` method can be made async so that it waits for relevant batch to load
+    let committed_batch_provider = CommittedBatchProvider::init(
+        &l1_state,
+        config.l1_watcher_config.max_blocks_to_process,
+        || async {
+            let genesis_state = genesis.state().await;
+            load_genesis_stored_batch_info(genesis_state, genesis_root_hash, genesis_root_leaves)
+                .await
+                .unwrap()
+        },
+    )
+    .await
+    .expect("failed to init CommittedBatchProvider");
 
     let state = State::new(&config.general_config, &genesis).await;
 
@@ -371,8 +390,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
+            committed_batch_provider.clone(),
             finality_storage.clone(),
-            batch_storage.clone(),
         )
         .await
         .expect("failed to start L1 commit watcher")
@@ -391,37 +410,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .expect("failed to start L1 execute watcher")
         .run()
         .map(report_exit("L1 execute watcher")),
-    );
-
-    let BatchRangeWatcherInit {
-        l1_watcher: batch_range_watcher,
-        last_executed_batch_data,
-    } = BatchRangeWatcher::create_watcher(
-        config.l1_watcher_config.clone().into(),
-        node_startup_state.l1_state.diamond_proxy.clone(),
-        node_startup_state.l1_state.last_executed_batch,
-        node_startup_state.l1_state.last_committed_batch,
-        batch_ranges_sender,
-    )
-    .await
-    .expect("failed to start L1 batch range watcher");
-    let last_executed_batch_data = match last_executed_batch_data {
-        Some(last_executed_batch_data) => last_executed_batch_data,
-        None => {
-            // Fallback to genesis if there is none on L1
-            let batch_info = genesis_stored_batch_info(&repositories, &tree_db, &genesis).await;
-            StoredBatchData {
-                batch_info,
-                first_block_number: 0,
-                last_block_number: 0,
-            }
-        }
-    };
-
-    tasks.spawn(
-        batch_range_watcher
-            .run()
-            .map(report_exit("L1 batch range watcher")),
     );
 
     let first_replay_record = block_replay_storage.get_replay_record(starting_block);
@@ -540,14 +528,42 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
 
-    let current_protocol_version = if let Some(record) = first_replay_record {
+    let current_protocol_version = if let Some(record) = &first_replay_record {
         record.protocol_version.clone()
     } else {
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
+    let (token_price_sender, token_price_receiver) = watch::channel(None);
+    let previous_block_fee_params = if starting_block == 1 {
+        None
+    } else {
+        let prev_record = block_replay_storage
+            .get_replay_record(starting_block - 1)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Missing replay record for block `starting_block - 1` = {}",
+                    starting_block - 1
+                )
+            });
+        Some(FeeParams {
+            eip1559_basefee: prev_record.block_context.eip1559_basefee,
+            native_price: prev_record.block_context.native_price,
+            pubdata_price: prev_record.block_context.pubdata_price,
+        })
+    };
+
     // todo: `BlockContextProvider` initialization and its dependencies
     // should be moved to `sequencer`
+    let fee_provider = FeeProvider::new(
+        config.fee_config.clone().into(),
+        previous_block_fee_params,
+        pubdata_price_receiver,
+        blob_fill_ratio_receiver,
+        token_price_receiver,
+        config.l1_sender_config.pubdata_mode,
+    );
+
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         l1_transactions_for_sequencer,
@@ -561,13 +577,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_pubdata_limit_bytes,
         current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
-        config.sequencer_config.base_fee_override,
-        config.sequencer_config.pubdata_price_override,
-        config.sequencer_config.native_price_override,
-        pubdata_price_receiver,
-        blob_fill_ratio_receiver,
         last_constructed_block_ctx_sender,
-        config.l1_sender_config.pubdata_mode,
+        fee_provider,
     );
 
     // ========== Start L1 Upgrade Watcher ===========
@@ -631,6 +642,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 &config.l1_sender_config,
             ),
             config.external_price_api_client_config.clone().into(),
+            token_price_sender,
         )
         .await
         .expect("Failed to initialize BaseTokenPriceUpdater");
@@ -662,8 +674,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             sidecar_sender,
-            batch_ranges_for_batcher,
-            last_executed_batch_data,
+            committed_batch_provider,
         )
         .await;
     } else {
@@ -714,8 +725,7 @@ async fn run_main_node_pipeline(
     _stop_receiver: watch::Receiver<bool>,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
-    batch_ranges_for_batcher: tokio::sync::mpsc::Receiver<CommittedBatch>,
-    last_executed_batch_data: StoredBatchData,
+    committed_batch_provider: CommittedBatchProvider,
 ) {
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         batch_storage.clone(),
@@ -808,7 +818,8 @@ async fn run_main_node_pipeline(
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
-                last_executed_batch_data,
+                last_committed_batch: node_state_on_startup.l1_state.last_committed_batch,
+                last_executed_batch: node_state_on_startup.l1_state.last_executed_batch,
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
@@ -817,10 +828,11 @@ async fn run_main_node_pipeline(
             batcher_config: config.batcher_config.clone(),
             pubdata_mode: config.l1_sender_config.pubdata_mode,
             sidecar_sender,
-            committed_batches: batch_ranges_for_batcher,
+            committed_batch_provider,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.into(),
+            node_state_on_startup.l1_state.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
         ))
         .pipe(fri_proving_step)
@@ -828,6 +840,7 @@ async fn run_main_node_pipeline(
             next_expected_batch_number: node_state_on_startup.l1_state.last_executed_batch + 1,
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
             proof_storage: batch_storage.clone(),
+            batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(
             node_state_on_startup.l1_state.diamond_proxy.clone(),
@@ -928,11 +941,12 @@ async fn run_en_pipeline(
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationClient::new(
-                finality.clone(),
-                config.batch_verification_config.signing_key.clone(),
                 chain_id,
                 *node_state_on_startup.l1_state.diamond_proxy.address(),
                 config.batch_verification_config.connect_address,
+                config.batch_verification_config.signing_key.clone(),
+                finality.clone(),
+                node_state_on_startup.l1_state.clone(),
             ),
             NoOpSink::new(),
         )
@@ -1201,24 +1215,4 @@ async fn find_last_matching_main_node_block(
         }
     }
     Ok(left)
-}
-
-// Implementation node: it's awkward that we need all these arguments to get the genesis StoredBatchInfo.
-// Consider addressing this if refactoring the genesis.
-pub async fn genesis_stored_batch_info(
-    repositories: &impl ReadRepository,
-    tree_db: &MerkleTree<RocksDBWrapper>,
-    genesis: &Genesis,
-) -> StoredBatchInfo {
-    let genesis_block = repositories
-        .get_block_by_number(0)
-        .expect("Failed to read genesis block from repositories")
-        .expect("Missing genesis block in repositories");
-    load_genesis_stored_batch_info(
-        genesis_block,
-        tree_db.clone(),
-        genesis.state().await.expected_genesis_root,
-    )
-    .await
-    .unwrap()
 }

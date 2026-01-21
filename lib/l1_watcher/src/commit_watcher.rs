@@ -1,25 +1,27 @@
+use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessL1Event, util};
+use crate::{DiscoveredCommittedBatch, L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
-use zksync_os_contract_interface::IExecutor::BlockCommit;
+use zksync_os_batch_types::BatchInfo;
+use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_storage_api::{ReadBatch, WriteFinality};
+use zksync_os_storage_api::WriteFinality;
 
-pub struct L1CommitWatcher<Finality, BatchStorage> {
-    contract_address: Address,
+pub struct L1CommitWatcher<Finality> {
+    zk_chain: ZkChain<DynProvider>,
     next_batch_number: u64,
+    committed_batch_provider: CommittedBatchProvider,
     finality: Finality,
-    batch_storage: BatchStorage,
 }
 
-impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality, BatchStorage> {
+impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
     pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
+        committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
-        batch_storage: BatchStorage,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
         let last_committed_batch = finality.get_finality_status().last_committed_batch;
@@ -40,10 +42,10 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
         tracing::info!(last_l1_block, "resolved on L1");
 
         let this = Self {
-            contract_address: *zk_chain.address(),
+            zk_chain: zk_chain.clone(),
             next_batch_number: last_committed_batch + 1,
+            committed_batch_provider,
             finality,
-            batch_storage,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
@@ -60,46 +62,44 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> L1CommitWatcher<Finality,
 }
 
 #[async_trait::async_trait]
-impl<Finality: WriteFinality, BatchStorage: ReadBatch> ProcessL1Event
-    for L1CommitWatcher<Finality, BatchStorage>
-{
+impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
     const NAME: &'static str = "block_commit";
 
-    type SolEvent = BlockCommit;
-    type WatchedEvent = BlockCommit;
+    type SolEvent = ReportCommittedBatchRangeZKsyncOS;
+    type WatchedEvent = ReportCommittedBatchRangeZKsyncOS;
 
     fn contract_address(&self) -> Address {
-        self.contract_address
+        *self.zk_chain.address()
     }
 
     async fn process_event(
         &mut self,
-        batch_commit: BlockCommit,
-        _log: Log,
+        report: ReportCommittedBatchRangeZKsyncOS,
+        log: Log,
     ) -> Result<(), L1WatcherError> {
-        let batch_number = batch_commit.batchNumber.to::<u64>();
-        let batch_hash = batch_commit.batchHash;
-        let batch_commitment = batch_commit.commitment;
+        let batch_number = report.batchNumber;
         if batch_number < self.next_batch_number {
-            tracing::debug!(
-                batch_number,
-                ?batch_hash,
-                ?batch_commitment,
-                "skipping already processed committed batch",
-            );
+            tracing::debug!(batch_number, "skipping already processed committed batch");
         } else {
-            tracing::debug!(
-                batch_number,
-                ?batch_hash,
-                ?batch_commitment,
-                "discovered committed batch"
-            );
-            let (_, last_committed_block) = self
-                .batch_storage
-                .get_batch_range_by_number(batch_number)
-                .await
-                .map_err(L1WatcherError::Batch)?
-                .expect("committed batch is missing");
+            tracing::debug!(batch_number, "discovered committed batch");
+            let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
+            let committed_batch = util::fetch_commit_calldata(&self.zk_chain, tx_hash).await?;
+
+            // todo: stop using this struct once fully migrated from S3
+            let last_executed_batch_info = BatchInfo {
+                commit_info: committed_batch.commit_info,
+                chain_address: Default::default(),
+                upgrade_tx_hash: committed_batch.upgrade_tx_hash,
+                blob_sidecar: None,
+            };
+            let batch_info =
+                last_executed_batch_info.into_stored(&committed_batch.protocol_version);
+            let committed_batch = DiscoveredCommittedBatch {
+                batch_info,
+                block_range: report.firstBlockNumber..=report.lastBlockNumber,
+            };
+
+            let last_committed_block = committed_batch.last_block();
             self.finality.update_finality_status(|finality| {
                 assert!(
                     batch_number > finality.last_committed_batch,
@@ -112,6 +112,7 @@ impl<Finality: WriteFinality, BatchStorage: ReadBatch> ProcessL1Event
                 finality.last_committed_batch = batch_number;
                 finality.last_committed_block = last_committed_block;
             });
+            self.committed_batch_provider.insert(committed_batch);
         }
         Ok(())
     }
