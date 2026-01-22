@@ -23,7 +23,7 @@ alloy.workspace = true
 num.workspace = true
 secrecy.workspace = true
 
-zksync_os_types = { workspace = true, features = ["reth"] }
+zksync_os_types.workspace = true
 
 [dev-dependencies]
 httpmock.workspace = true
