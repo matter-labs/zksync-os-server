@@ -8,10 +8,15 @@ use super::ProtocolSemanticVersion;
 #[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq)]
 #[repr(u32)]
 pub enum ExecutionVersion {
+    /// Historical version of zksync-os matching V3 STF. Kept for legacy reasons.
     V1 = 1,
+    /// Historical version of zksync-os matching V3 STF. Kept for legacy reasons.
     V2 = 2,
+    /// v0.0.x release branch of zksync-os
     V3 = 3,
+    /// v0.1.x release branch of zksync-os
     V4 = 4,
+    /// v0.2.x release branch of zksync-os
     V5 = 5,
 }
 
