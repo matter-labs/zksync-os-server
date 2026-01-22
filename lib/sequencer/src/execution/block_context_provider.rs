@@ -202,7 +202,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     self.previous_block_timestamp,
                     record.previous_block_timestamp
                 );
-
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted {

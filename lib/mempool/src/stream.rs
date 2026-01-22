@@ -199,7 +199,8 @@ impl BestTransactionsStream<'_> {
     /// Waits until there is a next transaction and returns a reference to it.
     /// Does not consume the transaction, it will be returned on the next poll.
     /// Returns `None` if the stream is closed.
-    /// Returns `Some(PeekedInfo)` with peeked information, such as if there is an upgrade info in the stream
+    /// Returns `Some(None)` if there is a transaction in the stream, but it's not an upgrade transaction.
+    /// Returns `Some(Some(upgrade_tx))` if the next transaction is an upgrade transaction.
     /// and if the peeked transaction is an interop transaction.
     // TODO: this interface leaks implementation details about the internal structure, and in general
     // this information is only needed for the `BlockContextProvider` which already has access to the stream.

@@ -46,7 +46,7 @@ alloy::sol! {
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
-        event NewInteropRoot(
+        event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
             uint256 indexed logId,
