@@ -163,8 +163,8 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
 
                         if let ZkEnvelope::InteropRoots(interop_roots_tx) = tx.inner.inner() {
                             interop_roots_count += interop_roots_tx.interop_roots_count();
-                            last_interop_log_index = metadata.and_then(|m| match m {
-                                ZkTransactionMetadata::Interop(log_index) => Some(log_index),
+                            last_interop_log_index = metadata.map(|m| match m {
+                                ZkTransactionMetadata::Interop(log_index) => log_index,
                             });
                         }
 
