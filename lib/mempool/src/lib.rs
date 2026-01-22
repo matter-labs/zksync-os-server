@@ -1,7 +1,7 @@
 mod stream;
 pub use stream::{
-    BestTransactionsStream, PeekedInfo, ReplayTxStream, TxStream, ZkPoolTransaction,
-    ZkTransactionMetadata, best_transactions,
+    BestTransactionsStream, ReplayTxStream, TxStream, ZkPoolTransaction, ZkTransactionMetadata,
+    best_transactions,
 };
 
 mod traits;

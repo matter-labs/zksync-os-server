@@ -12,7 +12,7 @@ use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use zksync_os_types::{
     IndexedInteropRootsEnvelope, InteropRootsLogIndex, L1PriorityEnvelope, L1UpgradeEnvelope,
-    L2Envelope, L2Transaction, UpgradeTransaction, ZkTransaction, ZkTxType,
+    L2Envelope, L2Transaction, UpgradeTransaction, ZkTransaction,
 };
 
 pub trait TxStream: Stream {
@@ -30,7 +30,7 @@ pub struct BestTransactionsStream<'a> {
     peeked_tx: Option<ZkPoolTransaction>,
     peeked_upgrade_info: Option<UpgradeTransaction>,
     txs_already_provided: bool,
-    first_tx_is_interop: bool,
+    provide_only_interop_txs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +112,7 @@ pub fn best_transactions<'a>(
         peeked_tx: None,
         peeked_upgrade_info: None,
         txs_already_provided: false,
-        first_tx_is_interop: false,
+        provide_only_interop_txs: false,
     }
 }
 
@@ -139,27 +139,30 @@ impl Stream for BestTransactionsStream<'_> {
                         // the first transaction will arrive.
                     }
                     Poll::Pending => {}
-                    Poll::Ready(None) => todo!("channel closed"),
+                    Poll::Ready(None) => return Poll::Ready(None),
                 }
             }
 
-            if !this.txs_already_provided || this.first_tx_is_interop {
+            if !this.txs_already_provided || this.provide_only_interop_txs {
                 match this.interop_transactions.poll_recv(cx) {
                     Poll::Ready(Some(tx)) => {
+                        // If first transaction in stream was interop one we should provide only interop transactions
+                        this.provide_only_interop_txs = true;
                         return Poll::Ready(Some(tx.into()));
                     }
-                    Poll::Pending if this.first_tx_is_interop => {
+                    Poll::Pending if this.provide_only_interop_txs => {
                         return Poll::Pending;
                     }
-                    Poll::Ready(None) => todo!("channel closed"),
-                    _ => {}
+                    // This arm is reachable in case if first transaction wasn't interop and we can execute other transactions
+                    Poll::Pending => {}
+                    Poll::Ready(None) => return Poll::Ready(None),
                 }
             }
 
             match this.l1_transactions.poll_recv(cx) {
                 Poll::Ready(Some(tx)) => return Poll::Ready(Some(tx.into())),
                 Poll::Pending => {}
-                Poll::Ready(None) => todo!("channel closed"),
+                Poll::Ready(None) => return Poll::Ready(None),
             }
 
             if let Some(tx) = this.best_l2_transactions.next() {
@@ -192,13 +195,6 @@ impl TxStream for BestTransactionsStream<'_> {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone)]
-pub struct PeekedInfo {
-    pub upgrade_info: Option<UpgradeTransaction>,
-    pub is_peeked_tx_interop: bool,
-}
-
 impl BestTransactionsStream<'_> {
     /// Waits until there is a next transaction and returns a reference to it.
     /// Does not consume the transaction, it will be returned on the next poll.
@@ -210,7 +206,7 @@ impl BestTransactionsStream<'_> {
     // This was introduced only because upgrade transaction can appear after we started waiting for the
     // first tx, and we need protocol upgrade info to initialize block context.
     // Consider refactoring this later.
-    pub async fn wait_peek(&mut self) -> Option<PeekedInfo> {
+    pub async fn wait_peek(&mut self) -> Option<Option<UpgradeTransaction>> {
         if self.peeked_tx.is_none() {
             self.peeked_tx = self.next().await;
             self.txs_already_provided = true; // TODO: implicit expectation that this method is _guaranteed_ to be called before using the stream.
@@ -222,13 +218,7 @@ impl BestTransactionsStream<'_> {
             return None;
         }
 
-        Some(PeekedInfo {
-            upgrade_info: self.peeked_upgrade_info.clone(),
-            is_peeked_tx_interop: matches!(
-                self.peeked_tx.clone().unwrap().into_parts().0.tx_type(),
-                ZkTxType::InteropRoots
-            ),
-        })
+        Some(self.peeked_upgrade_info.clone())
     }
 }
 

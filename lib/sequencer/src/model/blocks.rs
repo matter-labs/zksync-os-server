@@ -112,7 +112,6 @@ pub struct PreparedBlockCommand<'a> {
     /// Can be non-empty e.g. when processing upgrade transactions.
     pub force_preimages: Vec<(B256, Vec<u8>)>,
     pub starting_interop_event_index: InteropRootsLogIndex,
-    pub is_interop_only_block: bool,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

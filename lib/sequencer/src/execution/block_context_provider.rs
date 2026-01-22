@@ -13,8 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
 use zksync_os_interface::types::{BlockContext, BlockHashes};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, L2TransactionPool, PeekedInfo, PoolUpdateKind, ReplayTxStream,
-    best_transactions,
+    CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
@@ -107,25 +106,20 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 );
 
                 // Peek to ensure that at least one transaction is available so that timestamp is accurate.
-                let peeked_info = best_txs.wait_peek().await;
-
-                let Some(PeekedInfo {
-                    upgrade_info,
-                    is_peeked_tx_interop: is_interop_only_block,
-                }) = peeked_info
-                else {
+                let peeked_tx = best_txs.wait_peek().await;
+                if peeked_tx.is_none() {
                     return Err(anyhow::anyhow!(
                         "BestTransactionsStream closed unexpectedly for block {}",
                         produce_command.block_number
                     ));
-                };
+                }
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
 
                 // Check if we peeked an upgrade transaction info.
                 // It is possible that we peek an upgrade with version <= self.protocol_version
                 // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
-                let force_preimages = if let Some(upgrade_tx) = upgrade_info
+                let force_preimages = if let Some(Some(upgrade_tx)) = peeked_tx
                     && upgrade_tx.protocol_version > self.protocol_version
                 {
                     tracing::info!(
@@ -193,7 +187,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
-                    is_interop_only_block,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -210,12 +203,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     record.previous_block_timestamp
                 );
 
-                let is_interop_only_block = record
-                    .transactions
-                    .first()
-                    .map(|tx| matches!(tx.envelope(), ZkEnvelope::InteropRoots(_)))
-                    .unwrap_or(false);
-
                 PreparedBlockCommand {
                     block_context: record.block_context,
                     seal_policy: SealPolicy::UntilExhausted {
@@ -229,7 +216,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: record.force_preimages,
-                    is_interop_only_block,
                     starting_interop_event_index: record.starting_interop_event_index.clone(),
                 }
             }
@@ -297,11 +283,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     }
                 };
 
-                let is_interop_only_block = txs
-                    .first()
-                    .map(|tx| matches!(tx.envelope(), ZkEnvelope::InteropRoots(_)))
-                    .unwrap_or(false);
-
                 PreparedBlockCommand {
                     block_context,
                     tx_source: Box::pin(ReplayTxStream::new(txs)),
@@ -315,7 +296,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: rebuild.replay_record.force_preimages,
-                    is_interop_only_block,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                 }
             }
