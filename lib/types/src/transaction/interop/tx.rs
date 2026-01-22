@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::transaction::INTEROP_ROOTS_TX_TYPE_ID;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
-#[serde(rename_all = "camelCase", into = "tx_serde::TransactionSerdeHelper")]
+#[serde(rename_all = "camelCase")]
 pub struct InteropRootsTx {
     pub to: Address,
     pub input: Bytes,
@@ -19,60 +19,6 @@ pub struct InteropRootsTx {
 impl InteropRootsTx {
     pub fn calculate_hash(&self) -> B256 {
         keccak256(self.encoded_2718())
-    }
-}
-
-mod tx_serde {
-    use alloy::primitives::TxHash;
-
-    use super::*;
-    use crate::transaction::BOOTLOADER_FORMAL_ADDRESS;
-
-    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct TransactionSerdeHelper {
-        pub hash: TxHash,
-        pub initiator: Address,
-        pub to: Address,
-        #[serde(rename = "gas", with = "alloy::serde::quantity")]
-        pub gas_limit: u64,
-        #[serde(with = "alloy::serde::quantity")]
-        pub max_fee_per_gas: u128,
-        #[serde(with = "alloy::serde::quantity")]
-        pub max_priority_fee_per_gas: u128,
-        #[serde(with = "alloy::serde::quantity")]
-        pub nonce: u64,
-        pub value: U256,
-        pub input: Bytes,
-
-        #[serde(with = "alloy::serde::quantity")]
-        pub v: u64,
-        pub r: B256,
-        pub s: B256,
-        #[serde(with = "alloy::serde::quantity")]
-        pub y_parity: bool,
-    }
-
-    // Serialize: inject defaults for (r,s,v,yParity)
-    impl From<InteropRootsTx> for TransactionSerdeHelper {
-        fn from(tx: InteropRootsTx) -> Self {
-            Self {
-                hash: tx.calculate_hash(),
-                initiator: BOOTLOADER_FORMAL_ADDRESS,
-                to: tx.to,
-                gas_limit: tx.gas_limit(),
-                max_fee_per_gas: tx.max_fee_per_gas(),
-                max_priority_fee_per_gas: tx.max_priority_fee_per_gas().unwrap_or(0),
-                nonce: tx.nonce(),
-                value: tx.value(),
-                input: tx.input,
-                // Put defaults for signature fields
-                v: 0,
-                r: B256::ZERO,
-                s: B256::ZERO,
-                y_parity: false,
-            }
-        }
     }
 }
 

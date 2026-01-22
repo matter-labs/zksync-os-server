@@ -21,17 +21,72 @@ pub const L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS: Address =
 pub const INTEROP_ROOTS_TX_TYPE_ID: u8 = 125;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+#[serde(into = "tx_serde::TransactionSerdeHelper")]
 pub struct InteropRootsEnvelope {
     /// Hash of the transaction
     /// Stored in an envelope and calculated separately from transaction as hash of transaction is not part of transaction itself.
-    #[serde(skip)]
     pub hash: B256,
-    /// Log index of the last event from which the transaction was created.
-    /// Stored in an envelope to be able to easier keep track of it, but it is not part of the transaction
-    #[serde(skip)]
-    pub last_log_index: InteropRootsLogIndex,
-    #[serde(flatten)]
     pub inner: InteropRootsTx,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+pub struct IndexedInteropRootsEnvelope {
+    pub log_index: InteropRootsLogIndex,
+    pub envelope: InteropRootsEnvelope,
+}
+
+mod tx_serde {
+    use alloy::primitives::TxHash;
+
+    use super::*;
+    use crate::transaction::BOOTLOADER_FORMAL_ADDRESS;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct TransactionSerdeHelper {
+        pub hash: TxHash,
+        pub initiator: Address,
+        pub to: Address,
+        #[serde(rename = "gas", with = "alloy::serde::quantity")]
+        pub gas_limit: u64,
+        #[serde(with = "alloy::serde::quantity")]
+        pub max_fee_per_gas: u128,
+        #[serde(with = "alloy::serde::quantity")]
+        pub max_priority_fee_per_gas: u128,
+        #[serde(with = "alloy::serde::quantity")]
+        pub nonce: u64,
+        pub value: U256,
+        pub input: Bytes,
+
+        #[serde(with = "alloy::serde::quantity")]
+        pub v: u64,
+        pub r: B256,
+        pub s: B256,
+        #[serde(with = "alloy::serde::quantity")]
+        pub y_parity: bool,
+    }
+
+    // Serialize: inject defaults for (r,s,v,yParity)
+    impl From<InteropRootsEnvelope> for TransactionSerdeHelper {
+        fn from(tx: InteropRootsEnvelope) -> Self {
+            Self {
+                hash: *tx.hash(),
+                initiator: BOOTLOADER_FORMAL_ADDRESS,
+                to: L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS,
+                gas_limit: tx.gas_limit(),
+                max_fee_per_gas: tx.max_fee_per_gas(),
+                max_priority_fee_per_gas: tx.max_priority_fee_per_gas().unwrap_or(0),
+                nonce: tx.nonce(),
+                value: tx.value(),
+                input: Bytes::from(tx.input().to_vec()),
+                // Put defaults for signature fields
+                v: 0,
+                r: B256::ZERO,
+                s: B256::ZERO,
+                y_parity: false,
+            }
+        }
+    }
 }
 
 /// A helper struct to store the block number and index in block of published interop roots event.
@@ -64,10 +119,7 @@ impl Decodable for InteropRootsLogIndex {
 }
 
 impl InteropRootsEnvelope {
-    pub fn from_interop_roots(
-        interop_roots: Vec<InteropRoot>,
-        last_log_index: InteropRootsLogIndex,
-    ) -> Self {
+    pub fn from_interop_roots(interop_roots: Vec<InteropRoot>) -> Self {
         assert_eq!(
             interop_roots.len(),
             1,
@@ -86,7 +138,6 @@ impl InteropRootsEnvelope {
 
         Self {
             hash: transaction.calculate_hash(),
-            last_log_index,
             inner: transaction,
         }
     }
@@ -116,12 +167,11 @@ impl Typed2718 for InteropRootsEnvelope {
 
 impl RlpEcdsaEncodableTx for InteropRootsEnvelope {
     fn rlp_encoded_fields_length(&self) -> usize {
-        self.inner.rlp_encoded_fields_length() + self.last_log_index.length()
+        self.inner.rlp_encoded_fields_length()
     }
 
     fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
         self.inner.rlp_encode_fields(out);
-        self.last_log_index.encode(out);
     }
 }
 
@@ -130,10 +180,8 @@ impl RlpEcdsaDecodableTx for InteropRootsEnvelope {
 
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
         let transaction = InteropRootsTx::rlp_decode_fields(buf)?;
-        let last_log_index = <InteropRootsLogIndex as Decodable>::decode(buf)?;
         Ok(Self {
             hash: transaction.calculate_hash(),
-            last_log_index,
             inner: transaction,
         })
     }
@@ -142,22 +190,20 @@ impl RlpEcdsaDecodableTx for InteropRootsEnvelope {
 impl Encodable for InteropRootsEnvelope {
     fn encode(&self, out: &mut dyn BufMut) {
         self.inner.encode(out);
-        self.last_log_index.encode(out);
     }
 
     fn length(&self) -> usize {
-        self.inner.length() + self.last_log_index.length()
+        self.inner.length()
     }
 }
 
 impl Encodable2718 for InteropRootsEnvelope {
     fn encode_2718_len(&self) -> usize {
-        self.inner.encode_2718_len() + self.last_log_index.length()
+        self.inner.encode_2718_len()
     }
 
     fn encode_2718(&self, out: &mut dyn BufMut) {
         self.inner.encode_2718(out);
-        self.last_log_index.encode(out);
     }
 }
 
@@ -170,13 +216,10 @@ impl Decodable2718 for InteropRootsEnvelope {
         let transaction = InteropRootsTx::rlp_decode(buf)
             .map_err(|_| Eip2718Error::RlpError(alloy::rlp::Error::Custom("decode failed")))?;
 
-        let last_log_index = <InteropRootsLogIndex as Decodable>::decode(buf)?;
-
         let hash = transaction.calculate_hash();
 
         Ok(Self {
             hash,
-            last_log_index,
             inner: transaction,
         })
     }
@@ -260,7 +303,6 @@ impl Transaction for InteropRootsEnvelope {
 #[cfg(test)]
 mod tests {
     use crate::InteropRootsEnvelope;
-    use crate::transaction::InteropRootsLogIndex;
     use crate::transaction::tx::InteropRootsTx;
 
     #[test]
@@ -275,7 +317,6 @@ mod tests {
 
         let tx = InteropRootsEnvelope {
             hash: transaction.calculate_hash(),
-            last_log_index: InteropRootsLogIndex::default(),
             inner: transaction,
         };
 
