@@ -1,5 +1,8 @@
 mod stream;
-pub use stream::{BestTransactionsStream, ReplayTxStream, TxStream, best_transactions};
+pub use stream::{
+    BestTransactionsStream, ReplayTxStream, TxStream, ZkPoolTransaction, ZkTransactionMetadata,
+    best_transactions,
+};
 
 mod traits;
 pub use traits::L2TransactionPool;
