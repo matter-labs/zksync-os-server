@@ -1,4 +1,4 @@
-sequencer_block_replay_download_address=localhost:3053 \
+sequencer_block_replay_download_address=http://localhost:3053 \
 sequencer_block_replay_server_address=0.0.0.0:3054 \
 general_rocks_db_path=./db/en \
 observability_prometheus_port=3313 \

@@ -343,7 +343,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
         &self,
         block_count: U64,
         mut newest_block: BlockNumberOrTag,
-        _reward_percentiles: Option<Vec<f64>>,
+        reward_percentiles: Option<Vec<f64>>,
     ) -> EthResult<FeeHistory> {
         if block_count == 0 {
             return Ok(FeeHistory::default());
@@ -356,9 +356,33 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             return Err(EthError::BlockNotFound(newest_block.into()));
         };
 
+        const MAX_FEE_HISTORY_BLOCKS: u64 = 1024;
+        // Ensure that we query at most `MAX_FEE_HISTORY_BLOCKS` block and that we do not query outside of genesis
         let end_block_plus = end_block + 1;
-        // Ensure that we would not be querying outside of genesis
-        let block_count = end_block_plus.min(block_count.try_into().unwrap());
+        let block_count = [
+            end_block_plus,
+            block_count.try_into().unwrap(),
+            MAX_FEE_HISTORY_BLOCKS,
+        ]
+        .into_iter()
+        .min()
+        .unwrap();
+
+        const MAX_REWARD_PERCENTILE_COUNT: usize = 100;
+        if reward_percentiles.as_ref().map(|perc| perc.len()) > Some(MAX_REWARD_PERCENTILE_COUNT) {
+            return Err(EthError::InvalidRewardPercentiles);
+        }
+        // If reward percentiles were specified, we
+        // need to validate that they are monotonically
+        // increasing and 0 <= p <= 100
+        if let Some(percentiles) = &reward_percentiles {
+            let sorted = percentiles.is_sorted();
+            let range_is_correct = percentiles.iter().all(|&p| (0.0..=100.0).contains(&p));
+            if !sorted || !range_is_correct {
+                return Err(EthError::InvalidRewardPercentiles);
+            }
+        }
+
         let start_block = end_block_plus - block_count;
 
         let mut base_fee_per_gas = Vec::with_capacity(block_count as usize + 1);
@@ -389,6 +413,10 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             base_fee_per_gas.push(*base_fee_per_gas.last().unwrap());
         }
 
+        // ZKsync OS chains are not fully EIP-1559 compliant and using 0 as a priority fee should always work,
+        // so we return zeroes to keep code simpler.
+        let reward = reward_percentiles.map(|p| vec![vec![0; p.len()]; block_count as usize]);
+
         Ok(FeeHistory {
             base_fee_per_gas,
             oldest_block: start_block,
@@ -396,8 +424,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
             gas_used_ratio: vec![0.5; block_count as usize],
             base_fee_per_blob_gas: vec![],
             blob_gas_used_ratio: vec![],
-            // TODO: fill reward
-            reward: None,
+            reward,
         })
     }
 }
@@ -805,6 +832,9 @@ pub enum EthError {
     /// Incrementing the nonce would lead to invalid state (overflow)
     #[error("nonce has max value")]
     NonceMaxValue,
+    /// When the percentile array is invalid
+    #[error("invalid reward percentiles")]
+    InvalidRewardPercentiles,
 
     #[error(transparent)]
     RpcStorage(#[from] RpcStorageError),
