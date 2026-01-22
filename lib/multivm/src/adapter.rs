@@ -1,7 +1,6 @@
-use alloy::consensus::transaction::Recovered;
 use alloy::eips::Decodable2718;
 use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxSource};
-use zksync_os_types::{TransactionData, ZkEnvelope, ZkTransaction};
+use zksync_os_types::{L2Transaction, TransactionData, ZkEnvelope};
 
 pub(crate) fn convert_tx_to_abi(encoded_tx: EncodedTx) -> EncodedTx {
     match encoded_tx {
@@ -9,14 +8,25 @@ pub(crate) fn convert_tx_to_abi(encoded_tx: EncodedTx) -> EncodedTx {
         EncodedTx::Rlp(rlp_bytes, signer) => {
             let envelope = ZkEnvelope::decode_2718(&mut rlp_bytes.as_slice())
                 .expect("Failed to decode 2718 transaction");
-            let tx = ZkTransaction {
-                inner: Recovered::new_unchecked(envelope, signer),
+            let tx = match envelope {
+                ZkEnvelope::InteropRoots(_) => {
+                    // Interop is not supported in pre-0.1.0 versions of ZKsync OS.
+                    unreachable!("Interop transactions are not supported by old ZKsync OS versions")
+                }
+                ZkEnvelope::Upgrade(_) => {
+                    unreachable!("Upgrade transactions are never RLP-encoded")
+                }
+                ZkEnvelope::L1(_) => {
+                    unreachable!("L1 transactions are never RLP-encoded")
+                }
+                ZkEnvelope::L2(l2_envelope) => L2Transaction::new_unchecked(l2_envelope, signer),
             };
             EncodedTx::Abi(TransactionData::from(tx).abi_encode())
         }
     }
 }
 
+/// Adapter for pre-0.1.0 ZKsync OS versions that expect all transactions to be ABI-encoded.
 #[derive(Debug)]
 pub struct AbiTxSource<T> {
     inner: T,
