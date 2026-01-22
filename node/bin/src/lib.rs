@@ -443,27 +443,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(report_exit("L1 transaction watcher")),
     );
 
-    // ======== Start Status Server ========
-    if config.status_server_config.enabled {
-        tasks.spawn(
-            run_status_server(
-                config.status_server_config.address.clone(),
-                stop_receiver.clone(),
-            )
-            .map(report_exit("Status server")),
-        );
-    }
-
-    // =========== Start JSON RPC ========
-
-    let rpc_storage = RpcStorage::new(
-        repositories.clone(),
-        block_replay_storage.clone(),
-        finality_storage.clone(),
-        batch_storage.clone(),
-        state.clone(),
-    );
-
     // Transaction acceptance state - tracks whether we're accepting new transactions
     // Main nodes: accepts, but may switch to reject when `sequencer_max_blocks_to_produce` blocks are produced
     // External nodes: always accepts, but may be rejected on the main node side during forwarding
@@ -484,21 +463,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let (last_constructed_block_ctx_sender, last_constructed_block_ctx_receiver) =
         watch::channel(None);
-    tasks.spawn(
-        run_jsonrpsee_server(
-            config.rpc_config.clone().into(),
-            chain_id,
-            bridgehub_address,
-            bytecode_supplier_address,
-            rpc_storage,
-            l2_mempool.clone(),
-            genesis_input_source,
-            tx_acceptance_state_receiver,
-            last_constructed_block_ctx_receiver,
-            main_node_provider,
-        )
-        .map(report_exit("JSON-RPC server")),
-    );
 
     tracing::info!("Initializing pubdata price provider");
     // Channels for GasAdjuster->BlockContextProvider communication.
@@ -578,7 +542,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l1_transactions_for_sequencer,
         l1_upgrade_transactions_receiver,
         interop_transactions_receiver,
-        l2_mempool,
+        l2_mempool.clone(),
         block_hashes_for_next_block,
         previous_block_timestamp,
         chain_id,
@@ -667,18 +631,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     if config.sequencer_config.is_main_node() {
         // Main Node
         run_main_node_pipeline(
-            config,
+            &config,
             l1_provider.clone(),
-            batch_storage,
+            batch_storage.clone(),
             node_startup_state,
-            block_replay_storage,
+            block_replay_storage.clone(),
             &mut tasks,
-            state,
+            state.clone(),
             starting_block,
-            repositories,
+            repositories.clone(),
             block_context_provider,
             tree_db,
-            finality_storage,
+            finality_storage.clone(),
             chain_id,
             stop_receiver.clone(),
             tx_acceptance_state_sender,
@@ -689,23 +653,59 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } else {
         // External Node
         run_en_pipeline(
-            config,
-            batch_storage,
+            &config,
+            batch_storage.clone(),
             node_startup_state,
-            block_replay_storage,
+            block_replay_storage.clone(),
             &mut tasks,
             block_context_provider,
-            state,
+            state.clone(),
             tree_db,
             starting_block,
-            repositories,
-            finality_storage,
+            repositories.clone(),
+            finality_storage.clone(),
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             chain_id,
         )
         .await;
     };
+
+    // ======== Start Status Server ========
+    if config.status_server_config.enabled {
+        tasks.spawn(
+            run_status_server(
+                config.status_server_config.address.clone(),
+                stop_receiver.clone(),
+            )
+            .map(report_exit("Status server")),
+        );
+    }
+
+    // =========== Start JSON RPC ========
+
+    let rpc_storage = RpcStorage::new(
+        repositories,
+        block_replay_storage,
+        finality_storage,
+        batch_storage,
+        state,
+    );
+    tasks.spawn(
+        run_jsonrpsee_server(
+            config.rpc_config.into(),
+            chain_id,
+            bridgehub_address,
+            bytecode_supplier_address,
+            rpc_storage,
+            l2_mempool,
+            genesis_input_source,
+            tx_acceptance_state_receiver,
+            last_constructed_block_ctx_receiver,
+            main_node_provider,
+        )
+        .map(report_exit("JSON-RPC server")),
+    );
     let startup_time = process_started_at.elapsed();
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
     tracing::info!("All components initialized in {startup_time:?}");
@@ -715,7 +715,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
-    config: Config,
+    config: &Config,
     l1_provider: FillProvider<
         impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
         impl Provider<Ethereum> + Clone + 'static,
@@ -840,7 +840,7 @@ async fn run_main_node_pipeline(
             committed_batch_provider,
         })
         .pipe(BatchVerificationPipelineStep::new(
-            config.batch_verification_config.into(),
+            config.batch_verification_config.clone().into(),
             node_state_on_startup.l1_state.clone(),
             node_state_on_startup.l1_state.last_committed_batch,
         ))
@@ -891,7 +891,7 @@ async fn run_main_node_pipeline(
 /// need to drain them to not get stuck
 #[allow(clippy::too_many_arguments)]
 async fn run_en_pipeline(
-    config: Config,
+    config: &Config,
     batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
@@ -952,7 +952,7 @@ async fn run_en_pipeline(
             BatchVerificationClient::new(
                 chain_id,
                 *node_state_on_startup.l1_state.diamond_proxy.address(),
-                config.batch_verification_config.connect_address,
+                config.batch_verification_config.connect_address.clone(),
                 config.batch_verification_config.signing_key.clone(),
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),
