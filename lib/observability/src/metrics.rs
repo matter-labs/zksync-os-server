@@ -23,6 +23,9 @@ pub struct GeneralMetrics {
     pub fee_collector_address: LabeledFamily<&'static str, Gauge, 1>,
 
     pub chain_id: Gauge<u64>,
+
+    /// Number of blacklisted addresses in the internal config on server startup
+    pub blacklisted_addresses_count: Gauge<usize>,
 }
 
 #[vise::register]

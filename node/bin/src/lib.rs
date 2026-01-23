@@ -790,12 +790,12 @@ async fn run_main_node_pipeline(
         .general_config
         .rocks_db_path
         .join(PRIORITY_TREE_DB_NAME);
-    let internal_config_path = config
-        .general_config
-        .rocks_db_path
-        .join(INTERNAL_CONFIG_FILE_NAME);
-    let internal_config_manager = InternalConfigManager::new(internal_config_path)
-        .expect("Failed to initialize InternalConfigManager");
+    let internal_config_manager = init_and_report_internal_config_manager(
+        config
+            .general_config
+            .rocks_db_path
+            .join(INTERNAL_CONFIG_FILE_NAME),
+    );
 
     Pipeline::new()
         .pipe(MainNodeCommandSource {
@@ -922,12 +922,13 @@ async fn run_en_pipeline(
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     chain_id: u64,
 ) {
-    let internal_config_path = config
-        .general_config
-        .rocks_db_path
-        .join(INTERNAL_CONFIG_FILE_NAME);
-    let internal_config_manager = InternalConfigManager::new(internal_config_path)
-        .expect("Failed to initialize InternalConfigManager");
+    let internal_config_manager = init_and_report_internal_config_manager(
+        config
+            .general_config
+            .rocks_db_path
+            .join(INTERNAL_CONFIG_FILE_NAME),
+    );
+
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
             starting_block,
@@ -1023,6 +1024,23 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
         Ok(_) => tracing::warn!("{name} component unexpectedly exited"),
         Err(err) => tracing::error!(?err, "{name} component failed"),
     }
+}
+
+fn init_and_report_internal_config_manager(
+    internal_config_path: std::path::PathBuf,
+) -> InternalConfigManager {
+    let internal_config_manager = InternalConfigManager::new(internal_config_path)
+        .expect("Failed to initialize InternalConfigManager");
+
+    // Report blacklisted addresses metric
+    let internal_config = internal_config_manager
+        .read_config()
+        .expect("Failed to read internal config");
+    GENERAL_METRICS
+        .blacklisted_addresses_count
+        .set(internal_config.l2_signer_blacklist.len());
+
+    internal_config_manager
 }
 
 async fn commit_proof_execute_block_numbers(
