@@ -1,7 +1,7 @@
 use alloy::rpc::types::Log;
 use alloy::{primitives::Address, providers::DynProvider};
 use tokio::sync::mpsc;
-use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
+use zksync_os_contract_interface::IMessageRoot::AppendedChainRoot;
 use zksync_os_contract_interface::{Bridgehub, InteropRoot};
 use zksync_os_types::{IndexedInteropRootsEnvelope, InteropRootsEnvelope, InteropRootsLogIndex};
 
@@ -51,14 +51,18 @@ impl InteropWatcher {
 impl ProcessL1Event for InteropWatcher {
     const NAME: &'static str = "interop_root";
 
-    type SolEvent = NewInteropRoot;
-    type WatchedEvent = NewInteropRoot;
+    type SolEvent = AppendedChainRoot;
+    type WatchedEvent = AppendedChainRoot;
 
     fn contract_address(&self) -> Address {
         self.contract_address
     }
 
-    async fn process_event(&mut self, tx: NewInteropRoot, log: Log) -> Result<(), L1WatcherError> {
+    async fn process_event(
+        &mut self,
+        tx: AppendedChainRoot,
+        log: Log,
+    ) -> Result<(), L1WatcherError> {
         let current_log_index = InteropRootsLogIndex {
             block_number: log.block_number.expect("Block number is required"),
             index_in_block: log.log_index.expect("Log index is required"),
@@ -75,8 +79,8 @@ impl ProcessL1Event for InteropWatcher {
 
         let interop_root = InteropRoot {
             chainId: tx.chainId,
-            blockOrBatchNumber: tx.blockNumber,
-            sides: tx.sides,
+            blockOrBatchNumber: tx.batchNumber,
+            sides: vec![tx.chainRoot],
         };
 
         let indexed_envelope = IndexedInteropRootsEnvelope {

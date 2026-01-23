@@ -46,11 +46,21 @@ alloy::sol! {
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
+        // Event that is being emitted by GW
         event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
             uint256 indexed logId,
             bytes32[] sides
+        );
+
+        // Event that is being emmited by L1
+        event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
+
+        function addInteropRoot (
+            uint256 chainId,
+            uint256 blockOrBatchNumber,
+            bytes32[] calldata sides
         );
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
