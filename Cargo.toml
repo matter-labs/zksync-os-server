@@ -110,6 +110,11 @@ zk_os_basic_system = { package = "basic_system", git = "https://github.com/matte
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
 zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
 
+zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260122-4", features = [
+    "production",
+    "no_print",
+], default-features = false }
+
 #execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
 #full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
 

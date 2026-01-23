@@ -46,11 +46,21 @@ alloy::sol! {
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
+        // Event that is being emitted by GW
         event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
             uint256 indexed logId,
             bytes32[] sides
+        );
+
+        // Event that is being emmited by L1
+        event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
+
+        function addInteropRoot (
+            uint256 chainId,
+            uint256 blockOrBatchNumber,
+            bytes32[] calldata sides
         );
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
@@ -363,6 +373,14 @@ impl<P: Provider + Clone> Bridgehub<P> {
 
     pub fn address(&self) -> &Address {
         self.instance.address()
+    }
+
+    pub fn provider(&self) -> &P {
+        self.instance.provider()
+    }
+
+    pub async fn message_root_address(&self) -> alloy::contract::Result<Address> {
+        self.instance.messageRoot().call().await
     }
 
     pub async fn chain_type_manager_address(&self) -> alloy::contract::Result<Address> {

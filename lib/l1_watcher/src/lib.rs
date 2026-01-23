@@ -15,6 +15,9 @@ pub use execute_watcher::L1ExecuteWatcher;
 mod upgrade_tx_watcher;
 pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 
+mod interop_watcher;
+pub use interop_watcher::InteropWatcher;
+
 pub mod util;
 mod watcher;
 

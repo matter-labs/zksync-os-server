@@ -130,6 +130,8 @@ pub fn zk_spec_version(execution_version: ExecutionVersion) -> Option<ZkSpecId> 
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {
             Some(ZkSpecId::AtlasV1)
         }
-        ExecutionVersion::V4 | ExecutionVersion::V5 => Some(ZkSpecId::AtlasV2),
+        ExecutionVersion::V4 | ExecutionVersion::V5 | ExecutionVersion::V6 => {
+            Some(ZkSpecId::AtlasV2)
+        }
     }
 }
