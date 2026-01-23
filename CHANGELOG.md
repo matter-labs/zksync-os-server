@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.14.0](https://github.com/matter-labs/zksync-os-server/compare/v0.13.0...v0.14.0) (2026-01-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* Execution of service interop transactions ([#803](https://github.com/matter-labs/zksync-os-server/issues/803))
+* use token prices in fee model ([#787](https://github.com/matter-labs/zksync-os-server/issues/787))
+* token price updater component ([#779](https://github.com/matter-labs/zksync-os-server/issues/779))
+* Basic V31 Support ([#759](https://github.com/matter-labs/zksync-os-server/issues/759))
+
+### Features
+
+* 2FA L1 integration ([#726](https://github.com/matter-labs/zksync-os-server/issues/726)) ([43a466f](https://github.com/matter-labs/zksync-os-server/commit/43a466fd341532bdbdc79642e74b86639aad7b6a))
+* add bash script to run local chains ([#777](https://github.com/matter-labs/zksync-os-server/issues/777)) ([b786ad8](https://github.com/matter-labs/zksync-os-server/commit/b786ad8ef27a728c6394eb286aa00e48b061f4ea))
+* add more eth-sender metrics. Bump fee limit. ([#789](https://github.com/matter-labs/zksync-os-server/issues/789)) ([6b6f13b](https://github.com/matter-labs/zksync-os-server/commit/6b6f13b648739e92bc7f2356b1e2b67dca1da87e))
+* add support for YAML config files ([#785](https://github.com/matter-labs/zksync-os-server/issues/785)) ([5f3de80](https://github.com/matter-labs/zksync-os-server/commit/5f3de80747df543202496e737b37ec528bf2b3bb))
+* add toHex helper for JS tracer ([#761](https://github.com/matter-labs/zksync-os-server/issues/761)) ([f9e14aa](https://github.com/matter-labs/zksync-os-server/commit/f9e14aa0ccc49c53d052b9425294eeb1d8776453))
+* adjust pubdata price based on blob fill ratio ([#700](https://github.com/matter-labs/zksync-os-server/issues/700)) ([a8e6de4](https://github.com/matter-labs/zksync-os-server/commit/a8e6de4f4f260ab33bb2ac57c441c0bec4a8fb2c))
+* adjust pubdata price based on blob fill ratio (2nd attempt) ([#756](https://github.com/matter-labs/zksync-os-server/issues/756)) ([167d874](https://github.com/matter-labs/zksync-os-server/commit/167d874bfd4e5e4870ba85405a2a1fbdfd22ac5c))
+* Basic V31 Support ([#759](https://github.com/matter-labs/zksync-os-server/issues/759)) ([1103ab8](https://github.com/matter-labs/zksync-os-server/commit/1103ab882b6e7ccc94db08375cb2049cb142e5e5))
+* **batcher:** make the limit of transaction count per batch configurable ([#796](https://github.com/matter-labs/zksync-os-server/issues/796)) ([f09de09](https://github.com/matter-labs/zksync-os-server/commit/f09de09e30f586244967e94bb74bd24a0dac76e9))
+* **deposit tool:** Make it work with https provider; use ether as unit ([#794](https://github.com/matter-labs/zksync-os-server/issues/794)) ([c6b7839](https://github.com/matter-labs/zksync-os-server/commit/c6b78399be1c4b308d333a85963379b455064169))
+* do not require batch storage (S3) for ENs ([#810](https://github.com/matter-labs/zksync-os-server/issues/810)) ([d542f07](https://github.com/matter-labs/zksync-os-server/commit/d542f0777f53c5df5591139448da864a77bc1763))
+* Execution of service interop transactions ([#803](https://github.com/matter-labs/zksync-os-server/issues/803)) ([20f5ed2](https://github.com/matter-labs/zksync-os-server/commit/20f5ed296c4913a9cd9964f34ce545eec18fce8d))
+* ignore vulnerability to recover cargo-audit ([#754](https://github.com/matter-labs/zksync-os-server/issues/754)) ([309887e](https://github.com/matter-labs/zksync-os-server/commit/309887efe8ed2355d802a60319f72a6d1d5b22cc))
+* Implement interop system transaction ([#712](https://github.com/matter-labs/zksync-os-server/issues/712)) ([0310dbc](https://github.com/matter-labs/zksync-os-server/commit/0310dbc504b254596f088a3f66c7206104293981))
+* Interop roots watcher ([#819](https://github.com/matter-labs/zksync-os-server/issues/819)) ([66c8fc5](https://github.com/matter-labs/zksync-os-server/commit/66c8fc5f41933ad074c45f3a65a43265a61abf72))
+* introduce `CommittedBatchProvider` ([#764](https://github.com/matter-labs/zksync-os-server/issues/764)) ([d3a1cf4](https://github.com/matter-labs/zksync-os-server/commit/d3a1cf4859186a024e54191a061dbeecd16fb864))
+* make block-related logging consistent ([#792](https://github.com/matter-labs/zksync-os-server/issues/792)) ([485c13c](https://github.com/matter-labs/zksync-os-server/commit/485c13cd21a9e2dc385e7de9efd01e8c54e2888b))
+* more granular buckets for `prove_time_per_million_native` ([#763](https://github.com/matter-labs/zksync-os-server/issues/763)) ([4e0fe7d](https://github.com/matter-labs/zksync-os-server/commit/4e0fe7dbb269981600e63eacfec00147639a0dc9))
+* **network:** add runnable `NetworkService` (disabled by default) ([#773](https://github.com/matter-labs/zksync-os-server/issues/773)) ([88fdf39](https://github.com/matter-labs/zksync-os-server/commit/88fdf39a42cf054a92193badf0443b97a33bba6e))
+* **network:** implement bare-bones `zks` RLPx subprotocol ([#716](https://github.com/matter-labs/zksync-os-server/issues/716)) ([417c6ad](https://github.com/matter-labs/zksync-os-server/commit/417c6ad00d73f5e4add37f4db08d0bc4e2699eeb))
+* record prove time per native ([#757](https://github.com/matter-labs/zksync-os-server/issues/757)) ([63fd801](https://github.com/matter-labs/zksync-os-server/commit/63fd801284a53da3bdff08ecf2f1ddf2053eb6bc))
+* remove hardcoded config constants ([#762](https://github.com/matter-labs/zksync-os-server/issues/762)) ([adfc998](https://github.com/matter-labs/zksync-os-server/commit/adfc99875228a0bd3cd8945504355d8fe6dcf478))
+* return zeroes in `reward` in `eth_feeHistory` ([#800](https://github.com/matter-labs/zksync-os-server/issues/800)) ([8f09ae7](https://github.com/matter-labs/zksync-os-server/commit/8f09ae7c89a409ceb4fa7fc2eef2da19385441eb))
+* Revert "feat: adjust pubdata price based on blob fill ratio" ([#753](https://github.com/matter-labs/zksync-os-server/issues/753)) ([d7a7f54](https://github.com/matter-labs/zksync-os-server/commit/d7a7f54141b9db61773cba6235409f8aa7fdf347))
+* set total difficulty in rpc block headers ([#801](https://github.com/matter-labs/zksync-os-server/issues/801)) ([6dac957](https://github.com/matter-labs/zksync-os-server/commit/6dac957fc826d89485a0e5f1eb26b91a1c2121c2))
+* support JSON config files ([#752](https://github.com/matter-labs/zksync-os-server/issues/752)) ([f94d846](https://github.com/matter-labs/zksync-os-server/commit/f94d8463ef726f0c5fd8e68ba5ec564147120ae8))
+* token price updater component ([#779](https://github.com/matter-labs/zksync-os-server/issues/779)) ([863b909](https://github.com/matter-labs/zksync-os-server/commit/863b909a8d85e11727927618c037df1cfdb6db4c))
+* use newer version of zkyns-os-revm ([#798](https://github.com/matter-labs/zksync-os-server/issues/798)) ([aa97f62](https://github.com/matter-labs/zksync-os-server/commit/aa97f627874b5fdd446cfe35aecfb537ee17226b))
+* use token prices in fee model ([#787](https://github.com/matter-labs/zksync-os-server/issues/787)) ([1f2375f](https://github.com/matter-labs/zksync-os-server/commit/1f2375f50e370234785a1b792c28f21056ee05db))
+
+
+### Bug Fixes
+
+* `zksync_os_types` compiles without features ([#815](https://github.com/matter-labs/zksync-os-server/issues/815)) ([b7dbe66](https://github.com/matter-labs/zksync-os-server/commit/b7dbe661e705af617399228c1da6039d7b4671b0))
+* construct pending block context in `eth_call`-like methods ([#758](https://github.com/matter-labs/zksync-os-server/issues/758)) ([1e1086a](https://github.com/matter-labs/zksync-os-server/commit/1e1086af9e8a2c4449653958bae0601608e1c693))
+* local chain config file is required to start the node ([#771](https://github.com/matter-labs/zksync-os-server/issues/771)) ([4597cae](https://github.com/matter-labs/zksync-os-server/commit/4597cae68267e67159c0340f9c6ff9cf8853dcc8))
+* prevent "subtract with overflow" error on EN startup  ([#802](https://github.com/matter-labs/zksync-os-server/issues/802)) ([0678f56](https://github.com/matter-labs/zksync-os-server/commit/0678f56fdbd53daa8d4defc70924c700b78da883))
+* refactor local-chains structure and update with anvil 1.5.1 ([#776](https://github.com/matter-labs/zksync-os-server/issues/776)) ([24d3852](https://github.com/matter-labs/zksync-os-server/commit/24d38529dbeb2f0bdd016005b1e5e0bc491b692f))
+* rename sandbox to ephemeral ([#778](https://github.com/matter-labs/zksync-os-server/issues/778)) ([16f6bad](https://github.com/matter-labs/zksync-os-server/commit/16f6bad391fc502041750c6e6e3e1d854bf6099a))
+* **rpc:** make `eth_estimateGas` work when sender has no balance ([#807](https://github.com/matter-labs/zksync-os-server/issues/807)) ([4ce1018](https://github.com/matter-labs/zksync-os-server/commit/4ce1018e436063ba8d480fd3a5cdb19d6022ac72))
+* run RPC/status components later in the flow ([#817](https://github.com/matter-labs/zksync-os-server/issues/817)) ([387999e](https://github.com/matter-labs/zksync-os-server/commit/387999e8d65e19ef9eec2634b5c6e4af2a7b3929))
+
 ## [0.13.0](https://github.com/matter-labs/zksync-os-server/compare/v0.12.1...v0.13.0) (2025-12-22)
 
 
