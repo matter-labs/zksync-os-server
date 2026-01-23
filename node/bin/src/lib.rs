@@ -311,7 +311,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
-        commit_proof_execute_block_numbers(&l1_state, &batch_storage).await;
+        commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
 
     let node_startup_state = NodeStateOnStartup {
         is_main_node: config.sequencer_config.is_main_node(),
@@ -405,8 +405,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         L1ExecuteWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
+            committed_batch_provider.clone(),
             finality_storage.clone(),
-            batch_storage.clone(),
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -1011,40 +1011,34 @@ fn report_exit<T, E: std::fmt::Debug>(name: &'static str) -> impl Fn(Result<T, E
 
 async fn commit_proof_execute_block_numbers(
     l1_state: &L1State,
-    batch_storage: &ProofStorage,
+    committed_batch_provider: &CommittedBatchProvider,
 ) -> (u64, u64, u64) {
     let last_committed_block = if l1_state.last_committed_batch == 0 {
         0
     } else {
-        batch_storage
-            .get_batch_with_proof(l1_state.last_committed_batch)
-            .await
-            .expect("Failed to get last committed block from proof storage")
-            .map(|envelope| envelope.batch.last_block_number)
-            .expect("Committed batch is not present in proof storage")
+        committed_batch_provider
+            .get(l1_state.last_committed_batch)
+            .expect("last committed batch was not discovered on L1")
+            .last_block()
     };
 
     // only used to log on node startup
     let last_proved_block = if l1_state.last_proved_batch == 0 {
         0
     } else {
-        batch_storage
-            .get_batch_with_proof(l1_state.last_proved_batch)
-            .await
-            .expect("Failed to get last proved block from proof storage")
-            .map(|envelope| envelope.batch.last_block_number)
-            .expect("Proved batch is not present in proof storage")
+        committed_batch_provider
+            .get(l1_state.last_proved_batch)
+            .expect("last proved batch was not discovered on L1")
+            .last_block()
     };
 
     let last_executed_block = if l1_state.last_executed_batch == 0 {
         0
     } else {
-        batch_storage
-            .get_batch_with_proof(l1_state.last_executed_batch)
-            .await
-            .expect("Failed to get last proved block from execute storage")
-            .map(|envelope| envelope.batch.last_block_number)
-            .expect("Execute batch is not present in proof storage")
+        committed_batch_provider
+            .get(l1_state.last_executed_batch)
+            .expect("last executed batch was not discovered on L1")
+            .last_block()
     };
     (last_committed_block, last_proved_block, last_executed_block)
 }
