@@ -26,7 +26,7 @@ impl InteropWatcher {
         tracing::info!(
             contract_address = ?contract_address,
             starting_interop_event_index = ?starting_interop_event_index,
-            "initializing L1 transaction watcher"
+            "initializing interop watcher"
         );
 
         let this = Self {

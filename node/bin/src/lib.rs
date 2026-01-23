@@ -93,7 +93,8 @@ use zksync_os_storage_api::{
     WriteRepository, WriteState,
 };
 use zksync_os_types::{
-    InteropRootsLogIndex, PubdataMode, TransactionAcceptanceState, UpgradeTransaction,
+    InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
+    UpgradeTransaction,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -175,8 +176,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Channel between L1TxWatcher and Sequencer
     let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
 
-    // Channel between InteropRootsWatcher and Sequencer
-    // todo: implement InteropRootsWatcher
+    // Channel between InteropWatcher and Sequencer
     let (interop_transactions_sender, interop_transactions_receiver) =
         tokio::sync::mpsc::channel(5);
 
@@ -431,18 +431,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             record.starting_interop_event_index.clone()
         });
 
-    tasks.spawn(
-        InteropWatcher::create_watcher(
-            node_startup_state.l1_state.bridgehub.clone(),
-            config.l1_watcher_config.clone().into(),
-            interop_transactions_sender,
-            next_interop_event_index.clone(),
-        )
-        .await
-        .expect("failed to start L1 interop roots watcher")
-        .run()
-        .map(report_exit("L1 interop roots watcher")),
-    );
+    let current_protocol_version = if let Some(record) = &first_replay_record {
+        record.protocol_version.clone()
+    } else {
+        genesis.genesis_upgrade_tx().await.protocol_version
+    };
+
+    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
+        tasks.spawn(
+            InteropWatcher::create_watcher(
+                node_startup_state.l1_state.bridgehub.clone(),
+                config.l1_watcher_config.clone().into(),
+                interop_transactions_sender,
+                next_interop_event_index.clone(),
+            )
+            .await
+            .expect("failed to start L1 interop roots watcher")
+            .run()
+            .map(report_exit("L1 interop roots watcher")),
+        );
+    }
 
     tasks.spawn(
         L1TxWatcher::create_watcher(
@@ -549,12 +557,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .as_ref()
         .map(|record| record.block_context.block_hashes)
         .unwrap_or_else(|| block_hashes_for_first_block(&repositories));
-
-    let current_protocol_version = if let Some(record) = &first_replay_record {
-        record.protocol_version.clone()
-    } else {
-        genesis.genesis_upgrade_tx().await.protocol_version
-    };
 
     let (token_price_sender, token_price_receiver) = watch::channel(None);
     let previous_block_fee_params = if starting_block == 1 {
