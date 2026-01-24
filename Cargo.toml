@@ -74,8 +74,15 @@ regex = "1.11.3"
 #zk_os_basic_system = { package = "basic_system", path = "../zksync-os/basic_system" }
 #zk_os_api = { package = "zksync_os_api", path = "../zksync-os/api" }
 
+# Interface version expected to be implemented by ALL zksync-os versions present in this file (historical, previous,
+# current and dev). If you bump interface version you will have to back-port the changes to all historical versions of
+# zksync-os.
+
 zksync_os_evm_errors = { version = "0.0.10" }
 zksync_os_interface = { version = "0.0.10" }
+
+# Historical versions of zksync-os that are kept to be able to replay old blocks and simulate calls on them. Only
+# forward system dependencies are expected to be in this section.
 
 zk_os_forward_system_0_0_26 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.26-rc2", features = [
     "evm-compatibility",
@@ -89,42 +96,48 @@ zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github
     "testing",
 ], default-features = false }
 
-# Dependency on `zk_ee_0_1_0` and `zk_os_basic_system_0_1_0` can be removed after server doesn't have to prove and submit v29 batches.
-# After they're removed you'll see where they were used and should be able to clean it up there.
-zk_ee_0_1_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0-rc1" }
-zk_os_basic_system_0_1_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0-rc1" }
+# Previous version of zksync-os that can still be used to prove and submit batches. Also includes airbender dependencies
+# that are necessary to verify said proofs on the server end.
+#
+# After its support is dropped, forward system is moved in the historical section above under a new name.
+# (`zk_os_forward_system_<version>`), while `zk_ee` and `zk_os_basic_system` dependencies are dropped completely.
 
-zk_ee_0_2_4 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
-zk_os_basic_system_0_2_4 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
-zk_os_forward_system_0_2_4 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4", features = [
-    "production",
-    "no_print",
-], default-features = false }
+#zk_ee_prev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
+#zk_os_basic_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4" }
+#zk_os_forward_prev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.4", features = [
+#    "production",
+#    "no_print",
+#], default-features = false }
+#execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
+#full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
+
+# Current (as in most recently released) version of zksync-os used to prove and submit new batches. Also includes
+# airbender dependencies that are necessary to verify said proofs on the server end.
+#
+# When a new version is released this version gets downgraded to the "previous version" section above.
 
 zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
+zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
 zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
+execution_utils = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
+full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
+zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.7.0" }
+
+# Next version of zksync-os that is currently in development. Usually points to a tag with some intermediary state.
+#
+# Can be updated at any time and changing it does not count as a breaking change.
 
 zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260122-4", features = [
     "production",
     "no_print",
 ], default-features = false }
 
-#execution_utils = { package = "execution_utils", path = "../zksync-airbender/execution_utils" }
-#full_statement_verifier = { package = "full_statement_verifier", path = "../zksync-airbender/full_statement_verifier" }
-
-execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
-full_statement_verifier = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
-
-execution_utils_0_5_1 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
-full_statement_verifier_0_5_1 = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.1" }
-
-zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.7.0" }
+# Other dependencies.
 
 tokio = "1.45.1"
 tokio-stream = "0.1.17"

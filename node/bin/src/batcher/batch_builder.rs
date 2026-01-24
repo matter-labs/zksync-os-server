@@ -52,19 +52,14 @@ pub(crate) fn seal_batch(
         ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
     let batch_prover_input: ProverInput = match proving_version {
-        ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
-            panic!("sealing batch with prover version v1-v3 is not supported");
+        ProvingVersion::V1
+        | ProvingVersion::V2
+        | ProvingVersion::V3
+        | ProvingVersion::V4
+        | ProvingVersion::V5 => {
+            panic!("sealing batch with prover version v1-v5 is not supported");
         }
-        ProvingVersion::V4 => {
-            std::iter::once(u32::try_from(blocks.len()).expect("too many blocks"))
-                .chain(
-                    blocks
-                        .iter()
-                        .flat_map(|(_, _, _, prover_input)| prover_input.iter().copied()),
-                )
-                .collect()
-        }
-        ProvingVersion::V5 | ProvingVersion::V6 => {
+        ProvingVersion::V6 => {
             // TODO: in the long-term we should generate proof input per batch
             generate_batch_proof_input(
                 blocks
