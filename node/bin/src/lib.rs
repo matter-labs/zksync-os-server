@@ -990,9 +990,6 @@ async fn run_en_pipeline(
             ),
             batch_storage,
             finality.clone(),
-            node_state_on_startup
-                .last_l1_executed_block
-                .min(node_state_on_startup.block_replay_storage_last_block),
         )
         .await
         .unwrap();
