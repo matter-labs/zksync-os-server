@@ -67,10 +67,10 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
-use zksync_os_l1_watcher::InteropWatcher;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
+use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
@@ -85,7 +85,7 @@ use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{FeeParams, FeeProvider, Sequencer};
 use zksync_os_status_server::run_status_server;
-use zksync_os_storage::db::BlockReplayStorage;
+use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
@@ -101,6 +101,7 @@ const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
+const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
 #[allow(clippy::too_many_arguments)]
@@ -586,6 +587,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .map(report_exit("L1 upgrade transaction watcher")),
     );
 
+    // ========== Start L1 Persist Batch Watcher ===========
+
+    let persistent_batch_storage =
+        ExecutedBatchStorage::new(&config.general_config.rocks_db_path.join(BATCH_DB_NAME));
+    tasks.spawn(
+        L1PersistBatchWatcher::create_watcher(
+            config.l1_watcher_config.clone().into(),
+            node_startup_state.l1_state.diamond_proxy.clone(),
+            persistent_batch_storage.clone(),
+            finality_storage.clone(),
+        )
+        .await
+        .expect("failed to start L1 batch persist watcher")
+        .run()
+        .map(report_exit("L1 batch persist watcher")),
+    );
+
     // ========== Start Sequencer ===========
     if config.sequencer_config.block_replay_server_enabled {
         tasks.spawn(
@@ -704,7 +722,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         repositories,
         block_replay_storage,
         finality_storage,
-        batch_storage,
+        persistent_batch_storage,
         state,
     );
     tasks.spawn(

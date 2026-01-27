@@ -1,5 +1,6 @@
 use crate::ReadFinality;
 use alloy::primitives::BlockNumber;
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 
 #[async_trait::async_trait]
 pub trait ReadBatch: Send + Sync + 'static {
@@ -17,4 +18,10 @@ pub trait ReadBatch: Send + Sync + 'static {
         &self,
         batch_number: u64,
     ) -> anyhow::Result<Option<(BlockNumber, BlockNumber)>>;
+
+    fn latest_batch(&self) -> u64;
+}
+
+pub trait WriteBatch: ReadBatch {
+    fn write(&self, batch: DiscoveredCommittedBatch);
 }

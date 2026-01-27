@@ -15,6 +15,7 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_metadata.workspace = true
+zksync_os_batch_types.workspace = true
 
 zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
@@ -27,3 +28,5 @@ vise.workspace = true
 futures.workspace = true
 bincode.workspace = true
 semver.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true

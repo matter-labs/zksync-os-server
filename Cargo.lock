@@ -16022,6 +16022,8 @@ name = "zksync_os_storage"
 version = "0.14.0-non-semver-compat"
 dependencies = [
  "alloy",
+ "anyhow",
+ "async-trait",
  "bincode 2.0.1",
  "dashmap",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
@@ -16030,6 +16032,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
+ "zksync_os_batch_types",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_metadata",
@@ -16060,6 +16063,7 @@ dependencies = [
  "tracing",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
  "zksync_os_api",
+ "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_observability",
  "zksync_os_rocksdb",

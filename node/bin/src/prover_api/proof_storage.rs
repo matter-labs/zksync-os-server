@@ -193,4 +193,8 @@ impl ReadBatch for ProofStorage {
                 )
             }))
     }
+
+    fn latest_batch(&self) -> u64 {
+        todo!()
+    }
 }
