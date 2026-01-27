@@ -670,7 +670,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // External Node
         run_en_pipeline(
             &config,
-            batch_storage.clone(),
+            committed_batch_provider,
             node_startup_state,
             block_replay_storage.clone(),
             &mut tasks,
@@ -853,7 +853,7 @@ async fn run_main_node_pipeline(
             batcher_config: config.batcher_config.clone(),
             pubdata_mode: config.l1_sender_config.pubdata_mode,
             sidecar_sender,
-            committed_batch_provider,
+            committed_batch_provider: committed_batch_provider.clone(),
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
@@ -888,8 +888,8 @@ async fn run_main_node_pipeline(
             PriorityTreePipelineStep::new(
                 block_replay_storage.clone(),
                 &priority_tree_db_path,
-                batch_storage.clone(),
                 finality,
+                committed_batch_provider,
             )
             .await
             .unwrap(),
@@ -908,7 +908,7 @@ async fn run_main_node_pipeline(
 #[allow(clippy::too_many_arguments)]
 async fn run_en_pipeline(
     config: &Config,
-    batch_storage: ProofStorage,
+    committed_batch_provider: CommittedBatchProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
@@ -988,8 +988,8 @@ async fn run_en_pipeline(
                     .rocks_db_path
                     .join(PRIORITY_TREE_DB_NAME),
             ),
-            batch_storage,
             finality.clone(),
+            committed_batch_provider,
         )
         .await
         .unwrap();

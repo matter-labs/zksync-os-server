@@ -1,7 +1,8 @@
 use std::path::Path;
 use tokio::sync::mpsc;
+use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_priority_tree::PriorityTreeManager;
-use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay};
+use zksync_os_storage_api::{ReadFinality, ReadReplay};
 
 /// Priority Tree manager for External Nodes.
 ///
@@ -9,25 +10,28 @@ use zksync_os_storage_api::{ReadBatch, ReadFinality, ReadReplay};
 /// - Doesn't act as pipeline step - launched as a standalone task instead
 /// - Doesn't output execute commands (EN doesn't execute on L1)
 /// - Watches finalized batch numbers instead of batch envelopes
-pub struct PriorityTreeENStep<BlockStorage, Finality, BatchStorage> {
-    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality, BatchStorage>,
+pub struct PriorityTreeENStep<BlockStorage, Finality> {
+    priority_tree_manager: PriorityTreeManager<BlockStorage, Finality>,
 }
 
-impl<BlockStorage, Finality, BatchStorage> PriorityTreeENStep<BlockStorage, Finality, BatchStorage>
+impl<BlockStorage, Finality> PriorityTreeENStep<BlockStorage, Finality>
 where
-    BlockStorage: ReadReplay + Clone + Send + Sync + 'static,
-    Finality: ReadFinality + Clone + Send + 'static,
-    BatchStorage: ReadBatch + Clone + Send + Sync + 'static,
+    BlockStorage: ReadReplay + Clone,
+    Finality: ReadFinality + Clone,
 {
     pub async fn new(
         block_storage: BlockStorage,
         db_path: &Path,
-        batch_storage: BatchStorage,
         finality: Finality,
+        committed_batch_provider: CommittedBatchProvider,
     ) -> anyhow::Result<Self> {
-        let priority_tree_manager =
-            PriorityTreeManager::new(block_storage, db_path, finality.clone(), batch_storage)
-                .await?;
+        let priority_tree_manager = PriorityTreeManager::new(
+            block_storage,
+            db_path,
+            finality.clone(),
+            committed_batch_provider,
+        )
+        .await?;
 
         Ok(Self {
             priority_tree_manager,

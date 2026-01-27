@@ -15617,6 +15617,7 @@ dependencies = [
  "zksync_os_contract_interface",
  "zksync_os_crypto",
  "zksync_os_l1_sender",
+ "zksync_os_l1_watcher",
  "zksync_os_mini_merkle_tree",
  "zksync_os_observability",
  "zksync_os_pipeline",
