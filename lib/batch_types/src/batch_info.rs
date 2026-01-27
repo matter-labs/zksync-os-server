@@ -322,6 +322,10 @@ impl DiscoveredCommittedBatch {
         self.batch_info.batch_number
     }
 
+    pub fn hash(&self) -> B256 {
+        self.batch_info.hash()
+    }
+
     pub fn first_block(&self) -> BlockNumber {
         *self.block_range.start()
     }

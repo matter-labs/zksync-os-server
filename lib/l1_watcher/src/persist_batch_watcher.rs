@@ -79,8 +79,16 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let batch_number = report.batchNumber;
-        if batch_number <= self.batch_storage.latest_batch() {
+        let latest_persisted_batch = self.batch_storage.latest_batch();
+        if batch_number <= latest_persisted_batch {
             tracing::debug!(batch_number, "skipping already processed committed batch");
+        } else if batch_number > latest_persisted_batch + 1 {
+            // This should only be possible if we skipped reverted batch previously and are now
+            // discovering more reverted batches.
+            tracing::info!(
+                batch_number,
+                "non-sequential batch discovered; assuming revert and skipping"
+            );
         } else {
             tracing::debug!(batch_number, "discovered committed batch");
             let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
@@ -106,7 +114,18 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                 .await
                 .map_err(anyhow::Error::from)
                 .map_err(L1WatcherError::Other)?;
-            // todo: check if discovered batch matches latest L1 state to safe-guard against L1 reverts
+            let discovered_batch_hash = committed_batch.hash();
+            let stored_batch_hash = self.zk_chain.stored_batch_hash(batch_number).await?;
+            if stored_batch_hash != discovered_batch_hash {
+                // Discovered batch commitment does not match latest L1 state. Likely it got
+                // reverted at some point and we will discover another commitment.
+                tracing::info!(
+                    ?discovered_batch_hash,
+                    ?stored_batch_hash,
+                    batch_number,
+                    "batch hash mismatch; ignoring"
+                );
+            }
 
             self.batch_storage.write(committed_batch);
         }
