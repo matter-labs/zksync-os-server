@@ -8,14 +8,14 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
 use tracing;
-use zksync_os_batch_types::BlockMerkleTreeData;
+use zksync_os_batch_types::{BlockMerkleTreeData, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
 };
-use zksync_os_l1_watcher::{CommittedBatchProvider, DiscoveredCommittedBatch};
+use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,

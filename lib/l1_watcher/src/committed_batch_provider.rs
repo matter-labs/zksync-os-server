@@ -1,9 +1,8 @@
 use crate::util;
-use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use std::collections::HashMap;
-use std::ops;
 use std::sync::{Arc, RwLock};
+use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 
@@ -70,31 +69,5 @@ impl CommittedBatchProvider {
     pub fn get(&self, batch_number: u64) -> Option<DiscoveredCommittedBatch> {
         let inner = self.inner.read().expect("lock poisoned");
         inner.batches.get(&batch_number).cloned()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DiscoveredCommittedBatch {
-    /// Information about committed batch as was discovered on-chain.
-    pub batch_info: StoredBatchInfo,
-    /// Range of L2 blocks that belong to this batch.
-    pub block_range: ops::RangeInclusive<BlockNumber>,
-}
-
-impl DiscoveredCommittedBatch {
-    pub fn number(&self) -> u64 {
-        self.batch_info.batch_number
-    }
-
-    pub fn first_block(&self) -> BlockNumber {
-        *self.block_range.start()
-    }
-
-    pub fn last_block(&self) -> BlockNumber {
-        *self.block_range.end()
-    }
-
-    pub fn block_count(&self) -> u64 {
-        self.block_range.end() - self.block_range.start() + 1
     }
 }

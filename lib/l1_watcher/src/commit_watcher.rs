@@ -1,10 +1,10 @@
 use crate::committed_batch_provider::CommittedBatchProvider;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{DiscoveredCommittedBatch, L1WatcherConfig, ProcessL1Event, util};
+use crate::{L1WatcherConfig, ProcessL1Event, util};
 use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
-use zksync_os_batch_types::BatchInfo;
+use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::WriteFinality;

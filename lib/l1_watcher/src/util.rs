@@ -1,4 +1,3 @@
-use crate::DiscoveredCommittedBatch;
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
 use alloy::eips::BlockId;
@@ -9,7 +8,7 @@ use alloy::sol_types::SolEvent;
 use anyhow::Context;
 use std::fmt::Debug;
 use std::sync::Arc;
-use zksync_os_batch_types::BatchInfo;
+use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::models::CommitBatchInfo;
