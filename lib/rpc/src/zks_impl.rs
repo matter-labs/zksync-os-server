@@ -46,33 +46,22 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             return Ok(None);
         };
         let block_number = tx_meta.block_number;
-        // Reading from proof storage can return "dirty" data (i.e., not the one that will be
-        // finalized on L1). To avoid this, we assert that the block has been executed as there is
-        // no use case for fetching non-executed proofs.
-        if self
-            .storage
-            .finality()
-            .get_finality_status()
-            .last_executed_block
-            < block_number
-        {
+        if self.storage.batch().latest_batch() < block_number {
             return Err(ZksError::NotExecutedYet);
         }
         let batch_number = self
             .storage
             .batch()
-            .get_batch_by_block_number(block_number, self.storage.finality())
-            .await?
+            .get_batch_by_block_number(block_number)?
             .expect("executed block does not belong to a batch");
-        let (from_block, to_block) = self
+        let batch = self
             .storage
             .batch()
-            .get_batch_range_by_number(batch_number)
-            .await?
+            .get_batch_by_number(batch_number)?
             .expect("executed batch has unknown block range");
         let mut batch_index = None;
         let mut merkle_tree_leaves = vec![];
-        for block in from_block..=to_block {
+        for block in batch.block_range {
             let Some(block) = self.storage.repository().get_block_by_number(block)? else {
                 return Err(ZksError::BlockNotAvailable(block));
             };

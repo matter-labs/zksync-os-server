@@ -185,14 +185,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
         tokio::sync::mpsc::channel(5);
 
-    tracing::info!("Initializing BatchStorage");
-    let batch_storage = ProofStorage::new(
-        ObjectStoreFactory::new(config.prover_api_config.object_store.clone())
-            .create_store()
-            .await
-            .unwrap(),
-    );
-
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
@@ -667,7 +659,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         run_main_node_pipeline(
             &config,
             l1_provider.clone(),
-            batch_storage.clone(),
             node_startup_state,
             block_replay_storage.clone(),
             &mut tasks,
@@ -754,7 +745,6 @@ async fn run_main_node_pipeline(
         impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
         impl Provider<Ethereum> + Clone + 'static,
     >,
-    batch_storage: ProofStorage,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
@@ -770,8 +760,18 @@ async fn run_main_node_pipeline(
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
 ) {
+    tracing::info!("Initializing ProofStorage");
+    // todo: this is used purely for prover API
+    //       decide what to do with it - might still be useful to debug failed proofs
+    let proof_storage = ProofStorage::new(
+        ObjectStoreFactory::new(config.prover_api_config.object_store.clone())
+            .create_store()
+            .await
+            .unwrap(),
+    );
+
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
-        batch_storage.clone(),
+        proof_storage.clone(),
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
@@ -789,7 +789,7 @@ async fn run_main_node_pipeline(
             prover_server::run(
                 fri_job_manager.clone(),
                 snark_job_manager.clone(),
-                batch_storage.clone(),
+                proof_storage.clone(),
                 config.prover_api_config.address.clone(),
             )
             .map(report_exit("prover_server_job")),
@@ -882,7 +882,7 @@ async fn run_main_node_pipeline(
         .pipe(GaplessCommitter {
             next_expected_batch_number: node_state_on_startup.l1_state.last_executed_batch + 1,
             last_committed_batch_number: node_state_on_startup.l1_state.last_committed_batch,
-            proof_storage: batch_storage.clone(),
+            proof_storage,
             batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(

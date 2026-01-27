@@ -8,6 +8,7 @@ use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::{WriteBatch, WriteFinality};
 
+/// Persists executed batches via [`WriteBatch`].
 pub struct L1PersistBatchWatcher<BatchStorage, Finality> {
     zk_chain: ZkChain<DynProvider>,
     batch_storage: BatchStorage,

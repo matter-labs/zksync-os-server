@@ -4,7 +4,7 @@ use std::path::Path;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch as RocksdbWriteBatch};
-use zksync_os_storage_api::{ReadBatch, ReadFinality, WriteBatch};
+use zksync_os_storage_api::{ReadBatch, WriteBatch};
 
 #[derive(Clone, Debug)]
 pub struct ExecutedBatchStorage {
@@ -76,13 +76,8 @@ impl ExecutedBatchStorage {
     }
 }
 
-#[async_trait::async_trait]
 impl ReadBatch for ExecutedBatchStorage {
-    async fn get_batch_by_block_number(
-        &self,
-        block_number: BlockNumber,
-        _finality: &dyn ReadFinality,
-    ) -> anyhow::Result<Option<u64>> {
+    fn get_batch_by_block_number(&self, block_number: BlockNumber) -> anyhow::Result<Option<u64>> {
         let block_key = block_number.to_be_bytes();
 
         let mut iter = self.db.to_iterator_cf(
@@ -97,10 +92,10 @@ impl ReadBatch for ExecutedBatchStorage {
         }
     }
 
-    async fn get_batch_range_by_number(
+    fn get_batch_by_number(
         &self,
         batch_number: u64,
-    ) -> anyhow::Result<Option<(BlockNumber, BlockNumber)>> {
+    ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
         let batch_key = batch_number.to_be_bytes();
         let Some(bytes) = self
             .db
@@ -110,11 +105,9 @@ impl ReadBatch for ExecutedBatchStorage {
             return Ok(None);
         };
 
-        let batch: DiscoveredCommittedBatch =
-            bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
-                .context("failed to deserialize context")
-                .map(|(batch, _)| batch)?;
-        Ok(Some((batch.first_block(), batch.last_block())))
+        bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+            .context("failed to deserialize context")
+            .map(|(batch, _)| batch)
     }
 
     fn latest_batch(&self) -> u64 {
