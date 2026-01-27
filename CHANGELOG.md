@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.14.1](https://github.com/matter-labs/zksync-os-server/compare/v0.14.0...v0.14.1) (2026-01-27)
+
+
+### Features
+
+* Add metric for blacklisted addresses count ([#820](https://github.com/matter-labs/zksync-os-server/issues/820)) ([078368a](https://github.com/matter-labs/zksync-os-server/commit/078368a4e80ea3ac3f2d0418a3a99bc901cc5f00))
+* do not require batch storage for priority tree ([#825](https://github.com/matter-labs/zksync-os-server/issues/825)) ([6a73d20](https://github.com/matter-labs/zksync-os-server/commit/6a73d2031567d9a2c281d807164bd3637d7184b0))
+
+
+### Bug Fixes
+
+* **rpc:** revert "make `eth_estimateGas` work when sender has no balance ([#807](https://github.com/matter-labs/zksync-os-server/issues/807))" ([#826](https://github.com/matter-labs/zksync-os-server/issues/826)) ([e1018d6](https://github.com/matter-labs/zksync-os-server/commit/e1018d6da7031bf07aa030f14ff7f0d0d0344b70))
+
+
+### Performance Improvements
+
+* speed up priority tree init for EN ([#824](https://github.com/matter-labs/zksync-os-server/issues/824)) ([5e1b951](https://github.com/matter-labs/zksync-os-server/commit/5e1b95127f4c272d14989b5763ab8bd28a400ec2))
+
 ## [0.14.0](https://github.com/matter-labs/zksync-os-server/compare/v0.13.0...v0.14.0) (2026-01-23)
 
 
