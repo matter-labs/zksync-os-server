@@ -3,6 +3,7 @@ use self::util::SigningKeyDeserializer;
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
+use num::{BigInt, rational::Ratio};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -11,16 +12,19 @@ use smart_config::{
     ParseErrors, Serde, de::Delimited, metadata::EtherUnit,
 };
 use std::collections::{HashMap, HashSet};
+use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_mempool::SubPoolLimit;
+use zksync_os_network::{NodeRecord, SecretKey};
 use zksync_os_object_store::ObjectStoreConfig;
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
-use zksync_os_types::PubdataMode;
+use zksync_os_types::{NodeRole, PubdataMode};
 
 mod cli;
 mod util;
@@ -31,6 +35,7 @@ mod util;
 #[derive(Debug)]
 pub struct Config {
     pub general_config: GeneralConfig,
+    pub network_config: NetworkConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
     pub mempool_config: MempoolConfig,
@@ -47,6 +52,7 @@ pub struct Config {
     pub batch_verification_config: BatchVerificationConfig,
     pub base_token_price_updater_config: BaseTokenPriceUpdaterConfig,
     pub external_price_api_client_config: ExternalPriceApiClientConfig,
+    pub fee_config: FeeConfig,
 }
 
 impl Config {
@@ -55,6 +61,9 @@ impl Config {
         schema
             .insert(&GeneralConfig::DESCRIPTION, "general")
             .expect("Failed to insert general config");
+        schema
+            .insert(&NetworkConfig::DESCRIPTION, "network")
+            .expect("Failed to insert network config");
         schema
             .insert(&GenesisConfig::DESCRIPTION, "genesis")
             .expect("Failed to insert genesis config");
@@ -112,6 +121,9 @@ impl Config {
                 "external_price_api_client",
             )
             .expect("Failed to insert external price api client config");
+        schema
+            .insert(&FeeConfig::DESCRIPTION, "fee")
+            .expect("Failed to insert fee config");
         schema
     }
 
@@ -218,6 +230,39 @@ pub struct GeneralConfig {
     pub ephemeral: bool,
 }
 
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct NetworkConfig {
+    /// Whether devp2p-based networking should be enabled.
+    #[config(default_t = false)]
+    pub enabled: bool,
+    /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
+    /// handshake.
+    #[config(secret)]
+    #[config(
+        default_t = SecretKey::from_str("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349").unwrap(),
+        with = Serde![str]
+    )]
+    pub secret_key: SecretKey,
+    /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    #[config(default_t = Ipv4Addr::LOCALHOST, with = Serde![str])]
+    pub address: Ipv4Addr,
+    /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    #[config(default_t = 3060)]
+    pub port: u16,
+    /// All boot nodes to start network discovery with. Expected format is
+    /// `enode://<node ID>@<IP address>:<port>`.
+    // Default value corresponds to the default value of `secret_key` above. This is needed so local
+    // ENs can connect to local MN with zero configuration.
+    #[config(
+        default_t = vec![
+            NodeRecord::from_str("enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060").unwrap(),
+        ],
+        with = Delimited::repeat(Serde![str], ","),
+    )]
+    pub boot_nodes: Vec<NodeRecord>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum StateBackendConfig {
     FullDiffs,
@@ -262,7 +307,7 @@ pub struct RebuildBlocksConfig {
     /// have different hash, have some transactions rejected etc
     pub from_block: u64,
     /// List of blocks to empty (i.e., remove all transactions from).
-    #[config(default, with = Delimited(","))]
+    #[config(default, with = Delimited::new(","))]
     pub blocks_to_empty: Vec<u64>,
 }
 
@@ -310,18 +355,6 @@ pub struct SequencerConfig {
     #[config(with = Serde![str], default_t = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".parse().unwrap())]
     pub fee_collector_address: Address,
 
-    /// Override for base fee (in wei). If set, base fee will be constant and equal to this value.
-    #[config(default_t = None)]
-    pub base_fee_override: Option<U128>,
-
-    /// Override for pubdata price (in wei). If set, pubdata price will be constant and equal to this value.
-    #[config(default_t = None)]
-    pub pubdata_price_override: Option<U128>,
-
-    /// Override for native price (in wei). If set, native price will be constant and equal to this value.
-    #[config(default_t = None)]
-    pub native_price_override: Option<U128>,
-
     /// Maximum number of blocks to produce.
     /// `None` means unlimited (default, standard operations),
     /// `Some(0)` means no new blocks (useful when only RPC/replay/batching functionality is needed),
@@ -361,6 +394,14 @@ impl SequencerConfig {
     pub fn is_main_node(&self) -> bool {
         self.block_replay_download_address.is_none()
     }
+
+    pub fn node_role(&self) -> NodeRole {
+        if self.is_main_node() {
+            NodeRole::MainNode
+        } else {
+            NodeRole::ExternalNode
+        }
+    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -399,7 +440,7 @@ pub struct RpcConfig {
     pub stale_filter_ttl: Duration,
 
     /// List of L2 signer addresses to blacklist (i.e. their transactions are rejected).
-    #[config(default, with = Delimited(","))]
+    #[config(default, with = Delimited::new(","))]
     pub l2_signer_blacklist: HashSet<Address>,
 
     /// Default timeout for `eth_sendRawTransactionSync`
@@ -523,6 +564,10 @@ pub struct BatcherConfig {
     /// Max number of blocks per batch
     #[config(default_t = 10)]
     pub blocks_per_batch_limit: u64,
+
+    /// Max number of transactions per batch
+    #[config(default_t = 10000)]
+    pub tx_per_batch_limit: u64,
 
     /// Whether to verify that rebuilt batches match stored batches by comparing hashes.
     /// Enabled by default for safety. Disabling this check can be useful for debugging or
@@ -746,9 +791,9 @@ pub struct BatchVerificationConfig {
     pub connect_address: String,
     /// [server] Threshold (number of needed signatures)
     #[config(default_t = 1)]
-    pub threshold: usize,
+    pub threshold: u64,
     /// [server] Accepted signer pubkeys
-    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited(","))]
+    #[config(default_t = vec!["0x36615Cf349d7F6344891B1e7CA7C72883F5dc049".into()], with = Delimited::new(","))]
     pub accepted_signers: Vec<String>,
     /// [server] Iteration timeout
     #[config(default_t = Duration::from_secs(5))]
@@ -790,6 +835,9 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
     pub token_multiplier_setter_sk: Option<SigningKey>,
+    /// Predefined fallback prices for tokens in case external API fetching fails on startup.
+    #[config(default, with = Serde![*])]
+    pub fallback_prices: HashMap<Address, f64>,
 }
 
 /// Config to force configured token prices in USD.
@@ -839,6 +887,39 @@ pub enum ExternalPriceApiClientConfig {
         #[config(default_t = Duration::from_secs(10))]
         client_timeout: Duration,
     },
+}
+
+/// Fee-related configuration.
+#[derive(Debug, Clone, DescribeConfig, DeserializeConfig)]
+#[config(derive(Default))]
+pub struct FeeConfig {
+    /// Price for one unit of native resource in USD.
+    /// Default is set based on the current estimate of proving price.
+    #[config(default_t = 3e-9)]
+    pub native_price_usd: f64,
+    /// Override for base fee (in base token units).
+    /// If set, base fee will be constant and equal to this value.
+    pub base_fee_override: Option<U128>,
+    /// Defines how many native resource units are equivalent to one gas unit in terms of price.
+    #[config(default_t = 100)]
+    pub native_per_gas: u64,
+    /// Override for pubdata price (in base token units).
+    /// If set, pubdata price will be constant and equal to this value.
+    pub pubdata_price_override: Option<U128>,
+    /// Override for native price (in base token units).
+    /// If set, native price will be constant and equal to this value.
+    pub native_price_override: Option<U128>,
+}
+
+impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
+    fn from(value: NetworkConfig) -> Self {
+        Self {
+            secret_key: value.secret_key,
+            address: value.address,
+            port: value.port,
+            boot_nodes: value.boot_nodes,
+        }
+    }
 }
 
 impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
@@ -994,6 +1075,7 @@ pub fn base_token_price_updater_config(
         token_multiplier_setter_sk: c.token_multiplier_setter_sk.clone(),
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
+        fallback_prices: c.fallback_prices.clone(),
     }
 }
 
@@ -1033,6 +1115,27 @@ impl From<ExternalPriceApiClientConfig>
                 cmc_api_key,
                 client_timeout,
             },
+        }
+    }
+}
+
+impl From<FeeConfig> for zksync_os_sequencer::execution::FeeConfig {
+    fn from(c: FeeConfig) -> Self {
+        let native_price_usd = {
+            let r = Ratio::<BigInt>::from_float(c.native_price_usd)
+                .expect("Failed to convert native_price_usd to ratio");
+            Ratio::new(
+                r.numer().to_biguint().unwrap(),
+                r.denom().to_biguint().unwrap(),
+            )
+        };
+
+        Self {
+            native_price_usd,
+            base_fee_override: c.base_fee_override,
+            native_per_gas: c.native_per_gas,
+            pubdata_price_override: c.pubdata_price_override,
+            native_price_override: c.native_price_override,
         }
     }
 }

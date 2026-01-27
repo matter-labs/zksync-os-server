@@ -4,10 +4,11 @@ use super::v3::ReplayWireFormatV3;
 use super::v4::ReplayWireFormatV4;
 use super::v5::ReplayWireFormatV5;
 use crate::ReplayRecord;
+use crate::replay_wire_format::v6::ReplayWireFormatV6;
 use alloy::eips::{Decodable2718, Encodable2718};
 use alloy::primitives::{Address, U256};
 use zksync_os_interface::types::{BlockContext, BlockHashes};
-use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope};
+use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope};
 
 impl From<ReplayWireFormatV1> for ReplayRecord {
     fn from(value: ReplayWireFormatV1) -> Self {
@@ -57,6 +58,7 @@ impl From<ReplayWireFormatV1> for ReplayRecord {
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![],
+            starting_interop_event_index: InteropRootsLogIndex::default(),
         }
     }
 }
@@ -110,6 +112,7 @@ impl From<ReplayWireFormatV2> for ReplayRecord {
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![],
+            starting_interop_event_index: InteropRootsLogIndex::default(),
         }
     }
 }
@@ -161,6 +164,7 @@ impl From<ReplayWireFormatV3> for ReplayRecord {
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![],
+            starting_interop_event_index: InteropRootsLogIndex::default(),
         }
     }
 }
@@ -215,6 +219,7 @@ impl From<ReplayWireFormatV5> for ReplayRecord {
             protocol_version,
             block_output_hash,
             force_preimages,
+            starting_interop_event_index: InteropRootsLogIndex::default(),
         }
     }
 }
@@ -267,11 +272,68 @@ impl From<ReplayWireFormatV4> for ReplayRecord {
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(), // We assume that old nodes won't have "newer" protocol versions.
             block_output_hash,
             force_preimages: vec![], // v4 didn't have force_preimages
+            starting_interop_event_index: InteropRootsLogIndex::default(),
         }
     }
 }
 
-impl From<ReplayRecord> for ReplayWireFormatV5 {
+impl From<ReplayWireFormatV6> for ReplayRecord {
+    fn from(value: ReplayWireFormatV6) -> Self {
+        let ReplayWireFormatV6 {
+            block_context,
+            starting_l1_priority_id,
+            transactions,
+            previous_block_timestamp,
+            node_version,
+            block_output_hash,
+            protocol_version,
+            force_preimages,
+            starting_interop_event_index,
+        } = value;
+        let super::v6::BlockContext {
+            chain_id,
+            block_number,
+            block_hashes,
+            timestamp,
+            eip1559_basefee,
+            pubdata_price,
+            native_price,
+            coinbase,
+            gas_limit,
+            pubdata_limit,
+            mix_hash,
+            execution_version,
+            blob_fee,
+        } = block_context;
+        Self {
+            block_context: BlockContext {
+                chain_id,
+                block_number,
+                block_hashes: BlockHashes(block_hashes.0),
+                timestamp,
+                eip1559_basefee,
+                pubdata_price,
+                native_price,
+                coinbase,
+                gas_limit,
+                pubdata_limit,
+                mix_hash,
+                execution_version,
+                blob_fee,
+            },
+            starting_l1_priority_id,
+            transactions: transactions.into_iter().map(|tx| tx.into()).collect(),
+            previous_block_timestamp,
+            node_version,
+            protocol_version,
+            block_output_hash,
+            force_preimages,
+            starting_interop_event_index,
+        }
+    }
+}
+
+impl From<ReplayRecord> for ReplayWireFormatV6 {
     fn from(value: ReplayRecord) -> Self {
         let ReplayRecord {
             block_context,
@@ -282,6 +344,7 @@ impl From<ReplayRecord> for ReplayWireFormatV5 {
             block_output_hash,
             protocol_version,
             force_preimages,
+            starting_interop_event_index,
         } = value;
         let BlockContext {
             chain_id,
@@ -299,10 +362,10 @@ impl From<ReplayRecord> for ReplayWireFormatV5 {
             blob_fee,
         } = block_context;
         Self {
-            block_context: super::v5::BlockContext {
+            block_context: super::v6::BlockContext {
                 chain_id,
                 block_number,
-                block_hashes: super::v5::BlockHashes(block_hashes.0),
+                block_hashes: super::v6::BlockHashes(block_hashes.0),
                 timestamp,
                 eip1559_basefee,
                 pubdata_price,
@@ -321,11 +384,12 @@ impl From<ReplayRecord> for ReplayWireFormatV5 {
             block_output_hash,
             protocol_version,
             force_preimages,
+            starting_interop_event_index,
         }
     }
 }
 
-impl From<zksync_os_types::ZkTransaction> for super::v5::ZkTransactionWireFormat {
+impl From<zksync_os_types::ZkTransaction> for super::v6::ZkTransactionWireFormat {
     fn from(value: zksync_os_types::ZkTransaction) -> Self {
         Self(value.inner.encoded_2718())
     }
@@ -369,6 +433,15 @@ impl From<super::v4::ZkTransactionWireFormat> for zksync_os_types::ZkTransaction
 
 impl From<super::v5::ZkTransactionWireFormat> for zksync_os_types::ZkTransaction {
     fn from(value: super::v5::ZkTransactionWireFormat) -> Self {
+        ZkEnvelope::decode_2718(&mut &value.0[..])
+            .unwrap()
+            .try_into_recovered()
+            .unwrap()
+    }
+}
+
+impl From<super::v6::ZkTransactionWireFormat> for zksync_os_types::ZkTransaction {
+    fn from(value: super::v6::ZkTransactionWireFormat) -> Self {
         ZkEnvelope::decode_2718(&mut &value.0[..])
             .unwrap()
             .try_into_recovered()

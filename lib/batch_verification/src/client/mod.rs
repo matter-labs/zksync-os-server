@@ -19,6 +19,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::io::{ReaderStream, StreamReader};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::{BatchInfo, BatchSignature};
+use zksync_os_contract_interface::l1_discovery::{BatchVerificationL1, L1State};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_observability::ComponentStateHandle;
@@ -39,6 +40,7 @@ pub struct BatchVerificationClient<Finality> {
     chain_id: u64,
     diamond_proxy: Address,
     server_address: String,
+    l1_state: L1State,
     signer: PrivateKeySigner,
     block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
 }
@@ -61,19 +63,31 @@ type VerificationInput = (
 
 impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
     pub fn new(
-        finality: Finality,
-        private_key: SecretString,
         chain_id: u64,
         diamond_proxy: Address,
         server_address: String,
+        private_key: SecretString,
+        finality: Finality,
+        l1_state: L1State,
     ) -> Self {
+        let signer = PrivateKeySigner::from_str(private_key.expose_secret())
+            .expect("Invalid batch verification private key");
+        if let BatchVerificationL1::Enabled(l1_config) = l1_state.batch_verification.clone()
+            && !l1_config.validators.contains(&signer.address())
+        {
+            tracing::warn!(
+                address = %signer.address(),
+                "Your address is not authorized to verify batches on L1",
+            );
+        }
+
         Self {
-            signer: PrivateKeySigner::from_str(private_key.expose_secret())
-                .expect("Invalid batch verification private key"),
             chain_id,
             diamond_proxy,
-            block_cache: BlockCache::new(finality),
             server_address,
+            l1_state,
+            signer,
+            block_cache: BlockCache::new(finality),
         }
     }
 
@@ -201,7 +215,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
                 })
                 .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
-        let commit_batch_info = BatchInfo::new(
+        let batch_info = BatchInfo::new(
             blocks
                 .iter()
                 .map(|(block_output, replay_record, tree)| {
@@ -217,18 +231,25 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
             self.diamond_proxy,
             request.batch_number,
             request.pubdata_mode,
-        )
-        .commit_info;
+        );
 
-        if commit_batch_info != request.commit_data {
-            let diff = request.commit_data.diff(&commit_batch_info);
+        if batch_info.commit_info != request.commit_data {
+            let diff = request.commit_data.diff(&batch_info.commit_info);
 
             return Err(BatchVerificationError::BatchDataMismatch(format!(
                 "Batch data mismatch: {diff:?}",
             )));
         }
 
-        let signature = BatchSignature::sign_batch(&request.commit_data, &self.signer).await;
+        let signature = BatchSignature::sign_batch(
+            &request.prev_commit_data,
+            &batch_info,
+            self.l1_state.l1_chain_id,
+            self.l1_state.validator_timelock,
+            &blocks.first().unwrap().1.protocol_version,
+            &self.signer,
+        )
+        .await;
 
         Ok(signature)
     }

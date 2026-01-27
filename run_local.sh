@@ -49,28 +49,6 @@ cleanup() {
 # Set up trap for cleanup on script exit
 trap cleanup SIGINT SIGTERM EXIT
 
-# Function to find the latest version in local-chains directory
-# Supports versioning like v30, v31, v30.2, v31.0, etc.
-find_latest_version() {
-    local chains_dir="$REPO_ROOT/local-chains"
-    if [ ! -d "$chains_dir" ]; then
-        echo ""
-        return
-    fi
-    
-    # Find all version directories (v* pattern) and sort them properly
-    # Sort by major version first, then by minor version (defaulting to 0 if not present)
-    local latest=$(ls -d "$chains_dir"/v* 2>/dev/null | while read dir; do
-        basename "$dir"
-    done | sed 's/^v//' | sort -t. -k1,1n -k2,2n | tail -1)
-    
-    if [ -n "$latest" ]; then
-        echo "$chains_dir/v$latest"
-    else
-        echo ""
-    fi
-}
-
 # Parse command line arguments
 CONFIG_DIR=""
 LOGS_DIR=""
@@ -87,7 +65,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -*)
             echo -e "${RED}Error: Unknown option $1${NC}"
-            echo -e "Usage: $0 [folder-path] [--logs-dir <path>]"
+            echo -e "Usage: $0 <folder-path> [--logs-dir <path>]"
             exit 1
             ;;
         *)
@@ -102,23 +80,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check if folder path is provided, otherwise try to detect the latest version
+# Check if folder path is provided
 if [ -z "$CONFIG_DIR" ]; then
-    LATEST_VERSION=$(find_latest_version)
-    if [ -z "$LATEST_VERSION" ]; then
-        echo -e "${RED}Usage: $0 [folder-path] [--logs-dir <path>]${NC}"
-        echo -e "Example: $0 ./local-chains/v31.0/default"
-        echo -e "Example: $0 ./local-chains/v31.0/multi_chain"
-        echo -e "Example: $0 ./local-chains/v31.0/default --logs-dir ./logs"
-        exit 1
-    fi
-    # Default to single chain setup in the default folder
-    CONFIG_DIR="$LATEST_VERSION/default"
-    echo -e "${BLUE}No path provided, using latest version: $CONFIG_DIR${NC}"
-else
-    # Resolve to absolute path
-    CONFIG_DIR="$(realpath "$CONFIG_DIR")"
+    echo -e "${RED}Usage: $0 <folder-path> [--logs-dir <path>]${NC}"
+    echo -e "Example: $0 ./local-chains/v30.2/default"
+    echo -e "Example: $0 ./local-chains/v30.2/multi_chain"
+    echo -e "Example: $0 ./local-chains/v30.2/default --logs-dir ./logs"
+    exit 1
 fi
+
+# Resolve to absolute path
+CONFIG_DIR="$(realpath "$CONFIG_DIR")"
 
 # Verify the directory exists
 if [ ! -d "$CONFIG_DIR" ]; then

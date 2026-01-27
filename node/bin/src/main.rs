@@ -10,9 +10,9 @@ use zksync_os_object_store::ObjectStoreMode;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig, Config, ConfigArgs,
-    ExternalPriceApiClientConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig, L1SenderConfig,
-    L1WatcherConfig, MempoolConfig, ObservabilityConfig, ProverApiConfig,
-    ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
+    ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig, GeneralConfig, GenesisConfig,
+    L1SenderConfig, L1WatcherConfig, MempoolConfig, NetworkConfig, ObservabilityConfig,
+    ProverApiConfig, ProverInputGeneratorConfig, RebuildBlocksConfig, RpcConfig, SequencerConfig,
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
@@ -230,6 +230,12 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse general config");
 
+    let network_config = repo
+        .single::<NetworkConfig>()
+        .expect("Failed to load network config")
+        .parse()
+        .expect("Failed to parse network config");
+
     let mut genesis_config = repo
         .single::<GenesisConfig>()
         .expect("Failed to load genesis config")
@@ -326,6 +332,12 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse external price API client config");
 
+    let fee_config = repo
+        .single::<FeeConfig>()
+        .expect("Failed to load fee config")
+        .parse()
+        .expect("Failed to parse fee config");
+
     if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
         // If set, then update the configs based off the values from the yaml files.
         // This is a temporary measure until we update zkstack cli (or create a new tool) to create
@@ -355,6 +367,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
 
     Config {
         general_config,
+        network_config,
         genesis_config,
         rpc_config,
         mempool_config,
@@ -371,6 +384,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         batch_verification_config,
         base_token_price_updater_config,
         external_price_api_client_config,
+        fee_config,
     }
 }
 

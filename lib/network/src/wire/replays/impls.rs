@@ -11,7 +11,7 @@ use zksync_os_interface::types::BlockContext as InterfaceBlockContext;
 use zksync_os_interface::types::BlockHashes as InterfaceBlockHashes;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
-use zksync_os_types::ProtocolSemanticVersion;
+use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion};
 
 // ==================================================
 // | Implementations for protocol version 0 (Dummy) |
@@ -48,6 +48,7 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
             protocol_version: ProtocolSemanticVersion::new(0, 0, 0),
             block_output_hash: Default::default(),
             force_preimages: vec![],
+            starting_interop_event_index: InteropRootsLogIndex::default(),
         })
     }
 }
@@ -103,6 +104,7 @@ impl From<StorageReplayRecord> for v1::ReplayRecord {
                     preimage: Bytes::from(preimage),
                 })
                 .collect(),
+            starting_interop_event_index: value.starting_interop_event_index,
         }
     }
 }
@@ -149,6 +151,7 @@ impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
                 .into_iter()
                 .map(|p| (p.hash, p.preimage.into()))
                 .collect(),
+            starting_interop_event_index: value.starting_interop_event_index,
         })
     }
 }

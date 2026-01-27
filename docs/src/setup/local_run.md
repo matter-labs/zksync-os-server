@@ -7,17 +7,14 @@
 The `run_local.sh` script automates starting Anvil and chain node(s):
 
 ```bash
-# Run a single chain (auto-detects latest version)
-./run_local.sh
-
-# Run a single chain (explicit path)
-./run_local.sh ./local-chains/v31.0/default
+# Run a single chain
+./run_local.sh ./local-chains/v30.2/default
 
 # Run multiple chains
-./run_local.sh ./local-chains/v31.0/multi_chain
+./run_local.sh ./local-chains/v30.2/multi_chain
 
 # Run with logging to files
-./run_local.sh ./local-chains/v31.0/multi_chain --logs-dir ./logs
+./run_local.sh ./local-chains/v30.2/multi_chain --logs-dir ./logs
 ```
 
 ### Manual setup

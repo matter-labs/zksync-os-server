@@ -40,25 +40,15 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
         db_path: &Path,
         finality: Finality,
         batch_storage: BatchStorage,
-        last_executed_batch: u64,
     ) -> anyhow::Result<Self> {
         let started_at = Instant::now();
         let db = PriorityTreeDB::new(db_path);
         let (initial_block_number, mut merkle_tree) = db.init_tree()?;
-        let last_executed_block = batch_storage
-            .get_batch_range_by_number(last_executed_batch)
-            .await
-            .with_context(|| {
-                format!(
-                    "cannot initialize priority tree: failed to get batch {last_executed_batch} from storage"
-                )
-            })?
-            .with_context(|| {
-                format!(
-                    "cannot initialize priority tree: no batch {last_executed_batch} in storage"
-                )
-            })?
-            .1;
+        let finality_state = finality.get_finality_status();
+        let (last_executed_batch, last_executed_block) = (
+            finality_state.last_executed_batch,
+            finality_state.last_executed_block,
+        );
 
         tracing::debug!(
             persisted_up_to = initial_block_number,
@@ -67,12 +57,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
         );
 
         for block_number in (initial_block_number + 1)..=last_executed_block {
-            let block = replay_storage
-                .get_replay_record(block_number)
-                .with_context(|| {
-                    format!("cannot re-build priority tree: missing replay block {block_number}")
-                })?;
-            for tx in block.transactions {
+            let record = Self::wait_for_replay_record(&replay_storage, block_number).await;
+            for tx in record.transactions {
                 if let ZkEnvelope::L1(l1_tx) = tx.into_envelope() {
                     merkle_tree.push_hash(*l1_tx.hash());
                 }
@@ -198,7 +184,8 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
                 let mut priority_op_count = 0;
                 for block_number in first_block_number..=last_block_number {
                     // Block is not guaranteed to be present in the replay storage for EN, so we use `wait_for_replay_record`.
-                    let replay = self.wait_for_replay_record(block_number).await;
+                    let replay =
+                        Self::wait_for_replay_record(&self.replay_storage, block_number).await;
                     for tx in replay.transactions {
                         if let ZkEnvelope::L1(l1_tx) = tx.into_envelope() {
                             first_priority_op_id_in_batch
@@ -312,11 +299,14 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality, BatchStorage: ReadBatch>
         }
     }
 
-    async fn wait_for_replay_record(&self, block_number: u64) -> ReplayRecord {
+    async fn wait_for_replay_record(
+        replay_storage: &ReplayStorage,
+        block_number: u64,
+    ) -> ReplayRecord {
         let mut timer = tokio::time::interval(Duration::from_millis(100));
         loop {
             timer.tick().await;
-            if let Some(r) = self.replay_storage.get_replay_record(block_number) {
+            if let Some(r) = replay_storage.get_replay_record(block_number) {
                 return r;
             }
         }

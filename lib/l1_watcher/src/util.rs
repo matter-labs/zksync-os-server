@@ -1,9 +1,20 @@
-use alloy::primitives::BlockNumber;
+use crate::DiscoveredCommittedBatch;
+use crate::watcher::L1WatcherError;
+use alloy::consensus::Transaction;
+use alloy::eips::BlockId;
+use alloy::primitives::{Address, B256, BlockNumber, TxHash};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
+use anyhow::Context;
+use std::fmt::Debug;
 use std::sync::Arc;
+use zksync_os_batch_types::BatchInfo;
+use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
+use zksync_os_contract_interface::calldata::CommitCalldata;
+use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_contract_interface::{IExecutor, ZkChain};
+use zksync_os_types::ProtocolSemanticVersion;
 
 pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
 
@@ -57,40 +68,46 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
     Ok(lo)
 }
 
-/// Looks for an L1 batch revert event that happened in block range `[start_block_number; latest_block]`
-/// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
+/// Looks for an L1 event that happened in block range `[start_block_number; latest_block]`
+/// and matching provided predicate. Returns latest L1 block that contains such an event or `None`
 /// if there is not any.
-///
-/// Batch `batch_number` MUST have been committed before `start_block_number`.
-async fn find_latest_l1_revert(
-    zk_chain: &ZkChain<DynProvider>,
-    batch_number: u64,
+async fn find_last_matching_event<E: SolEvent + Debug>(
+    address: Address,
+    provider: &DynProvider,
     start_block_number: BlockNumber,
     max_blocks_to_scan: u64,
+    predicate: impl Fn(&E) -> bool,
 ) -> anyhow::Result<Option<BlockNumber>> {
-    let provider = zk_chain.provider();
     let mut current_block = start_block_number;
     let latest_block = provider.get_block_number().await?;
+
     tracing::debug!(
-        address = %zk_chain.address(),
+        %address,
         start_block_number,
         latest_block,
         max_blocks_to_scan,
-        "checking for revert events"
+        signature = E::SIGNATURE,
+        "looking for last matching event"
     );
 
-    let blocks_to_scan = latest_block - start_block_number + 1;
-    if blocks_to_scan > MAX_L1_BLOCKS_TO_SCAN_LINEARLY {
-        tracing::warn!(
-            blocks_to_scan,
-            "scanning a lot of L1 blocks; last commit must have happened a long time ago"
+    // Early return if latest block is behind start block. This can happen if we hit different
+    // L1 nodes between calls where the second node is behind the first.
+    if latest_block < start_block_number {
+        tracing::info!(
+            "latest block is behind start block (hitting different L1 nodes?), skipping revert checks"
         );
+        return Ok(None);
+    }
+
+    let blocks_to_scan = latest_block + 1 - start_block_number;
+    if blocks_to_scan > MAX_L1_BLOCKS_TO_SCAN_LINEARLY {
+        tracing::warn!(blocks_to_scan, "scanning a lot of L1 blocks");
     }
 
     let mut filter = Filter::new()
-        .address(*zk_chain.address())
-        .event_signature(IExecutor::BlocksRevert::SIGNATURE_HASH);
-    let mut last_block_with_revert = None;
+        .address(address)
+        .event_signature(E::SIGNATURE_HASH);
+    let mut last_block_with_event = None;
     while current_block < latest_block {
         // Inspect up to `max_blocks_to_scan` L1 blocks at a time
         let filter_to_block = latest_block.min(current_block + max_blocks_to_scan - 1);
@@ -103,23 +120,43 @@ async fn find_latest_l1_revert(
             "fetched logs"
         );
         for log in logs {
-            let event = IExecutor::BlocksRevert::decode_log(&log.inner)?.data;
-            if event.totalBatchesCommitted < batch_number {
+            let event = E::decode_log(&log.inner)?.data;
+            if predicate(&event) {
                 let l1_block = log
                     .block_number
-                    .expect("indexed revert log without block number");
-                tracing::info!(
-                    %event.totalBatchesCommitted,
-                    l1_block,
-                    "found batch revert event on L1"
+                    .expect("indexed event log without block number");
+                tracing::debug!(
+                    %address,
+                    ?event,
+                    "found new matching event on L1"
                 );
-                last_block_with_revert = Some(l1_block)
+                last_block_with_event = Some(l1_block);
             }
         }
         current_block = filter_to_block + 1;
     }
+    Ok(last_block_with_event)
+}
 
-    Ok(last_block_with_revert)
+/// Looks for an L1 batch revert event that happened in block range `[start_block_number; latest_block]`
+/// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
+/// if there is not any.
+///
+/// Batch `batch_number` MUST have been committed before `start_block_number`.
+async fn find_latest_l1_revert(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    start_block_number: BlockNumber,
+    max_blocks_to_scan: u64,
+) -> anyhow::Result<Option<BlockNumber>> {
+    find_last_matching_event::<IExecutor::BlocksRevert>(
+        *zk_chain.address(),
+        zk_chain.provider(),
+        start_block_number,
+        max_blocks_to_scan,
+        |e| e.totalBatchesCommitted < batch_number,
+    )
+    .await
 }
 
 /// Finds first L1 block that contains **non-reverted** batch commitment event on L1 matching
@@ -135,6 +172,27 @@ pub async fn find_l1_commit_block_by_batch_number(
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
+    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
+        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
+        // for historical blocks. We run linear search as a fallback.
+        if batch_number == 0 {
+            // For genesis we must return L1 block where `zk_chain` got deployed. For Anvil it's okay
+            // to return 0 here as the chain should not be long anyway.
+            return Ok(0);
+        }
+        return find_last_matching_event::<ReportCommittedBatchRangeZKsyncOS>(
+            *zk_chain.address(),
+            zk_chain.provider(),
+            0,
+            max_l1_blocks_to_scan,
+            |e| e.batchNumber == batch_number,
+        )
+        .await?
+        .with_context(|| {
+            format!("linear search failed to find where batch {batch_number} was committed")
+        });
+    }
+
     let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)
@@ -214,4 +272,143 @@ pub async fn find_l1_execute_block_by_batch_number(
         Ok(res >= batch_number)
     })
     .await
+}
+
+/// Fetches and decodes stored batch data for batch `batch_number` that is expected to have been
+/// committed in `l1_block_number`. Returns `None` if requested batch has not been committed in
+/// the given L1 block.
+pub async fn fetch_stored_batch_data(
+    zk_chain: &ZkChain<DynProvider>,
+    l1_block_number: BlockNumber,
+    batch_number: u64,
+) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    let logs = zk_chain
+        .provider()
+        .get_logs(
+            &Filter::new()
+                .address(*zk_chain.address())
+                .event_signature(ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH)
+                .from_block(l1_block_number)
+                .to_block(l1_block_number),
+        )
+        .await?;
+    let Some((log, tx_hash)) = logs.into_iter().find_map(|log| {
+        let batch_log = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)
+            .expect("unable to decode `ReportCommittedBatchRangeZKsyncOS` log");
+        if batch_log.batchNumber == batch_number {
+            Some((
+                batch_log,
+                log.transaction_hash.expect("indexed log without tx hash"),
+            ))
+        } else {
+            None
+        }
+    }) else {
+        return Ok(None);
+    };
+    let committed_batch = fetch_commit_calldata(zk_chain, tx_hash).await?;
+
+    // todo: stop using this struct once fully migrated from S3
+    let last_executed_batch_info = BatchInfo {
+        commit_info: committed_batch.commit_info,
+        chain_address: Default::default(),
+        upgrade_tx_hash: committed_batch.upgrade_tx_hash,
+        blob_sidecar: None,
+    };
+    let batch_info = last_executed_batch_info.into_stored(&committed_batch.protocol_version);
+
+    Ok(Some(DiscoveredCommittedBatch {
+        batch_info,
+        block_range: log.firstBlockNumber..=log.lastBlockNumber,
+    }))
+}
+
+/// Finds and decodes stored batch data for batch `batch_number`. Returns `None` if there is none.
+pub async fn find_stored_batch_data_by_batch_number(
+    zk_chain: &ZkChain<DynProvider>,
+    batch_number: u64,
+    max_l1_blocks_to_scan: u64,
+) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    let l1_block_with_commit =
+        find_l1_commit_block_by_batch_number(zk_chain.clone(), batch_number, max_l1_blocks_to_scan)
+            .await?;
+    fetch_stored_batch_data(zk_chain, l1_block_with_commit, batch_number).await
+}
+
+/// Commitment information about a batch. Contains enough data to restore `StoredBatchInfo` that
+/// got applied on-chain.
+#[derive(Debug)]
+pub struct CommittedBatch {
+    pub commit_info: CommitBatchInfo,
+    // todo: this should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
+    pub upgrade_tx_hash: Option<B256>,
+    // todo: this should be a part of `CommitBatchInfo` but needs to be changed on L1 contracts' side first
+    pub protocol_version: ProtocolSemanticVersion,
+}
+
+impl CommittedBatch {
+    /// Fetches extra information that is not available inside `CommitBatchInfo` from L1 to construct
+    /// `CommitedBatch`. Requires `l1_block_id` where the batch was committed.
+    pub async fn fetch(
+        zk_chain: &ZkChain<DynProvider>,
+        commit_batch_info: CommitBatchInfo,
+        l1_block_id: BlockId,
+    ) -> Result<Self, L1WatcherError> {
+        // To recreate batch's commitment (and hence it's `StoredBatchInfo` form) we need to
+        // know any potential upgrade transaction hash that was applied in this batch.
+        //
+        // Unfortunately, this information is not passed in `CommitBatchInfo` so we must derive
+        // it through other means. Querying `getL2SystemContractsUpgradeTxHash()` and
+        // `getL2SystemContractsUpgradeBatchNumber()` should work for the vast majority of cases
+        // except when the batch got committed and executed in the same L1 block (which should
+        // never happen in current implementation as commit->prove->execute operations are submitted
+        // sequentially after at least 1 block confirmation).
+        let upgrade_batch_number = zk_chain.get_upgrade_batch_number(l1_block_id).await?;
+        let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
+            // If the latest upgrade transaction belongs to this batch then current upgrade tx
+            // hash must also be present on L1. Thus, we fetch it.
+            Some(zk_chain.get_upgrade_tx_hash(l1_block_id).await?)
+        } else {
+            // Either latest in-progress upgrade transaction belongs to a different batch or
+            // there is none. If none, `upgrade_batch_number` would be `0` and thus never equal
+            // to the currently inspected batch as genesis does not get committed via this flow.
+            None
+        };
+        // Fetch active protocol version at the moment the batch got committed. This should work
+        // for the vast majority of cases except when upgrade gets applied in the same L1 block
+        // but after batch was committed.
+        let packed_protocol_version = zk_chain.get_raw_protocol_version(l1_block_id).await?;
+
+        Ok(Self {
+            commit_info: commit_batch_info,
+            upgrade_tx_hash,
+            protocol_version: ProtocolSemanticVersion::try_from(packed_protocol_version)
+                .context("invalid protocol version fetched from L1")
+                .map_err(L1WatcherError::Other)?,
+        })
+    }
+}
+
+/// Fetches and decodes batch commit transaction. Fails if transaction does not exist or is not
+/// a valid commit transaction.
+pub async fn fetch_commit_calldata(
+    zk_chain: &ZkChain<DynProvider>,
+    tx_hash: TxHash,
+) -> Result<CommittedBatch, L1WatcherError> {
+    // todo: retry-backoff logic in case tx is missing
+    let tx = zk_chain
+        .provider()
+        .get_transaction_by_hash(tx_hash)
+        .await?
+        .expect("tx not found");
+    let CommitCalldata {
+        commit_batch_info, ..
+    } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
+
+    // L1 block where this batch got committed.
+    let l1_block_id = BlockId::number(
+        tx.block_number
+            .expect("mined transaction has no block number"),
+    );
+    CommittedBatch::fetch(zk_chain, commit_batch_info, l1_block_id).await
 }

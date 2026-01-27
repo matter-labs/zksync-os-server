@@ -10,7 +10,7 @@ pub struct BatchVerificationConfig {
     pub listen_address: String,
     pub client_enabled: bool,
     pub connect_address: String,
-    pub threshold: usize,
+    pub threshold: u64,
     pub accepted_signers: Vec<String>,
     pub request_timeout: Duration,
     pub retry_delay: Duration,

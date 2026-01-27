@@ -1,25 +1,24 @@
+use crate::execution::block_executor::BlockOutputExt;
+use crate::execution::fee_provider::{FeeParams, FeeProvider};
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{
     BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
 };
 use alloy::consensus::{Block, BlockBody, Header};
-use alloy::eips::eip4844::FIELD_ELEMENTS_PER_BLOB;
-use alloy::primitives::{Address, BlockHash, TxHash, U128, U256};
+use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use anyhow::Context as _;
-use num::ToPrimitive;
-use num::rational::Ratio;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
-use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
+use zksync_os_interface::types::{BlockContext, BlockHashes};
 use zksync_os_mempool::{
     CanonicalStateUpdate, L2TransactionPool, PoolUpdateKind, ReplayTxStream, best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, InteropRootsEnvelope, L1PriorityEnvelope, L2Envelope,
-    ProtocolSemanticVersion, PubdataMode, UpgradeTransaction, ZkEnvelope,
+    ExecutionVersion, IndexedInteropRootsEnvelope, InteropRootsLogIndex, L1PriorityEnvelope,
+    L2Envelope, ProtocolSemanticVersion, UpgradeTransaction, ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -34,13 +33,13 @@ use zksync_os_types::{
 ///  this is easily fixable if needed.
 pub struct BlockContextProvider<Mempool> {
     next_l1_priority_id: u64,
+    next_interop_event_index: InteropRootsLogIndex,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
-    interop_transactions: mpsc::Receiver<InteropRootsEnvelope>,
+    interop_transactions: mpsc::Receiver<IndexedInteropRootsEnvelope>,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
-    previous_block_pubdata_price: Option<U256>,
     chain_id: u64,
     gas_limit: u64,
     pubdata_limit: u64,
@@ -48,22 +47,18 @@ pub struct BlockContextProvider<Mempool> {
     /// Can change in runtime in case of upgrades.
     protocol_version: ProtocolSemanticVersion,
     fee_collector_address: Address,
-    base_fee_override: Option<U256>,
-    pubdata_price_override: Option<U256>,
-    native_price_override: Option<U256>,
-    pubdata_price_provider: watch::Receiver<Option<u128>>,
-    blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
-    pubdata_mode: PubdataMode,
+    fee_provider: FeeProvider,
 }
 
 impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         next_l1_priority_id: u64,
+        next_interop_event_index: InteropRootsLogIndex,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
-        interop_transactions: mpsc::Receiver<InteropRootsEnvelope>,
+        interop_transactions: mpsc::Receiver<IndexedInteropRootsEnvelope>,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -72,35 +67,25 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         pubdata_limit: u64,
         protocol_version: ProtocolSemanticVersion,
         fee_collector_address: Address,
-        base_fee_override: Option<U128>,
-        pubdata_price_override: Option<U128>,
-        native_price_override: Option<U128>,
-        pubdata_price_provider: watch::Receiver<Option<u128>>,
-        blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
-        pubdata_mode: PubdataMode,
+        fee_provider: FeeProvider,
     ) -> Self {
         Self {
             next_l1_priority_id,
+            next_interop_event_index,
             l1_transactions,
             upgrade_transactions,
             interop_transactions,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
-            previous_block_pubdata_price: None,
             chain_id,
             gas_limit,
             pubdata_limit,
             protocol_version,
             fee_collector_address,
-            base_fee_override: base_fee_override.map(U256::from),
-            pubdata_price_override: pubdata_price_override.map(U256::from),
-            native_price_override: native_price_override.map(U256::from),
-            pubdata_price_provider,
-            blob_fill_ratio_provider,
             last_constructed_block_ctx_sender,
-            pubdata_mode,
+            fee_provider,
         }
     }
 
@@ -168,15 +153,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     eip1559_basefee,
                     native_price,
                     pubdata_price,
-                } = Self::produce_fee_params(
-                    self.base_fee_override,
-                    self.native_price_override,
-                    self.pubdata_price_override,
-                    self.pubdata_mode,
-                    self.previous_block_pubdata_price,
-                    &self.pubdata_price_provider,
-                    &self.blob_fill_ratio_provider,
-                );
+                } = self.fee_provider.produce_fee_params().await?;
                 let block_context = BlockContext {
                     eip1559_basefee,
                     native_price,
@@ -209,6 +186,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages,
+                    starting_interop_event_index: self.next_interop_event_index.clone(),
                 }
             }
             BlockCommand::Replay(record) => {
@@ -237,6 +215,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     expected_block_output_hash: Some(record.block_output_hash),
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: record.force_preimages,
+                    starting_interop_event_index: record.starting_interop_event_index.clone(),
                 }
             }
             BlockCommand::Rebuild(rebuild) => {
@@ -316,6 +295,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     expected_block_output_hash: None,
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: rebuild.replay_record.force_preimages,
+                    starting_interop_event_index: self.next_interop_event_index.clone(),
                 }
             }
         };
@@ -329,21 +309,28 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
 
     pub async fn on_canonical_state_change(
         &mut self,
-        block_output: &BlockOutput,
+        block_output: &BlockOutputExt,
         replay_record: &ReplayRecord,
         cmd_type: BlockCommandType,
     ) {
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
-                ZkEnvelope::InteropRoots(interop_tx) => {
-                    if matches!(
-                        cmd_type,
-                        BlockCommandType::Rebuild | BlockCommandType::Replay
-                    ) {
-                        assert_eq!(&self.interop_transactions.recv().await.unwrap(), interop_tx);
+                ZkEnvelope::InteropRoots(interop_tx) => match cmd_type {
+                    BlockCommandType::Replay | BlockCommandType::Rebuild => {
+                        // If block is being replayed we must fetch equivalent interop root tx from SL
+                        let indexed_interop_tx = self.interop_transactions.recv().await.unwrap();
+                        assert_eq!(&indexed_interop_tx.envelope, interop_tx);
+                        // We use its `log_index` to update `next_interop_event_index`.
+                        // NOTE: `block_output.last_interop_log_index` (see usage below) is empty
+                        //       for replay blocks
+                        self.next_interop_event_index = InteropRootsLogIndex {
+                            block_number: indexed_interop_tx.log_index.block_number,
+                            index_in_block: indexed_interop_tx.log_index.index_in_block + 1,
+                        };
                     }
-                }
+                    BlockCommandType::Produce => {}
+                },
                 ZkEnvelope::L1(l1_tx) => {
                     self.next_l1_priority_id = l1_tx.priority_id() + 1;
                     // consume processed L1 txs for non-produce commands
@@ -374,6 +361,15 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 }
             }
         }
+
+        // NOTE: `block_output.last_interop_log_index` is empty for replay blocks, instead
+        //       `next_interop_event_index` is updated via watcher logic above
+        if let Some(last_interop_log_index) = &block_output.last_interop_log_index {
+            self.next_interop_event_index = InteropRootsLogIndex {
+                block_number: last_interop_log_index.block_number,
+                index_in_block: last_interop_log_index.index_in_block + 1,
+            };
+        }
         EXECUTION_METRICS
             .next_l1_priority_id
             .set(self.next_l1_priority_id);
@@ -393,7 +389,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 .unwrap(),
         );
         self.previous_block_timestamp = block_output.header.timestamp;
-        self.previous_block_pubdata_price = Some(replay_record.block_context.pubdata_price);
+        self.fee_provider.on_canonical_state_change(replay_record);
 
         // TODO: confirm whether constructing a real block is absolutely necessary here;
         //       so far it looks like below is sufficient
@@ -427,115 +423,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 update_kind: PoolUpdateKind::Commit,
             });
     }
-
-    fn produce_fee_params(
-        base_fee_override: Option<U256>,
-        native_price_override: Option<U256>,
-        pubdata_price_override: Option<U256>,
-        pubdata_mode: PubdataMode,
-        previous_block_pubdata_price: Option<U256>,
-        pubdata_price_provider: &watch::Receiver<Option<u128>>,
-        blob_fill_ratio_provider: &watch::Receiver<Option<Ratio<u64>>>,
-    ) -> FeeParams {
-        const NATIVE_PRICE: u128 = 1_000_000;
-        const NATIVE_PER_GAS: u128 = 100;
-
-        let eip1559_basefee =
-            base_fee_override.unwrap_or(U256::from(NATIVE_PRICE) * U256::from(NATIVE_PER_GAS));
-
-        let native_price = native_price_override.unwrap_or(U256::from(NATIVE_PRICE));
-
-        let desired_pubdata_price = match pubdata_mode {
-            PubdataMode::Blobs => {
-                if let Some(pubdata_price_override) = pubdata_price_override {
-                    pubdata_price_override
-                } else {
-                    // TODO(698): Import constants from zksync-os when available.
-                    // Amount of native resource spent per blob.
-                    const NATIVE_PER_BLOB: u64 = 50_000_000;
-                    // Effective number of bytes stored in a blob for `SimpleCoder`.
-                    const BYTES_USED_PER_BLOB: u64 = (FIELD_ELEMENTS_PER_BLOB - 1) * 31;
-                    // Amount of native resource spent per pubdata byte (assuming blob is fully filled).
-                    const NATIVE_PER_BLOB_BYTE: u64 = NATIVE_PER_BLOB / BYTES_USED_PER_BLOB;
-                    // Default blob fill ratio to be used before `blob_fill_ratio_provider` is initialized.
-                    const DEFAULT_FILL_RATIO: Ratio<u64> = Ratio::new_raw(1, 2);
-
-                    let base_pubdata_price = U256::from(
-                        pubdata_price_provider
-                            .borrow()
-                            .expect("Pubdata price must be available"),
-                    );
-                    let native_overhead = native_price * U256::from(NATIVE_PER_BLOB_BYTE);
-                    // Final pubdata price is base price + overhead depending on native price.
-                    let mut pubdata_price = base_pubdata_price + native_overhead;
-
-                    // By default, we assume that blobs are half-filled.
-                    let fill_ratio =
-                        (*blob_fill_ratio_provider.borrow()).unwrap_or(DEFAULT_FILL_RATIO);
-                    // Adjust pubdata price according to blob fill ratio.
-                    // More filled blobs => less pubdata price (since less overhead per byte).
-                    // pubdata_price := pubdata_price / ratio = pubdata_price * denom / numer
-                    pubdata_price *= U256::from(*fill_ratio.denom());
-                    pubdata_price /= U256::from(*fill_ratio.numer());
-
-                    tracing::debug!(
-                        desired_pubdata_price = ?pubdata_price,
-                        ?base_pubdata_price,
-                        ?native_overhead,
-                        ?fill_ratio,
-                        "Calculated desired pubdata price for blobs"
-                    );
-                    if let Some(r) = fill_ratio.to_f64() {
-                        EXECUTION_METRICS.blob_fill_ratio.set(r);
-                    }
-
-                    pubdata_price
-                }
-            }
-            _ => pubdata_price_override.unwrap_or(U256::from(
-                pubdata_price_provider
-                    .borrow()
-                    .expect("Pubdata price must be available"),
-            )),
-        };
-
-        // Limit pubdata price increase to 1.5x per block.
-        let pubdata_price = if let Some(prev_pubdata_price) = previous_block_pubdata_price
-            && prev_pubdata_price > U256::ONE
-        {
-            const MAX_INCREASE_RATIO: Ratio<u64> = Ratio::new_raw(3, 2);
-            let capped_price = prev_pubdata_price * U256::from(*MAX_INCREASE_RATIO.numer())
-                / U256::from(*MAX_INCREASE_RATIO.denom());
-            if capped_price < desired_pubdata_price {
-                tracing::debug!(
-                    ?capped_price,
-                    ?prev_pubdata_price,
-                    ?desired_pubdata_price,
-                    "Capping pubdata price to {MAX_INCREASE_RATIO:?} * prev_pubdata_price",
-                );
-            }
-            desired_pubdata_price.min(capped_price)
-        } else {
-            desired_pubdata_price
-        };
-
-        if let Ok(p) = pubdata_price.try_into() {
-            EXECUTION_METRICS.pubdata_price.set(p);
-        }
-
-        FeeParams {
-            eip1559_basefee,
-            native_price,
-            pubdata_price,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FeeParams {
-    eip1559_basefee: U256,
-    native_price: U256,
-    pubdata_price: U256,
 }
 
 pub fn millis_since_epoch() -> u128 {

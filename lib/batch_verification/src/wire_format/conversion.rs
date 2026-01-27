@@ -5,7 +5,10 @@ use crate::{
 };
 use alloy::sol_types::SolValue;
 use zksync_os_batch_types::BatchSignature;
-use zksync_os_contract_interface::{IExecutor::CommitBatchInfoZKsyncOS, models::CommitBatchInfo};
+use zksync_os_contract_interface::{
+    IExecutor::{self, CommitBatchInfoZKsyncOS},
+    models::{CommitBatchInfo, StoredBatchInfo},
+};
 use zksync_os_types::PubdataMode;
 
 impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
@@ -17,10 +20,15 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
             pubdata_mode,
             request_id,
             commit_data,
+            prev_commit_data,
         } = value;
         let decoded_commit_data_alloy = CommitBatchInfoZKsyncOS::abi_decode(&commit_data)
             .expect("Failed to decode commit data");
         let decoded_commit_data = CommitBatchInfo::from(decoded_commit_data_alloy);
+        let decoded_prev_commit_data_alloy =
+            IExecutor::StoredBatchInfo::abi_decode(&prev_commit_data)
+                .expect("Failed to decode prev commit data");
+        let decoded_prev_commit_data = StoredBatchInfo::from(decoded_prev_commit_data_alloy);
         Self {
             batch_number,
             first_block_number,
@@ -29,6 +37,7 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
                 .expect("Failed to decode pubdata mode"),
             request_id,
             commit_data: decoded_commit_data,
+            prev_commit_data: decoded_prev_commit_data,
         }
     }
 }
@@ -42,9 +51,13 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
             pubdata_mode,
             request_id,
             commit_data,
+            prev_commit_data,
         } = value;
         let commit_data_alloy = CommitBatchInfoZKsyncOS::from(commit_data);
         let encoded_commit_data = commit_data_alloy.abi_encode();
+        // StoredBatchInfo conversion is not lossless last_commit_timestamp is zeroed. It is fine, because it is a legacy field unused in L1.
+        let prev_commit_data_alloy = IExecutor::StoredBatchInfo::from(&prev_commit_data);
+        let encoded_prev_commit_data = prev_commit_data_alloy.abi_encode();
         Self {
             batch_number,
             first_block_number,
@@ -52,6 +65,7 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
             pubdata_mode: pubdata_mode.to_u8(),
             request_id,
             commit_data: encoded_commit_data,
+            prev_commit_data: encoded_prev_commit_data,
         }
     }
 }

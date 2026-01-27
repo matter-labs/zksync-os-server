@@ -27,8 +27,9 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
-    L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
-    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType,
+    INTEROP_ROOTS_TX_TYPE_ID, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx,
+    L1TxType, L2Envelope, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope,
+    ZkTransaction, ZkTxType,
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -66,7 +67,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
-        for_estimate_gas: bool,
     ) -> Result<ZkTransaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
@@ -112,7 +112,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
-            for_estimate_gas,
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
@@ -123,26 +122,33 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         // Mock signature as this is a simulated transaction
         let signature = Signature::new(Default::default(), Default::default(), false);
 
-        if request.transaction_type == Some(L1PriorityTxType::TX_TYPE) {
-            let inner = L1Tx {
-                hash: B256::ZERO,
-                initiator: from,
-                to: to.into_to().unwrap_or_default(),
-                gas_limit: request.gas.unwrap_or(self.config.eth_call_gas as u64),
-                gas_per_pubdata_byte_limit: REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
-                max_fee_per_gas: gas_price,
-                max_priority_fee_per_gas: max_priority_fee_per_gas.unwrap_or_default(),
-                nonce,
-                value,
-                to_mint: value + U256::from(gas_price) * U256::from(gas_limit),
-                refund_recipient: Address::default(),
-                input,
-                factory_deps: vec![],
-                marker: std::marker::PhantomData::<L1PriorityTxType>,
-            };
-            return Ok(L1Envelope { inner }.into());
-        } else if request.transaction_type == Some(UpgradeTxType::TX_TYPE) {
-            return Err(EthCallError::UpgradeTxNotEstimatable);
+        match request.transaction_type {
+            Some(L1PriorityTxType::TX_TYPE) => {
+                let inner = L1Tx {
+                    hash: B256::ZERO,
+                    initiator: from,
+                    to: to.into_to().unwrap_or_default(),
+                    gas_limit: request.gas.unwrap_or(self.config.eth_call_gas as u64),
+                    gas_per_pubdata_byte_limit: REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+                    max_fee_per_gas: gas_price,
+                    max_priority_fee_per_gas: max_priority_fee_per_gas.unwrap_or_default(),
+                    nonce,
+                    value,
+                    to_mint: value + U256::from(gas_price) * U256::from(gas_limit),
+                    refund_recipient: Address::default(),
+                    input,
+                    factory_deps: vec![],
+                    marker: std::marker::PhantomData::<L1PriorityTxType>,
+                };
+                return Ok(L1Envelope { inner }.into());
+            }
+            Some(UpgradeTxType::TX_TYPE) => {
+                return Err(EthCallError::UpgradeTxNotEstimatable);
+            }
+            Some(INTEROP_ROOTS_TX_TYPE_ID) => {
+                return Err(EthCallError::SystemInteropRootsTxNotEstimatable);
+            }
+            _ => {}
         }
 
         // Build each transaction type manually to enforce proper handling of all involved fields.
@@ -278,7 +284,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
 
         let block_context = self.resolve_block_context(block)?;
-        let transaction = self.create_tx_from_request(request, &block_context, false)?;
+        let transaction = self.create_tx_from_request(request, &block_context)?;
 
         Ok(ExecutionEnv {
             transaction,
@@ -445,7 +451,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     fn estimate_gas_with_view<V: ViewState + Clone>(
         &self,
         mut request: TransactionRequest,
-        block_context: BlockContext,
+        mut block_context: BlockContext,
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
@@ -510,7 +516,12 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .unwrap_or(highest_gas_limit)
                 .min(highest_gas_limit),
         );
-        let tx = self.create_tx_from_request(request, &block_context, true)?;
+        let tx = self.create_tx_from_request(request, &block_context)?;
+
+        // The basefee should be ignored for eth_estimateGas
+        // See:
+        // <https://github.com/ethereum/go-ethereum/blob/ee8e83fa5f6cb261dad2ed0a7bbcde4930c41e6c/internal/ethapi/api.go#L985>
+        block_context.eip1559_basefee = U256::from(0);
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
@@ -642,7 +653,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     match tx.inner.inner_mut() {
-        ZkEnvelope::InteropRoots(interop_tx) => interop_tx.inner.gas_limit = gas_limit,
+        ZkEnvelope::InteropRoots(_) => {
+            unreachable!("interop roots transactions don't have explicit gas limit");
+        }
         ZkEnvelope::L2(L2Envelope::Legacy(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip2930(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip1559(inner)) => inner.tx_mut().gas_limit = gas_limit,
@@ -699,6 +712,8 @@ pub enum EthCallError {
     Eip7702NotSupported,
     #[error("upgrade transactions cannot be estimated")]
     UpgradeTxNotEstimatable,
+    #[error("system interop roots transactions cannot be estimated")]
+    SystemInteropRootsTxNotEstimatable,
 
     /// Error while decoding or validating transaction request fees.
     #[error(transparent)]

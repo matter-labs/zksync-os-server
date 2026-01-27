@@ -35,15 +35,9 @@ where
         batch_storage: BatchStorage,
         finality: Finality,
     ) -> anyhow::Result<Self> {
-        let finality_status = finality.get_finality_status();
-        let priority_tree_manager = PriorityTreeManager::new(
-            block_storage,
-            db_path,
-            finality.clone(),
-            batch_storage,
-            finality_status.last_executed_batch,
-        )
-        .await?;
+        let priority_tree_manager =
+            PriorityTreeManager::new(block_storage, db_path, finality.clone(), batch_storage)
+                .await?;
 
         Ok(Self {
             priority_tree_manager,
