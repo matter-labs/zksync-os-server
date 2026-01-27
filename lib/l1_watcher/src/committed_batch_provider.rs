@@ -26,10 +26,18 @@ impl CommittedBatchProvider {
         let mut inner = Inner::default();
         // Special case for genesis
         if l1_state.last_executed_batch == 0 {
+            let batch_info = load_genesis_batch_info().await;
+            let batch_hash_l1 = l1_state.diamond_proxy.stored_batch_hash(0).await?;
+            anyhow::ensure!(
+                batch_hash_l1 == batch_info.hash(),
+                "genesis batch hash mismatch: L1 {}, local {}",
+                batch_hash_l1,
+                batch_info.hash(),
+            );
             inner.batches.insert(
                 0,
                 DiscoveredCommittedBatch {
-                    batch_info: load_genesis_batch_info().await,
+                    batch_info,
                     block_range: 0..=0,
                 },
             );
