@@ -16,8 +16,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
-    BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, GeneralConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig, StatusServerConfig,
+    BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
+    GeneralConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
+    StatusServerConfig,
 };
 use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
@@ -383,6 +384,8 @@ pub struct TesterBuilder {
     enable_prover: bool,
     block_time: Option<Duration>,
     batch_verification_threshold: Option<u64>,
+    fee_config: Option<FeeConfig>,
+    estimate_gas_pubdata_price_factor: Option<f64>,
 }
 
 impl TesterBuilder {
@@ -399,6 +402,16 @@ impl TesterBuilder {
 
     pub fn batch_verification(mut self, threshold: u64) -> Self {
         self.batch_verification_threshold = Some(threshold);
+        self
+    }
+
+    pub fn fee_config(mut self, c: FeeConfig) -> Self {
+        self.fee_config = Some(c);
+        self
+    }
+
+    pub fn estimate_gas_pubdata_price_factor(mut self, factor: f64) -> Self {
+        self.estimate_gas_pubdata_price_factor = Some(factor);
         self
     }
 
@@ -425,6 +438,12 @@ impl TesterBuilder {
             if let Some(batch_verification_threshold) = self.batch_verification_threshold {
                 config.batch_verification_config.server_enabled = true;
                 config.batch_verification_config.threshold = batch_verification_threshold;
+            }
+            if let Some(fee_config) = self.fee_config.clone() {
+                config.fee_config = fee_config;
+            }
+            if let Some(factor) = self.estimate_gas_pubdata_price_factor {
+                config.rpc_config.estimate_gas_pubdata_price_factor = factor;
             }
         };
 
