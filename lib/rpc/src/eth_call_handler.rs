@@ -67,6 +67,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
+        for_estimate_gas: bool,
     ) -> Result<ZkTransaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
@@ -112,6 +113,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
+            for_estimate_gas,
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
@@ -284,7 +286,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         }
 
         let block_context = self.resolve_block_context(block)?;
-        let transaction = self.create_tx_from_request(request, &block_context)?;
+        let transaction = self.create_tx_from_request(request, &block_context, false)?;
 
         Ok(ExecutionEnv {
             transaction,
@@ -451,7 +453,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     fn estimate_gas_with_view<V: ViewState + Clone>(
         &self,
         mut request: TransactionRequest,
-        mut block_context: BlockContext,
+        block_context: BlockContext,
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
         // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
@@ -516,12 +518,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .unwrap_or(highest_gas_limit)
                 .min(highest_gas_limit),
         );
-        let tx = self.create_tx_from_request(request, &block_context)?;
-
-        // The basefee should be ignored for eth_estimateGas
-        // See:
-        // <https://github.com/ethereum/go-ethereum/blob/ee8e83fa5f6cb261dad2ed0a7bbcde4930c41e6c/internal/ethapi/api.go#L985>
-        block_context.eip1559_basefee = U256::from(0);
+        let tx = self.create_tx_from_request(request, &block_context, true)?;
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = execute(tx.clone(), block_context, storage_view.clone())
