@@ -60,7 +60,7 @@ impl ProvingVersion {
     const V5_VK_HASH: &'static str =
         "0x996b02b1d0420e997b4dc0d629a3a1bba93ed3185ac463f17b02ff83be139581";
 
-    /// verification key hash generated from zksync-os local, zksync-airbender local and zkos-wrapper local
+    /// verification key hash generated from zksync-os v0.2.5, zksync-airbender v0.5.2 and zkos-wrapper v0.5.4
     const V6_VK_HASH: &'static str =
         "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
 
