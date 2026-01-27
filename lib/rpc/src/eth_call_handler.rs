@@ -426,11 +426,19 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
     ) -> Result<U256, EthCallError> {
         let mut block_context = self.resolve_block_context(block)?;
 
+        if request.from == Some(Address::with_last_byte(0xFE)) || request.from == Some(Address::with_last_byte(0xFF)) {
+            block_context.pubdata_price = U256::from(10303657632u64);
+            block_context.native_price = U256::from(911615u64);
+            block_context.eip1559_basefee = U256::from(91161500u64);
+        }
+
         // Overestimate pubdata price to leave some space for fluctuations. Usual Ethereum tooling
         // assumes that gas limit stays constant in most scenarios, which is not the case in our system.
         block_context.pubdata_price = U256::from(
             f64::from(block_context.pubdata_price) * self.config.estimate_gas_pubdata_price_factor,
         );
+
+        dbg!(block_context.pubdata_price);
 
         // Choose storage view (with optional overrides) once and reuse it throughout.
         let storage_view = self
@@ -516,12 +524,15 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 .unwrap_or(highest_gas_limit)
                 .min(highest_gas_limit),
         );
-        let tx = self.create_tx_from_request(request, &block_context)?;
+        let tx = self.create_tx_from_request(request.clone(), &block_context)?;
 
         // The basefee should be ignored for eth_estimateGas
         // See:
         // <https://github.com/ethereum/go-ethereum/blob/ee8e83fa5f6cb261dad2ed0a7bbcde4930c41e6c/internal/ethapi/api.go#L985>
-        block_context.eip1559_basefee = U256::from(0);
+
+        if request.from != Some(Address::with_last_byte(0xFE)) {
+            block_context.eip1559_basefee = U256::from(0);
+        }
 
         // Execute the transaction with the highest possible gas limit.
         let mut res = execute(tx.clone(), block_context, storage_view.clone())

@@ -2351,19 +2351,19 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "arrayvec 0.7.6",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "paste",
  "ruint",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -2463,27 +2463,27 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "arrayvec 0.7.6",
  "cfg-if",
  "const-hex",
  "const_for",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "either",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "num-bigint 0.4.6",
  "num-traits",
  "paste",
  "rand 0.9.2",
  "ruint",
  "serde",
- "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "strum_macros",
  "zerocopy",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -3244,18 +3244,18 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "alloy-consensus",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "c-kzg",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "num-bigint 0.4.6",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "num-bigint 0.3.3",
  "num-traits",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -4043,7 +4043,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -4244,7 +4244,7 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.4#1ae23057162a34
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 
 [[package]]
 name = "darling"
@@ -5002,16 +5002,16 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "arrayvec 0.7.6",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "either",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_evm_errors",
 ]
 
@@ -5482,26 +5482,26 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "alloy",
  "arrayvec 0.7.6",
- "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "hex",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -7586,7 +7586,7 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.4#1ae23057162a34
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 
 [[package]]
 name = "modular-bitfield"
@@ -8268,10 +8268,10 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -12381,10 +12381,10 @@ dependencies = [
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -12622,15 +12622,15 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "arrayvec 0.7.6",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -14889,13 +14889,13 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "arrayvec 0.7.6",
  "bitflags 2.9.4",
  "cfg-if",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "paste",
  "ruint",
  "serde",
@@ -15103,20 +15103,20 @@ dependencies = [
 [[package]]
 name = "zksync_os_api"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
  "alloy",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_interface",
- "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
 ]
 
 [[package]]
@@ -15141,13 +15141,13 @@ version = "0.14.0-non-semver-compat"
 dependencies = [
  "alloy",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "blake2 0.10.6",
  "ruint",
  "serde",
  "thiserror 2.0.17",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_contract_interface",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
@@ -15164,10 +15164,10 @@ dependencies = [
  "async-trait",
  "axum",
  "backon",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "bincode 2.0.1",
  "dashmap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "hyper",
  "hyper-util",
@@ -15183,7 +15183,7 @@ dependencies = [
  "tower",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_interface",
@@ -15304,7 +15304,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "blake2 0.10.6",
  "serde",
  "serde_json",
@@ -15325,7 +15325,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "backon",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "fs2",
  "futures",
  "regex",
@@ -15381,7 +15381,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "blake2 0.10.6",
  "futures",
  "itertools 0.14.0",
@@ -15395,7 +15395,7 @@ dependencies = [
  "tracing",
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_interface",
@@ -15414,7 +15414,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "backon",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "serde",
  "serde_json",
@@ -15455,12 +15455,12 @@ dependencies = [
  "anyhow",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "blake2 0.10.6",
  "clap",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "insta",
  "leb128",
  "once_cell",
@@ -15477,7 +15477,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_crypto",
  "zksync_os_rocksdb",
 ]
@@ -15511,7 +15511,7 @@ dependencies = [
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.26-rc2)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "reqwest",
  "tracing",
  "url",
@@ -15672,9 +15672,9 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "blake2 0.10.6",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "reth-execution-types",
  "reth-primitives",
@@ -15689,7 +15689,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync-os-revm",
  "zksync_os_genesis",
  "zksync_os_interface",
@@ -15723,11 +15723,11 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "boa_engine",
  "boa_gc",
  "dashmap",
- "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "hyper",
  "jsonrpsee",
@@ -15741,7 +15741,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_api",
  "zksync_os_evm_errors",
  "zksync_os_genesis",
@@ -15814,9 +15814,9 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+source = "git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg#e156d2ed8ec76b266168d4c08ecb7327594dc121"
 dependencies = [
- "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -15829,8 +15829,8 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "num",
  "reth-execution-types",
@@ -15843,7 +15843,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_gas_adjuster",
  "zksync_os_genesis",
  "zksync_os_interface",
@@ -15865,7 +15865,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "bincode 2.0.1",
  "blake2 0.10.6",
  "clap",
@@ -15873,7 +15873,7 @@ dependencies = [
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "full_statement_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.1)",
  "full_statement_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "futures",
@@ -15899,7 +15899,7 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.4)",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_base_token_adjuster",
  "zksync_os_batch_types",
  "zksync_os_batch_verification",
@@ -15976,12 +15976,12 @@ dependencies = [
  "alloy",
  "anyhow",
  "dashmap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "ruint",
  "tokio",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_rocksdb",
@@ -15994,12 +15994,12 @@ version = "0.14.0-non-semver-compat"
 dependencies = [
  "alloy",
  "anyhow",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "ruint",
  "tempfile",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_rocksdb",
@@ -16024,7 +16024,7 @@ dependencies = [
  "alloy",
  "bincode 2.0.1",
  "dashmap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "semver 1.0.26",
  "tokio",
@@ -16047,9 +16047,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "auto_impl",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "bincode 2.0.1",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "futures",
  "pin-project 1.1.10",
  "semver 1.0.26",
@@ -16058,7 +16058,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=alocascio-fix-simulation-npg)",
  "zksync_os_api",
  "zksync_os_interface",
  "zksync_os_observability",
