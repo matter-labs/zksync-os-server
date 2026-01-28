@@ -133,7 +133,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
         } else if batch_number > latest_persisted_batch + 1 {
             // This should only be possible if we skipped reverted batch previously and are now
             // discovering more reverted batches.
-            tracing::info!(
+            tracing::warn!(
                 batch_number,
                 "non-sequential batch discovered; assuming revert and skipping"
             );
@@ -152,7 +152,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
             if stored_batch_hash != discovered_batch_hash {
                 // Discovered batch commitment does not match latest L1 state. Likely it got
                 // reverted at some point and we will discover another commitment.
-                tracing::info!(
+                tracing::warn!(
                     ?discovered_batch_hash,
                     ?stored_batch_hash,
                     batch_number,
