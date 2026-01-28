@@ -309,7 +309,7 @@ fn calculate_da_fields(
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiscoveredCommittedBatch {
     /// Information about committed batch as was discovered on-chain.
     pub batch_info: StoredBatchInfo,

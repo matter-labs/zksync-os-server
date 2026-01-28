@@ -64,6 +64,28 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
 
         Ok(l1_watcher)
     }
+
+    async fn parse_committed_batch(
+        &self,
+        report: ReportCommittedBatchRangeZKsyncOS,
+        log: Log,
+    ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
+        let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
+        let committed_batch = util::fetch_commit_calldata(&self.zk_chain, tx_hash).await?;
+
+        // todo: stop using this struct once fully migrated from S3
+        let last_executed_batch_info = BatchInfo {
+            commit_info: committed_batch.commit_info,
+            chain_address: Default::default(),
+            upgrade_tx_hash: committed_batch.upgrade_tx_hash,
+            blob_sidecar: None,
+        };
+        let batch_info = last_executed_batch_info.into_stored(&committed_batch.protocol_version);
+        Ok(DiscoveredCommittedBatch {
+            batch_info,
+            block_range: report.firstBlockNumber..=report.lastBlockNumber,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -87,7 +109,27 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
         let batch_number = report.batchNumber;
         let latest_persisted_batch = self.batch_storage.latest_batch();
         if batch_number <= latest_persisted_batch {
-            tracing::debug!(batch_number, "skipping already processed committed batch");
+            tracing::debug!(
+                batch_number,
+                "discovered already persisted batch, validating"
+            );
+            let committed_batch = self.parse_committed_batch(report, log).await?;
+            let stored_batch = self
+                .batch_storage
+                .get_batch_by_number(batch_number)
+                .map_err(L1WatcherError::Other)?
+                .expect("persisted batch not found in DB");
+            if stored_batch != committed_batch {
+                tracing::error!(
+                    ?stored_batch,
+                    ?committed_batch,
+                    batch_number,
+                    "discovered batch does not match stored batch"
+                );
+                return Err(L1WatcherError::Other(anyhow::anyhow!(
+                    "discovered batch #{batch_number} does not match stored batch"
+                )));
+            }
         } else if batch_number > latest_persisted_batch + 1 {
             // This should only be possible if we skipped reverted batch previously and are now
             // discovering more reverted batches.
@@ -97,22 +139,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
             );
         } else {
             tracing::debug!(batch_number, "discovered committed batch");
-            let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
-            let committed_batch = util::fetch_commit_calldata(&self.zk_chain, tx_hash).await?;
-
-            // todo: stop using this struct once fully migrated from S3
-            let last_executed_batch_info = BatchInfo {
-                commit_info: committed_batch.commit_info,
-                chain_address: Default::default(),
-                upgrade_tx_hash: committed_batch.upgrade_tx_hash,
-                blob_sidecar: None,
-            };
-            let batch_info =
-                last_executed_batch_info.into_stored(&committed_batch.protocol_version);
-            let committed_batch = DiscoveredCommittedBatch {
-                batch_info,
-                block_range: report.firstBlockNumber..=report.lastBlockNumber,
-            };
+            let committed_batch = self.parse_committed_batch(report, log).await?;
             // Wait until discovered batch is executed
             self.finality
                 .subscribe()
