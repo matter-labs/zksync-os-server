@@ -9,6 +9,11 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_storage_api::{WriteBatch, WriteFinality};
 
 /// Persists executed batches via [`WriteBatch`].
+/// Note: batches are discovered by `commit_watcher.rs` from L1 as soon as they are committed.
+/// However, `commit_watcher.rs` only saves them **in memory** (via `committed_batch_provider.rs`).
+/// Only when batch is also executed on L1, this logic kicks in and batches are **persisted on disc**.
+/// Committed batches can be rolled back on L1, which is not the case for executed - so this separation
+/// ensures that we don't need to rollback any persistent node state on L1 commit rollback.
 pub struct L1PersistBatchWatcher<BatchStorage, Finality> {
     zk_chain: ZkChain<DynProvider>,
     batch_storage: BatchStorage,

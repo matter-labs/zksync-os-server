@@ -14,7 +14,9 @@ pub struct ExecutedBatchStorage {
 /// Column families for storage of executed batches.
 #[derive(Copy, Clone, Debug)]
 pub enum ExecutedBatchColumnFamily {
+    /// batch_number (be) => DiscoveredCommittedBatch (JSON)
     BatchInfo,
+    /// block_number (be) => batch number which block range starts with this block (be)
     FirstBlockIndex,
     /// Stores the latest appended batch number under a fixed key.
     Latest,
