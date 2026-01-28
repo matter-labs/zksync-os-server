@@ -326,11 +326,11 @@ impl DiscoveredCommittedBatch {
         self.batch_info.hash()
     }
 
-    pub fn first_block(&self) -> BlockNumber {
+    pub fn first_block_number(&self) -> BlockNumber {
         *self.block_range.start()
     }
 
-    pub fn last_block(&self) -> BlockNumber {
+    pub fn last_block_number(&self) -> BlockNumber {
         *self.block_range.end()
     }
 

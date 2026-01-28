@@ -1068,7 +1068,7 @@ async fn commit_proof_execute_block_numbers(
         committed_batch_provider
             .get(l1_state.last_committed_batch)
             .expect("last committed batch was not discovered on L1")
-            .last_block()
+            .last_block_number()
     };
 
     // only used to log on node startup
@@ -1078,7 +1078,7 @@ async fn commit_proof_execute_block_numbers(
         committed_batch_provider
             .get(l1_state.last_proved_batch)
             .expect("last proved batch was not discovered on L1")
-            .last_block()
+            .last_block_number()
     };
 
     let last_executed_block = if l1_state.last_executed_batch == 0 {
@@ -1087,7 +1087,7 @@ async fn commit_proof_execute_block_numbers(
         committed_batch_provider
             .get(l1_state.last_executed_batch)
             .expect("last executed batch was not discovered on L1")
-            .last_block()
+            .last_block_number()
     };
     (last_committed_block, last_proved_block, last_executed_block)
 }

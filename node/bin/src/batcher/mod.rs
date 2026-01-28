@@ -83,7 +83,7 @@ impl PipelineComponent for Batcher {
                     self.startup_config.last_executed_batch
                 )
             })?;
-        let first_expected_block = last_executed_batch.last_block() + 1;
+        let first_expected_block = last_executed_batch.last_block_number() + 1;
         let mut prev_batch_info = last_executed_batch.batch_info;
 
         // We might receive some blocks that belong to already executed batches. We can skip these
@@ -133,9 +133,9 @@ impl PipelineComponent for Batcher {
                     })?;
                 // Validate that the existing batch's first block matches the next block in the stream
                 anyhow::ensure!(
-                    committed_batch.first_block() == next_block_number,
+                    committed_batch.first_block_number() == next_block_number,
                     "Existing batch first block ({}) does not match next block in stream ({})",
-                    committed_batch.first_block(),
+                    committed_batch.first_block_number(),
                     next_block_number
                 );
 
@@ -342,8 +342,8 @@ impl Batcher {
 
         tracing::info!(
             batch_number,
-            first_block = existing_batch.first_block(),
-            last_block = existing_batch.last_block(),
+            first_block = existing_batch.first_block_number(),
+            last_block = existing_batch.last_block_number(),
             "Recreating existing batch"
         );
 
@@ -376,7 +376,7 @@ impl Batcher {
         let last_block_number = blocks.last().unwrap().0.header.number;
         assert_eq!(
             last_block_number,
-            existing_batch.last_block(),
+            existing_batch.last_block_number(),
             "Block number mismatch in last block of a rebuilt batch"
         );
 

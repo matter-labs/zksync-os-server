@@ -99,7 +99,7 @@ impl<Finality: WriteFinality> ProcessL1Event for L1CommitWatcher<Finality> {
                 block_range: report.firstBlockNumber..=report.lastBlockNumber,
             };
 
-            let last_committed_block = committed_batch.last_block();
+            let last_committed_block = committed_batch.last_block_number();
             self.finality.update_finality_status(|finality| {
                 assert!(
                     batch_number > finality.last_committed_batch,
