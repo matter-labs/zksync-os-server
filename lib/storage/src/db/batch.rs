@@ -76,7 +76,10 @@ impl ExecutedBatchStorage {
 }
 
 impl ReadBatch for ExecutedBatchStorage {
-    fn get_batch_by_block_number(&self, block_number: BlockNumber) -> anyhow::Result<Option<u64>> {
+    fn get_batch_by_block_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
         let block_key = block_number.to_be_bytes();
 
         let mut iter = self.db.to_iterator_cf(
@@ -85,7 +88,16 @@ impl ReadBatch for ExecutedBatchStorage {
         );
         if let Some((_, v)) = iter.next() {
             let arr: [u8; 8] = v.as_ref().try_into().context("invalid first block index")?;
-            Ok(Some(u64::from_be_bytes(arr)))
+            let batch_number = u64::from_be_bytes(arr);
+            let batch = self
+                .get_batch_by_number(batch_number)?
+                .expect("batch indexed in FirstBlockIndex not found in DB");
+            if !batch.block_range.contains(&block_number) {
+                // This can be hit if requested block number is farther than latest persisted block
+                // number.
+                return Ok(None);
+            }
+            Ok(Some(batch))
         } else {
             Ok(None)
         }

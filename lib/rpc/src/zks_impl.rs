@@ -49,18 +49,14 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         if self.storage.batch().latest_batch() < block_number {
             return Err(ZksError::NotExecutedYet);
         }
-        let batch_number = self
+        let batch = self
             .storage
             .batch()
             .get_batch_by_block_number(block_number)?
             .expect("executed block does not belong to a batch");
-        let batch = self
-            .storage
-            .batch()
-            .get_batch_by_number(batch_number)?
-            .expect("executed batch has unknown block range");
         let mut batch_index = None;
         let mut merkle_tree_leaves = vec![];
+        let batch_number = batch.number();
         for block in batch.block_range {
             let Some(block) = self.storage.repository().get_block_by_number(block)? else {
                 return Err(ZksError::BlockNotAvailable(block));

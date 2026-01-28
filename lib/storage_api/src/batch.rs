@@ -2,10 +2,13 @@ use alloy::primitives::BlockNumber;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 
 pub trait ReadBatch: Send + Sync + 'static {
-    /// Get the batch number that contains the given block.
-    fn get_batch_by_block_number(&self, block_number: BlockNumber) -> anyhow::Result<Option<u64>>;
+    /// Get batch that contains the given block.
+    fn get_batch_by_block_number(
+        &self,
+        block_number: BlockNumber,
+    ) -> anyhow::Result<Option<DiscoveredCommittedBatch>>;
 
-    /// Get batch's range (start block number and end block number) by the batch's number.
+    /// Get batch by the batch's number.
     fn get_batch_by_number(
         &self,
         batch_number: u64,
