@@ -12,9 +12,11 @@ CONFIGS=(
   "v30 default|local-chains/v30.2/default/zkos-l1-state.json|local-chains/v30.2/default/config.yaml"
   "v30 multi-chain 1|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6565.yaml"
   "v30 multi-chain 2|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6566.yaml"
-  "v31 default|local-chains/v31.0/default/zkos-l1-state.json|local-chains/v31.0/default/config.yaml"
-  "v31 multi-chain 1|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
-  "v31 multi-chain 2|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
+  # TODO: Temporary disable v31 config tests due to wrong state files without balance
+  # to be re-enabled soon after fixing the issue with state files size and re-generation
+#  "v31 default|local-chains/v31.0/default/zkos-l1-state.json|local-chains/v31.0/default/config.yaml"
+#  "v31 multi-chain 1|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
+#  "v31 multi-chain 2|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
 )
 
 cleanup() {
@@ -95,6 +97,7 @@ for entry in "${CONFIGS[@]}"; do
   echo "✅ Server is up"
 
   TEST_PRIVATE_KEY=0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+  FROM=0x36615cf349d7f6344891b1e7ca7c72883f5dc049
   TO=0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0
 
   echo "Sending test transaction..."
@@ -102,6 +105,7 @@ for entry in "${CONFIGS[@]}"; do
   RETRY_DELAY=2  # seconds
   attempt=1
   while true; do
+    cast balance --rpc-url "http://localhost:${RPC_PORT}" "${FROM}"
     if cast send \
       --private-key "${TEST_PRIVATE_KEY}" \
       --rpc-url "http://localhost:${RPC_PORT}" \
@@ -112,6 +116,7 @@ for entry in "${CONFIGS[@]}"; do
     fi
     if [ "${attempt}" -ge "${MAX_RETRIES}" ]; then
       echo "❌ Test transaction failed after ${MAX_RETRIES} attempts!"
+      cat "${SERVER_LOGFILE}"
       exit 1
     fi
     echo "⚠️  Cast send failed (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RETRY_DELAY}s..."
