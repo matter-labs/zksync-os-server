@@ -140,7 +140,8 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
         } else {
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(report, log).await?;
-            // Wait until discovered batch is executed
+            // Wait until discovered batch is executed. Note: this will `await` for the entire time
+            // between L1 commit and L1 execute (potentially minutes or even hours)
             self.finality
                 .subscribe()
                 .wait_for(|f| f.last_executed_batch >= batch_number)
