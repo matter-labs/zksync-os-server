@@ -106,7 +106,7 @@ for entry in "${CONFIGS[@]}"; do
       --private-key "${TEST_PRIVATE_KEY}" \
       --rpc-url "http://localhost:${RPC_PORT}" \
       "${TO}" \
-      --value 100; then
+      --value 10; then
       echo "✅ Test transaction succeeded!"
       break
     fi
