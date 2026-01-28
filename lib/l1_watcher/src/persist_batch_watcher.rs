@@ -141,7 +141,16 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(report, log).await?;
             // Wait until discovered batch is executed. Note: this will `await` for the entire time
-            // between L1 commit and L1 execute (potentially minutes or even hours)
+            // between L1 commit and L1 execute (potentially minutes or even hours).
+            //
+            // This logic is not totally resistant to reorgs. If `executeBatches` is reverted + the
+            // batch itself is reverted then the storage will persist an incorrect batch. The
+            // situation should be extremely rare but still possible. Two options here:
+            // 1. Trim batches that are no longer executed from the storage on start-up.
+            // 2. Track **finalized** executions along with regular (latest) ones. They cannot
+            //    be reorged and hence would be safe to depend on here.
+            //
+            // AFAIU (2) can also help with the similar priority tree issue.
             self.finality
                 .subscribe()
                 .wait_for(|f| f.last_executed_batch >= batch_number)
