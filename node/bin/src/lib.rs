@@ -672,14 +672,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             stop_receiver.clone(),
             tx_acceptance_state_sender,
             sidecar_sender,
-            committed_batch_provider,
+            committed_batch_provider.clone(),
         )
         .await;
     } else {
         // External Node
         run_en_pipeline(
             &config,
-            committed_batch_provider,
+            committed_batch_provider.clone(),
             node_startup_state,
             block_replay_storage.clone(),
             &mut tasks,
@@ -722,6 +722,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             bridgehub_address,
             bytecode_supplier_address,
+            committed_batch_provider,
             rpc_storage,
             l2_mempool,
             genesis_input_source,
