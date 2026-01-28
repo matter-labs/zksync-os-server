@@ -51,9 +51,8 @@ impl ExecutedBatchStorage {
     fn write_batch_unchecked(&self, executed_batch: DiscoveredCommittedBatch) {
         let batch_number_key = executed_batch.number().to_be_bytes().to_vec();
         let first_block_number_key = executed_batch.first_block().to_be_bytes().to_vec();
-        let batch_info_value =
-            bincode::serde::encode_to_vec(executed_batch, bincode::config::standard())
-                .expect("failed to serialize DiscoveredCommittedBatch");
+        let batch_info_value = serde_json::to_vec(&executed_batch)
+            .expect("failed to serialize DiscoveredCommittedBatch");
         let mut batch: RocksdbWriteBatch<'_, ExecutedBatchColumnFamily> = self.db.new_write_batch();
         batch.put_cf(
             ExecutedBatchColumnFamily::Latest,
@@ -105,9 +104,7 @@ impl ReadBatch for ExecutedBatchStorage {
             return Ok(None);
         };
 
-        bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
-            .context("failed to deserialize context")
-            .map(|(batch, _)| batch)
+        serde_json::from_slice(&bytes).context("failed to deserialize context")
     }
 
     fn latest_batch(&self) -> u64 {

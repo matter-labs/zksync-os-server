@@ -16025,6 +16025,7 @@ dependencies = [
  "anyhow",
  "bincode 2.0.1",
  "dashmap",
+ "serde_json",
  "tokio",
  "tracing",
  "vise",
