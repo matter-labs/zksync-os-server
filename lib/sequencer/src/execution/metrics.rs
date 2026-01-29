@@ -122,6 +122,10 @@ pub struct ExecutionMetrics {
     pub pubdata_price: Gauge<u64>,
 
     pub blob_fill_ratio: Gauge<f64>,
+
+    pub base_fee: Gauge<u64>,
+
+    pub native_price: Gauge<u64>,
 }
 
 #[vise::register]
