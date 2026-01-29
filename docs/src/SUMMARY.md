@@ -14,6 +14,7 @@
   - [Exposed Ports](setup/exposed_ports.md)
   - [FAQ](setup/faq.md)
   - [Base token price updater](setup/base_token_price_updater.md)
+  - [Fees](setup/fees.md)
 
 ---
 
