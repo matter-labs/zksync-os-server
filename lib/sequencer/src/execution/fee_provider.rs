@@ -1,6 +1,6 @@
 use crate::execution::metrics::EXECUTION_METRICS;
 use alloy::eips::eip4844::FIELD_ELEMENTS_PER_BLOB;
-use alloy::primitives::{U128, U256};
+use alloy::primitives::U256;
 use num::rational::Ratio;
 use num::{BigUint, ToPrimitive};
 use tokio::sync::watch;
@@ -15,15 +15,20 @@ pub struct FeeConfig {
     pub native_price_usd: Ratio<BigUint>,
     /// Override for base fee (in base token units).
     /// If set, base fee will be constant and equal to this value.
-    pub base_fee_override: Option<U128>,
+    pub base_fee_override: Option<BigUint>,
     /// Defines how many native resource units are equivalent to one gas unit in terms of price.
     pub native_per_gas: u64,
     /// Override for pubdata price (in base token units).
     /// If set, pubdata price will be constant and equal to this value.
-    pub pubdata_price_override: Option<U128>,
+    pub pubdata_price_override: Option<BigUint>,
+    /// Cap for pubdata price (in base token units). If set, pubdata price will not exceed this value.
+    /// Note:
+    /// - has no effect if `pubdata_price_override` is set.
+    /// - if pubdata cap is reached, chain operator may operate at a loss.
+    pub pubdata_price_cap: Option<BigUint>,
     /// Override for native price (in base token units).
     /// If set, native price will be constant and equal to this value.
-    pub native_price_override: Option<U128>,
+    pub native_price_override: Option<BigUint>,
 }
 
 /// Provider of fee parameters for block execution.
@@ -97,8 +102,8 @@ impl FeeProvider {
     }
 
     fn calculate_native_price(&self, token_prices: &TokenPricesForFees) -> BigUint {
-        if let Some(o) = self.fee_config.native_price_override {
-            return BigUint::from(o.to::<u128>());
+        if let Some(o) = self.fee_config.native_price_override.clone() {
+            return o;
         }
 
         let desired_native_price_usd = &self.fee_config.native_price_usd;
@@ -148,8 +153,8 @@ impl FeeProvider {
     }
 
     fn calculate_base_fee(&self, native_price: &BigUint) -> BigUint {
-        if let Some(o) = self.fee_config.base_fee_override {
-            return BigUint::from(o.to::<u128>());
+        if let Some(o) = self.fee_config.base_fee_override.clone() {
+            return o;
         }
 
         // EIP-1559 base fee is proportional to native price.
@@ -162,8 +167,8 @@ impl FeeProvider {
         native_price: &BigUint,
         token_prices: &TokenPricesForFees,
     ) -> BigUint {
-        if let Some(o) = self.fee_config.pubdata_price_override {
-            return BigUint::from(o.to::<u128>());
+        if let Some(o) = self.fee_config.pubdata_price_override.clone() {
+            return o;
         }
 
         let base_pubdata_price_in_sl_token = BigUint::from(
@@ -227,7 +232,7 @@ impl FeeProvider {
         };
 
         // Limit pubdata price increase to 1.5x per block.
-        let pubdata_price = if let Some(prev_pubdata_price) =
+        let mut pubdata_price = if let Some(prev_pubdata_price) =
             self.previous_block_fee_params.map(|p| p.pubdata_price)
         {
             let capped_price = {
@@ -251,6 +256,17 @@ impl FeeProvider {
         } else {
             desired_pubdata_price
         };
+
+        if let Some(cap) = self.fee_config.pubdata_price_cap.clone()
+            && pubdata_price > cap
+        {
+            tracing::debug!(
+                %cap,
+                %pubdata_price,
+                "Capping pubdata price according to config",
+            );
+            pubdata_price = cap;
+        }
 
         if let Some(p) = pubdata_price.to_u64() {
             EXECUTION_METRICS.pubdata_price.set(p);
