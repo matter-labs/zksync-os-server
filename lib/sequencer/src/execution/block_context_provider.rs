@@ -8,7 +8,7 @@ use alloy::primitives::{Address, BlockHash, TxHash, U256};
 use anyhow::Context as _;
 use reth_execution_types::ChangedAccount;
 use reth_primitives::SealedBlock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
@@ -318,6 +318,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
         cmd_type: BlockCommandType,
+        block_time: Option<Duration>,
     ) {
         let mut l2_transactions = Vec::new();
         let mut interop_txs = Vec::new();
@@ -359,7 +360,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
 
         if let Some(last_interop_log_index) = self
             .interop_tx_stream
-            .on_canonical_state_change(interop_txs)
+            .on_canonical_state_change(interop_txs, block_time)
             .await
         {
             self.next_interop_event_index = InteropRootsLogIndex {

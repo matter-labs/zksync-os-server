@@ -82,6 +82,12 @@ where
             let block_number = cmd.block_number();
             let cmd_type = cmd.command_type();
 
+            let block_time = if let BlockCommand::Produce(produce_command) = &cmd {
+                Some(produce_command.block_time)
+            } else {
+                None
+            };
+
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
                 && let Some(limit) = self.sequencer_config.max_blocks_to_produce
@@ -175,7 +181,7 @@ where
 
             // TODO: would updating mempool in parallel with state make sense?
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record, cmd_type)
+                .on_canonical_state_change(&block_output, &replay_record, cmd_type, block_time)
                 .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
             self.block_context_provider.remove_txs(purged_txs_hashes);

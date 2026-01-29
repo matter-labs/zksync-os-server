@@ -2,10 +2,11 @@ use std::{
     collections::VecDeque,
     pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use futures::Stream;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::Instant};
 use zksync_os_types::{
     IndexedInteropRoot, IndexedInteropRootsEnvelope, InteropRootsEnvelope, InteropRootsLogIndex,
 };
@@ -18,6 +19,7 @@ pub struct InteropTxStream {
     pending_roots: VecDeque<IndexedInteropRoot>,
     used_roots: VecDeque<IndexedInteropRoot>,
     interop_roots_per_tx: usize,
+    next_interop_tx_allowed_after: Instant,
 }
 
 impl Stream for InteropTxStream {
@@ -25,6 +27,11 @@ impl Stream for InteropTxStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+
+        if Instant::now() < this.next_interop_tx_allowed_after {
+            return Poll::Pending;
+        }
+
         loop {
             match this.receiver.poll_recv(cx) {
                 Poll::Ready(Some(root)) => {
@@ -54,6 +61,7 @@ impl InteropTxStream {
             pending_roots: VecDeque::new(),
             used_roots: VecDeque::new(),
             interop_roots_per_tx,
+            next_interop_tx_allowed_after: Instant::now(),
         }
     }
 
@@ -114,8 +122,14 @@ impl InteropTxStream {
     pub async fn on_canonical_state_change(
         &mut self,
         txs: Vec<InteropRootsEnvelope>,
+        block_time: Option<Duration>,
     ) -> Option<InteropRootsLogIndex> {
-        let mut log_index = None;
+        if txs.is_empty() {
+            return None;
+        }
+
+        let mut log_index = InteropRootsLogIndex::default();
+
         for tx in txs {
             let mut roots = Vec::new();
             for _ in 0..tx.interop_roots_count() {
@@ -125,7 +139,7 @@ impl InteropTxStream {
             let envelope = InteropRootsEnvelope::from_interop_roots(
                 roots.iter().map(|r| r.root.clone()).collect(),
             );
-            log_index = Some(roots.last().unwrap().log_index.clone());
+            log_index = roots.last().unwrap().log_index.clone();
 
             assert_eq!(&envelope, &tx);
         }
@@ -138,6 +152,10 @@ impl InteropTxStream {
         // Clear used roots that were left in the buffer and move them to pending.
         std::mem::swap(&mut self.pending_roots, &mut self.used_roots);
 
-        log_index
+        if let Some(block_time) = block_time {
+            self.next_interop_tx_allowed_after = Instant::now() + 3 * block_time;
+        }
+
+        Some(log_index)
     }
 }
