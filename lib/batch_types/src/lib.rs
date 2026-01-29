@@ -7,4 +7,4 @@ mod block_merkle_tree_data;
 pub use block_merkle_tree_data::BlockMerkleTreeData;
 
 mod batch_info;
-pub use batch_info::BatchInfo;
+pub use batch_info::{BatchInfo, DiscoveredCommittedBatch};

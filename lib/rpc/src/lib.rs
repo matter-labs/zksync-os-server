@@ -45,6 +45,7 @@ use jsonrpsee::ws_client::RpcServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
+use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mempool::L2TransactionPool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -62,6 +63,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
     chain_id: u64,
     bridgehub_address: Address,
     bytecode_supplier_address: Address,
+    committed_batch_provider: CommittedBatchProvider,
     storage: RpcStorage,
     mempool: Mempool,
     genesis_input_source: Arc<dyn GenesisInputSource>,
@@ -98,6 +100,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         ZksNamespace::new(
             bridgehub_address,
             bytecode_supplier_address,
+            committed_batch_provider,
             storage.clone(),
             genesis_input_source,
         )

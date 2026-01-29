@@ -15,15 +15,15 @@ zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_metadata.workspace = true
+zksync_os_batch_types.workspace = true
 
 zksync_os_interface.workspace = true
-zk_os_forward_system.workspace = true
 
 alloy = { workspace = true, default-features = false, features = ["eips", "rlp"] }
 dashmap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 vise.workspace = true
-futures.workspace = true
 bincode.workspace = true
-semver.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true

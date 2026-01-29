@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use std::sync::Arc;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
+use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{types::BlockMetadata, types::L2ToL1LogProof, zks::ZksApiServer};
 use zksync_os_storage_api::RepositoryError;
@@ -16,6 +17,7 @@ const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
 pub struct ZksNamespace<RpcStorage> {
     bridgehub_address: Address,
     bytecode_supplier_address: Address,
+    committed_batch_provider: CommittedBatchProvider,
     storage: RpcStorage,
     genesis_input_source: Arc<dyn GenesisInputSource>,
 }
@@ -24,12 +26,14 @@ impl<RpcStorage> ZksNamespace<RpcStorage> {
     pub fn new(
         bridgehub_address: Address,
         bytecode_supplier_address: Address,
+        committed_batch_provider: CommittedBatchProvider,
         storage: RpcStorage,
         genesis_input_source: Arc<dyn GenesisInputSource>,
     ) -> Self {
         Self {
             bridgehub_address,
             bytecode_supplier_address,
+            committed_batch_provider,
             storage,
             genesis_input_source,
         }
@@ -46,9 +50,6 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             return Ok(None);
         };
         let block_number = tx_meta.block_number;
-        // Reading from proof storage can return "dirty" data (i.e., not the one that will be
-        // finalized on L1). To avoid this, we assert that the block has been executed as there is
-        // no use case for fetching non-executed proofs.
         if self
             .storage
             .finality()
@@ -58,21 +59,24 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         {
             return Err(ZksError::NotExecutedYet);
         }
-        let batch_number = self
-            .storage
-            .batch()
-            .get_batch_by_block_number(block_number, self.storage.finality())
-            .await?
-            .expect("executed block does not belong to a batch");
-        let (from_block, to_block) = self
-            .storage
-            .batch()
-            .get_batch_range_by_number(batch_number)
-            .await?
-            .expect("executed batch has unknown block range");
+        // Try fetching from `CommittedBatchProvider` first. This should be enough to answer requests
+        // about recent blocks. Fallback to batch storage after which might not have the batch yet
+        // if node is still indexing historical batches.
+        let batch = match self
+            .committed_batch_provider
+            .get_by_block_number(block_number)
+        {
+            None => self
+                .storage
+                .batch()
+                .get_batch_by_block_number(block_number)?
+                .ok_or(ZksError::BlockNotAvailableYet)?,
+            Some(batch) => batch,
+        };
         let mut batch_index = None;
         let mut merkle_tree_leaves = vec![];
-        for block in from_block..=to_block {
+        let batch_number = batch.number();
+        for block in batch.block_range {
             let Some(block) = self.storage.repository().get_block_by_number(block)? else {
                 return Err(ZksError::BlockNotAvailable(block));
             };
@@ -207,6 +211,10 @@ pub type ZksResult<Ok> = Result<Ok, ZksError>;
 pub enum ZksError {
     #[error("L1 batch containing the transaction has not been executed yet")]
     NotExecutedYet,
+    /// Block is executed according to L1 but hasn't been indexed by this node yet. Client needs to
+    /// retry after some time passes.
+    #[error("L1 batch containing the transaction has not been indexed by this node yet")]
+    BlockNotAvailableYet,
     /// Historical block could not be found on this node (e.g., pruned).
     #[error("historical block {0} is not available")]
     BlockNotAvailable(BlockNumber),

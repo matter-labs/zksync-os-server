@@ -191,6 +191,7 @@ boa_gc = { version = "0.21.0" }
 structdiff = { version = "0.7.3", features = ["debug_diffs"] }
 num = { version = "0.4" }
 httpmock = "0.8"
+rangemap = "1.7.1"
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"

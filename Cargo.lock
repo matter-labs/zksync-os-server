@@ -3187,7 +3187,7 @@ dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260122-4)",
  "c-kzg",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260122-4)",
- "num-bigint 0.3.3",
+ "num-bigint 0.4.6",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=dev-20260122-4)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -9371,6 +9371,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rangemap"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "973443cf09a9c8656b574a866ab68dfa19f0867d0340648c7d2f6a71b8a8ea68"
+
+[[package]]
 name = "rayon"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15416,6 +15422,7 @@ dependencies = [
  "backon",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
  "futures",
+ "rangemap",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -15746,6 +15753,7 @@ dependencies = [
  "zksync_os_evm_errors",
  "zksync_os_genesis",
  "zksync_os_interface",
+ "zksync_os_l1_watcher",
  "zksync_os_mempool",
  "zksync_os_metadata",
  "zksync_os_mini_merkle_tree",
@@ -16022,14 +16030,14 @@ name = "zksync_os_storage"
 version = "0.14.1"
 dependencies = [
  "alloy",
+ "anyhow",
  "bincode 2.0.1",
  "dashmap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
- "futures",
- "semver 1.0.26",
+ "serde_json",
  "tokio",
  "tracing",
  "vise",
+ "zksync_os_batch_types",
  "zksync_os_genesis",
  "zksync_os_interface",
  "zksync_os_metadata",
@@ -16045,11 +16053,9 @@ dependencies = [
  "alloy",
  "alloy-rlp",
  "anyhow",
- "async-trait",
  "auto_impl",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
  "bincode 2.0.1",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
  "futures",
  "pin-project 1.1.10",
  "semver 1.0.26",
@@ -16060,6 +16066,7 @@ dependencies = [
  "tracing",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
  "zksync_os_api",
+ "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_observability",
  "zksync_os_rocksdb",

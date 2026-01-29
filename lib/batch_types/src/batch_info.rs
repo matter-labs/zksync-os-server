@@ -1,8 +1,9 @@
 use alloy::consensus::{BlobTransactionSidecar, SidecarBuilder, SimpleCoder};
-use alloy::primitives::{Address, B256, U256, keccak256};
+use alloy::primitives::{Address, B256, BlockNumber, U256, keccak256};
 use blake2::{Blake2s256, Digest};
 use ruint::aliases::B160;
 use serde::{Deserialize, Serialize};
+use std::ops;
 use std::ops::{Deref, DerefMut};
 use zksync_os_contract_interface::models::{CommitBatchInfo, StoredBatchInfo};
 use zksync_os_interface::types::{BlockContext, BlockOutput};
@@ -305,5 +306,35 @@ fn calculate_da_fields(
         da_commitment,
         operator_da_input,
         blob_sidecar,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveredCommittedBatch {
+    /// Information about committed batch as was discovered on-chain.
+    pub batch_info: StoredBatchInfo,
+    /// Range of L2 blocks that belong to this batch.
+    pub block_range: ops::RangeInclusive<BlockNumber>,
+}
+
+impl DiscoveredCommittedBatch {
+    pub fn number(&self) -> u64 {
+        self.batch_info.batch_number
+    }
+
+    pub fn hash(&self) -> B256 {
+        self.batch_info.hash()
+    }
+
+    pub fn first_block_number(&self) -> BlockNumber {
+        *self.block_range.start()
+    }
+
+    pub fn last_block_number(&self) -> BlockNumber {
+        *self.block_range.end()
+    }
+
+    pub fn block_count(&self) -> u64 {
+        self.block_range.end() - self.block_range.start() + 1
     }
 }

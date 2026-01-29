@@ -13,10 +13,10 @@ categories.workspace = true
 zksync_os_rocksdb.workspace = true
 zksync_os_types.workspace = true
 zksync_os_observability.workspace = true
+zksync_os_batch_types.workspace = true
 
 zk_ee.workspace = true
 zk_os_basic_system.workspace = true
-zk_os_forward_system.workspace = true
 zksync_os_interface.workspace = true
 zk_os_api.workspace = true
 
@@ -31,7 +31,6 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
 semver = { workspace = true, features = ["serde"] }
-async-trait.workspace = true
 anyhow.workspace = true
 pin-project.workspace = true
 auto_impl.workspace = true

@@ -8,13 +8,11 @@
 //!  * batch -> failed FRI proof with batch metadata
 
 use crate::prover_api::fri_job_manager::FailedFriProof;
-use alloy::primitives::BlockNumber;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use zksync_os_l1_sender::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_object_store::_reexports::BoxedError;
 use zksync_os_object_store::{Bucket, ObjectStore, ObjectStoreError, StoredObject};
-use zksync_os_storage_api::{ReadBatch, ReadFinality};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -134,63 +132,5 @@ impl ProofStorage {
             Err(ObjectStoreError::KeyNotFound(_)) => Ok(None),
             Err(err) => Err(err.into()),
         }
-    }
-}
-
-#[async_trait::async_trait]
-impl ReadBatch for ProofStorage {
-    async fn get_batch_by_block_number(
-        &self,
-        block_number: BlockNumber,
-        finality: &dyn ReadFinality,
-    ) -> anyhow::Result<Option<u64>> {
-        // Handle genesis block with a special case as we don't store it in the DB.
-        if block_number == 0 {
-            return Ok(Some(0));
-        }
-        // todo(#259): we binsearch for the batch temporarily, to be replaced with something more efficient
-        let last_committed_batch = finality.get_finality_status().last_committed_batch;
-        let (mut lo, mut hi) = (1, last_committed_batch);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if let Some(batch) = self.get_batch_with_proof(mid).await? {
-                if batch.batch.first_block_number > block_number {
-                    hi = mid;
-                } else if batch.batch.last_block_number < block_number {
-                    lo = mid + 1;
-                } else {
-                    return Ok(Some(mid));
-                }
-            } else {
-                // Batch with this number doesn't exist, which shouldn't happen
-                tracing::warn!(
-                    batch_number = mid,
-                    last_committed_batch,
-                    "Missing batch from proof storage"
-                );
-                hi = mid;
-            }
-        }
-        // Check that `lo` actually exists
-        Ok(self.get_batch_with_proof(lo).await?.map(|_| lo))
-    }
-
-    async fn get_batch_range_by_number(
-        &self,
-        batch_number: u64,
-    ) -> anyhow::Result<Option<(BlockNumber, BlockNumber)>> {
-        // Handle genesis block with a special case as we don't store it in the DB.
-        if batch_number == 0 {
-            return Ok(Some((0, 0)));
-        }
-        Ok(self
-            .get_batch_with_proof(batch_number)
-            .await?
-            .map(|envelope| {
-                (
-                    envelope.batch.first_block_number,
-                    envelope.batch.last_block_number,
-                )
-            }))
     }
 }
