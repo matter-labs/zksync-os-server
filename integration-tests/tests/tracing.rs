@@ -167,7 +167,7 @@ async fn check_tx_equivalency<
     f: impl Fn(EthDynProvider) -> Fut,
 ) -> anyhow::Result<()> {
     tracing::info!(name, "checking trace equivalence");
-    let l1_call_frame = f(tester.l1_provider.clone())
+    let l1_call_frame = f(tester.l1_provider().clone())
         .await?
         .expect_call_trace()
         .await?;
@@ -186,9 +186,9 @@ async fn check_call_equivalency<Fut: Future<Output = anyhow::Result<TransactionR
     f: impl Fn(EthDynProvider) -> Fut,
 ) -> anyhow::Result<()> {
     tracing::info!(name, "checking trace equivalence");
-    let l1_tx_request = f(tester.l1_provider.clone()).await?;
+    let l1_tx_request = f(tester.l1_provider().clone()).await?;
     let l1_call_frame = tester
-        .l1_provider
+        .l1_provider()
         .debug_trace_call(
             l1_tx_request,
             BlockId::latest(),
