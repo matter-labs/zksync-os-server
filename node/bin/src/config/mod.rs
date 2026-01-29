@@ -448,10 +448,13 @@ pub struct RpcConfig {
     pub send_raw_transaction_sync_timeout: Duration,
 
     /// Factor for pubdata price used during gas limit estimation (`eth_estimateGas`).
-    /// Needed to account for pubdata price market fluctuations. Setting this to `1.0` can lead to
-    /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)
-    /// because pubdata price increase in-between estimation and sequencing.
-    #[config(default_t = 1.5)]
+    /// Needed to account for pubdata price market fluctuations.
+    /// Pubdata price can increase for up to 50% between consecutive blocks, native price can decrease for up to 12.5% ->
+    /// `native_per_pubdata` can increase in 1.5/0.875=1.714 times.
+    /// Setting it to a smaller value will increase the probability of users submitting
+    /// unexecutable/failing transactions (usually fail with `OutOfNativeResourcesDuringValidation`)
+    /// because pubdata price increases or native price decreases in-between estimation and sequencing.
+    #[config(default_t = 2.0)]
     pub estimate_gas_pubdata_price_factor: f64,
 }
 
