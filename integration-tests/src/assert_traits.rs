@@ -1,5 +1,7 @@
+use crate::contracts::L2InteropRootStorage;
 use alloy::eips::BlockId;
 use alloy::network::{Ethereum, Network, ReceiptResponse};
+use alloy::primitives::B256;
 use alloy::providers::ext::DebugApi;
 use alloy::providers::{EthCall, PendingTransaction, PendingTransactionBuilder, Provider};
 use alloy::rpc::json_rpc::RpcRecv;
@@ -9,6 +11,7 @@ use anyhow::Context;
 use std::time::Duration;
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
+pub const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[allow(async_fn_in_trait)]
 pub trait EthCallAssert {
@@ -75,7 +78,6 @@ impl<N: Network> ReceiptAssert<N> for PendingTransactionBuilder<N> {
             .block_number()
             .context("mined receipt is missing block number")?;
         // Wait until the expected block is executed.
-        const POLL_INTERVAL: Duration = Duration::from_millis(100);
         let mut retries = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as u64;
         while retries > 0 {
             // Finalized block is mapped to the latest executed block.
@@ -132,5 +134,40 @@ impl ReceiptsAssert for Vec<PendingTransactionBuilder<Ethereum>> {
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()?;
         Ok(receipts)
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ProviderAssert {
+    async fn expect_interop_root_inclusion(
+        &self,
+        chain_id: u64,
+        batch_number: u64,
+    ) -> anyhow::Result<B256>;
+}
+
+impl<P: Provider<Ethereum>> ProviderAssert for P {
+    async fn expect_interop_root_inclusion(
+        &self,
+        chain_id: u64,
+        batch_number: u64,
+    ) -> anyhow::Result<B256> {
+        let root_storage = L2InteropRootStorage::new(&self);
+        // Wait until the expected block is executed.
+        let mut retries = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as u64;
+        while retries > 0 {
+            let root = root_storage
+                .get_interop_root(chain_id, batch_number)
+                .await?;
+            if root.is_zero() {
+                tracing::info!(chain_id, batch_number, "interop root not included yet");
+                retries -= 1;
+                tokio::time::sleep(POLL_INTERVAL).await;
+            } else {
+                tracing::info!(chain_id, batch_number, ?root, "interop root was included");
+                return Ok(root);
+            }
+        }
+        Err(anyhow::anyhow!("interop root not included on time"))
     }
 }
