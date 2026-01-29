@@ -68,7 +68,7 @@ impl UpgradeTester {
     ) -> anyhow::Result<()> {
         // Deploy the upgrade contract on L1.
         let upgrade_contract =
-            DefaultUpgrade::deploy(&self.tester.l1_provider(), protocol_upgrade).await?;
+            DefaultUpgrade::deploy(self.tester.l1_provider(), protocol_upgrade).await?;
         tracing::info!("DefaultUpgrade contract deployed");
 
         // Send pause migration to Bridgehub
