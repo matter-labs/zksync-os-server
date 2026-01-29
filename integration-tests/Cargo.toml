@@ -26,6 +26,7 @@ zksync_os_prover_service = { workspace = true, optional = true }
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 fs2.workspace = true
+flate2.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
 tracing.workspace = true

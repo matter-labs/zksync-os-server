@@ -143,21 +143,6 @@ impl Tester {
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
         protocol_version: &str,
     ) -> anyhow::Result<Self> {
-        (|| async {
-            // Wait for L1 node to get up and be able to respond.
-            l1_provider.clone().get_chain_id().await?;
-            Ok(())
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_secs(1))
-                .with_max_times(10),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(%err, ?dur, "retrying connection to L1 node");
-        })
-        .await?;
-
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
@@ -416,6 +401,8 @@ impl TesterBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Tester> {
+        let tempdir = tempfile::tempdir()?;
+
         let l1_locked_port = LockedPort::acquire_unused().await?;
         let l1_address = format!("http://localhost:{}", l1_locked_port.port);
 
@@ -424,12 +411,33 @@ impl TesterBuilder {
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg(get_l1_state_path(ChainLayout::Default {
-                    protocol_version: PROTOCOL_VERSION,
-                }))
+                .arg(get_l1_state_path(
+                    ChainLayout::Default {
+                        protocol_version: PROTOCOL_VERSION,
+                    },
+                    &tempdir,
+                ))
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
+
+        (|| async {
+            // Wait for L1 node to get up and be able to respond.
+            l1_provider.clone().get_chain_id().await?;
+            Ok(())
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(%err, ?dur, "retrying connection to L1 node");
+        })
+        .await?;
+
+        tracing::info!("L1 chain started on {}", l1_address);
+        drop(tempdir);
 
         let overrides_fun = move |config: &mut Config| {
             if let Some(block_time) = self.block_time {
@@ -513,6 +521,7 @@ impl MultiChainTesterBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<MultiChainTester> {
+        let tempdir = tempfile::tempdir()?;
         let num_chains = self.num_chains.unwrap_or(2);
 
         assert!(
@@ -529,10 +538,13 @@ impl MultiChainTesterBuilder {
                 .port(l1_locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--load-state")
-                .arg(get_l1_state_path(ChainLayout::MultiChain {
-                    protocol_version: NEXT_PROTOCOL_VERSION,
-                    chain_index: 0,
-                }))
+                .arg(get_l1_state_path(
+                    ChainLayout::MultiChain {
+                        protocol_version: NEXT_PROTOCOL_VERSION,
+                        chain_index: 0,
+                    },
+                    &tempdir,
+                ))
         })?;
 
         let l1_wallet = l1_provider.wallet().clone();
@@ -553,6 +565,7 @@ impl MultiChainTesterBuilder {
         .await?;
 
         tracing::info!("L1 chain started on {}", l1_address);
+        drop(tempdir);
 
         // Launch L2 chains using chain configurations from config files
         let mut chains = Vec::new();
