@@ -72,6 +72,7 @@ impl FeeProvider {
         let native_price = self.calculate_native_price(&token_prices);
         let eip1559_basefee = self.calculate_base_fee(&native_price);
         let pubdata_price = self.calculate_pubdata_price(&native_price, &token_prices);
+        Self::record_metrics(&native_price, &eip1559_basefee, &pubdata_price);
 
         let native_price = biguint_to_u256_checked(&native_price).unwrap_or_else(|| {
             tracing::warn!(
@@ -268,10 +269,6 @@ impl FeeProvider {
             pubdata_price = cap;
         }
 
-        if let Some(p) = pubdata_price.to_u64() {
-            EXECUTION_METRICS.pubdata_price.set(p);
-        }
-
         pubdata_price
     }
 
@@ -281,6 +278,18 @@ impl FeeProvider {
             native_price: replay_record.block_context.native_price,
             pubdata_price: replay_record.block_context.pubdata_price,
         });
+    }
+
+    fn record_metrics(native_price: &BigUint, base_fee: &BigUint, pubdata_price: &BigUint) {
+        if let Some(n) = native_price.to_u64() {
+            EXECUTION_METRICS.native_price.set(n);
+        }
+        if let Some(b) = base_fee.to_u64() {
+            EXECUTION_METRICS.base_fee.set(b);
+        }
+        if let Some(p) = pubdata_price.to_u64() {
+            EXECUTION_METRICS.pubdata_price.set(p);
+        }
     }
 }
 
