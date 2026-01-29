@@ -3,7 +3,7 @@ use self::util::SigningKeyDeserializer;
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
-use num::{BigInt, rational::Ratio};
+use num::{BigInt, BigUint, rational::Ratio};
 use serde::{Deserialize, Serialize};
 use smart_config::metadata::TimeUnit;
 use smart_config::value::SecretString;
@@ -909,6 +909,11 @@ pub struct FeeConfig {
     /// Override for pubdata price (in base token units).
     /// If set, pubdata price will be constant and equal to this value.
     pub pubdata_price_override: Option<U128>,
+    /// Cap for pubdata price (in base token units). If set, pubdata price will not exceed this value.
+    /// Note:
+    /// - has no effect if `pubdata_price_override` is set.
+    /// - if pubdata cap is reached, chain operator may operate at a loss.
+    pub pubdata_price_cap: Option<U128>,
     /// Override for native price (in base token units).
     /// If set, native price will be constant and equal to this value.
     pub native_price_override: Option<U128>,
@@ -1135,10 +1140,15 @@ impl From<FeeConfig> for zksync_os_sequencer::execution::FeeConfig {
 
         Self {
             native_price_usd,
-            base_fee_override: c.base_fee_override,
+            base_fee_override: c.base_fee_override.map(|n| BigUint::from(n.to::<u128>())),
             native_per_gas: c.native_per_gas,
-            pubdata_price_override: c.pubdata_price_override,
-            native_price_override: c.native_price_override,
+            pubdata_price_override: c
+                .pubdata_price_override
+                .map(|n| BigUint::from(n.to::<u128>())),
+            pubdata_price_cap: c.pubdata_price_cap.map(|n| BigUint::from(n.to::<u128>())),
+            native_price_override: c
+                .native_price_override
+                .map(|n| BigUint::from(n.to::<u128>())),
         }
     }
 }
