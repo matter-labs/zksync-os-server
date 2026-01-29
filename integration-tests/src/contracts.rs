@@ -5,7 +5,7 @@ use crate::assert_traits::ReceiptAssert;
 use crate::network::Zksync;
 use crate::provider::ZksyncApi;
 use alloy::network::ReceiptResponse;
-use alloy::primitives::{Address, U256, address};
+use alloy::primitives::{Address, B256, U256, address};
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{Log, TransactionReceipt};
 use zksync_os_contract_interface::Bridgehub;
@@ -90,10 +90,17 @@ alloy::sol! {
         function l2TokenAddress(address _l1Token) public view returns (address);
         function withdraw(address _l1Receiver, address _l2Token, uint256 _amount);
     }
+
+    #[sol(rpc)]
+    contract IL2InteropRootStorage {
+        function interopRoots(uint256 chainId, uint256 batchNumber) external view returns (bytes32);
+    }
 }
 
 const L1_MESSENGER_ADDRESS: Address = address!("0000000000000000000000000000000000008008");
 const L2_BASE_TOKEN_ADDRESS: Address = address!("000000000000000000000000000000000000800a");
+const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address =
+    address!("0x0000000000000000000000000000000000010008");
 
 pub struct L2BaseToken<P: Provider<Zksync>>(IBaseToken::IBaseTokenInstance<P, Zksync>);
 
@@ -213,6 +220,34 @@ impl<P1: Provider, P2: Provider<Zksync>> L1Nullifier<P1, P2> {
             .send()
             .await?
             .expect_successful_receipt()
+            .await
+    }
+}
+
+pub struct L2InteropRootStorage<P: Provider>(
+    IL2InteropRootStorage::IL2InteropRootStorageInstance<P>,
+);
+
+impl<P: Provider> L2InteropRootStorage<P> {
+    pub fn new(l2_provider: P) -> Self {
+        Self(IL2InteropRootStorage::new(
+            L2_INTEROP_ROOT_STORAGE_ADDRESS,
+            l2_provider,
+        ))
+    }
+
+    pub fn address(&self) -> &Address {
+        self.0.address()
+    }
+
+    pub async fn get_interop_root(
+        &self,
+        chain_id: u64,
+        batch_number: u64,
+    ) -> alloy::contract::Result<B256> {
+        self.0
+            .interopRoots(U256::from(chain_id), U256::from(batch_number))
+            .call()
             .await
     }
 }

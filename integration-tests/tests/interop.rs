@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use test_log::test;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
+use zksync_os_integration_tests::assert_traits::ProviderAssert;
 use zksync_os_integration_tests::{
     MultiChainTester, Tester, assert_traits::ReceiptAssert, contracts::TestERC20,
     provider::ZksyncApi,
@@ -74,12 +75,6 @@ sol! {
             bytes calldata _bundle,
             MessageInclusionProof calldata _proof
         ) external;
-    }
-
-    #[sol(rpc)]
-    contract IL2InteropRootStorage {
-        function interopRoots(uint256 chainId, uint256 batchNumber) external view returns (bytes32);
-        function addInteropRoot(uint256 chainId, uint256 batchNumber, bytes32[] memory sides) external;
     }
 
     // Bundle attribute functions for encoding
@@ -402,7 +397,7 @@ async fn test_interop_bundle_send() -> Result<()> {
     let destination_chain_id = format_evm_v1(chain_b_id);
 
     // Send sendBundle transaction
-    let pending_tx = interop_center
+    let receipt = interop_center
         .sendBundle(destination_chain_id.clone(), calls, bundle_attributes)
         .value(U256::ZERO)
         .gas(10_000_000)
@@ -410,14 +405,10 @@ async fn test_interop_bundle_send() -> Result<()> {
         .max_priority_fee_per_gas(0)
         .send()
         .await
-        .context("Failed to send bundle transaction")?;
-
-    let hash = *pending_tx.tx_hash();
-    let receipt = pending_tx.get_receipt().await?;
-
-    if !receipt.status() {
-        anyhow::bail!("Bundle transaction reverted on chain A");
-    }
+        .context("Failed to send bundle transaction")?
+        .expect_successful_receipt()
+        .await
+        .context("sendBundle on chain A")?;
 
     // Extract bundle data from the L1Messenger log (log #3)
     let l1_messenger_log = receipt.logs().get(3).expect("L1Messenger log not found");
@@ -432,7 +423,18 @@ async fn test_interop_bundle_send() -> Result<()> {
 
     // Get message proof
     let block_number = receipt.block_number.expect("Block number not found");
-    let log_proof = relayer_get_message_proof(&chain_a.l2_zk_provider, hash, block_number).await?;
+    let log_proof = relayer_get_message_proof(
+        &chain_a.l2_zk_provider,
+        receipt.transaction_hash,
+        block_number,
+    )
+    .await?;
+
+    // Wait for interop root to get included on chain B
+    chain_b
+        .l2_provider
+        .expect_interop_root_inclusion(chain_a_id, log_proof.batch_number)
+        .await?;
 
     // Build MessageInclusionProof
     let proof_data: Vec<FixedBytes<32>> = log_proof.proof.clone();
@@ -458,20 +460,14 @@ async fn test_interop_bundle_send() -> Result<()> {
         interop_handler.executeBundle(bundle.clone(), message_inclusion_proof.clone());
 
     // Send executeBundle with high gas limit
-    let pending_tx = execute_call
+    let _execute_receipt = execute_call
         .gas(50_000_000)
         .send()
         .await
-        .context("Failed to send executeBundle transaction")?;
-
-    let execute_receipt = pending_tx
-        .get_receipt()
+        .context("Failed to send executeBundle transaction")?
+        .expect_successful_receipt()
         .await
-        .context("Failed to get executeBundle receipt")?;
-
-    if !execute_receipt.status() {
-        anyhow::bail!("executeBundle transaction reverted on chain B");
-    }
+        .context("executeBundle on chain B")?;
 
     // Verify token balance on chain B
     let vault_b = IL2NativeTokenVault::new(L2_NATIVE_TOKEN_VAULT_ADDRESS, &chain_b.l2_provider);
