@@ -234,7 +234,9 @@ jobs:
       - name: Upload artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
+        run: |
+          gzip -dfk "${L1_STATE_JSON}.gz"
+          gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
 
       - name: Update release
         env:

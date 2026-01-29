@@ -12,6 +12,7 @@ Default single-chain configuration for running ZKsync OS against L1 for protocol
 
 ```bash
 # Terminal 1: Start Anvil with shared L1 state
+gzip -dfk ./local-chains/v30.2/default/zkos-l1-state.json.gz
 anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545
 
 # Terminal 2: Run the node

@@ -197,7 +197,7 @@ impl UpgradeTester {
                 .get_code_at(bytecode_supplier_address)
                 .await?
                 .is_empty(),
-            "Bytecode supplier contract is not deployed at expected address {bytecode_supplier_address:?}; if zkos-l1-state.json was updated, update the address in the test code"
+            "Bytecode supplier contract is not deployed at expected address {bytecode_supplier_address:?}; if zkos-l1-state.json.gz was updated, update the address in the test code"
         );
         let bytecode_supplier = interfaces::BytecodesSupplier::new(
             bytecode_supplier_address,

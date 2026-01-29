@@ -62,6 +62,9 @@ for entry in "${CONFIGS[@]}"; do
 
   : > "${SERVER_LOGFILE}"
 
+  echo "Decompressing anvil state..."
+  gzip -dfk "${CUR_STATE}.gz"
+
   echo "Starting anvil..."
   anvil --load-state "${CUR_STATE}" --port 8545 > anvil.log 2>&1 &
   ANVIL_PID=$!
