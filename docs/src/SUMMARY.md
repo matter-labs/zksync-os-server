@@ -13,8 +13,6 @@
   - [Otterscan (Local Explorer)](setup/local_explorer.md)
   - [Exposed Ports](setup/exposed_ports.md)
   - [FAQ](setup/faq.md)
-  - [Base token price updater](setup/base_token_price_updater.md)
-  - [Fees](setup/fees.md)
 
 ---
 
@@ -27,6 +25,8 @@
   - [State Model](design/state.md)
   - [Merkle Tree Structure](design/tree.md)
   - [Genesis Process](design/genesis.md)
+  - [Base token price updater](design/base_token_price_updater.md)
+  - [Fees](design/fees.md)
 
 ---
 
