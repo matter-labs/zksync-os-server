@@ -43,6 +43,8 @@ alloy::sol! {
         bytes32[] sides;
     }
 
+    function setSettlementLayerChainId(uint256 _newSettlementLayerChainId);
+
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {

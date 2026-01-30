@@ -7,7 +7,8 @@ use std::{
 use futures::Stream;
 use tokio::sync::mpsc;
 use zksync_os_types::{
-    IndexedInteropRoot, IndexedInteropRootsEnvelope, InteropRootsEnvelope, InteropRootsLogIndex,
+    IndexedInteropRoot, IndexedInteropRootsEnvelope, InteropEnvelope, InteropRootsLogIndex,
+    InteropTxInput,
 };
 
 /// Stream that accumulates interop roots and produces interop transactions
@@ -84,9 +85,12 @@ impl InteropTxStream {
 
             let tx = IndexedInteropRootsEnvelope {
                 log_index: roots_to_consume.last().unwrap().log_index.clone(),
-                envelope: InteropRootsEnvelope::from_interop_roots(
-                    roots_to_consume.iter().map(|r| r.root.clone()).collect(),
-                ),
+                envelope: InteropEnvelope::new(InteropTxInput::ImportRoots(
+                    roots_to_consume
+                        .iter()
+                        .map(|r| r.root.clone())
+                        .collect::<Vec<_>>(),
+                )),
             };
 
             self.used_roots.extend(roots_to_consume);
@@ -113,7 +117,7 @@ impl InteropTxStream {
     /// Returns the last log index of executed interop root
     pub async fn on_canonical_state_change(
         &mut self,
-        txs: Vec<InteropRootsEnvelope>,
+        txs: Vec<InteropEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
         let mut log_index = None;
         for tx in txs {
@@ -122,9 +126,9 @@ impl InteropTxStream {
                 roots.push(self.take_next_root().await.unwrap());
             }
 
-            let envelope = InteropRootsEnvelope::from_interop_roots(
+            let envelope = InteropEnvelope::new(InteropTxInput::ImportRoots(
                 roots.iter().map(|r| r.root.clone()).collect(),
-            );
+            ));
             log_index = Some(roots.last().unwrap().log_index.clone());
 
             assert_eq!(&envelope, &tx);

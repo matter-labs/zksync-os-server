@@ -28,7 +28,7 @@ use alloy::rlp as alloy_rlp;
 #[envelope(alloy_consensus = alloy::consensus, tx_type_name = ZkTxType)]
 pub enum ZkEnvelope {
     #[envelope(ty = 125)]
-    InteropRoots(InteropRootsEnvelope),
+    InteropRoots(InteropEnvelope),
     #[envelope(ty = 126)]
     Upgrade(L1UpgradeEnvelope),
     #[envelope(ty = 127)]
@@ -157,8 +157,8 @@ impl ZkTransaction {
     }
 }
 
-impl From<InteropRootsEnvelope> for ZkTransaction {
-    fn from(value: InteropRootsEnvelope) -> Self {
+impl From<InteropEnvelope> for ZkTransaction {
+    fn from(value: InteropEnvelope) -> Self {
         Self {
             inner: Recovered::new_unchecked(
                 ZkEnvelope::InteropRoots(value),

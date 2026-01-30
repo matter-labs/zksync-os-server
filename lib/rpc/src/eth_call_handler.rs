@@ -27,9 +27,9 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
-    INTEROP_ROOTS_TX_TYPE_ID, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx,
-    L1TxType, L2Envelope, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope,
-    ZkTransaction, ZkTxType,
+    INTEROP_TX_TYPE_ID, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType,
+    L2Envelope, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope, ZkTransaction,
+    ZkTxType,
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -147,7 +147,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(UpgradeTxType::TX_TYPE) => {
                 return Err(EthCallError::UpgradeTxNotEstimatable);
             }
-            Some(INTEROP_ROOTS_TX_TYPE_ID) => {
+            Some(INTEROP_TX_TYPE_ID) => {
                 return Err(EthCallError::SystemInteropRootsTxNotEstimatable);
             }
             _ => {}
