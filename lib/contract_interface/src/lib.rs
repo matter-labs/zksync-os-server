@@ -44,6 +44,8 @@ alloy::sol! {
         bytes32[] sides;
     }
 
+    event SettlementLayerChainIdUpdated(uint256 indexed _newSettlementLayerChainId);
+
     function setSettlementLayerChainId(uint256 _newSettlementLayerChainId);
 
     // `IMessageRoot.sol`

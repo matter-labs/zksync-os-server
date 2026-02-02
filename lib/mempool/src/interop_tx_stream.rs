@@ -13,8 +13,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::BroadcastStream;
 use zksync_os_types::{
-    IndexedInteropRoot, InteropRoot, InteropEnvelope, InteropRootsLogIndex,
-    InteropTxInput,
+    IndexedInteropRoot, InteropEnvelope, InteropRoot, InteropRootsLogIndex, InteropTxInput,
 };
 
 #[derive(Clone)]
@@ -48,7 +47,7 @@ impl InteropTxPool {
 
     pub fn on_canonical_state_change(
         &mut self,
-        txs: Vec<InteropRootsEnvelope>,
+        txs: Vec<InteropEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
         self.inner.write().unwrap().on_canonical_state_change(txs)
     }
@@ -68,7 +67,7 @@ pub struct InteropTransactions {
 }
 
 impl Stream for InteropTransactions {
-    type Item = InteropRootsEnvelope;
+    type Item = InteropEnvelope;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(sleep) = self.sleep.as_mut() {
@@ -100,7 +99,7 @@ impl Stream for InteropTransactions {
 
 impl InteropTransactions {
     /// Take a transaction from pending roots(not depending on the amount)
-    fn take_tx(&mut self, allowed_to_take_remainder: bool) -> Option<InteropRootsEnvelope> {
+    fn take_tx(&mut self, allowed_to_take_remainder: bool) -> Option<InteropEnvelope> {
         if self.pending_roots.is_empty()
             || (self.pending_roots.len() < self.interop_roots_per_tx && !allowed_to_take_remainder)
         {
@@ -115,7 +114,9 @@ impl InteropTransactions {
                 .rev() // reversing iterator as last element is the one received earliest
                 .collect::<Vec<_>>();
 
-            Some(InteropRootsEnvelope::new(InteropTxInput::ImportRoots(roots_to_consume)))
+            Some(InteropEnvelope::new(InteropTxInput::ImportRoots(
+                roots_to_consume,
+            )))
         }
     }
 }
@@ -170,7 +171,7 @@ impl InteropTxPoolInner {
             let envelope = InteropEnvelope::new(InteropTxInput::ImportRoots(
                 roots.iter().map(|r| r.root.clone()).collect(),
             ));
-            log_index = Some(roots.last().unwrap().log_index.clone());
+            log_index = roots.last().unwrap().log_index.clone();
 
             assert_eq!(&envelope, &tx);
         }

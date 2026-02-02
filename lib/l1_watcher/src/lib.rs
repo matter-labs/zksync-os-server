@@ -30,4 +30,7 @@ pub use committed_batch_provider::CommittedBatchProvider;
 mod persist_batch_watcher;
 pub use persist_batch_watcher::L1PersistBatchWatcher;
 
+mod sl_chain_id_update;
+pub use sl_chain_id_update::SLChainIdUpdateWatcher;
+
 mod factory_deps;
