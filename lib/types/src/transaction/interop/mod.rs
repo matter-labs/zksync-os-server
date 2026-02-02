@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::{
     IMessageRoot::addInteropRootsInBatchCall, InteropRoot, setSettlementLayerChainIdCall,
 };
-
 pub mod tx;
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
@@ -76,7 +75,7 @@ pub struct IndexedInteropRootsEnvelope {
     pub envelope: InteropEnvelope,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IndexedInteropRoot {
     pub log_index: InteropRootsLogIndex,
     pub root: InteropRoot,

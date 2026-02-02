@@ -369,6 +369,11 @@ pub struct SequencerConfig {
     #[config(default_t = 100)]
     pub interop_roots_per_tx: usize,
 
+    /// Delay between 2 consecutive service blocks.
+    /// Defaults to 3 times of usual block time, to allow passing other transactions in between
+    #[config(default_t = Duration::from_millis(750))]
+    pub service_block_delay: Duration,
+
     /// Enable REVM consistency checker.
     /// If enabled, an additional pipeline process will be executed after the sequencer.
     /// The process re-executes transactions on the REVM client and checks state diff consistency.

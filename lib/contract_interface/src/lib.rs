@@ -37,6 +37,7 @@ alloy::sol! {
     }
 
     // `Messaging.sol`
+    #[derive(Debug)]
     struct InteropRoot {
         uint256 chainId;
         uint256 blockOrBatchNumber;

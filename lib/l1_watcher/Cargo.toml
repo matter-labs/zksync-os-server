@@ -14,6 +14,7 @@ zksync_os_contract_interface.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_types.workspace = true
 zksync_os_batch_types.workspace = true
+zksync_os_mempool.workspace = true
 
 # Needed to recalculate the bytecode hashes during upgrade tx processing
 zk_os_api.workspace = true

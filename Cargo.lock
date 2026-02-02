@@ -15432,6 +15432,7 @@ dependencies = [
  "zksync_os_api",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
+ "zksync_os_mempool",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -15447,6 +15448,7 @@ dependencies = [
  "reth-primitives-traits",
  "reth-transaction-pool",
  "tokio",
+ "tokio-stream",
  "tracing",
  "vise",
  "zksync_os_reth_compat",

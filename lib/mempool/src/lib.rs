@@ -11,7 +11,7 @@ mod config;
 pub use config::TxValidatorConfig;
 
 mod interop_tx_stream;
-pub use interop_tx_stream::InteropTxStream;
+pub use interop_tx_stream::{InteropTransactions, InteropTxPool};
 
 mod metrics;
 

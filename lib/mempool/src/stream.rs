@@ -1,5 +1,5 @@
 use crate::transaction::L2PooledTransaction;
-use crate::{InteropTxStream, L2TransactionPool};
+use crate::{InteropTransactions, L2TransactionPool};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::{Stream, StreamExt};
@@ -19,7 +19,7 @@ pub trait TxStream: Stream {
 pub struct BestTransactionsStream<'a> {
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
     pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
-    interop_tx_stream: &'a mut InteropTxStream,
+    interop_transactions: InteropTransactions,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
@@ -34,14 +34,14 @@ pub struct BestTransactionsStream<'a> {
 pub fn best_transactions<'a>(
     l2_mempool: &impl L2TransactionPool,
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
-    interop_tx_stream: &'a mut InteropTxStream,
+    interop_transactions: InteropTransactions,
     pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
 ) -> BestTransactionsStream<'a> {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
         l1_transactions,
-        interop_tx_stream,
+        interop_transactions,
         pending_upgrade_transactions,
         pending_transactions_listener,
         best_l2_transactions: l2_mempool.best_transactions(),
@@ -81,16 +81,16 @@ impl Stream for BestTransactionsStream<'_> {
             }
 
             if !this.txs_already_provided || this.provide_only_interop_txs {
-                match this.interop_tx_stream.poll_next_unpin(cx) {
+                match this.interop_transactions.poll_next_unpin(cx) {
                     Poll::Ready(Some(tx)) => {
                         // If first transaction in stream was interop one we should provide only interop transactions
                         this.provide_only_interop_txs = true;
-                        return Poll::Ready(Some(tx.envelope.into()));
+                        return Poll::Ready(Some(tx.into()));
                     }
                     Poll::Pending if this.provide_only_interop_txs => {
                         return Poll::Pending;
                     }
-                    // This arm is reachable in case if first transaction wasn't interop, so we should try executing other transactions
+                    // This arm is reachable in case if first transaction wasn't interop and we can execute other transactions
                     Poll::Pending => {}
                     Poll::Ready(None) => return Poll::Ready(None),
                 }
