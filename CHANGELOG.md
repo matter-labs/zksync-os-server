@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.2](https://github.com/matter-labs/zksync-os-server/compare/v0.14.1...v0.14.2) (2026-01-29)
+
+
+### Features
+
+* add metric for base fee and native price ([#844](https://github.com/matter-labs/zksync-os-server/issues/844)) ([3aa0b70](https://github.com/matter-labs/zksync-os-server/commit/3aa0b709068d0b01a585e3639346cb152d818da9))
+* add pubdata price cap ([#842](https://github.com/matter-labs/zksync-os-server/issues/842)) ([9d9803d](https://github.com/matter-labs/zksync-os-server/commit/9d9803d94a20372e13966d0985e0e637a05b389a))
+* do not require S3 for RPC ([#827](https://github.com/matter-labs/zksync-os-server/issues/827)) ([a923d83](https://github.com/matter-labs/zksync-os-server/commit/a923d833f876063f02b7c6cddffe350692b1180f))
+* validate genesis batch info against L1 ([#832](https://github.com/matter-labs/zksync-os-server/issues/832)) ([affbc1f](https://github.com/matter-labs/zksync-os-server/commit/affbc1f31deafe35d39955320bd5ab2aef970ae8))
+
+
+### Bug Fixes
+
+* increase default value for `estimate_gas_pubdata_price_factor` ([#831](https://github.com/matter-labs/zksync-os-server/issues/831)) ([6180db3](https://github.com/matter-labs/zksync-os-server/commit/6180db314fbfca08fbab6e7c9f4f33eeb71b22bc))
+
 ## [0.14.1](https://github.com/matter-labs/zksync-os-server/compare/v0.14.0...v0.14.1) (2026-01-27)
 
 
