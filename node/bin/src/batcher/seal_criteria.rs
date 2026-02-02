@@ -15,6 +15,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub tx_count: u64,
     pub has_upgrade_tx: bool,
     pub interop_roots_count: u64,
+    pub sl_chain_id_update_not_in_first_block: bool,
 
     pub protocol_versions: HashSet<ProtocolSemanticVersion>,
     pub execution_versions: HashSet<u32>,
@@ -60,12 +61,22 @@ impl BatchInfoAccumulator {
             .transactions
             .iter()
             .map(|tx| match tx.inner.inner() {
-                ZkEnvelope::InteropRoots(interop_roots_tx) => {
-                    interop_roots_tx.interop_roots_count()
-                }
+                ZkEnvelope::Interop(interop_roots_tx) => interop_roots_tx.interop_roots_count(),
                 _ => 0,
             })
             .sum::<u64>();
+
+        if replay_record
+            .transactions
+            .iter()
+            .any(|tx| match tx.inner.inner() {
+                ZkEnvelope::Interop(envelope) => envelope.interop_roots_count() == 0,
+                _ => false,
+            })
+            && self.tx_count > 1
+        {
+            self.sl_chain_id_update_not_in_first_block = true;
+        }
 
         if !self.has_upgrade_tx
             && replay_record
@@ -138,6 +149,14 @@ impl BatchInfoAccumulator {
         if self.interop_roots_count > self.interop_roots_per_batch_limit {
             BATCHER_METRICS.seal_reason[&"interop_roots"].inc();
             tracing::debug!("Batcher: reached max number of interop roots per batch");
+            return true;
+        }
+
+        if self.sl_chain_id_update_not_in_first_block {
+            BATCHER_METRICS.seal_reason[&"chain_id_update_tx"].inc();
+            tracing::debug!(
+                "Batcher: sealing batch due to chain id update transaction, which should go in the first block of the next batch"
+            );
             return true;
         }
 

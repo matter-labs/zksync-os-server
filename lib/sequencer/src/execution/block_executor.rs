@@ -134,12 +134,12 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             "Transaction executed"
                         );
 
-                        if let ZkEnvelope::InteropRoots(interop_roots_tx) = tx.inner.inner() {
+                        if let ZkEnvelope::Interop(interop_roots_tx) = tx.inner.inner() {
                             interop_roots_count += interop_roots_tx.interop_roots_count();
                         }
 
                         let tx_type = tx.tx_type();
-                        executed_txs.push(tx);
+                        executed_txs.push(tx.clone());
                         cumulative_gas_used += res.gas_used;
 
                         // arm the timer once, after the first successful tx
@@ -158,6 +158,20 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 }
                             }
                         }
+
+                        if let ZkEnvelope::Interop(envelope) = tx.inner.inner() && envelope.interop_roots_count() == 0 {
+                            match &command.seal_policy {
+                                SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
+                                    tracing::debug!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
+                                    break SealReason::ChainIdUpdateTx;
+                                }
+                                SealPolicy::UntilExhausted { allowed_to_finish_early: false } => {
+                                    // We trust that the execution stream will not break protocol invariants.
+                                    tracing::info!(block_number = ctx.block_number, "chain id update tx executed, but seal policy requires full exhaustion");
+                                }
+                            }
+                        }
+
                         match command.seal_policy {
                             SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
                                 tracing::debug!(block_number = ctx.block_number,
@@ -170,7 +184,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     }
                     Err(e) => {
                         match (tx.tx_type(), command.invalid_tx_policy) {
-                            (ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::InteropRoots, _) => {
+                            (ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::Interop, _) => {
                                 return Err(
                                     BlockDump {
                                         ctx,
@@ -356,7 +370,7 @@ fn should_exclude_and_seal(
     if cumulative_gas_used + tx.inner.gas_limit() > ctx.gas_limit {
         return Some(SealReason::GasLimit);
     }
-    if let ZkEnvelope::InteropRoots(interop_roots_tx) = tx.inner.inner()
+    if let ZkEnvelope::Interop(interop_roots_tx) = tx.inner.inner()
         && interop_roots_count + interop_roots_tx.interop_roots_count() > interop_roots_per_block
     {
         return Some(SealReason::LimitedInteropOnlyBlock);
@@ -389,6 +403,8 @@ pub enum SealReason {
     Blobs,
     // We executed upgrade transaction
     UpgradeTx,
+    // We executed chain id update transaction
+    ChainIdUpdateTx,
     // Block contains only interop transactions with a limit of interop roots per block reached
     LimitedInteropOnlyBlock,
     Other,

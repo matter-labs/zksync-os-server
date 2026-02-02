@@ -1,14 +1,33 @@
-use crate::ProcessL1Event;
-use crate::watcher::{L1Watcher, L1WatcherError};
-use alloy::primitives::Address;
-use alloy::rpc::types::Log;
-use zksync_os_contract_interface::SettlementLayerChainIdUpdated;
+use tokio::sync::mpsc;
 
-pub struct SLChainIdUpdateWatcher {}
+use crate::watcher::{L1Watcher, L1WatcherError};
+use crate::{L1WatcherConfig, ProcessL1Event};
+use alloy::primitives::Address;
+use alloy::providers::DynProvider;
+use alloy::rpc::types::Log;
+use zksync_os_contract_interface::{SettlementLayerChainIdUpdated, ZkChain};
+use zksync_os_types::{InteropEnvelope, InteropTxInput};
+
+pub struct SLChainIdUpdateWatcher {
+    output: mpsc::Sender<InteropEnvelope>,
+}
 
 impl SLChainIdUpdateWatcher {
-    pub async fn create_watcher() -> anyhow::Result<L1Watcher> {
-        todo!()
+    pub async fn create_watcher(
+        zk_chain: ZkChain<DynProvider>,
+        config: L1WatcherConfig,
+        output: mpsc::Sender<InteropEnvelope>,
+    ) -> anyhow::Result<L1Watcher> {
+        let this = Self { output };
+        let next_l1_block = 0; // TODO: implement this
+        let l1_watcher = L1Watcher::new(
+            zk_chain.provider().clone(),
+            next_l1_block,
+            config.max_blocks_to_process,
+            config.poll_interval,
+            this.into(),
+        );
+        Ok(l1_watcher)
     }
 }
 
@@ -26,8 +45,15 @@ impl ProcessL1Event for SLChainIdUpdateWatcher {
     async fn process_event(
         &mut self,
         tx: SettlementLayerChainIdUpdated,
-        log: Log,
+        _log: Log,
     ) -> Result<(), L1WatcherError> {
-        todo!()
+        let envelope = InteropEnvelope::new(InteropTxInput::SetChainId(
+            tx._newSettlementLayerChainId.try_into().unwrap(),
+        ));
+
+        self.output
+            .send(envelope)
+            .await
+            .map_err(|_| L1WatcherError::OutputClosed)
     }
 }

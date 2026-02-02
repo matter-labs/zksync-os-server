@@ -20,7 +20,7 @@ use zksync_os_mempool::{
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, InteropRootsLogIndex, L1PriorityEnvelope, L2Envelope,
+    ExecutionVersion, InteropEnvelope, InteropRootsLogIndex, L1PriorityEnvelope, L2Envelope,
     ProtocolSemanticVersion, UpgradeTransaction, ZkEnvelope,
 };
 
@@ -39,6 +39,7 @@ pub struct BlockContextProvider<Mempool> {
     next_interop_event_index: InteropRootsLogIndex,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+    sl_chain_id_update_transactions: mpsc::Receiver<InteropEnvelope>,
     interop_tx_pool: InteropTxPool,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
@@ -65,6 +66,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         next_interop_event_index: InteropRootsLogIndex,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+        sl_chain_id_update_transactions: mpsc::Receiver<InteropEnvelope>,
         interop_tx_pool: InteropTxPool,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
@@ -85,6 +87,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             next_interop_event_index,
             l1_transactions,
             upgrade_transactions,
+            sl_chain_id_update_transactions,
             interop_tx_pool,
             l2_mempool,
             block_hashes_for_next_block,
@@ -115,6 +118,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let mut best_txs = best_transactions(
                     &self.l2_mempool,
                     &mut self.l1_transactions,
+                    &mut self.sl_chain_id_update_transactions,
                     self.interop_tx_pool.interop_transactions_with_delay(
                         self.interop_roots_per_tx,
                         self.next_interop_tx_allowed_after,
@@ -337,7 +341,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         let mut interop_txs = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
-                ZkEnvelope::InteropRoots(interop_tx) => {
+                ZkEnvelope::Interop(interop_tx) => {
                     interop_txs.push(interop_tx.clone());
                 }
                 ZkEnvelope::L1(l1_tx) => {

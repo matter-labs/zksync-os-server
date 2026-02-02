@@ -71,6 +71,7 @@ use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
+    SLChainIdUpdateWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::L2TransactionPool;
@@ -445,6 +446,23 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
+    let (sl_chain_id_update_transactions_sender, sl_chain_id_update_transactions_receiver) =
+        tokio::sync::mpsc::channel(10);
+
+    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
+        tasks.spawn(
+            SLChainIdUpdateWatcher::create_watcher(
+                node_startup_state.l1_state.diamond_proxy.clone(),
+                config.l1_watcher_config.clone().into(),
+                sl_chain_id_update_transactions_sender,
+            )
+            .await
+            .expect("failed to start L1 chain id update watcher")
+            .run()
+            .map(report_exit("L1 chain id update watcher")),
+        );
+    }
+
     tasks.spawn(
         L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
@@ -550,6 +568,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         next_interop_event_index,
         l1_transactions_for_sequencer,
         l1_upgrade_transactions_receiver,
+        sl_chain_id_update_transactions_receiver,
         interop_tx_pool,
         l2_mempool.clone(),
         block_hashes_for_next_block,

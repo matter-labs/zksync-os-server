@@ -66,7 +66,7 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
         R: Into<ReceiptWithBloom<ZkReceipt<T, U>>>,
     {
         match tx_type {
-            ZkTxType::InteropRoots => Self::InteropRoots(receipt.into()),
+            ZkTxType::Interop => Self::InteropRoots(receipt.into()),
             ZkTxType::L2(TxType::Legacy) => Self::Legacy(receipt.into()),
             ZkTxType::L2(TxType::Eip2930) => Self::Eip2930(receipt.into()),
             ZkTxType::L2(TxType::Eip1559) => Self::Eip1559(receipt.into()),
@@ -123,7 +123,7 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             Self::Eip7702(_) => ZkTxType::L2(TxType::Eip7702),
             Self::L1(_) => ZkTxType::L1,
             Self::Upgrade(_) => ZkTxType::Upgrade,
-            Self::InteropRoots(_) => ZkTxType::InteropRoots,
+            Self::InteropRoots(_) => ZkTxType::Interop,
         }
     }
 
@@ -352,7 +352,7 @@ impl Decodable2718 for ZkReceiptEnvelope {
             ZkTxType::L2(TxType::Legacy) => Err(Eip2718Error::UnexpectedType(0)),
             ZkTxType::L1 => Ok(Self::L1(receipt)),
             ZkTxType::Upgrade => Ok(Self::Upgrade(receipt)),
-            ZkTxType::InteropRoots => Ok(Self::InteropRoots(receipt)),
+            ZkTxType::Interop => Ok(Self::InteropRoots(receipt)),
         }
     }
 
