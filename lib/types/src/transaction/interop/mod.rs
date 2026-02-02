@@ -335,36 +335,27 @@ impl Transaction for InteropEnvelope {
 
 #[cfg(test)]
 mod tests {
-    use crate::InteropEnvelope;
-    use crate::transaction::tx::InteropTx;
+    use crate::{InteropEnvelope, InteropTxInput};
 
     #[test]
     fn interop_roots_tx_serialization() {
         // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
         // See https://ethereum.github.io/execution-apis/api-documentation/
 
-        let transaction = InteropTx {
-            to: Default::default(),
-            input: Default::default(),
-        };
-
-        let tx = InteropEnvelope {
-            hash: transaction.calculate_hash(),
-            inner: transaction,
-        };
+        let tx = InteropEnvelope::new(InteropTxInput::SetChainId(1));
 
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),
             r#"{
-  "hash": "0x0b5cf6f6f3b9deb0fd6cb66f51e15f4d751e0724401c2cd7b7df59489fe5f289",
+  "hash": "0x0db54bf16b232c227e16f783ea14f030ab983c67b5a2898452bc09028e0e5a4f",
   "initiator": "0x0000000000000000000000000000000000008001",
-  "to": "0x0000000000000000000000000000000000010008",
+  "to": "0x000000000000000000000000000000000000800b",
   "gas": "0x0",
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
   "value": "0x0",
-  "input": "0x",
+  "input": "0x040203e60000000000000000000000000000000000000000000000000000000000000001",
   "v": "0x0",
   "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
