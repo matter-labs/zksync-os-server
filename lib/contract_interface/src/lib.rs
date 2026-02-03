@@ -518,7 +518,7 @@ impl<P: Provider> MultisigCommitter<P> {
                 instance,
                 chain_address,
             })),
-            Err(e) if e.as_revert_data().is_some() => Ok(None),
+            Err(e) if e.to_string().contains("revert") => Ok(None),
             Err(e) => Err(e),
         }
     }
