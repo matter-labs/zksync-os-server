@@ -374,12 +374,11 @@ fn should_exclude_and_seal(
     if cumulative_gas_used + tx.inner.gas_limit() > ctx.gas_limit {
         return Some(SealReason::GasLimit);
     }
-    if let ZkEnvelope::System(envelope) = tx.inner.inner() {
-        if let SystemTxType::ImportInteropRoots(roots_count) = envelope.tx_type()
-            && interop_roots_count + roots_count > interop_roots_per_block
-        {
-            return Some(SealReason::LimitedInteropOnlyBlock);
-        }
+    if let ZkEnvelope::System(envelope) = tx.inner.inner()
+        && let SystemTxType::ImportInteropRoots(roots_count) = envelope.tx_type()
+        && interop_roots_count + roots_count > interop_roots_per_block
+    {
+        return Some(SealReason::LimitedInteropOnlyBlock);
     }
     None
 }
