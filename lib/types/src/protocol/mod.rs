@@ -55,7 +55,6 @@ impl ProtocolSemanticVersion {
         }
         // Patch versions can always be live, as they don't change the state transition function.
         match self.minor {
-            29 => true,
             30 => true,
             // When updating this function, make sure to insert the new non-live version here.
             _ => false,
@@ -220,12 +219,10 @@ mod tests {
     #[test]
     fn test_protocol_semantic_version_is_live() {
         let test_vector = [
-            ((0, 28, 5), false),
-            ((0, 29, 0), true),
-            ((0, 29, 1), true),
-            ((0, 29, 99), true),
+            ((0, 29, 5), false),
             ((0, 30, 0), true),
             ((0, 30, 1), true),
+            ((0, 30, 99), true),
             ((0, 31, 0), false), // When updating this test, make sure to insert the new non-live version here.
         ];
         for ((major, minor, patch), expected) in test_vector.iter() {

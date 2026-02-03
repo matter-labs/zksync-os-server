@@ -3,43 +3,6 @@ use alloy::primitives::B256;
 use zk_os_basic_system::system_implementation::system::BatchPublicInput;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 
-pub fn verify_fri_proof_0_5_1(
-    previous_state_commitment: B256,
-    stored_batch_info: StoredBatchInfo,
-    proof: execution_utils_0_5_1::ProgramProof,
-) -> Result<(), SubmitError> {
-    let expected_pi = BatchPublicInput {
-        state_before: previous_state_commitment.0.into(),
-        state_after: stored_batch_info.state_commitment.0.into(),
-        batch_output: stored_batch_info.commitment.0.into(),
-    };
-
-    let expected_hash_u32s: [u32; 8] = batch_output_hash_as_register_values(&expected_pi);
-
-    let proof_final_register_values: [u32; 16] = extract_final_register_values_0_5_1(proof);
-
-    tracing::debug!(
-        batch_number = stored_batch_info.batch_number,
-        "Program final registers: {:?}",
-        proof_final_register_values
-    );
-    tracing::debug!(
-        batch_number = stored_batch_info.batch_number,
-        ?previous_state_commitment,
-        ?stored_batch_info,
-        "Expected values for Public Inputs hash: {:?}",
-        expected_hash_u32s
-    );
-
-    // compare expected_hash_u32s with the last 8 values of proof_final_register_values
-    (proof_final_register_values[..8] == expected_hash_u32s)
-        .then_some(())
-        .ok_or(SubmitError::FriProofVerificationError {
-            expected_hash_u32s,
-            proof_final_register_values,
-        })
-}
-
 pub fn verify_fri_proof(
     previous_state_commitment: B256,
     stored_batch_info: StoredBatchInfo,
@@ -85,40 +48,6 @@ fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32
         .collect::<Vec<u32>>()
         .try_into()
         .expect("Hash should be exactly 32 bytes long")
-}
-
-fn extract_final_register_values_0_5_1(
-    input_program_proof: execution_utils_0_5_1::ProgramProof,
-) -> [u32; 16] {
-    // Once new version of airbender is integrated, these functions should be changed to the ones from execution_utils.
-    let (metadata, proof_list) =
-        execution_utils_0_5_1::ProgramProof::to_metadata_and_proof_list(input_program_proof);
-
-    let oracle_data = execution_utils_0_5_1::generate_oracle_data_from_metadata_and_proof_list(
-        &metadata,
-        &proof_list,
-    );
-    tracing::debug!(
-        "Oracle data iterator created with {} items",
-        oracle_data.len()
-    );
-
-    let it = oracle_data.into_iter();
-
-    full_statement_verifier_0_5_1::verifier_common::prover::nd_source_std::set_iterator(it);
-
-    // Assume that program proof has only recursion proofs.
-    tracing::debug!("Running continue recursive");
-    assert!(metadata.reduced_proof_count > 0);
-
-    let final_register_values = full_statement_verifier_0_5_1::verify_recursion_layer();
-
-    assert!(
-        full_statement_verifier_0_5_1::verifier_common::prover::nd_source_std::try_read_word()
-            .is_none(),
-        "Expected that all words from CSR were consumed"
-    );
-    final_register_values
 }
 
 fn extract_final_register_values(input_program_proof: execution_utils::ProgramProof) -> [u32; 16] {

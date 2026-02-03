@@ -1,5 +1,6 @@
 use crate::transaction::L2PooledTransaction;
 use crate::{InteropTransactions, L2TransactionPool};
+use crate::{InteropTransactions, L2TransactionPool};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::{Stream, StreamExt};
@@ -27,6 +28,7 @@ pub struct BestTransactionsStream<'a> {
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
     last_polled_l2_tx: Option<Arc<ValidPoolTransaction<L2PooledTransaction>>>,
+    peeked_tx: Option<ZkTransaction>,
     peeked_tx: Option<ZkTransaction>,
     peeked_upgrade_info: Option<UpgradeTransaction>,
     txs_already_provided: bool,
@@ -59,6 +61,7 @@ pub fn best_transactions<'a>(
 }
 
 impl Stream for BestTransactionsStream<'_> {
+    type Item = ZkTransaction;
     type Item = ZkTransaction;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -96,6 +99,7 @@ impl Stream for BestTransactionsStream<'_> {
             }
 
             if !this.txs_already_provided || this.provide_only_interop_txs {
+                match this.interop_transactions.poll_next_unpin(cx) {
                 match this.interop_transactions.poll_next_unpin(cx) {
                     Poll::Ready(Some(tx)) => {
                         // If first transaction in stream was interop one we should provide only interop transactions
@@ -188,8 +192,10 @@ pub struct ReplayTxStream {
 
 impl Stream for ReplayTxStream {
     type Item = ZkTransaction;
+    type Item = ZkTransaction;
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.iter.next())
         Poll::Ready(self.iter.next())
     }
 }

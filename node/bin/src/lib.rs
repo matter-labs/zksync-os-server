@@ -19,6 +19,8 @@ pub mod zkstack_config;
 
 use zksync_os_mempool::InteropTxPool;
 
+use zksync_os_mempool::InteropTxPool;
+
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
@@ -431,12 +433,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let interop_tx_pool = InteropTxPool::new(10);
 
+    let interop_tx_pool = InteropTxPool::new(10);
+
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
             InteropWatcher::create_watcher(
                 node_startup_state.l1_state.bridgehub.clone(),
                 config.l1_watcher_config.clone().into(),
                 next_interop_event_index.clone(),
+                interop_tx_pool.clone(),
                 interop_tx_pool.clone(),
             )
             .await
@@ -576,6 +581,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         chain_id,
         config.sequencer_config.block_gas_limit,
         config.sequencer_config.block_pubdata_limit_bytes,
+        // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
+        config.batcher_config.interop_roots_per_batch_limit,
+        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
+        1,
+        config.sequencer_config.service_block_delay,
         // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
         config.batcher_config.interop_roots_per_batch_limit,
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
