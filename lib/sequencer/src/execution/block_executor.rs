@@ -17,7 +17,6 @@ use zksync_os_storage_api::{
     MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
 };
 use zksync_os_types::{ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode};
-use zksync_os_types::{ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -28,7 +27,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     mut command: PreparedBlockCommand<'_>,
     state: R,
     latency_tracker: &ComponentStateHandle<SequencerState>,
-) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
 ) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
@@ -89,7 +87,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             maybe_tx = command.tx_source.next() => {
                 latency_tracker.enter_state(SequencerState::Execution);
                 let Some(tx) = maybe_tx else {
-                let Some(tx) = maybe_tx else {
                     tracing::debug!(
                         block_number = ctx.block_number,
                         txs = executed_txs.len(),
@@ -98,7 +95,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     break SealReason::TxStreamExhausted;
                 };
 
-                if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
                 if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
                     tracing::debug!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
                     break reason;
@@ -349,7 +345,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
 
     Ok((
         output,
-        output,
         ReplayRecord::new(
             ctx,
             command.starting_l1_priority_id,
@@ -369,7 +364,6 @@ fn should_exclude_and_seal(
     ctx: &BlockContext,
     cumulative_gas_used: u64,
     interop_roots_count: u64,
-    interop_roots_per_block: u64,
     interop_roots_per_block: u64,
     tx: &ZkTransaction,
 ) -> Option<SealReason> {

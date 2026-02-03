@@ -14,15 +14,7 @@ use tokio::{
     time::Instant,
 };
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::{
-    sync::{mpsc, watch},
-    time::Instant,
-};
-use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, InteropTxPool, L2TransactionPool, PoolUpdateKind, ReplayTxStream,
-    best_transactions,
     CanonicalStateUpdate, InteropTxPool, L2TransactionPool, PoolUpdateKind, ReplayTxStream,
     best_transactions,
 };
@@ -59,10 +51,6 @@ pub struct BlockContextProvider<Mempool> {
     interop_roots_per_tx: usize,
     service_block_delay: Duration,
     next_interop_tx_allowed_after: Instant,
-    interop_roots_per_block: u64,
-    interop_roots_per_tx: usize,
-    service_block_delay: Duration,
-    next_interop_tx_allowed_after: Instant,
     /// Protocol version to be used for the next produced block.
     /// Can change in runtime in case of upgrades.
     protocol_version: ProtocolSemanticVersion,
@@ -89,9 +77,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         interop_roots_per_block: u64,
         interop_roots_per_tx: usize,
         service_block_delay: Duration,
-        interop_roots_per_block: u64,
-        interop_roots_per_tx: usize,
-        service_block_delay: Duration,
         protocol_version: ProtocolSemanticVersion,
         fee_collector_address: Address,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
@@ -110,10 +95,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             chain_id,
             gas_limit,
             pubdata_limit,
-            interop_roots_per_block,
-            interop_roots_per_tx,
-            service_block_delay,
-            next_interop_tx_allowed_after: Instant::now(),
             interop_roots_per_block,
             interop_roots_per_tx,
             service_block_delay,
@@ -228,7 +209,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
-                    interop_roots_per_block: self.interop_roots_per_block,
                 }
             }
             BlockCommand::Replay(record) => {
@@ -258,7 +238,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     previous_block_timestamp: self.previous_block_timestamp,
                     force_preimages: record.force_preimages,
                     starting_interop_event_index: record.starting_interop_event_index.clone(),
-                    interop_roots_per_block: self.interop_roots_per_block,
                     interop_roots_per_block: self.interop_roots_per_block,
                 }
             }
@@ -341,7 +320,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     force_preimages: rebuild.replay_record.force_preimages,
                     starting_interop_event_index: self.next_interop_event_index.clone(),
                     interop_roots_per_block: self.interop_roots_per_block,
-                    interop_roots_per_block: self.interop_roots_per_block,
                 }
             }
         };
@@ -356,12 +334,10 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
     pub async fn on_canonical_state_change(
         &mut self,
         block_output: &BlockOutput,
-        block_output: &BlockOutput,
         replay_record: &ReplayRecord,
         cmd_type: BlockCommandType,
     ) {
         let mut l2_transactions = Vec::new();
-        let mut interop_txs = Vec::new();
         let mut interop_txs = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
@@ -399,10 +375,6 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             }
         }
 
-        if let Some(last_interop_log_index) =
-            self.interop_tx_pool.on_canonical_state_change(interop_txs)
-        {
-            self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
         if let Some(last_interop_log_index) =
             self.interop_tx_pool.on_canonical_state_change(interop_txs)
         {

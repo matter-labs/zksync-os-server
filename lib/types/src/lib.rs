@@ -25,8 +25,6 @@ pub use transaction::{
 
 pub use zksync_os_contract_interface::InteropRoot;
 
-pub use zksync_os_contract_interface::InteropRoot;
-
 mod pubdata_mode;
 pub use pubdata_mode::PubdataMode;
 
