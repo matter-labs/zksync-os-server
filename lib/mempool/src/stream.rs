@@ -1,5 +1,5 @@
 use crate::transaction::L2PooledTransaction;
-use crate::{InteropTransactions, L2TransactionPool};
+use crate::{InteropRootTransactions, L2TransactionPool};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::{Stream, StreamExt};
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use zksync_os_types::{
-    InteropEnvelope, L1PriorityEnvelope, L2Envelope, UpgradeTransaction, ZkTransaction,
+    L1PriorityEnvelope, L2Envelope, SystemTxEnvelope, UpgradeTransaction, ZkTransaction,
 };
 
 pub trait TxStream: Stream {
@@ -21,8 +21,8 @@ pub trait TxStream: Stream {
 pub struct BestTransactionsStream<'a> {
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
     pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
-    sl_chain_id_update_transactions: &'a mut mpsc::Receiver<InteropEnvelope>,
-    interop_transactions: InteropTransactions,
+    sl_chain_id_update_transactions: &'a mut mpsc::Receiver<SystemTxEnvelope>,
+    interop_transactions: InteropRootTransactions,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
@@ -37,8 +37,8 @@ pub struct BestTransactionsStream<'a> {
 pub fn best_transactions<'a>(
     l2_mempool: &impl L2TransactionPool,
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
-    sl_chain_id_update_transactions: &'a mut mpsc::Receiver<InteropEnvelope>,
-    interop_transactions: InteropTransactions,
+    sl_chain_id_update_transactions: &'a mut mpsc::Receiver<SystemTxEnvelope>,
+    interop_transactions: InteropRootTransactions,
     pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
 ) -> BestTransactionsStream<'a> {
     let pending_transactions_listener =
@@ -100,13 +100,6 @@ impl Stream for BestTransactionsStream<'_> {
                     Poll::Ready(Some(tx)) => {
                         // If first transaction in stream was interop one we should provide only interop transactions
                         this.provide_only_interop_txs = true;
-
-                        // todo: sanity check, maybe should be reworked later on
-                        assert!(
-                            tx.interop_roots_count() > 0,
-                            "interop transaction received from that stream should contain interop roots"
-                        );
-
                         return Poll::Ready(Some(tx.into()));
                     }
                     Poll::Pending if this.provide_only_interop_txs => {

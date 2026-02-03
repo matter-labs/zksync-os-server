@@ -17,7 +17,7 @@ mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
 
-use zksync_os_mempool::InteropTxPool;
+use zksync_os_mempool::InteropRootsTxPool;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
@@ -429,7 +429,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
-    let interop_tx_pool = InteropTxPool::new(10);
+    let interop_tx_pool = InteropRootsTxPool::new(10);
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(

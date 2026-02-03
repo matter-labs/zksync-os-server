@@ -27,9 +27,9 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
-    INTEROP_TX_TYPE_ID, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType,
-    L2Envelope, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope, ZkTransaction,
-    ZkTxType,
+    L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
+    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType, ZkEnvelope,
+    ZkTransaction, ZkTxType,
 };
 
 const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
@@ -147,7 +147,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(UpgradeTxType::TX_TYPE) => {
                 return Err(EthCallError::UpgradeTxNotEstimatable);
             }
-            Some(INTEROP_TX_TYPE_ID) => {
+            Some(SYSTEM_TX_TYPE_ID) => {
                 return Err(EthCallError::SystemInteropRootsTxNotEstimatable);
             }
             _ => {}
@@ -650,7 +650,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     match tx.inner.inner_mut() {
-        ZkEnvelope::Interop(_) => {
+        ZkEnvelope::System(_) => {
             unreachable!("interop roots transactions don't have explicit gas limit");
         }
         ZkEnvelope::L2(L2Envelope::Legacy(inner)) => inner.tx_mut().gas_limit = gas_limit,

@@ -2,7 +2,7 @@ use alloy::rpc::types::Log;
 use alloy::{primitives::Address, providers::DynProvider};
 use zksync_os_contract_interface::IMessageRoot::AppendedChainRoot;
 use zksync_os_contract_interface::{Bridgehub, InteropRoot};
-use zksync_os_mempool::InteropTxPool;
+use zksync_os_mempool::InteropRootsTxPool;
 use zksync_os_types::{IndexedInteropRoot, InteropRootsLogIndex};
 
 use crate::watcher::{L1Watcher, L1WatcherError};
@@ -11,7 +11,7 @@ use crate::{L1WatcherConfig, ProcessL1Event};
 pub struct InteropWatcher {
     contract_address: Address,
     starting_interop_event_index: InteropRootsLogIndex,
-    tx_pool: InteropTxPool,
+    tx_pool: InteropRootsTxPool,
 }
 
 impl InteropWatcher {
@@ -19,7 +19,7 @@ impl InteropWatcher {
         bridgehub: Bridgehub<DynProvider>,
         config: L1WatcherConfig,
         starting_interop_event_index: InteropRootsLogIndex,
-        tx_pool: InteropTxPool,
+        tx_pool: InteropRootsTxPool,
     ) -> anyhow::Result<L1Watcher> {
         let contract_address = bridgehub.message_root_address().await?;
 

@@ -3,7 +3,7 @@ use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope, ZkTxType};
+use zksync_os_types::{ProtocolSemanticVersion, SystemTxType, ZkEnvelope, ZkTxType};
 
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
@@ -61,7 +61,12 @@ impl BatchInfoAccumulator {
             .transactions
             .iter()
             .map(|tx| match tx.inner.inner() {
-                ZkEnvelope::Interop(interop_roots_tx) => interop_roots_tx.interop_roots_count(),
+                ZkEnvelope::System(envelope) => {
+                    let SystemTxType::ImportInteropRoots(roots_count) = envelope.tx_type() else {
+                        return 0;
+                    };
+                    roots_count
+                }
                 _ => 0,
             })
             .sum::<u64>();
@@ -70,7 +75,7 @@ impl BatchInfoAccumulator {
             .transactions
             .iter()
             .any(|tx| match tx.inner.inner() {
-                ZkEnvelope::Interop(envelope) => envelope.interop_roots_count() == 0,
+                ZkEnvelope::System(envelope) => envelope.tx_type() == SystemTxType::SetSLChainId,
                 _ => false,
             })
             && self.tx_count > 1

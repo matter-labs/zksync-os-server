@@ -16,7 +16,7 @@ use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{
     MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
 };
-use zksync_os_types::{ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode};
+use zksync_os_types::{SystemTxType, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -134,8 +134,12 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             "Transaction executed"
                         );
 
-                        if let ZkEnvelope::Interop(interop_roots_tx) = tx.inner.inner() {
-                            interop_roots_count += interop_roots_tx.interop_roots_count();
+                        if let ZkEnvelope::System(system_tx) = tx.inner.inner() {
+                            interop_roots_count += if let SystemTxType::ImportInteropRoots(roots_count) = system_tx.tx_type(){
+                                roots_count
+                            } else {
+                                0
+                            };
                         }
 
                         let tx_type = tx.tx_type();
@@ -159,7 +163,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             }
                         }
 
-                        if let ZkEnvelope::Interop(envelope) = tx.inner.inner() && envelope.interop_roots_count() == 0 {
+                        if let ZkEnvelope::System(envelope) = tx.inner.inner() && envelope.tx_type() == SystemTxType::SetSLChainId {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
                                     tracing::debug!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
@@ -184,7 +188,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     }
                     Err(e) => {
                         match (tx.tx_type(), command.invalid_tx_policy) {
-                            (ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::Interop, _) => {
+                            (ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::System, _) => {
                                 return Err(
                                     BlockDump {
                                         ctx,
@@ -370,10 +374,12 @@ fn should_exclude_and_seal(
     if cumulative_gas_used + tx.inner.gas_limit() > ctx.gas_limit {
         return Some(SealReason::GasLimit);
     }
-    if let ZkEnvelope::Interop(interop_roots_tx) = tx.inner.inner()
-        && interop_roots_count + interop_roots_tx.interop_roots_count() > interop_roots_per_block
-    {
-        return Some(SealReason::LimitedInteropOnlyBlock);
+    if let ZkEnvelope::System(envelope) = tx.inner.inner() {
+        if let SystemTxType::ImportInteropRoots(roots_count) = envelope.tx_type()
+            && interop_roots_count + roots_count > interop_roots_per_block
+        {
+            return Some(SealReason::LimitedInteropOnlyBlock);
+        }
     }
     None
 }

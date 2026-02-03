@@ -1,7 +1,7 @@
 use crate::transaction::l1::L1Envelope;
 use crate::transaction::l2::L2Transaction;
 use crate::transaction::{BOOTLOADER_FORMAL_ADDRESS, L1TxType};
-use crate::{InteropEnvelope, ZkEnvelope, ZkTransaction};
+use crate::{SystemTxEnvelope, ZkEnvelope, ZkTransaction};
 use alloy::consensus::Transaction;
 use alloy::eips::Encodable2718;
 use alloy::primitives::{Address, B256, U256};
@@ -23,7 +23,7 @@ impl<T: L1TxType> ZksyncOsEncode for L1Envelope<T> {
     }
 }
 
-impl ZksyncOsEncode for InteropEnvelope {
+impl ZksyncOsEncode for SystemTxEnvelope {
     fn encode(self) -> EncodedTx {
         EncodedTx::Rlp(self.encoded_2718(), BOOTLOADER_FORMAL_ADDRESS)
     }
@@ -40,7 +40,7 @@ impl ZksyncOsEncode for ZkTransaction {
     fn encode(self) -> EncodedTx {
         let (envelope, signer) = self.into_parts();
         match envelope {
-            ZkEnvelope::Interop(interop_envelope) => interop_envelope.encode(),
+            ZkEnvelope::System(interop_envelope) => interop_envelope.encode(),
             ZkEnvelope::L1(l1_envelope) => l1_envelope.encode(),
             ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.encode(),
             ZkEnvelope::L2(l2_envelope) => {

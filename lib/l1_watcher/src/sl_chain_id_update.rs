@@ -6,17 +6,17 @@ use alloy::primitives::Address;
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use zksync_os_contract_interface::{SettlementLayerChainIdUpdated, ZkChain};
-use zksync_os_types::{InteropEnvelope, InteropTxInput};
+use zksync_os_types::{SystemTxEnvelope, SystemTxInput};
 
 pub struct SLChainIdUpdateWatcher {
-    output: mpsc::Sender<InteropEnvelope>,
+    output: mpsc::Sender<SystemTxEnvelope>,
 }
 
 impl SLChainIdUpdateWatcher {
     pub async fn create_watcher(
         zk_chain: ZkChain<DynProvider>,
         config: L1WatcherConfig,
-        output: mpsc::Sender<InteropEnvelope>,
+        output: mpsc::Sender<SystemTxEnvelope>,
     ) -> anyhow::Result<L1Watcher> {
         let this = Self { output };
         let next_l1_block = 0; // TODO: implement this
@@ -47,7 +47,7 @@ impl ProcessL1Event for SLChainIdUpdateWatcher {
         tx: SettlementLayerChainIdUpdated,
         _log: Log,
     ) -> Result<(), L1WatcherError> {
-        let envelope = InteropEnvelope::new(InteropTxInput::SetChainId(
+        let envelope = SystemTxEnvelope::new(SystemTxInput::SetSLChainId(
             tx._newSettlementLayerChainId.try_into().unwrap(),
         ));
 

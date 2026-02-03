@@ -1,5 +1,5 @@
 use crate::receipt::ZkReceipt;
-use crate::transaction::{INTEROP_TX_TYPE_ID, L1PriorityTxType, L1TxType, TxType};
+use crate::transaction::{L1PriorityTxType, L1TxType, SYSTEM_TX_TYPE_ID, TxType};
 use crate::{L2ToL1Log, UpgradeTxType, ZkTxType};
 use alloy::consensus::{Eip658Value, ReceiptWithBloom, TxReceipt};
 use alloy::eips::Typed2718;
@@ -66,7 +66,7 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
         R: Into<ReceiptWithBloom<ZkReceipt<T, U>>>,
     {
         match tx_type {
-            ZkTxType::Interop => Self::InteropRoots(receipt.into()),
+            ZkTxType::System => Self::InteropRoots(receipt.into()),
             ZkTxType::L2(TxType::Legacy) => Self::Legacy(receipt.into()),
             ZkTxType::L2(TxType::Eip2930) => Self::Eip2930(receipt.into()),
             ZkTxType::L2(TxType::Eip1559) => Self::Eip1559(receipt.into()),
@@ -123,7 +123,7 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
             Self::Eip7702(_) => ZkTxType::L2(TxType::Eip7702),
             Self::L1(_) => ZkTxType::L1,
             Self::Upgrade(_) => ZkTxType::Upgrade,
-            Self::InteropRoots(_) => ZkTxType::Interop,
+            Self::InteropRoots(_) => ZkTxType::System,
         }
     }
 
@@ -313,7 +313,7 @@ impl Typed2718 for ZkReceiptEnvelope {
             Self::Eip7702(_) => EIP7702_TX_TYPE_ID,
             Self::L1(_) => L1PriorityTxType::TX_TYPE,
             Self::Upgrade(_) => UpgradeTxType::TX_TYPE,
-            Self::InteropRoots(_) => INTEROP_TX_TYPE_ID,
+            Self::InteropRoots(_) => SYSTEM_TX_TYPE_ID,
         }
     }
 }
@@ -352,7 +352,7 @@ impl Decodable2718 for ZkReceiptEnvelope {
             ZkTxType::L2(TxType::Legacy) => Err(Eip2718Error::UnexpectedType(0)),
             ZkTxType::L1 => Ok(Self::L1(receipt)),
             ZkTxType::Upgrade => Ok(Self::Upgrade(receipt)),
-            ZkTxType::Interop => Ok(Self::InteropRoots(receipt)),
+            ZkTxType::System => Ok(Self::InteropRoots(receipt)),
         }
     }
 
