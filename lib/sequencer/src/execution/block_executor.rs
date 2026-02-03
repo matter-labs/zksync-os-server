@@ -6,52 +6,28 @@ use crate::model::debug_formatting::BlockOutputDebug;
 use alloy::consensus::Transaction;
 use alloy::primitives::TxHash;
 use futures::StreamExt;
-use std::ops::Deref;
 use std::pin::Pin;
 use tokio::time::Sleep;
 use vise::EncodeLabelValue;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::{BlockContext, BlockOutput};
-use zksync_os_mempool::ZkTransactionMetadata;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_observability::ComponentStateHandle;
 use zksync_os_storage_api::{
     MeteredViewState, OverriddenStateView, ReadStateHistory, ReplayRecord, WriteState,
 };
-use zksync_os_types::{InteropRootsLogIndex, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode};
+use zksync_os_types::{ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
 // a side effect of this is that it's harder to pass config values (normally we'd just pass the whole config object)
 // please be mindful when adding new parameters here
 
-pub const INTEROP_ROOTS_PER_BLOCK: u64 = 1000;
-
-pub struct BlockOutputExt {
-    inner: BlockOutput,
-    pub last_interop_log_index: Option<InteropRootsLogIndex>,
-}
-
-impl Deref for BlockOutputExt {
-    type Target = BlockOutput;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
 pub async fn execute_block<R: ReadStateHistory + WriteState>(
     mut command: PreparedBlockCommand<'_>,
     state: R,
     latency_tracker: &ComponentStateHandle<SequencerState>,
-) -> Result<
-    (
-        BlockOutputExt,
-        ReplayRecord,
-        Vec<(TxHash, InvalidTransaction)>,
-    ),
-    BlockDump,
-> {
+) -> Result<(BlockOutput, ReplayRecord, Vec<(TxHash, InvalidTransaction)>), BlockDump> {
     tracing::debug!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
     let ctx = command.block_context;
@@ -87,7 +63,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     };
     let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx success
     let mut interop_roots_count = 0;
-    let mut last_interop_log_index = None;
 
     /* ---------- main loop ------------------------------------------ */
     // seal_reason must only be used for observability - handling must remain generic
@@ -111,7 +86,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             /* -------- stream branch ------------------------------- */
             maybe_tx = command.tx_source.next() => {
                 latency_tracker.enter_state(SequencerState::Execution);
-                let Some(pool_tx) = maybe_tx else {
+                let Some(tx) = maybe_tx else {
                     tracing::debug!(
                         block_number = ctx.block_number,
                         txs = executed_txs.len(),
@@ -120,9 +95,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                     break SealReason::TxStreamExhausted;
                 };
 
-                let (tx, metadata) = pool_tx.into_parts();
-
-                if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, &tx) {
+                if let Some(reason) = should_exclude_and_seal(&ctx, cumulative_gas_used, interop_roots_count, command.interop_roots_per_block, &tx) {
                     tracing::debug!(block_number = ctx.block_number, "sealing block as next tx cannot be included");
                     break reason;
                 }
@@ -163,9 +136,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
 
                         if let ZkEnvelope::InteropRoots(interop_roots_tx) = tx.inner.inner() {
                             interop_roots_count += interop_roots_tx.interop_roots_count();
-                            last_interop_log_index = metadata.map(|m| match m {
-                                ZkTransactionMetadata::Interop(log_index) => log_index,
-                            });
                         }
 
                         let tx_type = tx.tx_type();
@@ -360,10 +330,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
     }
 
     Ok((
-        BlockOutputExt {
-            inner: output,
-            last_interop_log_index,
-        },
+        output,
         ReplayRecord::new(
             ctx,
             command.starting_l1_priority_id,
@@ -383,13 +350,14 @@ fn should_exclude_and_seal(
     ctx: &BlockContext,
     cumulative_gas_used: u64,
     interop_roots_count: u64,
+    interop_roots_per_block: u64,
     tx: &ZkTransaction,
 ) -> Option<SealReason> {
     if cumulative_gas_used + tx.inner.gas_limit() > ctx.gas_limit {
         return Some(SealReason::GasLimit);
     }
     if let ZkEnvelope::InteropRoots(interop_roots_tx) = tx.inner.inner()
-        && interop_roots_count + interop_roots_tx.interop_roots_count() > INTEROP_ROOTS_PER_BLOCK
+        && interop_roots_count + interop_roots_tx.interop_roots_count() > interop_roots_per_block
     {
         return Some(SealReason::LimitedInteropOnlyBlock);
     }

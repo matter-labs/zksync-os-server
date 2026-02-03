@@ -1,8 +1,5 @@
 mod stream;
-pub use stream::{
-    BestTransactionsStream, ReplayTxStream, TxStream, ZkPoolTransaction, ZkTransactionMetadata,
-    best_transactions,
-};
+pub use stream::{BestTransactionsStream, ReplayTxStream, TxStream, best_transactions};
 
 mod traits;
 pub use traits::L2TransactionPool;
@@ -12,6 +9,9 @@ pub use transaction::L2PooledTransaction;
 
 mod config;
 pub use config::TxValidatorConfig;
+
+mod interop_tx_stream;
+pub use interop_tx_stream::{InteropTransactions, InteropTxPool};
 
 mod metrics;
 

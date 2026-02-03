@@ -28,6 +28,9 @@ pub struct SequencerConfig {
     /// Maximum number of blocks to produce
     /// None for indefinite block production (normal operations)
     pub max_blocks_to_produce: Option<u64>,
+
+    /// Max number of interop roots to be included in a single transaction
+    pub interop_roots_per_tx: usize,
 }
 
 impl SequencerConfig {

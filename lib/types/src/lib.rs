@@ -15,12 +15,15 @@ pub use receipt::{ZkReceipt, ZkReceiptEnvelope};
 
 mod transaction;
 pub use transaction::{
-    INTEROP_ROOTS_TX_TYPE_ID, IndexedInteropRootsEnvelope, InteropRootsEnvelope,
-    InteropRootsLogIndex, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1EnvelopeError, L1PriorityEnvelope,
-    L1PriorityTx, L1PriorityTxType, L1Tx, L1TxSerialId, L1TxType, L1UpgradeEnvelope, L1UpgradeTx,
-    L2Envelope, L2Transaction, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, TransactionData,
-    UpgradeTransaction, UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
+    INTEROP_ROOTS_TX_TYPE_ID, IndexedInteropRoot, IndexedInteropRootsEnvelope,
+    InteropRootsEnvelope, InteropRootsLogIndex, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope,
+    L1EnvelopeError, L1PriorityEnvelope, L1PriorityTx, L1PriorityTxType, L1Tx, L1TxSerialId,
+    L1TxType, L1UpgradeEnvelope, L1UpgradeTx, L2Envelope, L2Transaction,
+    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, TransactionData, UpgradeTransaction, UpgradeTxType,
+    ZkEnvelope, ZkTransaction, ZkTxType, ZksyncOsEncode,
 };
+
+pub use zksync_os_contract_interface::InteropRoot;
 
 mod pubdata_mode;
 pub use pubdata_mode::PubdataMode;

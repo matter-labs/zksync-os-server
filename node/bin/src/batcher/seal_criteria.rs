@@ -5,8 +5,6 @@ use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope, ZkTxType};
 
-pub const MAX_INTEROP_ROOTS_PER_BATCH: u64 = 1000;
-
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
     // Accumulated values
@@ -25,6 +23,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub blocks_per_batch_limit: u64,
     pub tx_per_batch_limit: u64,
     pub batch_pubdata_limit_bytes: u64,
+    pub interop_roots_per_batch_limit: u64,
 }
 
 impl BatchInfoAccumulator {
@@ -32,11 +31,13 @@ impl BatchInfoAccumulator {
         blocks_per_batch_limit: u64,
         tx_per_batch_limit: u64,
         batch_pubdata_limit_bytes: u64,
+        interop_roots_per_batch_limit: u64,
     ) -> Self {
         Self {
             blocks_per_batch_limit,
             tx_per_batch_limit,
             batch_pubdata_limit_bytes,
+            interop_roots_per_batch_limit,
             ..Default::default()
         }
     }
@@ -134,7 +135,7 @@ impl BatchInfoAccumulator {
             return true;
         }
 
-        if self.interop_roots_count > MAX_INTEROP_ROOTS_PER_BATCH {
+        if self.interop_roots_count > self.interop_roots_per_batch_limit {
             BATCHER_METRICS.seal_reason[&"interop_roots"].inc();
             tracing::debug!("Batcher: reached max number of interop roots per batch");
             return true;
