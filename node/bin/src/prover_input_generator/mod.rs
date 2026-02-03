@@ -143,104 +143,12 @@ fn compute_prover_input(
     let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
         .expect("invalid protocol version");
     let prover_input = match proving_version {
-        ProvingVersion::V1 | ProvingVersion::V2 | ProvingVersion::V3 => {
-            panic!("computing prover input for batch with prover version v1-v3 is not supported");
-        }
-        ProvingVersion::V4 => {
-            use zk_ee_0_1_0::{
-                common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
-            };
-            use zk_os_forward_system_0_1_0::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input,
-            };
-
-            let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                next_free_slot: leaf_count,
-            };
-
-            let list_source = TxListSource { transactions };
-
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v4::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
-            } else {
-                zksync_os_multivm::apps::v4::singleblock_batch_path(&app_bin_base_path)
-            };
-
-            generate_proof_input(
-                bin_path,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                ProofData {
-                    state_root_view: initial_storage_commitment,
-                    last_block_timestamp: replay_record.previous_block_timestamp,
-                },
-                tree_view,
-                state_view,
-                list_source,
-            )
-            .expect("proof gen failed")
-        }
-        ProvingVersion::V5 => {
-            use zk_ee_0_2_4::{
-                common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
-            };
-            use zk_os_forward_system_0_2_4::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input,
-            };
-
-            // Quick fix: converts DA commitment scheme from zk_ee to zk_ee_0_2_4
-            fn convert_da_scheme(
-                scheme: DACommitmentScheme,
-            ) -> zk_ee_0_2_4::common_structs::DACommitmentScheme {
-                match scheme {
-                    DACommitmentScheme::None => {
-                        zk_ee_0_2_4::common_structs::DACommitmentScheme::None
-                    }
-                    DACommitmentScheme::EmptyNoDA => {
-                        zk_ee_0_2_4::common_structs::DACommitmentScheme::EmptyNoDA
-                    }
-                    DACommitmentScheme::PubdataKeccak256 => {
-                        zk_ee_0_2_4::common_structs::DACommitmentScheme::PubdataKeccak256
-                    }
-                    DACommitmentScheme::BlobsAndPubdataKeccak256 => {
-                        zk_ee_0_2_4::common_structs::DACommitmentScheme::BlobsAndPubdataKeccak256
-                    }
-                    DACommitmentScheme::BlobsZKsyncOS => {
-                        zk_ee_0_2_4::common_structs::DACommitmentScheme::BlobsZKsyncOS
-                    }
-                }
-            }
-
-            let initial_storage_commitment = StorageCommitment {
-                root: fixed_bytes_to_bytes32(root_hash).as_u8_array().into(),
-                next_free_slot: leaf_count,
-            };
-
-            let list_source = TxListSource { transactions };
-
-            let bin_path = if enable_logging {
-                zksync_os_multivm::apps::v5::singleblock_batch_logging_enabled_path(
-                    &app_bin_base_path,
-                )
-            } else {
-                zksync_os_multivm::apps::v5::singleblock_batch_path(&app_bin_base_path)
-            };
-
-            generate_proof_input(
-                bin_path,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                ProofData {
-                    state_root_view: initial_storage_commitment,
-                    last_block_timestamp: replay_record.previous_block_timestamp,
-                },
-                convert_da_scheme(da_commitment_scheme),
-                tree_view,
-                state_view,
-                list_source,
-            )
-            .expect("proof gen failed")
+        ProvingVersion::V1
+        | ProvingVersion::V2
+        | ProvingVersion::V3
+        | ProvingVersion::V4
+        | ProvingVersion::V5 => {
+            panic!("computing prover input for batch with prover version v1-v5 is not supported");
         }
         ProvingVersion::V6 => {
             use zk_ee::{
