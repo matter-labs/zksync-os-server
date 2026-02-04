@@ -70,8 +70,8 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    CommittedBatchProvider, GatewayMigrationWatcher, L1CommitWatcher, L1ExecuteWatcher,
-    L1TxWatcher, L1UpgradeTxWatcher,
+    CommittedBatchProvider, Gateway, GatewayMigrationWatcher, L1, L1CommitWatcher,
+    L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::L2TransactionPool;
@@ -450,17 +450,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         tokio::sync::mpsc::channel(10);
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
-        tasks.spawn(
-            GatewayMigrationWatcher::create_watcher(
-                node_startup_state.l1_state.diamond_proxy.clone(),
-                config.l1_watcher_config.clone().into(),
-                sl_chain_id_update_transactions_sender,
-            )
-            .await
-            .expect("failed to start L1 chain id update watcher")
-            .run()
-            .map(report_exit("L1 chain id update watcher")),
-        );
+        let is_gateway = false;
+        if is_gateway {
+            tasks.spawn(
+                GatewayMigrationWatcher::<Gateway>::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy.clone(),
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_update_transactions_sender,
+                )
+                .await
+                .expect("failed to start L1 chain id update watcher")
+                .run()
+                .map(report_exit("L1 chain id update watcher")),
+            );
+        } else {
+            tasks.spawn(
+                GatewayMigrationWatcher::<L1>::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy.clone(),
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_update_transactions_sender,
+                )
+                .await
+                .expect("failed to start L1 chain id update watcher")
+                .run()
+                .map(report_exit("L1 chain id update watcher")),
+            );
+        }
     }
 
     tasks.spawn(

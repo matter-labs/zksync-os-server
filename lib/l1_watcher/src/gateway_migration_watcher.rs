@@ -1,19 +1,51 @@
+use std::marker::PhantomData;
+
 use tokio::sync::mpsc;
+use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event};
-use alloy::primitives::Address;
+use alloy::primitives::{Address, ChainId};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
+use alloy::sol_types::SolEvent;
 use zksync_os_contract_interface::{ServerNotifier::MigrateToGateway, ZkChain};
 use zksync_os_types::SystemTxEnvelope;
 
-pub struct GatewayMigrationWatcher {
-    server_notifier_contract: Address,
-    output: mpsc::Sender<SystemTxEnvelope>,
+pub trait MigrationProcessor: Send + Sync + 'static {
+    type Event: SolEvent + Send + Sync + 'static;
+
+    fn chain_id(event: Self::Event) -> ChainId;
 }
 
-impl GatewayMigrationWatcher {
+pub struct Gateway;
+
+pub struct L1;
+
+impl MigrationProcessor for Gateway {
+    type Event = MigrateFromGateway;
+
+    fn chain_id(event: Self::Event) -> ChainId {
+        event.chainId.try_into().unwrap()
+    }
+}
+
+impl MigrationProcessor for L1 {
+    type Event = MigrateToGateway;
+
+    fn chain_id(event: Self::Event) -> ChainId {
+        event.chainId.try_into().unwrap()
+    }
+}
+
+pub struct GatewayMigrationWatcher<T> {
+    server_notifier_contract: Address,
+    output: mpsc::Sender<SystemTxEnvelope>,
+
+    _marker: PhantomData<T>,
+}
+
+impl<T: MigrationProcessor> GatewayMigrationWatcher<T> {
     pub async fn create_watcher(
         zk_chain: ZkChain<DynProvider>,
         config: L1WatcherConfig,
@@ -22,6 +54,7 @@ impl GatewayMigrationWatcher {
         let this = Self {
             server_notifier_contract: zk_chain.get_server_notifier_address().await?,
             output,
+            _marker: PhantomData,
         };
 
         // todo: need to make correct way
@@ -38,22 +71,18 @@ impl GatewayMigrationWatcher {
 }
 
 #[async_trait::async_trait]
-impl ProcessL1Event for GatewayMigrationWatcher {
+impl<T: MigrationProcessor> ProcessL1Event for GatewayMigrationWatcher<T> {
     const NAME: &'static str = "gateway_migration";
 
-    type SolEvent = MigrateToGateway;
-    type WatchedEvent = MigrateToGateway;
+    type SolEvent = T::Event;
+    type WatchedEvent = T::Event;
 
     fn contract_address(&self) -> Address {
         self.server_notifier_contract
     }
 
-    async fn process_event(
-        &mut self,
-        tx: MigrateToGateway,
-        _log: Log,
-    ) -> Result<(), L1WatcherError> {
-        let envelope = SystemTxEnvelope::set_sl_chain_id(tx.chainId.try_into().unwrap());
+    async fn process_event(&mut self, tx: T::Event, _log: Log) -> Result<(), L1WatcherError> {
+        let envelope = SystemTxEnvelope::set_sl_chain_id(T::chain_id(tx));
 
         self.output
             .send(envelope)
