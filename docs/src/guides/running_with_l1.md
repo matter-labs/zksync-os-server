@@ -12,7 +12,11 @@ It also comes with a deposit transaction that makes `0x36615cf349d7f6344891b1e7c
 
 Before you run an L1 node, make sure you have a `1.5.1` version of `anvil` installed (see [foundry guide](https://getfoundry.sh/)). Then:
 
-```
+```bash
+# Decompress l1 state
+gzip -dfk ./local-chains/v30.2/l1-state.json.gz
+
+# Start anvil
 anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545
 ...
 Listening on 127.0.0.1:8545
