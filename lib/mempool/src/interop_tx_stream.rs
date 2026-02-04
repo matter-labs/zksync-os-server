@@ -13,8 +13,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::BroadcastStream;
 use zksync_os_types::{
-    IndexedInteropRoot, InteropRoot, InteropRootsLogIndex, SystemTxEnvelope, SystemTxInput,
-    SystemTxType,
+    IndexedInteropRoot, InteropRoot, InteropRootsLogIndex, SystemTxEnvelope, SystemTxType,
 };
 
 #[derive(Clone)]
@@ -115,9 +114,7 @@ impl InteropRootTransactions {
                 .rev() // reversing iterator as last element is the one received earliest
                 .collect::<Vec<_>>();
 
-            Some(SystemTxEnvelope::new(SystemTxInput::ImportInteropRoots(
-                roots_to_consume,
-            )))
+            Some(SystemTxEnvelope::import_interop_roots(roots_to_consume))
         }
     }
 }
@@ -173,9 +170,9 @@ impl InteropRootsTxPoolInner {
                 .rev()
                 .collect::<Vec<_>>();
 
-            let envelope = SystemTxEnvelope::new(SystemTxInput::ImportInteropRoots(
+            let envelope = SystemTxEnvelope::import_interop_roots(
                 roots.iter().map(|r| r.root.clone()).collect(),
-            ));
+            );
             log_index = roots.last().unwrap().log_index.clone();
 
             assert_eq!(&envelope, &tx);

@@ -20,6 +20,8 @@ use std::hash::Hash;
 // `TransactionEnvelope` derive macro below depends on this being present
 use alloy::rlp as alloy_rlp;
 
+use crate::transaction::utils::BOOTLOADER_FORMAL_ADDRESS;
+
 /// ZKsync OS transaction envelope describing [EIP-2718] envelopes, custom L1->L2 transaction
 /// envelope and custom transaction envelope for publishing interop roots.
 ///

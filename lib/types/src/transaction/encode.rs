@@ -1,6 +1,6 @@
 use crate::transaction::l1::L1Envelope;
 use crate::transaction::l2::L2Transaction;
-use crate::transaction::{BOOTLOADER_FORMAL_ADDRESS, L1TxType};
+use crate::transaction::{L1TxType, system::utils::BOOTLOADER_FORMAL_ADDRESS};
 use crate::{SystemTxEnvelope, ZkEnvelope, ZkTransaction};
 use alloy::consensus::Transaction;
 use alloy::eips::Encodable2718;
