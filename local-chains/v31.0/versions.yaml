@@ -6,14 +6,15 @@ era-contracts:
   # TODO: remove branch and put tag and sha when the release is done
   branch: "draft-v31-with-zksync-os"
   # tag: "TBD"
-  sha: "61aa6f81fbcbfe15563b838373d4c46169925451"
+  sha: "01aea7c559ca6a6741fa13b4342cb568ce05ebd1"
 
 zkstack-cli:
   # TODO: remove branch and put tag and sha when the release is done
   branch: "draft-v31"
   # tag: "TBD"
-  sha: "8666488c61993fb6d0113c1448de4473d91e980d"
+  sha: "afb47774ca9c598ebee83e02a62ce3cfd81e2d58"
 
-zksync-os-workflows:
-  tag: "TBD"
-  sha: "TBD"
+# todo: this is not relevant for now, will be updated once migration to zksync-os-scripts is finished
+#zksync-os-workflows:
+#  tag: "TBD"
+#  sha: "TBD"
