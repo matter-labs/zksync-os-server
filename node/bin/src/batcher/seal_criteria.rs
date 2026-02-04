@@ -15,7 +15,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub tx_count: u64,
     pub has_upgrade_tx: bool,
     pub interop_roots_count: u64,
-    pub has_sl_chain_id_update_tx: bool,
+    pub should_seal_for_gateway_migration: bool,
 
     pub protocol_versions: HashSet<ProtocolSemanticVersion>,
     pub execution_versions: HashSet<u32>,
@@ -71,6 +71,7 @@ impl BatchInfoAccumulator {
             })
             .sum::<u64>();
 
+        // If there is a chain id update transaction not in the first block, we need to seal the batch for gateway migration(so it goes in the first block of the next batch)
         if replay_record
             .transactions
             .iter()
@@ -78,8 +79,9 @@ impl BatchInfoAccumulator {
                 ZkEnvelope::System(envelope) => envelope.tx_type() == SystemTxType::SetSLChainId,
                 _ => false,
             })
+            && self.block_count > 1
         {
-            self.has_sl_chain_id_update_tx = true;
+            self.should_seal_for_gateway_migration = true;
         }
 
         if !self.has_upgrade_tx
@@ -157,7 +159,7 @@ impl BatchInfoAccumulator {
         }
 
         // In case SL chain id update tx is present and there are other transactions in batch, we need it to go in the first block of the next batch
-        if self.has_sl_chain_id_update_tx && self.tx_count > 1 {
+        if self.should_seal_for_gateway_migration {
             BATCHER_METRICS.seal_reason[&"chain_id_update_tx"].inc();
             tracing::debug!(
                 "Batcher: sealing batch due to chain id update transaction, which should go in the first block of the next batch"
