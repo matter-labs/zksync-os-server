@@ -13,7 +13,7 @@ use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{
-    ReadStateHistory, ReplayRecord, WriteReplay, WriteRepository, WriteState,
+    ReadStateHistory, ReplayRecord, SealedReplayRecord, WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
@@ -143,7 +143,10 @@ where
             tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
-            self.replay.write(replay_record.clone(), override_allowed);
+            self.replay.write(
+                SealedReplayRecord::new(replay_record.clone(), block_output.header.hash()),
+                override_allowed,
+            );
 
             tracing::debug!(block_number, "Added to replay storage. Adding to state...");
             latency_tracker.enter_state(SequencerState::AddingToState);
