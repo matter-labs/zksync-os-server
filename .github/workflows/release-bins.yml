@@ -24,8 +24,8 @@ env:
   RELEASE_PROFILE: 'maxperf'
   SERVER_LOGFILE: zksync-os-server.log.txt
   FOUNDRY_VERSION: 'v1.5.1'
-  L1_STATE_JSON: 'local-chains/v30.2/l1-state.json'
-  GENESIS_JSON: 'local-chains/v30.2/genesis.json'
+  PROTOCOL_VERSION: 'v30.2'
+  LOCAL_CHAINS_DIR: 'local-chains'
 
 defaults:
   run:
@@ -147,6 +147,7 @@ jobs:
           PORT: 3050
         run: |
           tar xzf ${ZKSYNC_OS_SERVER_BIN}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+          L1_STATE_JSON="${LOCAL_CHAINS_DIR}/${PROTOCOL_VERSION}/l1-state.json"
           gzip -dfk "${L1_STATE_JSON}.gz"
           anvil --load-state "${L1_STATE_JSON}" \
             --port 8545 > anvil.log.txt 2>&1 &
@@ -220,6 +221,9 @@ jobs:
           tar -czf dist/${{ env.ZKSYNC_OS_SERVER_BIN }}-${{ inputs.tag }}-universal-apple-darwin.tar.gz \
             ${{ env.ZKSYNC_OS_SERVER_BIN }}
 
+      - name: Archive local chains
+        run: tar -czf dist/local-chains.tar.gz "${LOCAL_CHAINS_DIR}"
+
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -235,9 +239,7 @@ jobs:
       - name: Upload artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gzip -dfk "${L1_STATE_JSON}.gz"
-          gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
+        run: gh release upload "${{ inputs.tag }}" dist/* --clobber
 
       - name: Update release
         env:
