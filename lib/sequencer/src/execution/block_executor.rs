@@ -163,6 +163,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                             }
                         }
 
+                        // If the only transaction provided is an SL chain id update transaction, we need to seal the block.
                         if let ZkEnvelope::System(envelope) = tx.inner.inner() && envelope.tx_type() == SystemTxType::SetSLChainId {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {

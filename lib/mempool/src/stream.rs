@@ -85,6 +85,7 @@ impl Stream for BestTransactionsStream<'_> {
                 }
             }
 
+            // We only should provide an SL chain id update transaction if it's the first one in the stream for this block.
             if !this.txs_already_provided {
                 match this.sl_chain_id_update_transactions.poll_recv(cx) {
                     Poll::Ready(Some(tx)) => {

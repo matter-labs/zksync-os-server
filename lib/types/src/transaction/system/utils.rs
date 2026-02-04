@@ -4,7 +4,8 @@ use alloy::{
 };
 use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::{
-    IMessageRoot::addInteropRootsInBatchCall, InteropRoot, setSettlementLayerChainIdCall,
+    IMessageRoot::addInteropRootsInBatchCall, ISystemContext::setSettlementLayerChainIdCall,
+    InteropRoot,
 };
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
@@ -15,15 +16,19 @@ pub const SYSTEM_CONTEXT_ADDRESS: Address = address!("0x000000000000000000000000
 
 pub const SYSTEM_TX_TYPE_ID: u8 = 125;
 
+/// Enum to represent the subtype of system transaction
+#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
+pub enum SystemTxType {
+    /// The transaction type for importing interop roots, contains the number of interop roots imported
+    ImportInteropRoots(u64),
+    /// The transaction type for setting the settlement layer chain id
+    SetSLChainId,
+}
+
+/// Helper type to encode/decode system transaction input and determine it's subtype
 pub(crate) enum SystemTxInput {
     ImportInteropRoots(Vec<InteropRoot>),
     SetSLChainId(ChainId),
-}
-
-#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
-pub enum SystemTxType {
-    ImportInteropRoots(u64),
-    SetSLChainId,
 }
 
 impl SystemTxInput {

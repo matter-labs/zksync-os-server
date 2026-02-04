@@ -2,10 +2,10 @@ use tokio::sync::mpsc;
 
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event};
-use alloy::primitives::Address;
-use alloy::providers::DynProvider;
+use alloy::primitives::{Address, address};
+use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
-use zksync_os_contract_interface::{SettlementLayerChainIdUpdated, ZkChain};
+use zksync_os_contract_interface::{ISystemContext::SettlementLayerChainIdUpdated, ZkChain};
 use zksync_os_types::SystemTxEnvelope;
 
 pub struct SLChainIdUpdateWatcher {
@@ -19,7 +19,9 @@ impl SLChainIdUpdateWatcher {
         output: mpsc::Sender<SystemTxEnvelope>,
     ) -> anyhow::Result<L1Watcher> {
         let this = Self { output };
-        let next_l1_block = 0; // TODO: implement this
+
+        // todo: need to make correct way
+        let next_l1_block = zk_chain.provider().get_block_number().await?;
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
             next_l1_block,
@@ -39,7 +41,7 @@ impl ProcessL1Event for SLChainIdUpdateWatcher {
     type WatchedEvent = SettlementLayerChainIdUpdated;
 
     fn contract_address(&self) -> Address {
-        todo!()
+        address!("0x0000000000000000000000000000000000000001")
     }
 
     async fn process_event(

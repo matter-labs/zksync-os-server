@@ -15,7 +15,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub tx_count: u64,
     pub has_upgrade_tx: bool,
     pub interop_roots_count: u64,
-    pub sl_chain_id_update_not_in_first_block: bool,
+    pub has_sl_chain_id_update_tx: bool,
 
     pub protocol_versions: HashSet<ProtocolSemanticVersion>,
     pub execution_versions: HashSet<u32>,
@@ -78,9 +78,8 @@ impl BatchInfoAccumulator {
                 ZkEnvelope::System(envelope) => envelope.tx_type() == SystemTxType::SetSLChainId,
                 _ => false,
             })
-            && self.tx_count > 1
         {
-            self.sl_chain_id_update_not_in_first_block = true;
+            self.has_sl_chain_id_update_tx = true;
         }
 
         if !self.has_upgrade_tx
@@ -157,7 +156,8 @@ impl BatchInfoAccumulator {
             return true;
         }
 
-        if self.sl_chain_id_update_not_in_first_block {
+        // In case SL chain id update tx is present and there are other transactions in batch, we need it to go in the first block of the next batch
+        if self.has_sl_chain_id_update_tx && self.tx_count > 1 {
             BATCHER_METRICS.seal_reason[&"chain_id_update_tx"].inc();
             tracing::debug!(
                 "Batcher: sealing batch due to chain id update transaction, which should go in the first block of the next batch"
