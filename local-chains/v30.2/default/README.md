@@ -11,11 +11,8 @@ Default single-chain configuration for running ZKsync OS against L1 for protocol
 ## Quick Start
 
 ```bash
-# Terminal 1: Start Anvil with shared L1 state
-anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545
-
-# Terminal 2: Run the node
-cargo run --release -- --config ./local-chains/v30.2/default/config.yaml
+# Use script to launch in-memory L1 and the node for one chain
+./run_local.sh ./local-chains/v30.2/default
 ```
 
 ## Wallets
@@ -28,4 +25,4 @@ For contract addresses, refer to `genesis` section of the [config.yaml](./config
 
 ## Versions
 
-For information about how this config was created, check [version.toml](../versions.toml) file.
+For information about how this config was created, check [versions.yaml](../versions.yaml) file.

@@ -18,11 +18,19 @@ echo ""
 # Array to store PIDs of background processes
 declare -a PIDS=()
 
+TEMP_DIR=$(mktemp -d)
+
+# Check if tmp dir was created
+if [[ ! "$TEMP_DIR" || ! -d "$TEMP_DIR" ]]; then
+  echo "Could not create temporary directory via 'mkdir'"
+  exit 1
+fi
+
 # Cleanup function to stop all started services
 cleanup() {
     # Prevent re-entry when exit triggers the trap again
     trap - SIGINT SIGTERM EXIT
-    
+
     echo -e "\n${YELLOW}Shutting down all services...${NC}"
     for pid in "${PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
@@ -30,10 +38,10 @@ cleanup() {
             kill -TERM "$pid" 2>/dev/null || true
         fi
     done
-    
+
     # Wait for processes to terminate gracefully
     sleep 2
-    
+
     # Force kill any remaining processes
     for pid in "${PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
@@ -41,8 +49,9 @@ cleanup() {
             kill -9 "$pid" 2>/dev/null || true
         fi
     done
-    
+
     echo -e "${GREEN}All services stopped${NC}"
+    rm -rf "$TEMP_DIR"
     exit 0
 }
 
@@ -98,10 +107,20 @@ if [ ! -d "$CONFIG_DIR" ]; then
     exit 1
 fi
 
+# Check for compressed L1 state file
+L1_STATE_FILE_GZ="$CONFIG_DIR/../l1-state.json.gz"
+if [ ! -f "$L1_STATE_FILE_GZ" ]; then
+    echo -e "${RED}Error: L1 state file '$L1_STATE_FILE_GZ' not found${NC}"
+    exit 1
+fi
+
+# Decompress L1 state file into temporary directory
+gzip -d < "$L1_STATE_FILE_GZ" > "$TEMP_DIR/l1-state.json"
+
 # Check for L1 state file
-L1_STATE_FILE="$CONFIG_DIR/zkos-l1-state.json"
+L1_STATE_FILE="$TEMP_DIR/l1-state.json"
 if [ ! -f "$L1_STATE_FILE" ]; then
-    echo -e "${RED}Error: L1 state file '$L1_STATE_FILE' not found${NC}"
+    echo -e "${RED}Error: decompressed L1 state file '$L1_STATE_FILE' not found${NC}"
     exit 1
 fi
 
@@ -161,7 +180,7 @@ SINGLE_CONFIG="$CONFIG_DIR/config.yaml"
 
 if [ -f "$SINGLE_CONFIG" ]; then
     # Single chain mode
-    
+
     # Prompt to clean up db folder (only for single chain mode)
     if [ -d "$REPO_ROOT/db" ] && [ "$(ls -A "$REPO_ROOT/db" 2>/dev/null)" ]; then
         echo -e "${YELLOW}The db/ folder contains existing data.${NC}"
@@ -173,7 +192,7 @@ if [ -f "$SINGLE_CONFIG" ]; then
             echo -e "${GREEN}db/ folder cleaned${NC}"
         fi
     fi
-    
+
     echo -e "\n${GREEN}Starting single chain with config: $SINGLE_CONFIG${NC}"
     if [ -n "$LOGS_DIR" ]; then
         CHAIN_LOG_FILE="$LOGS_DIR/chain-$LOG_TIMESTAMP.log"
@@ -188,14 +207,14 @@ if [ -f "$SINGLE_CONFIG" ]; then
 else
     # Multiple chains mode - look for chain_<chainid>.yaml files
     CHAIN_CONFIGS=($(ls "$CONFIG_DIR"/chain_*.yaml 2>/dev/null | sort -V))
-    
+
     if [ ${#CHAIN_CONFIGS[@]} -eq 0 ]; then
         echo -e "${RED}Error: No config.yaml or chain_*.yaml files found in '$CONFIG_DIR'${NC}"
         exit 1
     fi
-    
+
     echo -e "\n${GREEN}Starting ${#CHAIN_CONFIGS[@]} chain(s)...${NC}"
-    
+
     for config_file in "${CHAIN_CONFIGS[@]}"; do
         echo -e "${GREEN}Starting chain with config: $config_file${NC}"
         if [ -n "$LOGS_DIR" ]; then
@@ -210,7 +229,7 @@ else
         CHAIN_PID=$!
         PIDS+=($CHAIN_PID)
         echo -e "${GREEN}Chain started with PID $CHAIN_PID${NC}"
-                
+
         # Small delay between starting chains (to make sure file locks are awaited properly)
         sleep 2
     done

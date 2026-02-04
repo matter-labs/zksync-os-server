@@ -1,4 +1,4 @@
-use crate::config::{ChainLayout, get_l1_state_path, load_chain_config};
+use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
@@ -7,11 +7,13 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
@@ -33,7 +35,7 @@ pub mod provider;
 pub mod upgrade;
 mod utils;
 
-/// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
+/// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
 
 /// Set of private keys for batch verification participants.
@@ -55,15 +57,13 @@ static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
 
 #[derive(Debug)]
 pub struct Tester {
-    pub l1_provider: EthDynProvider,
-    pub l2_provider: EthDynProvider,
+    pub l1: AnvilL1,
 
+    pub l2_provider: EthDynProvider,
     /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
     /// system to be Ethereum-compatible. But this can be useful if you need to assert custom fields
     /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
     pub l2_zk_provider: DynProvider<Zksync>,
-
-    pub l1_wallet: EthereumWallet,
     pub l2_wallet: EthereumWallet,
 
     pub prover_tester: ProverTester,
@@ -76,10 +76,19 @@ pub struct Tester {
     main_node_tempdir: Arc<tempfile::TempDir>,
 
     // Needed to be able to connect external nodes
-    l1_address: String,
     replay_url: String,
     l2_rpc_address: String,
     batch_verification_url: String,
+}
+
+impl Tester {
+    pub fn l1_provider(&self) -> &EthDynProvider {
+        &self.l1.provider
+    }
+
+    pub fn l1_wallet(&self) -> &EthereumWallet {
+        &self.l1.wallet
+    }
 }
 
 impl Tester {
@@ -123,9 +132,7 @@ impl Tester {
         };
 
         Self::launch_node(
-            self.l1_address.clone(),
-            self.l1_provider.clone(),
-            self.l1_wallet.clone(),
+            self.l1.clone(),
             false,
             Some(overrides_fun),
             Some(self.main_node_tempdir.clone()),
@@ -135,29 +142,12 @@ impl Tester {
     }
 
     async fn launch_node(
-        l1_address: String,
-        l1_provider: EthDynProvider,
-        l1_wallet: EthereumWallet,
+        l1: AnvilL1,
         enable_prover: bool,
         config_overrides: Option<impl FnOnce(&mut Config)>,
         main_node_tempdir: Option<Arc<tempfile::TempDir>>,
         protocol_version: &str,
     ) -> anyhow::Result<Self> {
-        (|| async {
-            // Wait for L1 node to get up and be able to respond.
-            l1_provider.clone().get_chain_id().await?;
-            Ok(())
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_secs(1))
-                .with_max_times(10),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(%err, ?dur, "retrying connection to L1 node");
-        })
-        .await?;
-
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
@@ -186,7 +176,7 @@ impl Tester {
         // Create a handle to run the sequencer in the background
         let general_config = GeneralConfig {
             rocks_db_path: rocks_db_path.clone(),
-            l1_rpc_url: l1_address.clone(),
+            l1_rpc_url: l1.address.clone(),
             ..Default::default()
         };
         let sequencer_config = SequencerConfig {
@@ -356,20 +346,19 @@ impl Tester {
             .await?;
 
         let tempdir = Arc::new(tempdir);
+        let prover_tester = ProverTester::new(
+            EthDynProvider::new(l1.provider.clone()),
+            EthDynProvider::new(l2_provider.clone()),
+            DynProvider::new(l2_zk_provider.clone()),
+        );
         Ok(Tester {
-            l1_provider: EthDynProvider::new(l1_provider.clone()),
+            l1,
             l2_provider: EthDynProvider::new(l2_provider.clone()),
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
-            l1_wallet,
             l2_wallet,
-            prover_tester: ProverTester::new(
-                EthDynProvider::new(l1_provider.clone()),
-                EthDynProvider::new(l2_provider.clone()),
-                DynProvider::new(l2_zk_provider.clone()),
-            ),
+            prover_tester,
             stop_sender,
             main_task,
-            l1_address,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
             replay_url,
@@ -416,20 +405,10 @@ impl TesterBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Tester> {
-        let l1_locked_port = LockedPort::acquire_unused().await?;
-        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
-
-        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-            anvil
-                .port(l1_locked_port.port)
-                .chain_id(L1_CHAIN_ID)
-                .arg("--load-state")
-                .arg(get_l1_state_path(ChainLayout::Default {
-                    protocol_version: PROTOCOL_VERSION,
-                }))
-        })?;
-
-        let l1_wallet = l1_provider.wallet().clone();
+        let l1 = AnvilL1::start(ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        })
+        .await?;
 
         let overrides_fun = move |config: &mut Config| {
             if let Some(block_time) = self.block_time {
@@ -448,9 +427,7 @@ impl TesterBuilder {
         };
 
         Tester::launch_node(
-            l1_address,
-            EthDynProvider::new(l1_provider),
-            l1_wallet,
+            l1,
             self.enable_prover,
             Some(overrides_fun),
             None,
@@ -471,8 +448,7 @@ impl Drop for Tester {
 
 /// Multi-chain test environment with multiple L2 chains sharing the same L1
 pub struct MultiChainTester {
-    pub l1_provider: EthDynProvider,
-    pub l1_wallet: EthereumWallet,
+    pub l1: AnvilL1,
     pub chains: Vec<Tester>,
 }
 
@@ -514,45 +490,16 @@ impl MultiChainTesterBuilder {
 
     pub async fn build(self) -> anyhow::Result<MultiChainTester> {
         let num_chains = self.num_chains.unwrap_or(2);
-
         assert!(
             num_chains >= 2,
             "MultiChainTester requires at least 2 chains"
         );
 
-        // Set up shared L1 with multiple-chains state
-        let l1_locked_port = LockedPort::acquire_unused().await?;
-        let l1_address = format!("http://localhost:{}", l1_locked_port.port);
-
-        let l1_provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-            anvil
-                .port(l1_locked_port.port)
-                .chain_id(L1_CHAIN_ID)
-                .arg("--load-state")
-                .arg(get_l1_state_path(ChainLayout::MultiChain {
-                    protocol_version: NEXT_PROTOCOL_VERSION,
-                    chain_index: 0,
-                }))
-        })?;
-
-        let l1_wallet = l1_provider.wallet().clone();
-
-        // Wait for L1 to be ready
-        (|| async {
-            l1_provider.clone().get_chain_id().await?;
-            Ok(())
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_secs(1))
-                .with_max_times(10),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(%err, ?dur, "retrying connection to L1 node");
+        let l1 = AnvilL1::start(ChainLayout::MultiChain {
+            protocol_version: NEXT_PROTOCOL_VERSION,
+            chain_index: 0,
         })
         .await?;
-
-        tracing::info!("L1 chain started on {}", l1_address);
 
         // Launch L2 chains using chain configurations from config files
         let mut chains = Vec::new();
@@ -580,9 +527,7 @@ impl MultiChainTesterBuilder {
             };
 
             let tester = Tester::launch_node(
-                l1_address.clone(),
-                EthDynProvider::new(l1_provider.clone()),
-                l1_wallet.clone(),
+                l1.clone(),
                 false, // disable prover for faster tests
                 Some(chain_override),
                 None,
@@ -600,10 +545,64 @@ impl MultiChainTesterBuilder {
             chains.push(tester);
         }
 
-        Ok(MultiChainTester {
-            l1_provider: EthDynProvider::new(l1_provider),
-            l1_wallet,
-            chains,
+        Ok(MultiChainTester { l1, chains })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AnvilL1 {
+    pub address: String,
+    pub provider: EthDynProvider,
+    pub wallet: EthereumWallet,
+
+    // Temporary directory that holds uncompressed l1-state.json used to initialize Anvil's state.
+    // Needs to be held for the duration of test's lifetime.
+    _tempdir: Arc<TempDir>,
+}
+
+impl AnvilL1 {
+    async fn start(chain_layout: ChainLayout<'_>) -> anyhow::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+        let l1_state = chain_layout.l1_state();
+        let l1_state_path = tempdir.path().join("l1-state.json");
+        std::fs::write(&l1_state_path, &l1_state)
+            .context("failed to write L1 state to temporary state file")?;
+
+        let locked_port = LockedPort::acquire_unused().await?;
+        let address = format!("http://localhost:{}", locked_port.port);
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
+            anvil
+                .port(locked_port.port)
+                .chain_id(L1_CHAIN_ID)
+                .arg("--load-state")
+                .arg(l1_state_path)
+        })?;
+
+        let wallet = provider.wallet().clone();
+
+        (|| async {
+            // Wait for L1 node to get up and be able to respond.
+            provider.clone().get_chain_id().await?;
+            Ok(())
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(%err, ?dur, "retrying connection to L1 node");
+        })
+        .await?;
+
+        tracing::info!("L1 chain started on {}", address);
+
+        Ok(Self {
+            address,
+            provider: EthDynProvider::new(provider),
+            wallet,
+            _tempdir: Arc::new(tempdir),
         })
     }
 }

@@ -22,8 +22,8 @@ use zksync_os_types::{
 async fn l1_deposit() -> anyhow::Result<()> {
     // Test that we can deposit L2 funds from a rich L1 account
     let tester = Tester::setup().await?;
-    let alice = tester.l1_wallet.default_signer().address();
-    let alice_l1_initial_balance = tester.l1_provider.get_balance(alice).await?;
+    let alice = tester.l1_wallet().default_signer().address();
+    let alice_l1_initial_balance = tester.l1_provider().get_balance(alice).await?;
     let alice_l2_initial_balance = tester.l2_provider.get_balance(alice).await?;
 
     let default_config: Config = load_chain_config(ChainLayout::Default {
@@ -37,13 +37,13 @@ async fn l1_deposit() -> anyhow::Result<()> {
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
-        tester.l1_provider.clone(),
+        tester.l1_provider().clone(),
         chain_id,
     );
     let amount = U256::from(100);
-    let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;
+    let max_priority_fee_per_gas = tester.l1_provider().get_max_priority_fee_per_gas().await?;
     let base_l1_fees_data = tester
-        .l1_provider
+        .l1_provider()
         .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
             Eip1559Estimation {
                 max_fee_per_gas: base_fee_per_gas * 3 / 2,
@@ -85,7 +85,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
         .max_priority_fee_per_gas(max_priority_fee_per_gas)
         .into_transaction_request();
     let l1_deposit_receipt = tester
-        .l1_provider
+        .l1_provider()
         .send_transaction(l1_deposit_request)
         .await?
         .expect_successful_receipt()
@@ -132,7 +132,7 @@ async fn l1_deposit() -> anyhow::Result<()> {
     let fee = U256::from(l1_deposit_receipt.effective_gas_price)
         * U256::from(l1_deposit_receipt.gas_used);
 
-    let alice_l1_final_balance = tester.l1_provider.get_balance(alice).await?;
+    let alice_l1_final_balance = tester.l1_provider().get_balance(alice).await?;
     let alice_l2_final_balance = tester.l2_provider.get_balance(alice).await?;
     assert!(alice_l1_final_balance <= alice_l1_initial_balance - fee - amount);
     assert!(alice_l2_final_balance >= alice_l2_initial_balance + amount);
@@ -145,7 +145,7 @@ async fn l1_withdraw() -> anyhow::Result<()> {
     // Test that we can withdraw L2 funds to L1
     let tester = Tester::setup().await?;
     let alice = tester.l2_wallet.default_signer().address();
-    let alice_l1_initial_balance = tester.l1_provider.get_balance(alice).await?;
+    let alice_l1_initial_balance = tester.l1_provider().get_balance(alice).await?;
     let alice_l2_initial_balance = tester.l2_provider.get_balance(alice).await?;
     let amount = U256::from(100);
 
@@ -160,7 +160,7 @@ async fn l1_withdraw() -> anyhow::Result<()> {
     );
 
     let l1_asset_router =
-        L1AssetRouter::new(tester.l1_provider.clone(), tester.l2_zk_provider.clone()).await?;
+        L1AssetRouter::new(tester.l1_provider().clone(), tester.l2_zk_provider.clone()).await?;
     let l1_nullifier = l1_asset_router.l1_nullifier().await?;
     let finalize_withdrawal_l1_receipt = l1_nullifier
         .finalize_withdrawal(withdrawal_l2_receipt)
@@ -170,7 +170,7 @@ async fn l1_withdraw() -> anyhow::Result<()> {
             * finalize_withdrawal_l1_receipt.gas_used() as u128,
     );
 
-    let alice_l1_final_balance = tester.l1_provider.get_balance(alice).await?;
+    let alice_l1_final_balance = tester.l1_provider().get_balance(alice).await?;
     let alice_l2_final_balance = tester.l2_provider.get_balance(alice).await?;
     assert!(alice_l1_final_balance >= alice_l1_initial_balance - l1_fee + amount);
     assert!(alice_l2_final_balance <= alice_l2_initial_balance - l2_fee - amount);

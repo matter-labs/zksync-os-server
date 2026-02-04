@@ -12,14 +12,8 @@ Configuration for running multiple ZKsync OS chains against a shared L1.
 ## Quick Start
 
 ```bash
-# Terminal 1: Start Anvil with shared L1 state
-anvil --load-state ./local-chains/v30.2/multi_chain/zkos-l1-state.json --port 8545
-
-# Terminal 2: Chain 1
-cargo run --release -- --config ./local-chains/v30.2/multi_chain/chain_6565.yaml
-
-# Terminal 3: Chain 2
-cargo run --release -- --config ./local-chains/v30.2/multi_chain/chain_6566.yaml
+# Use script to launch in-memory L1 and two nodes for both chains
+./run_local.sh ./local-chains/v30.2/multi_chain
 ```
 
 ## Wallets
@@ -38,4 +32,4 @@ for the corresponding chain.
 
 ## Versions
 
-For information about how this config was created, check [version.toml](../versions.toml) file.
+For information about how this config was created, check [versions.yaml](../versions.yaml) file.

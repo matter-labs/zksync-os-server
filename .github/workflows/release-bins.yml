@@ -24,8 +24,8 @@ env:
   RELEASE_PROFILE: 'maxperf'
   SERVER_LOGFILE: zksync-os-server.log.txt
   FOUNDRY_VERSION: 'v1.5.1'
-  L1_STATE_JSON: 'local-chains/v30.2/default/zkos-l1-state.json'
-  GENESIS_JSON: 'local-chains/v30.2/default/genesis.json'
+  L1_STATE_JSON: 'local-chains/v30.2/l1-state.json'
+  GENESIS_JSON: 'local-chains/v30.2/genesis.json'
 
 defaults:
   run:
@@ -147,6 +147,7 @@ jobs:
           PORT: 3050
         run: |
           tar xzf ${ZKSYNC_OS_SERVER_BIN}-${{ inputs.tag }}-${{ matrix.target }}.tar.gz
+          gzip -dfk "${L1_STATE_JSON}.gz"
           anvil --load-state "${L1_STATE_JSON}" \
             --port 8545 > anvil.log.txt 2>&1 &
           ./${ZKSYNC_OS_SERVER_BIN} > ${SERVER_LOGFILE} 2>&1 &
@@ -234,7 +235,9 @@ jobs:
       - name: Upload artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
+        run: |
+          gzip -dfk "${L1_STATE_JSON}.gz"
+          gh release upload "${{ inputs.tag }}" dist/* ${GENESIS_JSON} ${L1_STATE_JSON} --clobber
 
       - name: Update release
         env:

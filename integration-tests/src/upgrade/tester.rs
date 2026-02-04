@@ -68,7 +68,7 @@ impl UpgradeTester {
     ) -> anyhow::Result<()> {
         // Deploy the upgrade contract on L1.
         let upgrade_contract =
-            DefaultUpgrade::deploy(&self.tester.l1_provider, protocol_upgrade).await?;
+            DefaultUpgrade::deploy(self.tester.l1_provider(), protocol_upgrade).await?;
         tracing::info!("DefaultUpgrade contract deployed");
 
         // Send pause migration to Bridgehub
@@ -162,22 +162,22 @@ impl UpgradeTester {
             .expect("Chain id is missing in the config");
 
         let bridgehub = tester.l2_zk_provider.get_bridgehub_contract().await?;
-        let bridgehub = interfaces::Bridgehub::new(bridgehub, tester.l1_provider.clone());
+        let bridgehub = interfaces::Bridgehub::new(bridgehub, tester.l1_provider().clone());
         let ctm = bridgehub
             .chainTypeManager(U256::from(chain_id))
             .call()
             .await?;
-        let ctm = interfaces::ChainTypeManager::new(ctm, tester.l1_provider.clone());
+        let ctm = interfaces::ChainTypeManager::new(ctm, tester.l1_provider().clone());
         let raw_protocol_version = ctm.getProtocolVersion(U256::from(chain_id)).call().await?;
         let protocol_version = ProtocolSemanticVersion::try_from(raw_protocol_version)
             .expect("invalid protocol version stored in CTM");
 
         let diamond_proxy = bridgehub.getZKChain(U256::from(chain_id)).call().await?;
-        let diamond_proxy = interfaces::ZkChain::new(diamond_proxy, tester.l1_provider.clone());
+        let diamond_proxy = interfaces::ZkChain::new(diamond_proxy, tester.l1_provider().clone());
 
         let l1_chain_admin = diamond_proxy.getAdmin().call().await?;
         let l1_chain_admin =
-            interfaces::ChainAdmin::new(l1_chain_admin, tester.l1_provider.clone());
+            interfaces::ChainAdmin::new(l1_chain_admin, tester.l1_provider().clone());
 
         let bridgehub_owner = bridgehub.owner().call().await?;
         let ctm_owner = ctm.owner().call().await?;
@@ -186,22 +186,22 @@ impl UpgradeTester {
 
         // Bytecode supplier is a bit special: right now it's not discoverable
         // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
-        // to the value stored in `zkos-l1-state.json`.
+        // to the value stored in `l1-state.json.gz`.
         let bytecode_supplier_address = default_config
             .genesis_config
             .bridgehub_address
             .expect("Bytecode supplier address is missing in the config");
         anyhow::ensure!(
             !tester
-                .l1_provider
+                .l1_provider()
                 .get_code_at(bytecode_supplier_address)
                 .await?
                 .is_empty(),
-            "Bytecode supplier contract is not deployed at expected address {bytecode_supplier_address:?}; if zkos-l1-state.json was updated, update the address in the test code"
+            "Bytecode supplier contract is not deployed at expected address {bytecode_supplier_address:?}; if zkos-l1-state.json.gz was updated, update the address in the test code"
         );
         let bytecode_supplier = interfaces::BytecodesSupplier::new(
             bytecode_supplier_address,
-            tester.l1_provider.clone(),
+            tester.l1_provider().clone(),
         );
 
         Ok(Self {
@@ -229,11 +229,11 @@ impl UpgradeTester {
             self.l1_chain_admin_owner,
         ] {
             self.tester
-                .l1_provider
+                .l1_provider()
                 .anvil_impersonate_account(addr)
                 .await?;
             self.tester
-                .l1_provider
+                .l1_provider()
                 .send_transaction(
                     TransactionRequest::default()
                         .with_to(addr)
@@ -419,12 +419,13 @@ impl UpgradeTester {
         // `send_transaction`, and doesn't require setting bogus signature and encoding unlike `send_raw_transaction`.
         let hash = self
             .tester
-            .l1_provider
+            .l1_provider()
             .anvil_send_impersonated_transaction(tx)
             .await?;
-        let receipt = PendingTransactionBuilder::new(self.tester.l1_provider.root().clone(), hash)
-            .expect_successful_receipt()
-            .await?;
+        let receipt =
+            PendingTransactionBuilder::new(self.tester.l1_provider().root().clone(), hash)
+                .expect_successful_receipt()
+                .await?;
         Ok(receipt)
     }
 }

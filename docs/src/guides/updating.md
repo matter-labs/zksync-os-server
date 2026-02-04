@@ -14,7 +14,7 @@ Then follow instructions below for era-contracts updates.
 
 ## Updating era contracts 
 
-If you do any change to era-contracts, we should update zkos-l1-state.json (especially if this is a breaking change -- be careful with those when we're in production).
+If you do any change to era-contracts, we should update l1-state.json.gz (especially if this is a breaking change -- be careful with those when we're in production).
 
 * commit your change to era-contracts, and generate a new release/tag (we name them as zkos-v0.29.3 for example)
 * go to zksync-era, checkout zksync-os-integration, and update the contracts dependency there (this step will hopefully disappear soon)
@@ -36,6 +36,6 @@ Currently it is a little bit of a frustrating process, but we plan to improve it
 * Step 2: compute "genesis hash" - when you start the server **with new genesis.json** created in the step above - add a print here: https://github.com/matter-labs/zksync-os-server/blob/main/node/bin/src/batcher/util.rs#L36 to get the hash value.
 * Step 3: Put the new hash value into: https://github.com/matter-labs/zksync-era/blob/zksync-os-integration/etc/env/file_based/genesis.yaml
 * Step 4: Re-run the Step 1. Make sure to use zksync-era with the Step3, as new genesis is used inside CTM registration, so it will impact the state.json contents.
-* Step 5: check that everything works -- you should be able to run anvil with the new state (`anvil --load_state ./local-chains/v30.2/default/zkos-l1-state.json`) and zksync-os-server **with new genesis.json** (it normally loads it from local directory).
+* Step 5: check that everything works -- you should be able to run anvil with the new state and zksync-os-server **with new genesis.json** (it normally loads it from local directory): `./run_local.sh ./local-chains/v30.2/default`.
 
 https://github.com/matter-labs/zksync-os-server/blob/main/node/bin/src/batcher/util.rs#L36

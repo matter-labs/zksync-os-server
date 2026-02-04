@@ -10,6 +10,7 @@ zkstack-cli:
   tag: "protocol-upgrade-v1.3.1"
   sha: "383f48ddcd3ba6bf49666b3fefe78b7cde6f1b40"
 
-zksync-os-workflows:
-  tag: "protocol-upgrade-v1.3.1-chainid"
-  sha: "8669253f06c7bb287171c45e11e289316257f3b7"
+# todo: this is not relevant for now, will be updated once migration to zksync-os-scripts is finished
+#zksync-os-workflows:
+#  tag: "protocol-upgrade-v1.3.1-chainid"
+#  sha: "8669253f06c7bb287171c45e11e289316257f3b7"

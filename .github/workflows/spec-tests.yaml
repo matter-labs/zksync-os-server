@@ -173,8 +173,11 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
+      - name: Decompress anvil state
+        run: gzip -dfk ./local-chains/v30.2/l1-state.json.gz
+
       - name: Run anvil L1
-        run: anvil --load-state ./local-chains/v30.2/default/zkos-l1-state.json --port 8545 &
+        run: anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 &
 
       - name: Build server
         run: cargo build --release --bin zksync-os-server
