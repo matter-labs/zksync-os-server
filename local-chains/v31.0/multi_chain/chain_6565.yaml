@@ -3,7 +3,7 @@ general:
 genesis:
   bridgehub_address: '0xc3c69adbceae631c73b4c3924211c6741583c3ae'
   bytecode_supplier_address: '0xcef839e31f740869098d04e5bb105a08f21ba337'
-  genesis_input_path: ./local-chains/v31.0/default/genesis.json
+  genesis_input_path: ./local-chains/v31.0/genesis.json
   chain_id: 6565
 l1_sender:
   operator_commit_sk: '0x1be04be1a04d5309c0f406b02c33c8bb0f4663398a9f6e4ea79b103e25036320'

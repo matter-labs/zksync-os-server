@@ -1,4 +1,4 @@
-use crate::config::{ChainLayout, get_l1_state_path, load_chain_config};
+use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::prover_tester::ProverTester;
@@ -7,6 +7,7 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::str::FromStr;
@@ -34,7 +35,7 @@ pub mod provider;
 pub mod upgrade;
 mod utils;
 
-/// L1 chain id as expected by contracts deployed in `zkos-l1-state.json`
+/// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
 
 /// Set of private keys for batch verification participants.
@@ -554,7 +555,7 @@ pub struct AnvilL1 {
     pub provider: EthDynProvider,
     pub wallet: EthereumWallet,
 
-    // Temporary directory that holds uncompressed zkos-l1-state.json used to initialize Anvil's state.
+    // Temporary directory that holds uncompressed l1-state.json used to initialize Anvil's state.
     // Needs to be held for the duration of test's lifetime.
     _tempdir: Arc<TempDir>,
 }
@@ -562,7 +563,10 @@ pub struct AnvilL1 {
 impl AnvilL1 {
     async fn start(chain_layout: ChainLayout<'_>) -> anyhow::Result<Self> {
         let tempdir = tempfile::tempdir()?;
-        let l1_state_path = get_l1_state_path(chain_layout, &tempdir);
+        let l1_state = chain_layout.l1_state();
+        let l1_state_path = tempdir.path().join("l1-state.json");
+        std::fs::write(&l1_state_path, &l1_state)
+            .context("failed to write L1 state to temporary state file")?;
 
         let locked_port = LockedPort::acquire_unused().await?;
         let address = format!("http://localhost:{}", locked_port.port);

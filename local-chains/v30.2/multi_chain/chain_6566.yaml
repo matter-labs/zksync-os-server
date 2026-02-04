@@ -4,7 +4,7 @@ general:
 genesis:
   bridgehub_address: "0x733ea950ab9541daff0ef9678245f2d3547d7552"
   bytecode_supplier_address: "0xebc32dc2cac7c35e3b2055fccb57020a3918a326"
-  genesis_input_path: "./local-chains/v30.2/default/genesis.json"
+  genesis_input_path: "./local-chains/v30.2/genesis.json"
   chain_id: 6566
 
 l1_sender:

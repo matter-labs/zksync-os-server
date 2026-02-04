@@ -186,7 +186,7 @@ impl UpgradeTester {
 
         // Bytecode supplier is a bit special: right now it's not discoverable
         // The value is hardcoded, keep it aligned with `node/bin/src/config.rs`, it must correspond
-        // to the value stored in `zkos-l1-state.json`.
+        // to the value stored in `l1-state.json.gz`.
         let bytecode_supplier_address = default_config
             .genesis_config
             .bridgehub_address

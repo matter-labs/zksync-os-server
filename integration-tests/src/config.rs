@@ -3,7 +3,6 @@ use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tempfile::TempDir;
 use zksync_os_server::config::{Config, GenesisConfig};
 use zksync_os_types::ConfigFormat;
 
@@ -43,11 +42,14 @@ impl<'a> ChainLayout<'a> {
         }
     }
 
-    fn base_dir(self) -> PathBuf {
+    fn protocol_dir(self) -> PathBuf {
         workspace_dir()
             .join("local-chains")
             .join(self.protocol_version())
-            .join(self.dir())
+    }
+
+    fn base_dir(self) -> PathBuf {
+        self.protocol_dir().join(self.dir())
     }
 
     fn config_path(self) -> PathBuf {
@@ -60,8 +62,8 @@ impl<'a> ChainLayout<'a> {
         }
     }
 
-    fn l1_state(self) -> Vec<u8> {
-        let compressed_path = self.base_dir().join("zkos-l1-state.json.gz");
+    pub(crate) fn l1_state(self) -> Vec<u8> {
+        let compressed_path = self.protocol_dir().join("l1-state.json.gz");
         let data = std::fs::read(&compressed_path).expect("failed to read compressed L1 state");
         let mut decoder = GzDecoder::new(data.as_slice());
         let mut decoded_data = Vec::new();
@@ -86,14 +88,6 @@ pub fn load_chain_config(layout: ChainLayout<'_>) -> Config {
     let mut config = load_config_from_path(&layout.config_path());
     config.genesis_config.genesis_input_path = Some(layout.genesis_input_path());
     config
-}
-
-/// Get L1 state path for either default or multi-chain layout.
-pub fn get_l1_state_path(layout: ChainLayout<'_>, tempdir: &TempDir) -> String {
-    let state = layout.l1_state();
-    let path = tempdir.path().join("zkos-l1-state.json");
-    std::fs::write(&path, &state).expect("failed to write L1 state to temporary state file");
-    path.to_string_lossy().to_string()
 }
 
 /// Workspace directory path, taken from WORKSPACE_DIR environment variable.

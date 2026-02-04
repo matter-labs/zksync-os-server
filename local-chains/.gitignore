@@ -1,3 +1,0 @@
-# Uncompressed state files are not checked-in. States are supposed to be decompressed on the user side and only stored
-# locally.
-v*/*/zkos-l1-state.json
