@@ -31,7 +31,4 @@
 ---
 
 - [Guides](guides/index.md)
-  - [Generate L1 State and Genesis](guides/generate_l1_state.md)
-  - [Run against Layer 1 (L1)](guides/running_with_l1.md)
-  - [Updating Contracts](guides/updating.md)
-
+  - [Updating local chains: genesis and L1 state](guides/local_setup_update.md)

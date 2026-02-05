@@ -15,5 +15,4 @@ Deep dives into internal components and lifecycle.
 
 These guides help you set up and operate the server in different environments.
 
-- [Run against Layer 1 (L1)](guides/running_with_l1.md) — Local dev chain and Sepolia testnet setup, environment variables, common pitfalls.
-- [Updating Contracts](guides/updating.md) — Rebuilding and deploying custom contracts, migration flow, testing.
+- [Updating local chains: genesis and L1 state](./guides/local_setup_update.md) - local chain and setup, genesis and L1 state update guide.
