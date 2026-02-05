@@ -44,6 +44,7 @@ pub enum BlockReplayColumnFamily {
     ForcePreimages,
     BlockOutputHash,
     StartingInteropEventIndex,
+    CanonicalHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
 }
@@ -59,6 +60,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::BlockOutputHash,
         BlockReplayColumnFamily::ForcePreimages,
         BlockReplayColumnFamily::StartingInteropEventIndex,
+        BlockReplayColumnFamily::CanonicalHash,
         BlockReplayColumnFamily::Latest,
     ];
 
@@ -72,6 +74,7 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::BlockOutputHash => "block_output_hash",
             BlockReplayColumnFamily::ForcePreimages => "force_preimages",
             BlockReplayColumnFamily::StartingInteropEventIndex => "starting_interop_event_index",
+            BlockReplayColumnFamily::CanonicalHash => "canonical_hash",
             BlockReplayColumnFamily::Latest => "latest",
         }
     }
@@ -105,7 +108,7 @@ impl BlockReplayStorage {
                 starting_interop_event_index: InteropRootsLogIndex::default(),
             };
             this.write_replay_unchecked(
-                SealedReplayRecord::new(genesis_record, BlockHash::ZERO),
+                SealedReplayRecord::new(genesis_record, BlockHash::ZERO), /* TODO */
                 None,
             )
         }
@@ -153,6 +156,11 @@ impl BlockReplayStorage {
             BlockReplayColumnFamily::BlockOutputHash,
             &db_key,
             &record.block_output_hash.0,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::CanonicalHash,
+            &db_key,
+            &block_hash.0,
         );
         batch.put_cf(
             BlockReplayColumnFamily::ProtocolVersion,
