@@ -208,10 +208,6 @@ impl GasAdjuster {
         median + self.config.max_priority_fee_per_gas
     }
 
-    pub fn priority_fee(&self) -> u128 {
-        self.config.max_priority_fee_per_gas
-    }
-
     pub fn pubdata_price(&self) -> u128 {
         let price = match self.config.pubdata_mode {
             PubdataMode::Blobs => {
