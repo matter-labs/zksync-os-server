@@ -296,7 +296,9 @@ async fn tx_request_with_gas_fields(
     } else {
         eip1559_est.max_fee_per_gas
     };
-    let capped_max_priority_fee_per_gas = if eip1559_est.max_priority_fee_per_gas > max_priority_fee_per_gas {
+    let capped_max_priority_fee_per_gas = if eip1559_est.max_priority_fee_per_gas
+        > max_priority_fee_per_gas
+    {
         tracing::warn!(
             "L1 sender's configured max_priority_fee_per_gas ({max_priority_fee_per_gas}) \
              is lower than the one estimated from network  ({eip1559_est.max_priority_fee_per_gas}), \
