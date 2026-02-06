@@ -408,20 +408,19 @@ impl WriteReplay for BlockReplayStorage {
                 .get_replay_record(block_context.block_number)
                 .expect("Old record must exist");
             if &old_record != sealed_record.record() {
-                let db_key = self
+                let old_record_hash = self
                     .get_canonical_block_hash(block_context.block_number)
-                    .unwrap()
-                    .0;
-                let old_record_hex_db_key = alloy::hex::encode_prefixed(db_key);
+                    .unwrap();
+                let db_key = old_record_hash.0.to_vec();
+                let old_record_hex_db_key = alloy::hex::encode_prefixed(&db_key);
                 tracing::warn!(
                     block_number = block_context.block_number,
                     old_record_hex_db_key,
                     "Overriding existing block replay record",
                 );
-                let old_record_hash = BlockHash::ZERO; //TODO
                 self.write_replay_unchecked(
                     SealedReplayRecord::new(old_record, old_record_hash),
-                    Some(db_key.to_vec()),
+                    Some(db_key),
                 );
             }
         }
