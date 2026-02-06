@@ -130,14 +130,29 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                     "discovered batch #{batch_number} does not match stored batch"
                 )));
             }
-        } else if batch_number > latest_persisted_batch + 1 {
-            // This should only be possible if we skipped reverted batch previously and are now
-            // discovering more reverted batches.
-            tracing::warn!(
-                batch_number,
-                "non-sequential batch discovered; assuming revert and skipping"
-            );
         } else {
+            if batch_number > latest_persisted_batch + 1 {
+                if latest_persisted_batch == 0 {
+                    // We did not have `ReportCommittedBatchRangeZKsyncOS` event on some of the older
+                    // testnet chains (e.g. `stage`, `testnet-alpha`). These batches are considered to
+                    // be legacy and are not persisted in batch storage. Users will not be able to
+                    // generate L2->L1 log proofs for those batches through RPC.
+                    tracing::warn!(
+                        batch_number,
+                        "first discovered batch #{batch_number} is not batch #1; assuming batches #1-#{} are legacy and skipping them",
+                        batch_number - 1
+                    );
+                } else {
+                    // This should only be possible if we skipped reverted batch previously and are now
+                    // discovering more reverted batches.
+                    tracing::warn!(
+                        batch_number,
+                        latest_persisted_batch,
+                        "non-sequential batch discovered; assuming revert and skipping"
+                    );
+                    return Ok(());
+                }
+            }
             tracing::debug!(batch_number, "discovered committed batch");
             let committed_batch = self.parse_committed_batch(report, log).await?;
             // Wait until discovered batch is executed. Note: this will `await` for the entire time
