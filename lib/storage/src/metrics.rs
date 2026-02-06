@@ -26,5 +26,18 @@ pub struct RepositoriesMetrics {
     pub persist_block_number: Gauge<BlockNumber>,
 }
 
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "batch_storage")]
+pub struct BatchStorageMetrics {
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]
+    pub persist_latency: Histogram<Duration>,
+    #[metrics(unit = Unit::Bytes, buckets = BLOCK_DATA_SIZES)]
+    pub data_size: Histogram<usize>,
+    pub persist_batch_number: Gauge<u64>,
+}
+
 #[vise::register]
 pub(crate) static REPOSITORIES_METRICS: vise::Global<RepositoriesMetrics> = vise::Global::new();
+
+#[vise::register]
+pub(crate) static BATCH_STORAGE_METRICS: vise::Global<BatchStorageMetrics> = vise::Global::new();

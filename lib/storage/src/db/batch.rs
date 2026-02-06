@@ -1,3 +1,4 @@
+use crate::metrics::BATCH_STORAGE_METRICS;
 use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use std::path::Path;
@@ -52,6 +53,7 @@ impl ExecutedBatchStorage {
     }
 
     fn write_batch_unchecked(&self, executed_batch: DiscoveredCommittedBatch) {
+        let persist_latency_observer = BATCH_STORAGE_METRICS.persist_latency.start();
         let batch_number_key = executed_batch.number().to_be_bytes().to_vec();
         let first_block_number_key = executed_batch.first_block_number().to_be_bytes().to_vec();
         let batch_info_value = serde_json::to_vec(&executed_batch)
@@ -72,9 +74,16 @@ impl ExecutedBatchStorage {
             &first_block_number_key,
             &batch_number_key,
         );
+        BATCH_STORAGE_METRICS
+            .data_size
+            .observe(batch.size_in_bytes());
         self.db
             .write(batch)
             .expect("failed to write to batch storage");
+        persist_latency_observer.observe();
+        BATCH_STORAGE_METRICS
+            .persist_batch_number
+            .set(executed_batch.number());
     }
 }
 
