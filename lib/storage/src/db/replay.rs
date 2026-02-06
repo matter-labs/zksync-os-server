@@ -93,6 +93,7 @@ impl BlockReplayStorage {
         if this.latest_record_checked().is_none() {
             let genesis_tx = genesis.genesis_upgrade_tx().await;
             let genesis_context = &genesis.state().await.context;
+            let genesis_hash = genesis.state().await.header.hash();
             tracing::info!(
                 "block replay DB is empty, assuming start of the chain; appending genesis"
             );
@@ -107,10 +108,7 @@ impl BlockReplayStorage {
                 force_preimages: genesis_tx.force_deploy_preimages,
                 starting_interop_event_index: InteropRootsLogIndex::default(),
             };
-            this.write_replay_unchecked(
-                SealedReplayRecord::new(genesis_record, BlockHash::ZERO), /* TODO */
-                None,
-            )
+            this.write_replay_unchecked(SealedReplayRecord::new(genesis_record, genesis_hash), None)
         }
         this
     }
@@ -207,6 +205,20 @@ impl BlockReplayStorage {
                 let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
                 u64::from_be_bytes(arr)
             })
+    }
+
+    /// Given `block_number` retrieve block's hash.
+    /// If the block was committed before introduction of CanonicalHash CF
+    /// or there is no record for this block, function will return None.
+    fn get_canonical_block_hash(&self, block_number: BlockNumber) -> Option<BlockHash> {
+        // TODO: Once all blocks are indexed by hash, make it work for old blocks as well
+        // After that, we can .expect("writes should be atomic") instead of ?
+        let key = block_number.to_be_bytes();
+        let hash = self
+            .db
+            .get_cf(BlockReplayColumnFamily::CanonicalHash, &key)
+            .expect("Cannot read from DB")?;
+        Some(BlockHash::from_slice(&hash))
     }
 }
 
@@ -396,19 +408,11 @@ impl WriteReplay for BlockReplayStorage {
                 .get_replay_record(block_context.block_number)
                 .expect("Old record must exist");
             if &old_record != sealed_record.record() {
-                let seconds = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Incorrect system time")
-                    .as_secs();
-                let db_key = old_record
-                    .block_context
-                    .block_number
-                    .to_be_bytes()
-                    .to_vec()
-                    .into_iter()
-                    .chain(seconds.to_be_bytes())
-                    .collect();
-                let old_record_hex_db_key = alloy::hex::encode_prefixed(&db_key);
+                let db_key = self
+                    .get_canonical_block_hash(block_context.block_number)
+                    .unwrap()
+                    .0;
+                let old_record_hex_db_key = alloy::hex::encode_prefixed(db_key);
                 tracing::warn!(
                     block_number = block_context.block_number,
                     old_record_hex_db_key,
@@ -417,7 +421,7 @@ impl WriteReplay for BlockReplayStorage {
                 let old_record_hash = BlockHash::ZERO; //TODO
                 self.write_replay_unchecked(
                     SealedReplayRecord::new(old_record, old_record_hash),
-                    Some(db_key),
+                    Some(db_key.to_vec()),
                 );
             }
         }
