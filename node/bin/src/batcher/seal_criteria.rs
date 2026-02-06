@@ -60,25 +60,21 @@ impl BatchInfoAccumulator {
         self.interop_roots_count += replay_record
             .transactions
             .iter()
-            .map(|tx| match tx.inner.inner() {
-                ZkEnvelope::System(envelope) => {
-                    let SystemTxType::ImportInteropRoots(roots_count) = envelope.tx_type() else {
-                        return 0;
-                    };
+            .map(|tx| {
+                if let Some(SystemTxType::ImportInteropRoots(roots_count)) = *tx.as_system_tx_type()
+                {
                     roots_count
+                } else {
+                    0
                 }
-                _ => 0,
             })
             .sum::<u64>();
 
-        // If there is a chain id update transaction not in the first block, we need to seal the batch for gateway migration(so it goes in the first block of the next batch)
+        // If there is a chain id update transaction not in the first block(note `self.block_count > 1`), we need to seal the batch for gateway migration(so it goes in the first block of the next batch)
         if replay_record
             .transactions
             .iter()
-            .any(|tx| match tx.inner.inner() {
-                ZkEnvelope::System(envelope) => envelope.tx_type() == SystemTxType::SetSLChainId,
-                _ => false,
-            })
+            .any(|tx| tx.as_system_tx_type() == Some(&SystemTxType::SetSLChainId))
             && self.block_count > 1
         {
             self.should_seal_for_gateway_migration = true;
@@ -158,7 +154,8 @@ impl BatchInfoAccumulator {
             return true;
         }
 
-        // In case SL chain id update tx is present and there are other transactions in batch, we need it to go in the first block of the next batch
+        // In case SL chain id update tx is present but not in the first block, we need to seal and
+        // exclude. It will then go in the first block of the next batch.
         if self.should_seal_for_gateway_migration {
             BATCHER_METRICS.seal_reason[&"chain_id_update_tx"].inc();
             tracing::debug!(

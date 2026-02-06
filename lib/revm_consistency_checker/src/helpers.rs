@@ -38,7 +38,7 @@ pub fn zk_tx_into_revm_tx(
         refund_recipient,
     ) = match envelope {
         zksync_os_types::ZkEnvelope::System(_) => {
-            unimplemented!("handle interop txs");
+            unimplemented!("handle system txs");
         }
         zksync_os_types::ZkEnvelope::L2(l2_tx) => {
             // L2 transactions are standard Ethereum transactions

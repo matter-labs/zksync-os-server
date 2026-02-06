@@ -11,9 +11,9 @@ use alloy_rlp::{BufMut, Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use zksync_os_contract_interface::InteropRoot;
+
 pub mod tx;
 pub mod utils;
-
 pub use utils::{SYSTEM_TX_TYPE_ID, SystemTxType};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -21,17 +21,19 @@ pub use utils::{SYSTEM_TX_TYPE_ID, SystemTxType};
 pub struct SystemTxEnvelope {
     /// Hash of the transaction
     /// Stored in an envelope and calculated separately from transaction as hash of transaction is not part of transaction itself.
-    pub hash: B256,
-    pub inner: SystemTx,
+    hash: B256,
+    inner: SystemTx,
     #[serde(skip)]
-    pub tx_type: OnceLock<SystemTxType>,
+    subtype: OnceLock<SystemTxType>,
 }
 
 impl SystemTxEnvelope {
+    /// A constructor for system transaction that imports interop roots
     pub fn import_interop_roots(roots: Vec<InteropRoot>) -> Self {
         Self::create_from_input(SystemTxInput::ImportInteropRoots(roots))
     }
 
+    /// A constructor for system transaction that sets the settlement layer chain id
     pub fn set_sl_chain_id(chain_id: ChainId) -> Self {
         Self::create_from_input(SystemTxInput::SetSLChainId(chain_id))
     }
@@ -47,30 +49,24 @@ impl SystemTxEnvelope {
         Self {
             hash: transaction.calculate_hash(),
             inner: transaction,
-            tx_type: OnceLock::new(),
+            subtype: OnceLock::new(),
         }
     }
 
-    pub fn tx_type(&self) -> SystemTxType {
-        self.tx_type
+    pub fn system_subtype(&self) -> &SystemTxType {
+        &self
+            .subtype
             .get_or_init(|| match SystemTxInput::abi_decode(self.inner.input()) {
                 SystemTxInput::ImportInteropRoots(roots) => {
                     SystemTxType::ImportInteropRoots(roots.len() as u64)
                 }
                 SystemTxInput::SetSLChainId(_) => SystemTxType::SetSLChainId,
             })
-            .clone()
     }
 
     pub fn hash(&self) -> &B256 {
         &self.hash
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IndexedInteropRootsEnvelope {
-    pub log_index: InteropRootsLogIndex,
-    pub envelope: SystemTxEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -187,7 +183,7 @@ impl RlpEcdsaDecodableTx for SystemTxEnvelope {
         Ok(Self {
             hash: transaction.calculate_hash(),
             inner: transaction,
-            tx_type: OnceLock::new(),
+            subtype: OnceLock::new(),
         })
     }
 }
@@ -226,7 +222,7 @@ impl Decodable2718 for SystemTxEnvelope {
         Ok(Self {
             hash,
             inner: transaction,
-            tx_type: OnceLock::new(),
+            subtype: OnceLock::new(),
         })
     }
 

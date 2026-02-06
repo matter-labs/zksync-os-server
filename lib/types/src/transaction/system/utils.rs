@@ -10,7 +10,7 @@ use zksync_os_contract_interface::{
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000008001");
-pub const L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS: Address =
+pub const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000010008");
 pub const SYSTEM_CONTEXT_ADDRESS: Address = address!("0x000000000000000000000000000000000000800b");
 
@@ -47,7 +47,7 @@ impl SystemTxInput {
 
     pub fn to_address(&self) -> Address {
         match self {
-            Self::ImportInteropRoots(_) => L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS,
+            Self::ImportInteropRoots(_) => L2_INTEROP_ROOT_STORAGE_ADDRESS,
             Self::SetSLChainId(_) => SYSTEM_CONTEXT_ADDRESS,
         }
     }

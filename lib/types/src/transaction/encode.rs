@@ -40,7 +40,7 @@ impl ZksyncOsEncode for ZkTransaction {
     fn encode(self) -> EncodedTx {
         let (envelope, signer) = self.into_parts();
         match envelope {
-            ZkEnvelope::System(interop_envelope) => interop_envelope.encode(),
+            ZkEnvelope::System(system_envelope) => system_envelope.encode(),
             ZkEnvelope::L1(l1_envelope) => l1_envelope.encode(),
             ZkEnvelope::Upgrade(upgrade_envelope) => upgrade_envelope.encode(),
             ZkEnvelope::L2(l2_envelope) => {

@@ -133,7 +133,6 @@ impl RlpEcdsaDecodableTx for SystemTx {
     }
 }
 
-// if something goes wrong with encoding, there's a chance that something is wrong here
 impl Encodable for SystemTx {
     fn encode(&self, out: &mut dyn BufMut) {
         self.rlp_encode(out);
