@@ -33,43 +33,55 @@ enum CliCommand {
 #[derive(Debug, Parser)]
 #[command(author = "Matter Labs", version, about = "ZKsync OS node", long_about = None)]
 struct Cli {
-    /// Path to a JSON or YAML config file. If not specified, default config will attempted to be loaded to fill in the config
-    /// values for local setup. If default config is missing, no configs will be loaded, and they must be explicitly set
-    /// via other configuration means (e.g. environment variables). Env variables override config settings from the file
-    /// if both are provided. The file format is detected based on the file extension (.json, .yaml, or .yml).
-    #[arg(long)]
-    config: Option<String>,
+    /// Paths to JSON or YAML config files. Multiple files can be specified by repeating the flag
+    /// (e.g. `--config main.yaml --config overrides.json`) or using `:` as a delimiter
+    /// (e.g. `--config main.yaml:overrides.json`). Files are loaded in order, with later files
+    /// taking precedence. If not specified, default config will be attempted to be loaded to fill
+    /// in the config values for local setup. If default config is missing, no configs will be
+    /// loaded, and they must be explicitly set via other configuration means (e.g. environment
+    /// variables). Env variables override config settings from all files. The file format is
+    /// detected based on the file extension (.json, .yaml, or .yml).
+    #[arg(long, value_delimiter = ':')]
+    config: Option<Vec<String>>,
 
     #[command(subcommand)]
     cmd: Option<CliCommand>,
 }
 
-fn load_config_defaults(config_sources: &mut ConfigSources, config_path: Option<String>) {
-    // Process the config file if provided or if default exists
-    let config_path: Option<String> = config_path.or_else(|| {
-        let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.yaml");
-        Path::new(&default_path).exists().then_some(default_path)
-    });
+fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option<Vec<String>>) {
+    // Process the config files if provided or if default exists
+    let config_paths: Vec<String> = config_paths
+        .filter(|paths| !paths.is_empty())
+        .unwrap_or_else(|| {
+            let default_path = format!("./local-chains/{PROTOCOL_VERSION}/default/config.yaml");
+            if Path::new(&default_path).exists() {
+                vec![default_path]
+            } else {
+                vec![]
+            }
+        });
 
-    if let Some(config_path) = &config_path {
-        let config_contents =
-            fs::read_to_string(config_path).expect("Failed to read config file from provided path");
+    for config_path in &config_paths {
+        let config_contents = fs::read_to_string(config_path)
+            .unwrap_or_else(|_| panic!("Failed to read config file from path '{config_path}'"));
 
         // Detect file format based on extension
         let path = Path::new(config_path);
         match ConfigFormat::from_path(path) {
             ConfigFormat::Yaml => {
                 let config_yaml: serde_yaml::Mapping = serde_yaml::from_str(&config_contents)
-                    .expect("Failed to parse YAML config file from provided path");
-                config_sources.push(
-                    Yaml::new(config_path, config_yaml)
-                        .expect("Failed to create YAML config source"),
-                );
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to parse YAML config file from path '{config_path}'")
+                    });
+                config_sources.push(Yaml::new(config_path, config_yaml).unwrap_or_else(|_| {
+                    panic!("Failed to create YAML config source from path '{config_path}'")
+                }));
             }
             ConfigFormat::Json => {
                 let config_json: serde_json::Map<String, serde_json::Value> =
-                    serde_json::from_str(&config_contents)
-                        .expect("Failed to parse JSON config file from provided path");
+                    serde_json::from_str(&config_contents).unwrap_or_else(|_| {
+                        panic!("Failed to parse JSON config file from path '{config_path}'")
+                    });
                 config_sources.push(Json::new(config_path, config_json));
             }
         }
