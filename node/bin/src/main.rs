@@ -73,11 +73,9 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option
                     .unwrap_or_else(|_| {
                         panic!("Failed to parse YAML config file from path '{config_path}'")
                     });
-                config_sources.push(
-                    Yaml::new(config_path, config_yaml).unwrap_or_else(|_| {
-                        panic!("Failed to create YAML config source from path '{config_path}'")
-                    }),
-                );
+                config_sources.push(Yaml::new(config_path, config_yaml).unwrap_or_else(|_| {
+                    panic!("Failed to create YAML config source from path '{config_path}'")
+                }));
             }
             ConfigFormat::Json => {
                 let config_json: serde_json::Map<String, serde_json::Value> =
