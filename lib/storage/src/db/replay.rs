@@ -44,6 +44,7 @@ pub enum BlockReplayColumnFamily {
     ForcePreimages,
     BlockOutputHash,
     StartingInteropEventIndex,
+    /// Mapping from block_number to block hash, maps hashes of non-canonical blocks to themselves.
     CanonicalHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
@@ -116,6 +117,7 @@ impl BlockReplayStorage {
     fn write_replay_unchecked(&self, sealed_record: SealedReplayRecord, db_key: Option<Vec<u8>>) {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
+        /// TODO: We want to change the key to be block_hash eventually
         let db_key =
             db_key.unwrap_or_else(|| record.block_context.block_number.to_be_bytes().to_vec());
         let context_value =
