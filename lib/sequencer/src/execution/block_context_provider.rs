@@ -40,7 +40,7 @@ pub struct BlockContextProvider<Mempool> {
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
     sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
-    interop_tx_pool: InteropRootsTxPool,
+    interop_roots_tx_pool: InteropRootsTxPool,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -67,7 +67,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
         sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
-        interop_tx_pool: InteropRootsTxPool,
+        interop_roots_tx_pool: InteropRootsTxPool,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -88,7 +88,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             l1_transactions,
             upgrade_transactions,
             sl_chain_id_update_transactions,
-            interop_tx_pool,
+            interop_roots_tx_pool,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -119,7 +119,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                     &self.l2_mempool,
                     &mut self.l1_transactions,
                     &mut self.sl_chain_id_update_transactions,
-                    self.interop_tx_pool.interop_transactions_with_delay(
+                    self.interop_roots_tx_pool.interop_transactions_with_delay(
                         self.interop_roots_per_tx,
                         self.next_interop_tx_allowed_after,
                     ),
@@ -375,8 +375,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             }
         }
 
-        if let Some(last_interop_log_index) =
-            self.interop_tx_pool.on_canonical_state_change(interop_txs)
+        if let Some(last_interop_log_index) = self
+            .interop_roots_tx_pool
+            .on_canonical_state_change(interop_txs)
         {
             self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
             self.next_interop_event_index = InteropRootsLogIndex {

@@ -429,7 +429,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
-    let interop_tx_pool = InteropRootsTxPool::new(10);
+    let interop_roots_tx_pool = InteropRootsTxPool::new(10);
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
@@ -437,7 +437,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 node_startup_state.l1_state.bridgehub.clone(),
                 config.l1_watcher_config.clone().into(),
                 next_interop_event_index.clone(),
-                interop_tx_pool.clone(),
+                interop_roots_tx_pool.clone(),
             )
             .await
             .expect("failed to start L1 interop roots watcher")
@@ -587,7 +587,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         l1_transactions_for_sequencer,
         l1_upgrade_transactions_receiver,
         sl_chain_id_update_transactions_receiver,
-        interop_tx_pool,
+        interop_roots_tx_pool,
         l2_mempool.clone(),
         block_hashes_for_next_block,
         previous_block_timestamp,

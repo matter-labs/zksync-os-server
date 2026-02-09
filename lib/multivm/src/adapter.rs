@@ -10,8 +10,8 @@ pub(crate) fn convert_tx_to_abi(encoded_tx: EncodedTx) -> EncodedTx {
                 .expect("Failed to decode 2718 transaction");
             let tx = match envelope {
                 ZkEnvelope::System(_) => {
-                    // Interop is not supported in pre-0.1.0 versions of ZKsync OS.
-                    unreachable!("Interop transactions are not supported by old ZKsync OS versions")
+                    // System transactions are not supported in pre-0.1.0 versions of ZKsync OS.
+                    unreachable!("System transactions are not supported by old ZKsync OS versions")
                 }
                 ZkEnvelope::Upgrade(_) => {
                     unreachable!("Upgrade transactions are never RLP-encoded")

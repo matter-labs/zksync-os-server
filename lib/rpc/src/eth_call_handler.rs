@@ -148,7 +148,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 return Err(EthCallError::UpgradeTxNotEstimatable);
             }
             Some(SYSTEM_TX_TYPE_ID) => {
-                return Err(EthCallError::SystemInteropRootsTxNotEstimatable);
+                return Err(EthCallError::SystemTxNotEstimatable);
             }
             _ => {}
         }
@@ -709,8 +709,8 @@ pub enum EthCallError {
     Eip7702NotSupported,
     #[error("upgrade transactions cannot be estimated")]
     UpgradeTxNotEstimatable,
-    #[error("system interop roots transactions cannot be estimated")]
-    SystemInteropRootsTxNotEstimatable,
+    #[error("system transactions cannot be estimated")]
+    SystemTxNotEstimatable,
 
     /// Error while decoding or validating transaction request fees.
     #[error(transparent)]

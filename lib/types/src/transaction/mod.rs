@@ -22,7 +22,7 @@ use std::hash::Hash;
 use alloy::rlp as alloy_rlp;
 
 /// ZKsync OS transaction envelope describing [EIP-2718] envelopes, custom L1->L2 transaction
-/// envelope and custom transaction envelope for publishing interop roots.
+/// envelope and custom transaction envelope for system transactions.
 ///
 /// [EIP-2718]: https://eips.ethereum.org/EIPS/eip-2718
 #[derive(Clone, Debug, TransactionEnvelope)]
@@ -52,7 +52,7 @@ impl ZkEnvelope {
     /// Recovers the signer of inner transaction and returns a `ZkTransaction`.
     pub fn try_into_recovered(self) -> Result<ZkTransaction, RecoveryError> {
         match self {
-            Self::System(interop_tx) => Ok(ZkTransaction::from(interop_tx)),
+            Self::System(system_tx) => Ok(ZkTransaction::from(system_tx)),
             Self::Upgrade(upgrade_tx) => Ok(ZkTransaction::from(upgrade_tx)),
             Self::L1(l1_tx) => Ok(ZkTransaction::from(l1_tx)),
             Self::L2(l2_tx) => Ok(ZkTransaction::from(SignerRecoverable::try_into_recovered(
@@ -118,7 +118,7 @@ impl ZkTransaction {
 
     pub fn hash(&self) -> &B256 {
         match self.envelope() {
-            ZkEnvelope::System(interop_tx) => interop_tx.hash(),
+            ZkEnvelope::System(system_tx) => system_tx.hash(),
             ZkEnvelope::Upgrade(upgrade_tx) => upgrade_tx.hash(),
             ZkEnvelope::L1(l1_tx) => l1_tx.hash(),
             ZkEnvelope::L2(l2_tx) => l2_tx.hash(),

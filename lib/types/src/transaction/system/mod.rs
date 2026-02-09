@@ -319,11 +319,10 @@ mod tests {
 
     use crate::SystemTxEnvelope;
 
+    /// System transaction serialization should be consistent with Ethereum JSON-RPC spec
+    /// See https://ethereum.github.io/execution-apis/api-documentation/
     #[test]
     fn interop_roots_tx_serialization() {
-        // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
-        // See https://ethereum.github.io/execution-apis/api-documentation/
-
         let tx = SystemTxEnvelope::import_interop_roots(vec![InteropRoot {
             chainId: Uint::from(1),
             blockOrBatchNumber: Uint::from(1),
@@ -352,9 +351,6 @@ mod tests {
 
     #[test]
     fn set_sl_chain_id_tx_serialization() {
-        // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
-        // See https://ethereum.github.io/execution-apis/api-documentation/
-
         let tx = SystemTxEnvelope::set_sl_chain_id(1);
 
         assert_eq!(
