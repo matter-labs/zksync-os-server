@@ -159,7 +159,7 @@ impl ZkTransaction {
 
     pub fn as_system_tx_type(&self) -> Option<&SystemTxType> {
         match self.envelope() {
-            ZkEnvelope::System(envelope) => Some(&envelope.system_subtype()),
+            ZkEnvelope::System(envelope) => Some(envelope.system_subtype()),
             _ => None,
         }
     }

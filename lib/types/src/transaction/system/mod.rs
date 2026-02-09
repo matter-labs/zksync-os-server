@@ -62,7 +62,7 @@ impl SystemTxEnvelope {
     }
 
     pub fn system_subtype(&self) -> &SystemTxType {
-        &self.subtype.get_or_init(|| {
+        self.subtype.get_or_init(|| {
             let input = SystemTxInput::abi_decode(self.inner.input());
             assert_eq!(self.to(), Some(input.to_address()));
             match input {
