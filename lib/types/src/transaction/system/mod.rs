@@ -14,9 +14,9 @@ use zksync_os_contract_interface::InteropRoot;
 
 pub mod tx;
 pub mod utils;
-pub use utils::{SYSTEM_TX_TYPE_ID, SystemTxType};
+pub use utils::{L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_TX_TYPE_ID, SystemTxType};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(into = "tx_serde::TransactionSerdeHelper")]
 pub struct SystemTxEnvelope {
     /// Hash of the transaction
@@ -25,6 +25,14 @@ pub struct SystemTxEnvelope {
     inner: SystemTx,
     #[serde(skip)]
     subtype: OnceLock<SystemTxType>,
+}
+
+impl PartialEq for SystemTxEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash() == other.hash()
+            && self.inner == other.inner
+            && self.system_subtype() == other.system_subtype()
+    }
 }
 
 impl SystemTxEnvelope {
@@ -54,14 +62,16 @@ impl SystemTxEnvelope {
     }
 
     pub fn system_subtype(&self) -> &SystemTxType {
-        &self
-            .subtype
-            .get_or_init(|| match SystemTxInput::abi_decode(self.inner.input()) {
+        &self.subtype.get_or_init(|| {
+            let input = SystemTxInput::abi_decode(self.inner.input());
+            assert_eq!(self.to(), Some(input.to_address()));
+            match input {
                 SystemTxInput::ImportInteropRoots(roots) => {
                     SystemTxType::ImportInteropRoots(roots.len() as u64)
                 }
                 SystemTxInput::SetSLChainId(_) => SystemTxType::SetSLChainId,
-            })
+            }
+        })
     }
 
     pub fn hash(&self) -> &B256 {
@@ -304,10 +314,44 @@ impl Transaction for SystemTxEnvelope {
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::{B256, Uint};
+    use zksync_os_contract_interface::InteropRoot;
+
     use crate::SystemTxEnvelope;
 
     #[test]
     fn interop_roots_tx_serialization() {
+        // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
+        // See https://ethereum.github.io/execution-apis/api-documentation/
+
+        let tx = SystemTxEnvelope::import_interop_roots(vec![InteropRoot {
+            chainId: Uint::from(1),
+            blockOrBatchNumber: Uint::from(1),
+            sides: vec![B256::ZERO],
+        }]);
+
+        assert_eq!(
+            serde_json::to_string_pretty(&tx).unwrap(),
+            r#"{
+  "hash": "0x1f7117fa6190a6da113e9b7223222d3bc3b7c4c866772385e05ec79041e8f0ba",
+  "initiator": "0x0000000000000000000000000000000000008001",
+  "to": "0x0000000000000000000000000000000000010008",
+  "gas": "0x0",
+  "maxFeePerGas": "0x0",
+  "maxPriorityFeePerGas": "0x0",
+  "nonce": "0x0",
+  "value": "0x0",
+  "input": "0xcca2f7bc00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
+  "v": "0x0",
+  "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "yParity": "0x0"
+}"#
+        );
+    }
+
+    #[test]
+    fn set_sl_chain_id_tx_serialization() {
         // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
         // See https://ethereum.github.io/execution-apis/api-documentation/
 

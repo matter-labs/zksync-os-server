@@ -9,6 +9,7 @@ pub use system::*;
 
 use std::fmt;
 
+use crate::transaction::utils::BOOTLOADER_FORMAL_ADDRESS;
 use alloy::consensus::crypto::RecoveryError;
 use alloy::consensus::transaction::{Recovered, SignerRecoverable};
 use alloy::consensus::{Transaction, TransactionEnvelope};
@@ -19,8 +20,6 @@ use std::hash::Hash;
 
 // `TransactionEnvelope` derive macro below depends on this being present
 use alloy::rlp as alloy_rlp;
-
-use crate::transaction::utils::BOOTLOADER_FORMAL_ADDRESS;
 
 /// ZKsync OS transaction envelope describing [EIP-2718] envelopes, custom L1->L2 transaction
 /// envelope and custom transaction envelope for publishing interop roots.
@@ -204,7 +203,7 @@ impl From<L2Transaction> for ZkTransaction {
 impl fmt::Display for ZkTxType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::System => write!(f, "InteropRoots"),
+            Self::System => write!(f, "System"),
             Self::L2(tx) => tx.fmt(f),
             Self::L1 => write!(f, "L1"),
             Self::Upgrade => write!(f, "Upgrade"),

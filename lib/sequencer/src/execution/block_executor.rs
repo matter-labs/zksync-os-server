@@ -139,7 +139,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                         }
 
                         let tx_type = tx.tx_type();
-                        executed_txs.push(tx.clone());
+                        executed_txs.push(tx);
                         cumulative_gas_used += res.gas_used;
 
                         // arm the timer once, after the first successful tx
@@ -160,7 +160,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                         }
 
                         // If the only transaction provided is an SL chain id update transaction, we need to seal the block.
-                        if let Some(SystemTxType::SetSLChainId) = tx.as_system_tx_type() {
+                        if let Some(SystemTxType::SetSLChainId) = executed_txs.last().unwrap().as_system_tx_type() {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
                                     tracing::debug!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");

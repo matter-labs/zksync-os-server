@@ -17,7 +17,7 @@ mod transaction;
 pub use transaction::{
     IndexedInteropRoot, InteropRootsLogIndex, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1EnvelopeError,
     L1PriorityEnvelope, L1PriorityTx, L1PriorityTxType, L1Tx, L1TxSerialId, L1TxType,
-    L1UpgradeEnvelope, L1UpgradeTx, L2Envelope, L2Transaction,
+    L1UpgradeEnvelope, L1UpgradeTx, L2_INTEROP_ROOT_STORAGE_ADDRESS, L2Envelope, L2Transaction,
     REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, SystemTxEnvelope, SystemTxType,
     TransactionData, UpgradeTransaction, UpgradeTxType, ZkEnvelope, ZkTransaction, ZkTxType,
     ZksyncOsEncode,

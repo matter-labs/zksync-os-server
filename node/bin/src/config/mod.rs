@@ -542,6 +542,10 @@ pub struct L1WatcherConfig {
     /// How often to poll L1 for new priority requests.
     #[config(default_t = 100 * TimeUnit::Millis)]
     pub poll_interval: Duration,
+
+    /// Whether to run gateway migration watcher.
+    #[config(default_t = false)]
+    pub enable_gw_migration_watcher: bool,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]

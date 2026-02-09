@@ -53,13 +53,26 @@ impl SystemTxInput {
     }
 
     pub fn abi_decode(data: &Bytes) -> Self {
-        match addInteropRootsInBatchCall::abi_decode(data) {
-            Ok(call) => Self::ImportInteropRoots(call.interopRootsInput),
-            Err(_) => {
+        let selector_bytes: [u8; 4] = data
+            .slice(..4)
+            .to_vec()
+            .try_into()
+            .expect("Failed to get selector bytes from system transaction data");
+        match selector_bytes {
+            addInteropRootsInBatchCall::SELECTOR => {
+                let call = addInteropRootsInBatchCall::abi_decode(data)
+                    .expect("failed to decode interop roots system transaction");
+                Self::ImportInteropRoots(call.interopRootsInput)
+            }
+            setSettlementLayerChainIdCall::SELECTOR => {
                 let call = setSettlementLayerChainIdCall::abi_decode(data)
-                    .expect("failed to decode system transaction");
+                    .expect("failed to decode SL chain id system transaction");
                 Self::SetSLChainId(call._newSettlementLayerChainId.try_into().unwrap())
             }
+            _ => panic!(
+                "unknown system transaction selector: {}",
+                alloy::hex::encode(selector_bytes)
+            ),
         }
     }
 }

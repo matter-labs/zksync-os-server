@@ -449,7 +449,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (sl_chain_id_update_transactions_sender, sl_chain_id_update_transactions_receiver) =
         tokio::sync::mpsc::channel(10);
 
-    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
+    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0)
+        && config.l1_watcher_config.enable_gw_migration_watcher
+    {
+        // todo: add proper handling of gateway migration watcher/differentiating between gateway and l1
         let is_gateway = false;
         if is_gateway {
             tasks.spawn(

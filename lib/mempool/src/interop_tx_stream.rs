@@ -175,8 +175,7 @@ impl InteropRootsTxPoolInner {
             );
             log_index = roots.last().unwrap().log_index.clone();
 
-            assert_eq!(&envelope.hash(), &tx.hash());
-            // todo: fix assert_eq!(&envelope.inner, &tx.inner);
+            assert_eq!(envelope, tx)
         }
 
         Some(log_index)
