@@ -33,8 +33,9 @@ impl CallFees {
                         // when no fields are specified, set gas price to zero
                         gas_price.unwrap_or_default()
                     }
+                    // ignore base fee when tx's gas price is missing
+                    (_, None | Some(0)) => 0,
                     // only enforce the fee cap if provided input is not zero
-                    (_, None | Some(0)) => block_base_fee,
                     (_, Some(gas_price)) if gas_price < block_base_fee => {
                         return Err(CallFeesError::FeeCapTooLow);
                     }
@@ -47,6 +48,13 @@ impl CallFees {
             }
             (None, max_fee_per_gas, max_priority_fee_per_gas) => {
                 let effective_gas_price = match max_fee_per_gas {
+                    None | Some(0) => match max_priority_fee_per_gas {
+                        None | Some(0) => 0,
+                        // respect basefee when priority fee is non-zero
+                        Some(max_priority_fee_per_gas) => block_base_fee
+                            .checked_add(max_priority_fee_per_gas)
+                            .ok_or(CallFeesError::TipVeryHigh)?,
+                    },
                     Some(max_fee_per_gas) => {
                         let max_priority_fee_per_gas = max_priority_fee_per_gas.unwrap_or_default();
 
@@ -66,9 +74,6 @@ impl CallFees {
                                 .ok_or(CallFeesError::TipVeryHigh)?,
                         )
                     }
-                    None => block_base_fee
-                        .checked_add(max_priority_fee_per_gas.unwrap_or_default())
-                        .ok_or(CallFeesError::TipVeryHigh)?,
                 };
 
                 Ok(Self {

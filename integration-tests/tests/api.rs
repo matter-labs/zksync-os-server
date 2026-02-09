@@ -1,6 +1,6 @@
 use alloy::eips::Encodable2718;
 use alloy::network::{ReceiptResponse, TransactionBuilder, TxSigner};
-use alloy::primitives::{TxHash, U128, U256, address, bytes};
+use alloy::primitives::{TxHash, U128, U256, address};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use regex::Regex;
@@ -238,13 +238,22 @@ async fn estimate_gas_with_high_prices() -> anyhow::Result<()> {
 async fn estimate_gas_without_balance() -> anyhow::Result<()> {
     // Test that the node can estimate transaction's gas even if sender does not have enough balance.
     let tester = Tester::setup().await?;
-    let _estimated_gas = tester
-        .l2_provider
-        .estimate_gas(
-            TransactionRequest::default()
-                .to(address!("0x6e3338eB78A71C5FfF5Cd2673f9C63b7229fAa0b"))
-                .input(bytes!("0x38711eC715A5A32180427792Dc0e97f8E3303071").into()),
-        )
-        .await?;
+    let req = TransactionRequest::default()
+        .to(address!("0xF8fF3e62E94807a5C687f418Fe36942dD3a24525"))
+        .from(address!("0x38711eC715A5A32180427792Dc0e97f8E3303072"));
+    let txs_requests = [
+        // no gas price fields are specified
+        req.clone(),
+        // `gasPrice=0`
+        req.clone().gas_price(0),
+        // `maxPriorityFeePerGas=0`
+        req.clone().max_priority_fee_per_gas(0),
+        // `maxFeePerGas=0,maxPriorityFeePerGas=0`
+        req.clone().max_fee_per_gas(0).max_priority_fee_per_gas(0),
+    ];
+    for (i, tx_request) in txs_requests.into_iter().enumerate() {
+        let estimated_gas = tester.l2_provider.estimate_gas(tx_request).await?;
+        tracing::info!("Estimated gas for tx #{i}: {estimated_gas}");
+    }
     Ok(())
 }
