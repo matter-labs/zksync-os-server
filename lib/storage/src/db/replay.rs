@@ -1,7 +1,7 @@
 use alloy::primitives::{B256, BlockHash, BlockNumber};
 use std::convert::TryInto;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
 use zksync_os_genesis::Genesis;
@@ -117,7 +117,7 @@ impl BlockReplayStorage {
     fn write_replay_unchecked(&self, sealed_record: SealedReplayRecord, db_key: Option<Vec<u8>>) {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
-        /// TODO: We want to change the key to be block_hash eventually
+        // TODO: We want to change the key to be block_hash eventually
         let db_key =
             db_key.unwrap_or_else(|| record.block_context.block_number.to_be_bytes().to_vec());
         let context_value =
