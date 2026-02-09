@@ -1,4 +1,3 @@
 # Guides
 
-* [Run against Layer 1 (L1)](running_with_l1.md)
-* [Updating Contracts](updating.md)
+- [Update local setup: genesis and L1 state](./local_setup_update.md)

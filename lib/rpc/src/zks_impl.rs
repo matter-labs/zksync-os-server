@@ -212,7 +212,8 @@ pub enum ZksError {
     #[error("L1 batch containing the transaction has not been executed yet")]
     NotExecutedYet,
     /// Block is executed according to L1 but hasn't been indexed by this node yet. Client needs to
-    /// retry after some time passes.
+    /// retry after some time passes. For early blocks in old testnets it can also mean that the
+    /// batch is legacy and the node does not index it anymore.
     #[error("L1 batch containing the transaction has not been indexed by this node yet")]
     BlockNotAvailableYet,
     /// Historical block could not be found on this node (e.g., pruned).

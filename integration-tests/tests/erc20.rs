@@ -22,7 +22,7 @@ use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxTyp
 #[test_log::test(tokio::test)]
 async fn erc20_deposit() -> anyhow::Result<()> {
     let tester = Tester::setup().await?;
-    let alice = tester.l1_wallet.default_signer().address();
+    let alice = tester.l1_wallet().default_signer().address();
 
     // Mint ERC20 tokens on L1 for Alice
     let mint_amount = U256::from(100u64);
@@ -136,7 +136,7 @@ async fn erc20_withdrawal() -> anyhow::Result<()> {
         .await?;
     // Finalize withdrawal on L1.
     let l1_asset_router =
-        L1AssetRouter::new(tester.l1_provider.clone(), tester.l2_zk_provider.clone()).await?;
+        L1AssetRouter::new(tester.l1_provider().clone(), tester.l2_zk_provider.clone()).await?;
     let l1_nullifier = l1_asset_router.l1_nullifier().await?;
     l1_nullifier.finalize_withdrawal(l2_receipt).await?;
 
@@ -163,14 +163,14 @@ async fn deploy_l1_token_and_mint(
     mint_amount: U256,
 ) -> anyhow::Result<TestERC20Instance<EthDynProvider>> {
     let l1_erc20 = TestERC20::deploy(
-        tester.l1_provider.clone(),
+        tester.l1_provider().clone(),
         U256::ZERO,
         "Test token".to_string(),
         "TEST".to_string(),
     )
     .await?;
     l1_erc20
-        .mint(tester.l1_wallet.default_signer().address(), mint_amount)
+        .mint(tester.l1_wallet().default_signer().address(), mint_amount)
         .send()
         .await?
         .expect_successful_receipt()
@@ -194,13 +194,13 @@ async fn deposit_erc20(
     // todo: copied over from alloy-zksync, use directly once it is EIP-712 agnostic
     let bridgehub = Bridgehub::new(
         tester.l2_zk_provider.get_bridgehub_contract().await?,
-        tester.l1_provider.clone(),
+        tester.l1_provider().clone(),
         chain_id,
     );
 
-    let max_priority_fee_per_gas = tester.l1_provider.get_max_priority_fee_per_gas().await?;
+    let max_priority_fee_per_gas = tester.l1_provider().get_max_priority_fee_per_gas().await?;
     let base_l1_fees_data = tester
-        .l1_provider
+        .l1_provider()
         .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
             Eip1559Estimation {
                 max_fee_per_gas: base_fee_per_gas * 3 / 2,
@@ -250,7 +250,7 @@ async fn deposit_erc20(
 
     // Send deposit request and wait for it to be processed on L2.
     let l1_deposit_receipt = tester
-        .l1_provider
+        .l1_provider()
         .send_transaction(deposit_request)
         .await?
         .expect_successful_receipt()

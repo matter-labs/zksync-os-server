@@ -95,6 +95,12 @@ zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github
     # It was used with this feature, so it should stay here forever.
     "testing",
 ], default-features = false }
+# v0.2.x is not historical yet, but we use a separate version for simulation so that `eth_estimateGas` can work with
+# 0-balance accounts. The fix was not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
+zk_os_forward_system_0_2_6 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.6-simulation-only", features = [
+    "production",
+    "no_print",
+], default-features = false }
 
 # Previous version of zksync-os that can still be used to prove and submit batches. Also includes airbender dependencies
 # that are necessary to verify said proofs on the server end.
@@ -205,6 +211,7 @@ structdiff = { version = "0.7.3", features = ["debug_diffs"] }
 num = { version = "0.4" }
 httpmock = "0.8"
 rangemap = "1.7.1"
+flate2 = "1.1.8"
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"

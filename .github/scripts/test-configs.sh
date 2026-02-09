@@ -9,14 +9,12 @@ chmod a+x ./zksync-os-server
 
 # name|state|config
 CONFIGS=(
-  "v30 default|local-chains/v30.2/default/zkos-l1-state.json|local-chains/v30.2/default/config.yaml"
-  "v30 multi-chain 1|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6565.yaml"
-  "v30 multi-chain 2|local-chains/v30.2/multi_chain/zkos-l1-state.json|local-chains/v30.2/multi_chain/chain_6566.yaml"
-  # TODO: Temporary disable v31 config tests due to wrong state files without balance
-  # to be re-enabled soon after fixing the issue with state files size and re-generation
-#  "v31 default|local-chains/v31.0/default/zkos-l1-state.json|local-chains/v31.0/default/config.yaml"
-#  "v31 multi-chain 1|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
-#  "v31 multi-chain 2|local-chains/v31.0/multi_chain/zkos-l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
+  "v30 default|local-chains/v30.2/l1-state.json|local-chains/v30.2/default/config.yaml"
+  "v30 multi-chain 1|local-chains/v30.2/l1-state.json|local-chains/v30.2/multi_chain/chain_6565.yaml"
+  "v30 multi-chain 2|local-chains/v30.2/l1-state.json|local-chains/v30.2/multi_chain/chain_6566.yaml"
+  "v31 default|local-chains/v31.0/l1-state.json|local-chains/v31.0/default/config.yaml"
+  "v31 multi-chain 1|local-chains/v31.0/l1-state.json|local-chains/v31.0/multi_chain/chain_6565.yaml"
+  "v31 multi-chain 2|local-chains/v31.0/l1-state.json|local-chains/v31.0/multi_chain/chain_6566.yaml"
 )
 
 cleanup() {
@@ -61,6 +59,9 @@ for entry in "${CONFIGS[@]}"; do
   echo "============================================================"
 
   : > "${SERVER_LOGFILE}"
+
+  echo "Decompressing anvil state..."
+  gzip -dfk "${CUR_STATE}.gz"
 
   echo "Starting anvil..."
   anvil --load-state "${CUR_STATE}" --port 8545 > anvil.log 2>&1 &

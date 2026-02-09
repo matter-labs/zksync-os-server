@@ -15,6 +15,15 @@ pub trait ReadBatch: Send + Sync + 'static {
     ) -> anyhow::Result<Option<DiscoveredCommittedBatch>>;
 
     /// Returns the latest (greatest) batch's number.
+    ///
+    /// This method:
+    /// * MUST be thread-safe
+    /// * MUST be infallible, as batch storage is guaranteed to hold at least genesis under `0`
+    /// * MUST be monotonically non-decreasing
+    ///
+    /// If this method returned `N`, then batch number `N` MUST be available in storage. However,
+    /// batches `[0; N-1]` MAY be missing if they are a legacy batch (i.e. produced before
+    /// `ReportCommittedBatchRangeZKsyncOS` event was being emitted on commit to settlement layer).
     fn latest_batch(&self) -> u64;
 }
 

@@ -2349,6 +2349,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "basic_bootloader"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "arrayvec 0.7.6",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "cfg-if",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "paste",
+ "ruint",
+ "strum_macros",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+]
+
+[[package]]
 name = "basic_system"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=dev-20260122-4#988460ccb9fc53648f5fe8bb52fbdeffbb04ec6a"
@@ -2441,6 +2459,28 @@ dependencies = [
  "strum_macros",
  "zerocopy",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+]
+
+[[package]]
+name = "basic_system"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "arrayvec 0.7.6",
+ "cfg-if",
+ "const-hex",
+ "const_for",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "either",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "paste",
+ "ruint",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "strum_macros",
+ "zerocopy",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
 ]
 
 [[package]]
@@ -3033,9 +3073,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.10.1"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 dependencies = [
  "serde",
 ]
@@ -3146,6 +3186,23 @@ dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+]
+
+[[package]]
+name = "callable_oracles"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "alloy-consensus",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "c-kzg",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "num-bigint 0.3.3",
+ "num-traits",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
+ "ruint",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
 ]
 
 [[package]]
@@ -3921,6 +3978,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "ark-bls12-381",
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "blake2 0.10.6",
+ "cfg-if",
+ "const_for",
+ "educe",
+ "itertools 0.14.0",
+ "k256",
+ "num-bigint 0.4.6",
+ "num-traits",
+ "p256",
+ "ripemd",
+ "ruint",
+ "sha2 0.10.9",
+ "sha3 0.10.8",
+ "zeroize",
+]
+
+[[package]]
 name = "crypto-bigint"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4070,6 +4154,11 @@ version = "0.0.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
 
 [[package]]
+name = "cycle_marker"
+version = "0.0.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4177,7 +4266,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 2.0.104",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4823,6 +4912,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "evm_interpreter"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "arrayvec 0.7.6",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "either",
+ "paste",
+ "ruint",
+ "strum_macros",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "zksync_os_evm_errors",
+]
+
+[[package]]
 name = "execution_utils"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3#c23fd0085ee87872e25ff83f780d2d0ee102a166"
@@ -5068,9 +5173,9 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
-version = "1.1.2"
+version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a3d7db9596fecd151c5f638c0ee5d5bd487b6e0ea232e5dc96d5250f6f94b1d"
+checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -5225,6 +5330,31 @@ dependencies = [
  "zksync_os_evm_errors",
  "zksync_os_interface",
  "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+]
+
+[[package]]
+name = "forward_system"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "alloy",
+ "arrayvec 0.7.6",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "bincode 1.3.3",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "hex",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "paste",
+ "ruint",
+ "serde",
+ "strum_macros",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "zksync_os_evm_errors",
+ "zksync_os_interface",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
 ]
 
 [[package]]
@@ -7246,6 +7376,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
+ "simd-adler32",
 ]
 
 [[package]]
@@ -7279,6 +7410,11 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1#19ec28c281
 name = "modexp"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
+
+[[package]]
+name = "modexp"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
 
 [[package]]
 name = "modular-bitfield"
@@ -7950,6 +8086,15 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+]
+
+[[package]]
+name = "oracle_provider"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
 ]
 
 [[package]]
@@ -11702,6 +11847,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "simd-adler32"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
+
+[[package]]
 name = "similar"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11915,6 +12066,15 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+]
+
+[[package]]
+name = "storage_models"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
 ]
 
 [[package]]
@@ -12147,6 +12307,20 @@ dependencies = [
  "ruint",
  "strum_macros",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+]
+
+[[package]]
+name = "system_hooks"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "arrayvec 0.7.6",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "paste",
+ "ruint",
+ "strum_macros",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
 ]
 
 [[package]]
@@ -14333,6 +14507,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zk_ee"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "arrayvec 0.7.6",
+ "bitflags 2.9.4",
+ "cfg-if",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
+ "paste",
+ "ruint",
+ "strum_macros",
+ "zksync_os_evm_errors",
+]
+
+[[package]]
 name = "zk_evm"
 version = "0.153.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14753,6 +14943,7 @@ dependencies = [
  "async-trait",
  "backon",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "flate2",
  "fs2",
  "futures",
  "regex",
@@ -14933,6 +15124,7 @@ dependencies = [
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.26-rc2)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.0-rc1)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
  "reqwest",
  "tracing",
  "url",
@@ -15228,6 +15420,17 @@ version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.5#135013888f4ec0be3211dfd488050bbad8bd58c1"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
+]
+
+[[package]]
+name = "zksync_os_runner"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only#e43a695c90332d01df914a96332cdca07cf75c03"
+dependencies = [
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.6-simulation-only)",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
