@@ -175,17 +175,25 @@ async fn setup_token_on_chain_a(
 )> {
     // Deploy ERC20 token
     let initial_supply = U256::from(1_000_000) * U256::from(10).pow(U256::from(18));
-    let token = TestERC20::deploy(
-        provider.clone(),
+    let token_address = TestERC20::deploy_builder(
+        provider,
         U256::ZERO,
         "Test Token".to_string(),
         "TEST".to_string(),
     )
+    // fixme: temporary measure while v31 zksync-os does not support estimation with gasPrice=0
+    .max_fee_per_gas(1_000_000_000)
+    .max_priority_fee_per_gas(0)
+    .deploy()
     .await?;
+    let token = TestERC20::new(token_address, provider.clone());
 
     // Mint tokens to sender
     token
         .mint(sender, initial_supply)
+        // fixme: temporary measure while v31 zksync-os does not support estimation with gasPrice=0
+        .max_fee_per_gas(1_000_000_000)
+        .max_priority_fee_per_gas(0)
         .send()
         .await?
         .expect_successful_receipt()
@@ -199,6 +207,9 @@ async fn setup_token_on_chain_a(
     let vault = IL2NativeTokenVault::new(L2_NATIVE_TOKEN_VAULT_ADDRESS, provider);
     vault
         .ensureTokenIsRegistered(*token.address())
+        // fixme: temporary measure while v31 zksync-os does not support estimation with gasPrice=0
+        .max_fee_per_gas(1_000_000_000)
+        .max_priority_fee_per_gas(0)
         .send()
         .await?
         .expect_successful_receipt()
@@ -355,6 +366,9 @@ async fn test_interop_bundle_send() -> Result<()> {
 
     token
         .approve(L2_NATIVE_TOKEN_VAULT_ADDRESS, amount_to_send)
+        // fixme: temporary measure while v31 zksync-os does not support estimation with gasPrice=0
+        .max_fee_per_gas(1_000_000_000)
+        .max_priority_fee_per_gas(0)
         .send()
         .await?
         .expect_successful_receipt()
