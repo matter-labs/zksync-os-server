@@ -1,4 +1,4 @@
-use alloy::primitives::{B256, BlockHash, BlockNumber};
+use alloy::primitives::{B256, BlockHash, BlockNumber, Sealed};
 use std::convert::TryInto;
 use std::path::Path;
 use std::time::Duration;
@@ -9,7 +9,7 @@ use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
-use zksync_os_storage_api::{ReadReplay, ReplayRecord, SealedReplayRecord, WriteReplay};
+use zksync_os_storage_api::{ReadReplay, ReplayRecord, WriteReplay};
 use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion};
 
 /// A write-ahead log storing [`ReplayRecord`]s.
@@ -109,12 +109,12 @@ impl BlockReplayStorage {
                 force_preimages: genesis_tx.force_deploy_preimages,
                 starting_interop_event_index: InteropRootsLogIndex::default(),
             };
-            this.write_replay_unchecked(SealedReplayRecord::new(genesis_record, genesis_hash), None)
+            this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), None)
         }
         this
     }
 
-    fn write_replay_unchecked(&self, sealed_record: SealedReplayRecord, db_key: Option<Vec<u8>>) {
+    fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, db_key: Option<Vec<u8>>) {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
         // TODO: We want to change the key to be block_hash eventually
@@ -385,9 +385,9 @@ impl ReadReplay for BlockReplayStorage {
 }
 
 impl WriteReplay for BlockReplayStorage {
-    fn write(&self, sealed_record: SealedReplayRecord, override_allowed: bool) -> bool {
-        // let (record, block_hash) = sealed_record.split();
-        let block_context = &sealed_record.record().block_context;
+    fn write(&self, sealed_record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
+        let (block_record, _) = sealed_record.as_sealed_ref().split();
+        let block_context = &sealed_record.block_context;
         let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let current_latest_record = self.latest_record();
         if block_context.block_number <= current_latest_record && !override_allowed {
@@ -409,7 +409,7 @@ impl WriteReplay for BlockReplayStorage {
             let old_record = self
                 .get_replay_record(block_context.block_number)
                 .expect("Old record must exist");
-            if &old_record != sealed_record.record() {
+            if &old_record != block_record {
                 let old_record_hash = self
                     .get_canonical_block_hash(block_context.block_number)
                     .unwrap();
@@ -421,7 +421,7 @@ impl WriteReplay for BlockReplayStorage {
                     "Overriding existing block replay record",
                 );
                 self.write_replay_unchecked(
-                    SealedReplayRecord::new(old_record, old_record_hash),
+                    Sealed::new_unchecked(old_record, old_record_hash),
                     Some(db_key),
                 );
             }

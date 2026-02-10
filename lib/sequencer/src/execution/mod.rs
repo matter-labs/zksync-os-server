@@ -4,6 +4,7 @@ use crate::execution::block_executor::execute_block;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
 use crate::model::blocks::BlockCommand;
+use alloy::consensus::Sealed;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio::sync::{mpsc::Sender, watch};
@@ -13,7 +14,7 @@ use zksync_os_mempool::L2TransactionPool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{
-    ReadStateHistory, ReplayRecord, SealedReplayRecord, WriteReplay, WriteRepository, WriteState,
+    ReadStateHistory, ReplayRecord, WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
 
@@ -144,7 +145,7 @@ where
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
             self.replay.write(
-                SealedReplayRecord::new(replay_record.clone(), block_output.header.hash()),
+                Sealed::new_unchecked(replay_record.clone(), block_output.header.hash()),
                 override_allowed,
             );
 

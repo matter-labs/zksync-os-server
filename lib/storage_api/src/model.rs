@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, B256, BlockHash};
+use alloy::primitives::{Address, B256, BlockHash, Sealed};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
 use zksync_os_interface::types::BlockContext;
@@ -89,31 +89,6 @@ impl ReplayRecord {
             force_preimages,
             starting_interop_event_index,
         }
-    }
-}
-
-/// ReplayRecord with extra data needed for storing it in the Block Replay WAL
-#[derive(Debug, Clone, PartialEq)]
-pub struct SealedReplayRecord {
-    record: ReplayRecord,
-    hash: BlockHash,
-}
-
-impl SealedReplayRecord {
-    pub fn new(record: ReplayRecord, hash: BlockHash) -> Self {
-        Self { record, hash }
-    }
-
-    pub fn record(&self) -> &ReplayRecord {
-        &self.record
-    }
-    pub fn hash(&self) -> BlockHash {
-        self.hash
-    }
-
-    pub fn split(self) -> (ReplayRecord, BlockHash) {
-        let hash = self.hash();
-        (self.record, hash)
     }
 }
 
