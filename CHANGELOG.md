@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.15.0](https://github.com/matter-labs/zksync-os-server/compare/v0.14.2...v0.15.0) (2026-02-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop proving support for v29.x and v30.0 versions ([#822](https://github.com/matter-labs/zksync-os-server/issues/822))
+
+### Features
+
+* Accumulated interop txs ([#848](https://github.com/matter-labs/zksync-os-server/issues/848)) ([feaeeea](https://github.com/matter-labs/zksync-os-server/commit/feaeeeaaaddb44be5521eaa8d1a4ab829ea43bbd))
+* drop proving support for v29.x and v30.0 versions ([#822](https://github.com/matter-labs/zksync-os-server/issues/822)) ([f157dbb](https://github.com/matter-labs/zksync-os-server/commit/f157dbbdf30a49b68ccfc60c555a62732ed6cb9a))
+* **multivm:** use v0.2.6-simulate-only for V5 simulation ([#855](https://github.com/matter-labs/zksync-os-server/issues/855)) ([c21a107](https://github.com/matter-labs/zksync-os-server/commit/c21a107f4b344e02d8d799d81c8472769d7d67cc))
+* Set SL chain id txs ([#849](https://github.com/matter-labs/zksync-os-server/issues/849)) ([f561a9e](https://github.com/matter-labs/zksync-os-server/commit/f561a9e0feb1cf5b4d8036f05d2d3f574915d6be))
+* store gzip-compressed anvil states ([#837](https://github.com/matter-labs/zksync-os-server/issues/837)) ([d231609](https://github.com/matter-labs/zksync-os-server/commit/d231609035533db253bb09b6002197286ff2a8e0))
+* support multiple config files ([#866](https://github.com/matter-labs/zksync-os-server/issues/866)) ([319b2f9](https://github.com/matter-labs/zksync-os-server/commit/319b2f9b311c23e1292e7880b3c8e41fabf686e5))
+* use max_priority_fee_per_gas config value as cap on the priority fee used ([#857](https://github.com/matter-labs/zksync-os-server/issues/857)) ([2331595](https://github.com/matter-labs/zksync-os-server/commit/233159524f069410e23c9059cac84649a00ace8f))
+
+
+### Bug Fixes
+
+* better recognition for missing `IMultisigCommitter` ([#852](https://github.com/matter-labs/zksync-os-server/issues/852)) ([9e07c51](https://github.com/matter-labs/zksync-os-server/commit/9e07c518bbc2b0bbc5ba7e6e52703b911879adb2))
+* **l1-watcher:** skip persisting legacy batches ([#860](https://github.com/matter-labs/zksync-os-server/issues/860)) ([9d818fd](https://github.com/matter-labs/zksync-os-server/commit/9d818fd223183cddf8b51bf3b4cc08693961bf9d))
+* rebuild_from_block assert for EN ([#864](https://github.com/matter-labs/zksync-os-server/issues/864)) ([fa2c6c6](https://github.com/matter-labs/zksync-os-server/commit/fa2c6c64b8c6a122b64ae462f6197d1169f42bda))
+* **rpc:** respect 0 gas price during gas estimation ([#865](https://github.com/matter-labs/zksync-os-server/issues/865)) ([ed80197](https://github.com/matter-labs/zksync-os-server/commit/ed80197dc1d5d826064dfb37550127a38d04114e))
+* Update time crate to 0.3.47 to address security vulnerability ([#870](https://github.com/matter-labs/zksync-os-server/issues/870)) ([82a0537](https://github.com/matter-labs/zksync-os-server/commit/82a05377bb5929956ccea8d4f5ed76decb31f449))
+
 ## [0.14.2](https://github.com/matter-labs/zksync-os-server/compare/v0.14.1...v0.14.2) (2026-01-29)
 
 
