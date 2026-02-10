@@ -13,7 +13,9 @@ pub use interop_tx_stream::{InteropRootTransactions, InteropRootsTxPool};
 pub mod subpools;
 
 mod pool;
-pub use pool::{Pool, TransactionsStream, UpgradeInfo};
+pub use pool::{BoxTxStream, Pool, TransactionsStream, TxStream, UpgradeInfo};
+
+mod peekable;
 
 mod metrics;
 

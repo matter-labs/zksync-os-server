@@ -1,9 +1,11 @@
 use crate::metrics::ViseRecorder;
-use crate::{L2PooledTransaction, TxValidatorConfig};
+use crate::{L2PooledTransaction, TxStream, TxValidatorConfig};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
+use reth_primitives_traits::transaction::error::InvalidTransactionError;
 use reth_transaction_pool::blobstore::NoopBlobStore;
+use reth_transaction_pool::error::InvalidPoolTransactionError;
 use reth_transaction_pool::validate::EthTransactionValidatorBuilder;
 use reth_transaction_pool::{
     AddedTransactionOutcome, CoinbaseTipOrdering, EthTransactionValidator, Pool, PoolConfig,
@@ -43,6 +45,7 @@ pub trait L2Subpool:
 
     fn best_transactions_stream(&self) -> L2TransactionsStream {
         L2TransactionsStream {
+            last_polled_tx: None,
             txs: self.best_transactions(),
             pending_txs_listener: self
                 .pending_transactions_listener_for(TransactionListenerKind::All),
@@ -56,6 +59,7 @@ impl<State: ReadStateHistory + Clone, Repository: ReadRepository + Clone> L2Subp
 }
 
 pub struct L2TransactionsStream {
+    last_polled_tx: Option<Arc<ValidPoolTransaction<L2PooledTransaction>>>,
     txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
     pending_txs_listener: mpsc::Receiver<TxHash>,
 }
@@ -67,6 +71,7 @@ impl Stream for L2TransactionsStream {
         let this = self.get_mut();
         loop {
             if let Some(tx) = this.txs.next() {
+                this.last_polled_tx = Some(tx.clone());
                 let (tx, signer) = tx.to_consensus().into_parts();
                 return Poll::Ready(Some(Recovered::new_unchecked(tx, signer).into()));
             }
@@ -78,6 +83,22 @@ impl Stream for L2TransactionsStream {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+impl TxStream for L2TransactionsStream {
+    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        let Some(tx) = this.last_polled_tx.take() else {
+            tracing::error!("tried to mark non-existing L2 transaction as invalid");
+            return;
+        };
+        // Error kind is actually not used internally, but we need to provide it.
+        // Reth provides `TxTypeNotSupported` and we do the same just in case.
+        this.txs.mark_invalid(
+            &tx,
+            InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
+        );
     }
 }
 
