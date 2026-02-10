@@ -17,8 +17,6 @@ mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
 
-use zksync_os_mempool::{InteropRootsTxPool, Pool};
-
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
@@ -74,6 +72,8 @@ use zksync_os_l1_watcher::{
     L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
+use zksync_os_mempool::Pool;
+use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
@@ -430,7 +430,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
-    let interop_roots_subpool = InteropRootsTxPool::new(10);
+    let interop_roots_subpool = InteropRootsSubpool::new(
+        10,
+        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
+        1,
+    );
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
@@ -584,14 +588,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.l1_sender_config.pubdata_mode,
     );
 
-    let l1_subpool = L1Subpool::new(10);
     let pool = Pool::new(
         upgrade_transactions_receiver,
-        interop_subpool,
+        interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
-        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
-        1,
     );
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,

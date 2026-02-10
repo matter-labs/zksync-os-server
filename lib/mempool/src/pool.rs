@@ -1,4 +1,4 @@
-use crate::InteropTxPool;
+use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::{L1Subpool, L1TransactionsStream};
 use crate::subpools::l2::{L2Subpool, L2TransactionsStream};
 use alloy::consensus::{Block, BlockBody, Header, Sealed};
@@ -21,28 +21,23 @@ use zksync_os_types::{
 
 pub struct Pool<T> {
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
-    // todo: rename to `InteropSubpool` and move to `subpools`
-    interop_subpool: InteropTxPool,
+    interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
-    // todo: should be a part of `InteropTxPool`
-    interop_roots_per_tx: usize,
 }
 
 impl<T: L2Subpool> Pool<T> {
     pub fn new(
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
-        interop_subpool: InteropTxPool,
+        interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
-        interop_roots_per_tx: usize,
     ) -> Self {
         Self {
             upgrade_transactions,
-            interop_subpool,
+            interop_roots_subpool,
             l1_subpool,
             l2_subpool,
-            interop_roots_per_tx,
         }
     }
 
@@ -50,10 +45,9 @@ impl<T: L2Subpool> Pool<T> {
         &'a mut self,
         next_interop_tx_allowed_after: Instant,
     ) -> TransactionsStream<'a> {
-        let interop_stream = self.interop_subpool.interop_transactions_with_delay(
-            self.interop_roots_per_tx,
-            next_interop_tx_allowed_after,
-        );
+        let interop_stream = self
+            .interop_roots_subpool
+            .interop_transactions_with_delay(next_interop_tx_allowed_after);
         let mut interop_stream = crate::peekable::Peekable::new(interop_stream);
 
         let l1_stream = self.l1_subpool.best_transactions_stream();
@@ -103,13 +97,13 @@ impl<T: L2Subpool> Pool<T> {
         account_diffs: &[AccountDiff],
         replay_record: &ReplayRecord,
     ) -> StateChangeOutcome {
-        let mut interop_txs = Vec::new();
+        let mut system_txs = Vec::new();
         let mut l1_transactions = Vec::new();
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
-                ZkEnvelope::InteropRoots(interop_tx) => {
-                    interop_txs.push(interop_tx.clone());
+                ZkEnvelope::System(system_tx) => {
+                    system_txs.push(system_tx.clone());
                 }
                 ZkEnvelope::L1(l1_tx) => {
                     l1_transactions.push(l1_tx.clone());
@@ -159,7 +153,9 @@ impl<T: L2Subpool> Pool<T> {
                     update_kind: PoolUpdateKind::Commit,
                 });
         }
-        let last_interop_log_index = self.interop_subpool.on_canonical_state_change(interop_txs);
+        let last_interop_log_index = self
+            .interop_roots_subpool
+            .on_canonical_state_change(system_txs);
         let last_l1_priority_id = self
             .l1_subpool
             .on_canonical_state_change(l1_transactions)

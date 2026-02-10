@@ -15,31 +15,35 @@ use tokio::{
 use tokio_stream::wrappers::BroadcastStream;
 use zksync_os_types::{
     IndexedInteropRoot, InteropRoot, InteropRootsLogIndex, SystemTxEnvelope, SystemTxType,
+    ZkTransaction,
 };
 
 #[derive(Clone)]
-pub struct InteropRootsTxPool {
-    inner: Arc<RwLock<InteropRootsTxPoolInner>>,
+pub struct InteropRootsSubpool {
+    inner: Arc<RwLock<Inner>>,
 }
 
-impl InteropRootsTxPool {
-    pub fn new(buffer_size: usize) -> Self {
+impl InteropRootsSubpool {
+    pub fn new(interop_roots_per_tx: usize, buffer_size: usize) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(InteropRootsTxPoolInner::new(buffer_size))),
+            inner: Arc::new(RwLock::new(Inner {
+                interop_roots_per_tx,
+                sender: broadcast::Sender::new(buffer_size),
+                pending_roots: VecDeque::new(),
+            })),
         }
     }
 }
 
-impl InteropRootsTxPool {
+impl InteropRootsSubpool {
     pub fn interop_transactions_with_delay(
         &self,
-        interop_roots_per_tx: usize,
         next_tx_allowed_after: Instant,
-    ) -> InteropRootTransactions {
+    ) -> InteropRootsTransactionsStream {
         self.inner
             .read()
             .unwrap()
-            .interop_transactions_with_delay(interop_roots_per_tx, next_tx_allowed_after)
+            .interop_transactions_with_delay(next_tx_allowed_after)
     }
 
     pub fn add_root(&mut self, root: IndexedInteropRoot) {
@@ -55,19 +59,20 @@ impl InteropRootsTxPool {
 }
 
 #[derive(Clone)]
-struct InteropRootsTxPoolInner {
+struct Inner {
+    interop_roots_per_tx: usize,
     sender: broadcast::Sender<InteropRoot>,
     pending_roots: VecDeque<IndexedInteropRoot>,
 }
 
-pub struct InteropRootTransactions {
+pub struct InteropRootsTransactionsStream {
     receiver: BroadcastStream<InteropRoot>,
     pending_roots: VecDeque<InteropRoot>,
     interop_roots_per_tx: usize,
     sleep: Option<Pin<Box<Sleep>>>,
 }
 
-impl Stream for InteropRootTransactions {
+impl Stream for InteropRootsTransactionsStream {
     type Item = ZkTransaction;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -98,13 +103,13 @@ impl Stream for InteropRootTransactions {
     }
 }
 
-impl TxStream for InteropTransactions {
+impl TxStream for InteropRootsTransactionsStream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
         panic!("cannot mark interop transaction as invalid")
     }
 }
 
-impl InteropRootTransactions {
+impl InteropRootsTransactionsStream {
     /// Take a transaction from pending roots(not depending on the amount)
     fn take_tx(&mut self, allowed_to_take_remainder: bool) -> Option<SystemTxEnvelope> {
         if self.pending_roots.is_empty()
@@ -126,35 +131,27 @@ impl InteropRootTransactions {
     }
 }
 
-impl InteropRootsTxPoolInner {
-    pub fn new(buffer_size: usize) -> Self {
-        Self {
-            sender: broadcast::Sender::new(buffer_size),
-            pending_roots: VecDeque::new(),
-        }
-    }
-
-    pub fn interop_transactions_with_delay(
+impl Inner {
+    fn interop_transactions_with_delay(
         &self,
-        interop_roots_per_tx: usize,
         next_tx_allowed_after: Instant,
-    ) -> InteropRootTransactions {
-        InteropRootTransactions {
+    ) -> InteropRootsTransactionsStream {
+        InteropRootsTransactionsStream {
             receiver: BroadcastStream::new(self.sender.subscribe()),
             pending_roots: self.pending_roots.iter().map(|r| r.root.clone()).collect(),
-            interop_roots_per_tx,
+            interop_roots_per_tx: self.interop_roots_per_tx,
             sleep: Some(Box::pin(sleep_until(next_tx_allowed_after))),
         }
     }
 
-    pub fn add_root(&mut self, root: IndexedInteropRoot) {
+    fn add_root(&mut self, root: IndexedInteropRoot) {
         let _ = self.sender.send(root.root.clone());
         self.pending_roots.push_front(root);
     }
 
     /// Cleans up the stream and removes all roots that were sent in transactions
     /// Returns the last log index of executed interop root
-    pub fn on_canonical_state_change(
+    fn on_canonical_state_change(
         &mut self,
         txs: Vec<SystemTxEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
@@ -169,6 +166,7 @@ impl InteropRootsTxPoolInner {
                 continue;
             };
 
+            // todo: wait for more if `pending_roots.len() < roots_count`
             let starting_index = self.pending_roots.len() - roots_count as usize;
 
             let roots = self
