@@ -27,7 +27,7 @@ use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::{get_balance, get_code};
 use zksync_os_interface::traits::ReadStorage;
-use zksync_os_mempool::L2TransactionPool;
+use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::types::{
     RpcBlockConvert, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt,
@@ -47,7 +47,7 @@ pub struct EthNamespace<RpcStorage, Mempool> {
     chain_id: u64,
 }
 
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Mempool> {
     pub fn new(
         config: RpcConfig,
         storage: RpcStorage,
@@ -75,7 +75,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
     }
 }
 
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcStorage, Mempool> {
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Mempool> {
     fn block_number_impl(&self) -> EthResult<U256> {
         Ok(U256::from(self.storage.repository().get_latest_block()))
     }
@@ -430,7 +430,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthNamespace<RpcSto
 }
 
 #[async_trait]
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthApiServer
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
     for EthNamespace<RpcStorage, Mempool>
 {
     async fn protocol_version(&self) -> RpcResult<String> {
