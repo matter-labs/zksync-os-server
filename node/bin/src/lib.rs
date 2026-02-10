@@ -321,7 +321,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
-    if let Some(block_rebuild) = &config.sequencer_config.block_rebuild {
+    if let Some(block_rebuild) = &config.sequencer_config.block_rebuild
+        && config.sequencer_config.is_main_node()
+    {
+        // The assertion is only relevant for the main node.
+        // External node can be started at any point and doesn't have to be in sync with L1.
+        // But the main node is expected to only produce blocks on top of committed L1 blocks,
+        // as those can't be re-sequenced.
         assert!(
             block_rebuild.from_block > node_startup_state.last_l1_committed_block,
             "rebuild_from_block must be > last_l1_committed_block, got {} <= {}",
