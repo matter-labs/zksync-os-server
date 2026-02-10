@@ -6,9 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 use tokio::sync::{Notify, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
-use zksync_os_types::{
-    L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeTransaction, ZkTransaction,
-};
+use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, ZkTransaction};
 
 #[derive(Clone)]
 pub struct UpgradeSubpool {
@@ -18,8 +16,8 @@ pub struct UpgradeSubpool {
 struct Inner {
     current_protocol_version: ProtocolSemanticVersion,
     notify: Arc<Notify>,
-    sender: broadcast::Sender<UpgradeTransaction>,
-    pending_upgrades: VecDeque<UpgradeTransaction>,
+    sender: broadcast::Sender<UpgradeInfo>,
+    pending_upgrades: VecDeque<UpgradeInfo>,
 }
 
 impl UpgradeSubpool {
@@ -47,22 +45,22 @@ impl UpgradeSubpool {
         }
     }
 
-    pub fn insert(&self, tx: UpgradeTransaction) {
+    pub fn insert(&self, upgrade: UpgradeInfo) {
         let mut inner = self.inner.write().unwrap();
-        let _ = inner.sender.send(tx.clone());
-        inner.pending_upgrades.push_front(tx);
+        let _ = inner.sender.send(upgrade.clone());
+        inner.pending_upgrades.push_front(upgrade);
         inner.notify.notify_waiters();
     }
 
-    async fn pop_wait(&self) -> UpgradeTransaction {
+    async fn pop_wait(&self) -> UpgradeInfo {
         loop {
             let notify = {
                 let mut inner = self.inner.write().unwrap();
-                if let Some(pending_tx) = inner.pending_upgrades.pop_back() {
-                    tracing::info!(protocol_version = %pending_tx.protocol_version, "advancing protocol version");
+                if let Some(upgrade) = inner.pending_upgrades.pop_back() {
+                    tracing::info!(protocol_version = %upgrade.protocol_version(), "advancing protocol version");
                     // Update current protocol version as if the upgrade got applied
-                    inner.current_protocol_version = pending_tx.protocol_version.clone();
-                    return pending_tx;
+                    inner.current_protocol_version = upgrade.protocol_version().clone();
+                    return upgrade;
                 } else {
                     inner.notify.clone()
                 }
@@ -97,11 +95,13 @@ impl UpgradeSubpool {
             if &current_protocol_version == protocol_version {
                 return;
             } else if &current_protocol_version < protocol_version {
-                let pending_tx = self.pop_wait().await;
-                if pending_tx.tx.is_some() {
+                let upgrade = self.pop_wait().await;
+                if upgrade.tx.is_some() {
                     panic!(
                         "expected patch protocol upgrade {}->{} but found minor protocol upgrade {} with unapplied upgrade transaction",
-                        current_protocol_version, protocol_version, pending_tx.protocol_version
+                        current_protocol_version,
+                        protocol_version,
+                        upgrade.protocol_version()
                     );
                 }
             } else {
@@ -114,27 +114,27 @@ impl UpgradeSubpool {
 }
 
 pub struct UpgradeInfoStream {
-    receiver: BroadcastStream<UpgradeTransaction>,
+    receiver: BroadcastStream<UpgradeInfo>,
     state: StreamState,
 }
 
 enum StreamState {
     Empty,
-    Pending(UpgradeTransaction),
+    Pending(UpgradeInfo),
     Closed,
 }
 
 impl Stream for UpgradeInfoStream {
-    type Item = UpgradeTransaction;
+    type Item = UpgradeInfo;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         match &this.state {
             StreamState::Empty => {}
-            StreamState::Pending(tx) => {
-                let tx = tx.clone();
+            StreamState::Pending(upgrade) => {
+                let upgrade = upgrade.clone();
                 this.state = StreamState::Closed;
-                return Poll::Ready(Some(tx));
+                return Poll::Ready(Some(upgrade));
             }
             StreamState::Closed => {
                 return Poll::Ready(None);
@@ -142,9 +142,9 @@ impl Stream for UpgradeInfoStream {
         }
 
         match this.receiver.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(tx))) => {
+            Poll::Ready(Some(Ok(upgrade))) => {
                 this.state = StreamState::Closed;
-                Poll::Ready(Some(tx))
+                Poll::Ready(Some(upgrade))
             }
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => Poll::Ready(None),
@@ -157,10 +157,6 @@ pub struct UpgradeTransactionsStream {
 }
 
 impl UpgradeTransactionsStream {
-    pub fn empty() -> Self {
-        UpgradeTransactionsStream { tx: None }
-    }
-
     pub fn one(tx: L1UpgradeEnvelope) -> Self {
         UpgradeTransactionsStream { tx: Some(tx) }
     }

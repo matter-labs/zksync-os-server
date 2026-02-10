@@ -25,34 +25,47 @@ pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
 pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
 
 /// Upgrade transaction with metadata fetched from L1.
-/// Important: `UpgradeTransaction` as a structure is not expected to be widely
+/// Important: `UpgradeInfo` as a structure is not expected to be widely
 /// exposed within the system.
 /// From the sequencer step onwards, upgrade tx should be represented as
 /// `L1PriorityEnvelope` or `ZkTransaction` only.
 #[derive(Clone)]
-pub struct UpgradeTransaction {
+pub struct UpgradeInfo {
+    /// The L2 upgrade transaction itself.
+    pub tx: Option<L1UpgradeEnvelope>,
+    /// Upgrade metadata fetched from L1.
+    pub metadata: UpgradeMetadata,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpgradeMetadata {
     /// Instruction for the sequencer to NOT execute the upgrade transaction
     /// until the given timestamp.
     /// Represents a timestamp in seconds since UNIX_EPOCH
     pub timestamp: u64,
     /// Which protocol version will be used after the upgrade transaction is executed.
     pub protocol_version: ProtocolSemanticVersion,
-    /// The L2 upgrade transaction itself.
-    pub tx: Option<L1UpgradeEnvelope>,
     /// Preimages (e.g. force deployments) for the upgrade transaction (if any).
     pub force_preimages: Vec<(B256, Vec<u8>)>,
 }
 
-// UpgradeTransaction has huge content. Especially force_preimage values and upgrade transaction input field. Display only some hashes.
-impl Debug for UpgradeTransaction {
+impl UpgradeInfo {
+    pub fn protocol_version(&self) -> &ProtocolSemanticVersion {
+        &self.metadata.protocol_version
+    }
+}
+
+// UpgradeInfo has huge content. Especially force_preimage values and upgrade transaction input field. Display only some hashes.
+impl Debug for UpgradeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UpgradeTransaction")
-            .field("timestamp", &self.timestamp)
-            .field("protocol_version", &self.protocol_version)
+            .field("timestamp", &self.metadata.timestamp)
+            .field("protocol_version", &self.metadata.protocol_version)
             .field("tx_hash", &self.tx.as_ref().map(|tx| tx.hash()))
             .field(
                 "force_preimages_hashes",
                 &self
+                    .metadata
                     .force_preimages
                     .iter()
                     .map(|(hash, _)| hash)

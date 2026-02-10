@@ -14,7 +14,8 @@ use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, Propose
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_types::{
-    L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeTransaction,
+    L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
+    UpgradeMetadata,
 };
 // TODO: disabled until bytecode supplier integration is ready
 // use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
@@ -112,10 +113,7 @@ impl L1UpgradeTxWatcher {
         Ok(l1_watcher)
     }
 
-    async fn fetch_upgrade_tx(
-        &self,
-        request: &L1UpgradeRequest,
-    ) -> anyhow::Result<UpgradeTransaction> {
+    async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {
         let L1UpgradeRequest {
             timestamp,
             protocol_version,
@@ -183,11 +181,13 @@ impl L1UpgradeTxWatcher {
             (Some(tx), force_preimages)
         };
 
-        let upgrade_tx = UpgradeTransaction {
+        let upgrade_tx = UpgradeInfo {
             tx: l2_upgrade_tx,
-            timestamp: *timestamp,
-            protocol_version: protocol_version.clone(),
-            force_preimages,
+            metadata: UpgradeMetadata {
+                timestamp: *timestamp,
+                protocol_version: protocol_version.clone(),
+                force_preimages,
+            },
         };
 
         Ok(upgrade_tx)
@@ -305,13 +305,13 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             }
         }
 
-        let upgrade_tx = self
-            .fetch_upgrade_tx(&request)
+        let upgrade_info = self
+            .fetch_upgrade_info(&request)
             .await
             .map_err(L1WatcherError::Batch)?;
 
         tracing::info!(
-            protocol_version = ?upgrade_tx.protocol_version,
+            protocol_version = ?upgrade_info.protocol_version(),
             target_timestamp = request.timestamp,
             "detected upgrade transaction to be sent"
         );
@@ -322,12 +322,12 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         self.wait_until_timestamp(request.timestamp).await;
 
         tracing::info!(
-            protocol_version = ?upgrade_tx.protocol_version,
+            protocol_version = ?upgrade_info.protocol_version(),
             "sending upgrade transaction to the mempool"
         );
 
-        self.current_protocol_version = upgrade_tx.protocol_version.clone();
-        self.upgrade_subpool.insert(upgrade_tx);
+        self.current_protocol_version = upgrade_info.protocol_version().clone();
+        self.upgrade_subpool.insert(upgrade_info);
 
         Ok(())
     }

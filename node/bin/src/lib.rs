@@ -100,7 +100,7 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{
     InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
-    UpgradeTransaction,
+    UpgradeInfo, UpgradeMetadata,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -421,11 +421,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // If we start from the very first block, we should start by sending upgrade tx for genesis.
     if starting_block == 1 {
         let genesis_upgrade = genesis.genesis_upgrade_tx().await;
-        let upgrade_tx = UpgradeTransaction {
+        let upgrade_tx = UpgradeInfo {
             tx: Some(genesis_upgrade.tx),
-            protocol_version: genesis_upgrade.protocol_version,
-            timestamp: 0, // No restrictions on timestamp.
-            force_preimages: genesis_upgrade.force_deploy_preimages,
+            metadata: UpgradeMetadata {
+                protocol_version: genesis_upgrade.protocol_version,
+                timestamp: 0, // No restrictions on timestamp.
+                force_preimages: genesis_upgrade.force_deploy_preimages,
+            },
         };
         upgrade_subpool.insert(upgrade_tx);
     }

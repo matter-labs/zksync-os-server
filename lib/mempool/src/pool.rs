@@ -4,7 +4,7 @@ use crate::subpools::l2::{L2Subpool, L2TransactionsStream};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
 use alloy::consensus::{Block, BlockBody, Header, Sealed};
-use alloy::primitives::{B256, TxHash};
+use alloy::primitives::TxHash;
 use futures::Stream;
 use pin_project::pin_project;
 use reth_execution_types::ChangedAccount;
@@ -17,8 +17,8 @@ use tokio_stream::StreamExt;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    InteropRootsLogIndex, L1TxSerialId, L2Envelope, ProtocolSemanticVersion, SystemTxType,
-    ZkEnvelope, ZkTransaction,
+    InteropRootsLogIndex, L1TxSerialId, L2Envelope, SystemTxType, UpgradeMetadata, ZkEnvelope,
+    ZkTransaction,
 };
 
 pub struct Pool<T> {
@@ -69,7 +69,7 @@ impl<T: L2Subpool> Pool<T> {
         };
         let mut l1_l2_stream = crate::peekable::Peekable::new(l1_l2_stream);
 
-        let mut upgrade_info = None;
+        let mut upgrade_metadata = None;
         loop {
             tokio::select! {
                 // If you run this example without `biased;`, the polling order is
@@ -77,36 +77,31 @@ impl<T: L2Subpool> Pool<T> {
                 // (probably) fail.
                 biased;
 
-                Some(upgrade_tx) = upgrade_info_stream.next() => {
-                    upgrade_info = Some(UpgradeInfo {
-                        timestamp: upgrade_tx.timestamp,
-                        protocol_version: upgrade_tx.protocol_version,
-                        force_preimages: upgrade_tx.force_preimages,
-                    });
-                    // todo: rename `.tx` to `.envelope`
-                    if let Some(envelope) = upgrade_tx.tx {
+                Some(upgrade) = upgrade_info_stream.next() => {
+                    upgrade_metadata = Some(upgrade.metadata);
+                    if let Some(tx) = upgrade.tx {
                         return StreamOutcome {
-                            upgrade_info,
-                            stream: UpgradeTransactionsStream::one(envelope).boxed_tx_stream(),
+                            upgrade_metadata,
+                            stream: UpgradeTransactionsStream::one(tx).boxed_tx_stream(),
                         }
                     }
                 }
                 Some(_) = sl_chain_id_stream.peek() => {
                     // todo: chain with `l1_l2_stream`
                     return StreamOutcome {
-                        upgrade_info,
+                        upgrade_metadata,
                         stream: sl_chain_id_stream.boxed_tx_stream(),
                     }
                 }
                 Some(_) = interop_stream.peek() => {
                     return StreamOutcome {
-                        upgrade_info,
+                        upgrade_metadata,
                         stream: interop_stream.boxed_tx_stream(),
                     }
                 }
                 Some(_) = l1_l2_stream.peek() => {
                     return StreamOutcome {
-                        upgrade_info,
+                        upgrade_metadata,
                         stream: l1_l2_stream.boxed_tx_stream(),
                     }
                 }
@@ -203,19 +198,6 @@ pub struct StateChangeOutcome {
     pub last_l1_priority_id: Option<L1TxSerialId>,
 }
 
-// todo: move to `types`
-#[derive(Debug)]
-pub struct UpgradeInfo {
-    /// Instruction for the sequencer to NOT execute the upgrade transaction
-    /// until the given timestamp.
-    /// Represents a timestamp in seconds since UNIX_EPOCH
-    pub timestamp: u64,
-    /// Which protocol version will be used after the upgrade transaction is executed.
-    pub protocol_version: ProtocolSemanticVersion,
-    /// Preimages (e.g. force deployments) for the upgrade transaction (if any).
-    pub force_preimages: Vec<(B256, Vec<u8>)>,
-}
-
 pub trait TxStream: Stream<Item = ZkTransaction> {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
 
@@ -282,10 +264,10 @@ impl TxStream for L1L2TxStream {
 }
 
 pub struct StreamOutcome<'a> {
-    /// Optional upgrade info to be applied with transactions in `stream`. Note that even if this is
-    /// `Some`, `stream` is not guaranteed to contain an upgrade transaction. The stream may contain
-    /// other transaction types if the upgrade is a patch upgrade.
-    pub upgrade_info: Option<UpgradeInfo>,
+    /// Optional upgrade metadata to be applied with transactions in `stream`. Note that even if
+    /// this is `Some`, `stream` is not guaranteed to contain an upgrade transaction. The stream may
+    /// contain other transaction types if the upgrade is a patch upgrade.
+    pub upgrade_metadata: Option<UpgradeMetadata>,
     /// Non-empty stream of transactions.
     pub stream: BoxTxStream<'a>,
 }
