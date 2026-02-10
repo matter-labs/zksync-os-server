@@ -174,7 +174,7 @@ fs2 = "0.4.3"
 test-log = { version = "0.2.18", default-features = false }
 backon = "1.5.1"
 reqwest = "0.12.22"
-time = "0.3"
+time = "0.3.47"
 criterion = "0.7.0"
 sha2 = "0.10.9"
 tower = "0.5.2"
