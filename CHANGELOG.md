@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/matter-labs/zksync-os-server/compare/v0.15.0...v0.15.1) (2026-02-10)
+
+
+### Bug Fixes
+
+* **eth-watch:** don't save batches with divergent hashes ([#871](https://github.com/matter-labs/zksync-os-server/issues/871)) ([5254754](https://github.com/matter-labs/zksync-os-server/commit/52547541f8ea7f3db819bb5ea90f279ee4db6d5f))
+
 ## [0.15.0](https://github.com/matter-labs/zksync-os-server/compare/v0.14.2...v0.15.0) (2026-02-10)
 
 
