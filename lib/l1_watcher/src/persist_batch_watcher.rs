@@ -183,6 +183,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                     batch_number,
                     "batch hash mismatch; ignoring"
                 );
+                return Ok(());
             }
 
             self.batch_storage.write(committed_batch);
