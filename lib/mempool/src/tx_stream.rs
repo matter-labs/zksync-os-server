@@ -9,7 +9,7 @@ pub trait TxStream: Stream<Item = ZkTransaction> {
 
 pub trait TxStreamExt: TxStream {
     /// Wrap the transaction stream in a Box, pinning it.
-    fn peekable<'a>(self) -> PeekableTxStream<Self>
+    fn peekable(self) -> PeekableTxStream<Self>
     where
         Self: Sized,
     {

@@ -118,6 +118,7 @@ pub struct UpgradeInfoStream {
     state: StreamState,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum StreamState {
     Empty,
     Pending(UpgradeInfo),
