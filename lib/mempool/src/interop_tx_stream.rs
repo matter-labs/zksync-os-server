@@ -5,6 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::TxStream;
 use futures::{Stream, StreamExt, ready};
 use tokio::time::Instant;
 use tokio::{
@@ -46,7 +47,7 @@ impl InteropRootsTxPool {
     }
 
     pub fn on_canonical_state_change(
-        &mut self,
+        &self,
         txs: Vec<SystemTxEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
         self.inner.write().unwrap().on_canonical_state_change(txs)
@@ -67,7 +68,7 @@ pub struct InteropRootTransactions {
 }
 
 impl Stream for InteropRootTransactions {
-    type Item = SystemTxEnvelope;
+    type Item = ZkTransaction;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(sleep) = self.sleep.as_mut() {
@@ -77,7 +78,7 @@ impl Stream for InteropRootTransactions {
 
         loop {
             if let Some(envelope) = self.take_tx(false) {
-                return Poll::Ready(Some(envelope));
+                return Poll::Ready(Some(envelope.into()));
             }
 
             match self.receiver.poll_next_unpin(cx) {
@@ -87,13 +88,19 @@ impl Stream for InteropRootTransactions {
                 }
                 Poll::Pending => {
                     if let Some(tx) = self.take_tx(true) {
-                        return Poll::Ready(Some(tx));
+                        return Poll::Ready(Some(tx.into()));
                     }
                     return Poll::Pending;
                 }
                 Poll::Ready(_) => return Poll::Ready(None),
             }
         }
+    }
+}
+
+impl TxStream for InteropTransactions {
+    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
+        panic!("cannot mark interop transaction as invalid")
     }
 }
 
