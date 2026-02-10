@@ -15,12 +15,13 @@ use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    InteropRootsLogIndex, L1TxSerialId, L2Envelope, ProtocolSemanticVersion, UpgradeTransaction,
-    ZkEnvelope, ZkTransaction,
+    InteropRootsLogIndex, L1TxSerialId, L2Envelope, ProtocolSemanticVersion, SystemTxEnvelope,
+    SystemTxType, UpgradeTransaction, ZkEnvelope, ZkTransaction,
 };
 
 pub struct Pool<T> {
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+    sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
@@ -29,12 +30,14 @@ pub struct Pool<T> {
 impl<T: L2Subpool> Pool<T> {
     pub fn new(
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+        sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
     ) -> Self {
         Self {
             upgrade_transactions,
+            sl_chain_id_update_transactions,
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
@@ -68,6 +71,13 @@ impl<T: L2Subpool> Pool<T> {
             Some(upgrade_tx) = self.upgrade_transactions.recv() => {
                 TransactionsStream::upgrade(upgrade_tx)
             }
+            Some(sl_chain_id_tx) = self.sl_chain_id_update_transactions.recv() => {
+                TransactionsStream {
+                    upgrade_info: None,
+                    stream: todo!(),
+                    // stream: invalid_box(futures::stream::iter(vec![sl_chain_id_tx.into()])),
+                }
+            }
             Some(_) = interop_stream.peek() => {
                 TransactionsStream {
                     upgrade_info: None,
@@ -97,14 +107,19 @@ impl<T: L2Subpool> Pool<T> {
         account_diffs: &[AccountDiff],
         replay_record: &ReplayRecord,
     ) -> StateChangeOutcome {
-        let mut system_txs = Vec::new();
+        let mut interop_txs = Vec::new();
         let mut l1_transactions = Vec::new();
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
-                ZkEnvelope::System(system_tx) => {
-                    system_txs.push(system_tx.clone());
-                }
+                ZkEnvelope::System(system_tx) => match system_tx.system_subtype() {
+                    SystemTxType::ImportInteropRoots(_) => {
+                        interop_txs.push(system_tx.clone());
+                    }
+                    SystemTxType::SetSLChainId => {
+                        // todo: SL chain id subpool
+                    }
+                },
                 ZkEnvelope::L1(l1_tx) => {
                     l1_transactions.push(l1_tx.clone());
                 }
@@ -130,32 +145,31 @@ impl<T: L2Subpool> Pool<T> {
             }
         }
 
-        if !l2_transactions.is_empty() {
-            let (header, hash) = header.into_parts();
-            let body = BlockBody::<L2Envelope>::default();
-            let block = Block::new(header, body);
-            let sealed_block = SealedBlock::new_unchecked(block, hash);
-            let changed_accounts = account_diffs
-                .iter()
-                .map(|diff| ChangedAccount {
-                    address: diff.address,
-                    nonce: diff.nonce,
-                    balance: diff.balance,
-                })
-                .collect();
-            self.l2_subpool
-                .on_canonical_state_change(CanonicalStateUpdate {
-                    new_tip: &sealed_block,
-                    pending_block_base_fee: 0,
-                    pending_block_blob_fee: None,
-                    changed_accounts,
-                    mined_transactions: l2_transactions,
-                    update_kind: PoolUpdateKind::Commit,
-                });
-        }
+        let (header, hash) = header.into_parts();
+        let body = BlockBody::<L2Envelope>::default();
+        let block = Block::new(header, body);
+        let sealed_block = SealedBlock::new_unchecked(block, hash);
+        let changed_accounts = account_diffs
+            .iter()
+            .map(|diff| ChangedAccount {
+                address: diff.address,
+                nonce: diff.nonce,
+                balance: diff.balance,
+            })
+            .collect();
+        self.l2_subpool
+            .on_canonical_state_change(CanonicalStateUpdate {
+                new_tip: &sealed_block,
+                pending_block_base_fee: 0,
+                pending_block_blob_fee: None,
+                changed_accounts,
+                mined_transactions: l2_transactions,
+                update_kind: PoolUpdateKind::Commit,
+            });
+
         let last_interop_log_index = self
             .interop_roots_subpool
-            .on_canonical_state_change(system_txs);
+            .on_canonical_state_change(interop_txs);
         let last_l1_priority_id = self
             .l1_subpool
             .on_canonical_state_change(l1_transactions)

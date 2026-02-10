@@ -590,6 +590,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let pool = Pool::new(
         upgrade_transactions_receiver,
+        sl_chain_id_update_transactions_receiver,
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),
