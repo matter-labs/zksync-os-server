@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_mempool::{Pool, TxStream};
+use zksync_os_mempool::{Pool, TxStream, TxStreamExt};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope, ZkTransaction,
@@ -97,7 +97,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 let best_txs = self
                     .pool
                     .best_transactions_stream(self.next_interop_tx_allowed_after)
-                    .await;
+                    .await
+                    .context("mempool is closed")?;
 
                 let timestamp = (millis_since_epoch() / 1000) as u64;
 
@@ -194,7 +195,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         allowed_to_finish_early: false,
                     },
                     invalid_tx_policy: InvalidTxPolicy::Abort,
-                    tx_source: ReplayTxStream::new(record.transactions).boxed_tx_stream(),
+                    tx_source: ReplayTxStream::new(record.transactions).boxed(),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     protocol_version: record.protocol_version,
@@ -271,7 +272,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
                 PreparedBlockCommand {
                     block_context,
-                    tx_source: ReplayTxStream::new(txs).boxed_tx_stream(),
+                    tx_source: ReplayTxStream::new(txs).boxed(),
                     seal_policy: SealPolicy::UntilExhausted {
                         allowed_to_finish_early: true,
                     },

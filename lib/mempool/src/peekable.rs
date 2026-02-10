@@ -1,18 +1,21 @@
+//! Variation of [`tokio_stream::adapters::Peekable`] that works with [`TxStream`].
+
+use crate::TxStream;
 use futures::Stream;
 use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_stream::StreamExt;
 
-/// Stream returned by the [`peekable`](super::StreamExt::peekable) method.
+/// Peekable transaction stream.
 #[pin_project]
-pub(crate) struct Peekable<T: Stream> {
-    peek: Option<T::Item>,
+pub struct PeekableTxStream<S: TxStream> {
+    peek: Option<S::Item>,
     #[pin]
-    pub(crate) stream: T,
+    stream: S,
 }
 
-impl<T: Stream> Peekable<T> {
+impl<T: TxStream> PeekableTxStream<T> {
     pub(crate) fn new(stream: T) -> Self {
         Self { peek: None, stream }
     }
@@ -31,8 +34,8 @@ impl<T: Stream> Peekable<T> {
     }
 }
 
-impl<T: Stream> Stream for Peekable<T> {
-    type Item = T::Item;
+impl<S: TxStream> Stream for PeekableTxStream<S> {
+    type Item = S::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
@@ -41,5 +44,15 @@ impl<T: Stream> Stream for Peekable<T> {
         } else {
             this.stream.poll_next(cx)
         }
+    }
+}
+
+impl<S: TxStream> TxStream for PeekableTxStream<S> {
+    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
+        if self.peek.is_some() {
+            panic!("`peek` is not expected to be called during transaction execution");
+        }
+        // Since `peek` is empty we can delegate to the underlying stream
+        self.project().stream.mark_last_tx_as_invalid()
     }
 }

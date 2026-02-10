@@ -3,6 +3,8 @@ use crate::subpools::l1::{L1Subpool, L1TransactionsStream};
 use crate::subpools::l2::{L2Subpool, L2TransactionsStream};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
+use crate::tx_stream::TxStreamExt;
+use crate::{BoxTxStream, TxStream};
 use alloy::consensus::{Block, BlockBody, Header, Sealed};
 use alloy::primitives::TxHash;
 use futures::Stream;
@@ -13,7 +15,6 @@ use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::time::Instant;
-use tokio_stream::StreamExt;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
@@ -21,6 +22,9 @@ use zksync_os_types::{
     ZkTransaction,
 };
 
+/// General pool that provides unified access to all transaction sources in the system.
+///
+/// Consists of multiple smaller subpools, see [`crate::subpools`] for more information.
 pub struct Pool<T> {
     upgrade_subpool: UpgradeSubpool,
     sl_chain_id_subpool: SlChainIdSubpool,
@@ -46,68 +50,85 @@ impl<T: L2Subpool> Pool<T> {
         }
     }
 
+    /// Picks the best source of transactions out of currently available ones. If there are none,
+    /// then waits for one to become available.
+    ///
+    /// Also provides upgrade information is there is one (which is not necessarily accompanied by
+    /// an upgrade transaction).
+    ///
+    /// Returns `None` if all transaction sources are closed.
     pub async fn best_transactions_stream<'a>(
         &'a mut self,
         next_interop_tx_allowed_after: Instant,
-    ) -> StreamOutcome<'a> {
+    ) -> Option<StreamOutcome<'a>> {
         let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream();
 
-        let interop_stream = self
+        let mut interop_stream = self
             .interop_roots_subpool
-            .interop_transactions_with_delay(next_interop_tx_allowed_after);
-        let mut interop_stream = crate::peekable::Peekable::new(interop_stream);
+            .interop_transactions_with_delay(next_interop_tx_allowed_after)
+            .peekable();
 
-        let sl_chain_id_stream = self.sl_chain_id_subpool.best_transactions_stream();
-        let mut sl_chain_id_stream = crate::peekable::Peekable::new(sl_chain_id_stream);
+        let mut sl_chain_id_stream = self
+            .sl_chain_id_subpool
+            .best_transactions_stream()
+            .peekable();
 
         let l1_stream = self.l1_subpool.best_transactions_stream();
         let l2_stream = self.l2_subpool.best_transactions_stream();
-        let l1_l2_stream = L1L2TxStream {
+        let mut l1_l2_stream = L1L2TxStream {
             last_polled_tx: None,
             l1_stream,
             l2_stream,
-        };
-        let mut l1_l2_stream = crate::peekable::Peekable::new(l1_l2_stream);
+        }
+        .peekable();
 
         let mut upgrade_metadata = None;
         loop {
             tokio::select! {
-                // If you run this example without `biased;`, the polling order is
-                // pseudo-random, and the assertions on the value of count will
-                // (probably) fail.
+                // This select is biased on purpose, meaning `tokio::select!` branches are checked
+                // sequentially top to bottom. It is very important to maintain the fairness of the
+                // order here: rarest transaction types must be generally polled first while common
+                // ones last. Otherwise, we might never pick rarer transaction types under load.
                 biased;
 
-                Some(upgrade) = upgrade_info_stream.next() => {
+                // Upgrade branch is a bit special as it does not always produce a stream of
+                // transactions. Sometimes it only sets `upgrade_metadata` and some other stream
+                // needs to provide transactions. This is the reason behind `loop` above (which can
+                // iterate twice at max).
+                Some(upgrade) = tokio_stream::StreamExt::next(&mut upgrade_info_stream) => {
                     upgrade_metadata = Some(upgrade.metadata);
                     if let Some(tx) = upgrade.tx {
-                        return StreamOutcome {
+                        return Some(StreamOutcome {
                             upgrade_metadata,
-                            stream: UpgradeTransactionsStream::one(tx).boxed_tx_stream(),
-                        }
+                            stream: UpgradeTransactionsStream::one(tx).boxed(),
+                        });
                     }
                 }
                 Some(_) = sl_chain_id_stream.peek() => {
-                    // todo: chain with `l1_l2_stream`
-                    return StreamOutcome {
+                    // todo: this will make sure that SL chain ID transaction is in its own block.
+                    //       But we only need to ensure that, if present, it is the first transaction
+                    //       in the block. In other words, we could chain it with `l1_l2_stream` as
+                    //       an optimization
+                    return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: sl_chain_id_stream.boxed_tx_stream(),
-                    }
+                        stream: sl_chain_id_stream.boxed(),
+                    });
                 }
                 Some(_) = interop_stream.peek() => {
-                    return StreamOutcome {
+                    return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: interop_stream.boxed_tx_stream(),
-                    }
+                        stream: interop_stream.boxed(),
+                    });
                 }
                 Some(_) = l1_l2_stream.peek() => {
-                    return StreamOutcome {
+                    return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: l1_l2_stream.boxed_tx_stream(),
-                    }
+                        stream: l1_l2_stream.boxed(),
+                    });
                 }
 
                 else => {
-                    todo!()
+                    return None;
                 }
             }
         }
@@ -192,31 +213,26 @@ impl<T: L2Subpool> Pool<T> {
     }
 }
 
+pub struct StreamOutcome<'a> {
+    /// Optional upgrade metadata to be applied with transactions in `stream`. Note that even if
+    /// this is `Some`, `stream` is not guaranteed to contain an upgrade transaction. The stream may
+    /// contain other transaction types if the upgrade is a patch upgrade.
+    pub upgrade_metadata: Option<UpgradeMetadata>,
+    /// Non-empty stream of transactions.
+    pub stream: BoxTxStream<'a>,
+}
+
 #[derive(Debug, Default)]
 pub struct StateChangeOutcome {
+    /// Last interop log index that was imported after canonical state change.
     pub last_interop_log_index: Option<InteropRootsLogIndex>,
+    /// Last L1 priority ID that was executed after canonical state change.
     pub last_l1_priority_id: Option<L1TxSerialId>,
 }
 
-pub trait TxStream: Stream<Item = ZkTransaction> {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
-
-    fn boxed_tx_stream<'a>(self) -> BoxTxStream<'a>
-    where
-        Self: Sized + Send + 'a,
-    {
-        Box::pin(self)
-    }
-}
-
-pub type BoxTxStream<'a> = Pin<Box<dyn TxStream + Send + 'a>>;
-
-impl<S: TxStream> TxStream for crate::peekable::Peekable<S> {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
-        self.project().stream.mark_last_tx_as_invalid()
-    }
-}
-
+/// L1-biased select of two streams that also remembers which stream provided last polled
+/// transaction. Similar thing can be achieved with [`futures::stream::select_with_strategy`] but
+/// then we lose information about last polled origin.
 #[pin_project]
 pub struct L1L2TxStream {
     last_polled_tx: Option<LastPolledType>,
@@ -261,13 +277,4 @@ impl TxStream for L1L2TxStream {
             Some(LastPolledType::L2) => self.as_mut().project().l2_stream.mark_last_tx_as_invalid(),
         }
     }
-}
-
-pub struct StreamOutcome<'a> {
-    /// Optional upgrade metadata to be applied with transactions in `stream`. Note that even if
-    /// this is `Some`, `stream` is not guaranteed to contain an upgrade transaction. The stream may
-    /// contain other transaction types if the upgrade is a patch upgrade.
-    pub upgrade_metadata: Option<UpgradeMetadata>,
-    /// Non-empty stream of transactions.
-    pub stream: BoxTxStream<'a>,
 }

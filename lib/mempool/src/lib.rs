@@ -7,9 +7,12 @@ pub use config::TxValidatorConfig;
 pub mod subpools;
 
 mod pool;
-pub use pool::{BoxTxStream, Pool, TxStream};
+pub use pool::Pool;
 
 mod peekable;
+
+mod tx_stream;
+pub use tx_stream::{BoxTxStream, TxStream, TxStreamExt};
 
 mod metrics;
 
