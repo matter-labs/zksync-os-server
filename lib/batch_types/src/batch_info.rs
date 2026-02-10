@@ -55,7 +55,7 @@ impl BatchInfo {
 
             for tx in transactions {
                 match tx.envelope() {
-                    ZkEnvelope::InteropRoots(_) => {}
+                    ZkEnvelope::System(_) => {}
                     ZkEnvelope::L1(l1_tx) => {
                         let onchain_data_hash = l1_tx.hash();
                         priority_operations_hash =

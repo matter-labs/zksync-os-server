@@ -17,7 +17,7 @@ mod state_initializer;
 pub mod tree_manager;
 pub mod zkstack_config;
 
-use zksync_os_mempool::InteropTxPool;
+use zksync_os_mempool::InteropRootsTxPool;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
@@ -70,7 +70,8 @@ use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::pipeline_component::L1Sender;
 use zksync_os_l1_sender::upgrade_gatekeeper::UpgradeGatekeeper;
 use zksync_os_l1_watcher::{
-    CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
+    CommittedBatchProvider, Gateway, GatewayMigrationWatcher, L1, L1CommitWatcher,
+    L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
 use zksync_os_mempool::L2TransactionPool;
@@ -428,7 +429,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
-    let interop_tx_pool = InteropTxPool::new(10);
+    let interop_roots_tx_pool = InteropRootsTxPool::new(10);
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
@@ -436,13 +437,48 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 node_startup_state.l1_state.bridgehub.clone(),
                 config.l1_watcher_config.clone().into(),
                 next_interop_event_index.clone(),
-                interop_tx_pool.clone(),
+                interop_roots_tx_pool.clone(),
             )
             .await
             .expect("failed to start L1 interop roots watcher")
             .run()
             .map(report_exit("L1 interop roots watcher")),
         );
+    }
+
+    let (sl_chain_id_update_transactions_sender, sl_chain_id_update_transactions_receiver) =
+        tokio::sync::mpsc::channel(10);
+
+    if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0)
+        && config.l1_watcher_config.enable_gw_migration_watcher
+    {
+        // todo: add proper handling of gateway migration watcher/differentiating between gateway and l1
+        let is_gateway = false;
+        if is_gateway {
+            tasks.spawn(
+                GatewayMigrationWatcher::<Gateway>::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy.clone(),
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_update_transactions_sender,
+                )
+                .await
+                .expect("failed to start L1 chain id update watcher")
+                .run()
+                .map(report_exit("L1 chain id update watcher")),
+            );
+        } else {
+            tasks.spawn(
+                GatewayMigrationWatcher::<L1>::create_watcher(
+                    node_startup_state.l1_state.diamond_proxy.clone(),
+                    config.l1_watcher_config.clone().into(),
+                    sl_chain_id_update_transactions_sender,
+                )
+                .await
+                .expect("failed to start L1 chain id update watcher")
+                .run()
+                .map(report_exit("L1 chain id update watcher")),
+            );
+        }
     }
 
     tasks.spawn(
@@ -550,7 +586,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         next_interop_event_index,
         l1_transactions_for_sequencer,
         l1_upgrade_transactions_receiver,
-        interop_tx_pool,
+        sl_chain_id_update_transactions_receiver,
+        interop_roots_tx_pool,
         l2_mempool.clone(),
         block_hashes_for_next_block,
         previous_block_timestamp,

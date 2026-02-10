@@ -3,7 +3,7 @@ use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope, ZkTxType};
+use zksync_os_types::{ProtocolSemanticVersion, SystemTxType, ZkTxType};
 
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
@@ -15,6 +15,7 @@ pub(crate) struct BatchInfoAccumulator {
     pub tx_count: u64,
     pub has_upgrade_tx: bool,
     pub interop_roots_count: u64,
+    pub should_seal_for_gateway_migration: bool,
 
     pub protocol_versions: HashSet<ProtocolSemanticVersion>,
     pub execution_versions: HashSet<u32>,
@@ -59,13 +60,25 @@ impl BatchInfoAccumulator {
         self.interop_roots_count += replay_record
             .transactions
             .iter()
-            .map(|tx| match tx.inner.inner() {
-                ZkEnvelope::InteropRoots(interop_roots_tx) => {
-                    interop_roots_tx.interop_roots_count()
+            .map(|tx| {
+                if let Some(SystemTxType::ImportInteropRoots(roots_count)) = tx.as_system_tx_type()
+                {
+                    *roots_count
+                } else {
+                    0
                 }
-                _ => 0,
             })
             .sum::<u64>();
+
+        // If there is a chain id update transaction not in the first block(note `self.block_count > 1`), we need to seal the batch for gateway migration(so it goes in the first block of the next batch)
+        if replay_record
+            .transactions
+            .iter()
+            .any(|tx| tx.as_system_tx_type() == Some(&SystemTxType::SetSLChainId))
+            && self.block_count > 1
+        {
+            self.should_seal_for_gateway_migration = true;
+        }
 
         if !self.has_upgrade_tx
             && replay_record
@@ -138,6 +151,16 @@ impl BatchInfoAccumulator {
         if self.interop_roots_count > self.interop_roots_per_batch_limit {
             BATCHER_METRICS.seal_reason[&"interop_roots"].inc();
             tracing::debug!("Batcher: reached max number of interop roots per batch");
+            return true;
+        }
+
+        // In case SL chain id update tx is present but not in the first block, we need to seal and
+        // exclude. It will then go in the first block of the next batch.
+        if self.should_seal_for_gateway_migration {
+            BATCHER_METRICS.seal_reason[&"chain_id_update_tx"].inc();
+            tracing::debug!(
+                "Batcher: sealing batch due to chain id update transaction, which should go in the first block of the next batch"
+            );
             return true;
         }
 

@@ -15,13 +15,13 @@ use tokio::{
 };
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::{
-    CanonicalStateUpdate, InteropTxPool, L2TransactionPool, PoolUpdateKind, ReplayTxStream,
+    CanonicalStateUpdate, InteropRootsTxPool, L2TransactionPool, PoolUpdateKind, ReplayTxStream,
     best_transactions,
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     ExecutionVersion, InteropRootsLogIndex, L1PriorityEnvelope, L2Envelope,
-    ProtocolSemanticVersion, UpgradeTransaction, ZkEnvelope,
+    ProtocolSemanticVersion, SystemTxEnvelope, UpgradeTransaction, ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -39,7 +39,8 @@ pub struct BlockContextProvider<Mempool> {
     next_interop_event_index: InteropRootsLogIndex,
     l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
     upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
-    interop_tx_pool: InteropTxPool,
+    sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
+    interop_roots_tx_pool: InteropRootsTxPool,
     l2_mempool: Mempool,
     block_hashes_for_next_block: BlockHashes,
     previous_block_timestamp: u64,
@@ -65,7 +66,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         next_interop_event_index: InteropRootsLogIndex,
         l1_transactions: mpsc::Receiver<L1PriorityEnvelope>,
         upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
-        interop_tx_pool: InteropTxPool,
+        sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
+        interop_roots_tx_pool: InteropRootsTxPool,
         l2_mempool: Mempool,
         block_hashes_for_next_block: BlockHashes,
         previous_block_timestamp: u64,
@@ -85,7 +87,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             next_interop_event_index,
             l1_transactions,
             upgrade_transactions,
-            interop_tx_pool,
+            sl_chain_id_update_transactions,
+            interop_roots_tx_pool,
             l2_mempool,
             block_hashes_for_next_block,
             previous_block_timestamp,
@@ -115,7 +118,8 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
                 let mut best_txs = best_transactions(
                     &self.l2_mempool,
                     &mut self.l1_transactions,
-                    self.interop_tx_pool.interop_transactions_with_delay(
+                    &mut self.sl_chain_id_update_transactions,
+                    self.interop_roots_tx_pool.interop_transactions_with_delay(
                         self.interop_roots_per_tx,
                         self.next_interop_tx_allowed_after,
                     ),
@@ -337,7 +341,7 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
         let mut interop_txs = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
-                ZkEnvelope::InteropRoots(interop_tx) => {
+                ZkEnvelope::System(interop_tx) => {
                     interop_txs.push(interop_tx.clone());
                 }
                 ZkEnvelope::L1(l1_tx) => {
@@ -371,8 +375,9 @@ impl<Mempool: L2TransactionPool> BlockContextProvider<Mempool> {
             }
         }
 
-        if let Some(last_interop_log_index) =
-            self.interop_tx_pool.on_canonical_state_change(interop_txs)
+        if let Some(last_interop_log_index) = self
+            .interop_roots_tx_pool
+            .on_canonical_state_change(interop_txs)
         {
             self.next_interop_tx_allowed_after = Instant::now() + self.service_block_delay;
             self.next_interop_event_index = InteropRootsLogIndex {

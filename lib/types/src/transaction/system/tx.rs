@@ -7,22 +7,22 @@ use alloy::rpc::types::{AccessList, SignedAuthorization};
 use alloy_rlp::{BufMut, Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 
-use crate::transaction::INTEROP_ROOTS_TX_TYPE_ID;
+use crate::transaction::SYSTEM_TX_TYPE_ID;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct InteropRootsTx {
+pub struct SystemTx {
     pub to: Address,
     pub input: Bytes,
 }
 
-impl InteropRootsTx {
+impl SystemTx {
     pub fn calculate_hash(&self) -> B256 {
         keccak256(self.encoded_2718())
     }
 }
 
-impl Transaction for InteropRootsTx {
+impl Transaction for SystemTx {
     fn chain_id(&self) -> Option<ChainId> {
         None
     }
@@ -92,13 +92,13 @@ impl Transaction for InteropRootsTx {
     }
 }
 
-impl Typed2718 for InteropRootsTx {
+impl Typed2718 for SystemTx {
     fn ty(&self) -> u8 {
-        INTEROP_ROOTS_TX_TYPE_ID
+        SYSTEM_TX_TYPE_ID
     }
 }
 
-impl Encodable2718 for InteropRootsTx {
+impl Encodable2718 for SystemTx {
     fn encode_2718_len(&self) -> usize {
         1 + self.length()
     }
@@ -106,12 +106,12 @@ impl Encodable2718 for InteropRootsTx {
     fn encode_2718(&self, out: &mut dyn BufMut) {
         let mut rlp_body = Vec::new();
         Encodable::encode(&self, &mut rlp_body);
-        out.put_u8(INTEROP_ROOTS_TX_TYPE_ID);
+        out.put_u8(SYSTEM_TX_TYPE_ID);
         out.put_slice(&rlp_body);
     }
 }
 
-impl RlpEcdsaEncodableTx for InteropRootsTx {
+impl RlpEcdsaEncodableTx for SystemTx {
     fn rlp_encoded_fields_length(&self) -> usize {
         self.to.length() + self.input.length()
     }
@@ -122,8 +122,8 @@ impl RlpEcdsaEncodableTx for InteropRootsTx {
     }
 }
 
-impl RlpEcdsaDecodableTx for InteropRootsTx {
-    const DEFAULT_TX_TYPE: u8 = INTEROP_ROOTS_TX_TYPE_ID;
+impl RlpEcdsaDecodableTx for SystemTx {
+    const DEFAULT_TX_TYPE: u8 = SYSTEM_TX_TYPE_ID;
 
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
         Ok(Self {
@@ -133,8 +133,7 @@ impl RlpEcdsaDecodableTx for InteropRootsTx {
     }
 }
 
-// if something goes wrong with encoding, there's a chance that something is wrong here
-impl Encodable for InteropRootsTx {
+impl Encodable for SystemTx {
     fn encode(&self, out: &mut dyn BufMut) {
         self.rlp_encode(out);
     }

@@ -1,5 +1,5 @@
 use crate::transaction::L2PooledTransaction;
-use crate::{InteropTransactions, L2TransactionPool};
+use crate::{InteropRootTransactions, L2TransactionPool};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::{Stream, StreamExt};
@@ -10,7 +10,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use zksync_os_types::{L1PriorityEnvelope, L2Envelope, UpgradeTransaction, ZkTransaction};
+use zksync_os_types::{
+    L1PriorityEnvelope, L2Envelope, SystemTxEnvelope, UpgradeTransaction, ZkTransaction,
+};
 
 pub trait TxStream: Stream {
     fn mark_last_tx_as_invalid(self: Pin<&mut Self>);
@@ -19,7 +21,8 @@ pub trait TxStream: Stream {
 pub struct BestTransactionsStream<'a> {
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
     pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
-    interop_transactions: InteropTransactions,
+    sl_chain_id_update_transactions: &'a mut mpsc::Receiver<SystemTxEnvelope>,
+    interop_transactions: InteropRootTransactions,
     pending_transactions_listener: mpsc::Receiver<TxHash>,
     best_l2_transactions:
         Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
@@ -34,13 +37,15 @@ pub struct BestTransactionsStream<'a> {
 pub fn best_transactions<'a>(
     l2_mempool: &impl L2TransactionPool,
     l1_transactions: &'a mut mpsc::Receiver<L1PriorityEnvelope>,
-    interop_transactions: InteropTransactions,
+    sl_chain_id_update_transactions: &'a mut mpsc::Receiver<SystemTxEnvelope>,
+    interop_transactions: InteropRootTransactions,
     pending_upgrade_transactions: &'a mut mpsc::Receiver<UpgradeTransaction>,
 ) -> BestTransactionsStream<'a> {
     let pending_transactions_listener =
         l2_mempool.pending_transactions_listener_for(TransactionListenerKind::All);
     BestTransactionsStream {
         l1_transactions,
+        sl_chain_id_update_transactions,
         interop_transactions,
         pending_upgrade_transactions,
         pending_transactions_listener,
@@ -74,6 +79,17 @@ impl Stream for BestTransactionsStream<'_> {
                         // If there is no upgrade transaction (patch-only upgrade), continue to the next step.
                         // We already set the upgrade info, so protocol version will be updated once
                         // the first transaction will arrive.
+                    }
+                    Poll::Pending => {}
+                    Poll::Ready(None) => return Poll::Ready(None),
+                }
+            }
+
+            // We only should provide an SL chain id update transaction if it's the first one in the stream for this block.
+            if !this.txs_already_provided {
+                match this.sl_chain_id_update_transactions.poll_recv(cx) {
+                    Poll::Ready(Some(tx)) => {
+                        return Poll::Ready(Some(tx.into()));
                     }
                     Poll::Pending => {}
                     Poll::Ready(None) => return Poll::Ready(None),

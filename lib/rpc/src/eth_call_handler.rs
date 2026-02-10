@@ -27,8 +27,8 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
-    INTEROP_ROOTS_TX_TYPE_ID, L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx,
-    L1TxType, L2Envelope, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, UpgradeTxType, ZkEnvelope,
+    L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
+    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType, ZkEnvelope,
     ZkTransaction, ZkTxType,
 };
 
@@ -147,8 +147,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(UpgradeTxType::TX_TYPE) => {
                 return Err(EthCallError::UpgradeTxNotEstimatable);
             }
-            Some(INTEROP_ROOTS_TX_TYPE_ID) => {
-                return Err(EthCallError::SystemInteropRootsTxNotEstimatable);
+            Some(SYSTEM_TX_TYPE_ID) => {
+                return Err(EthCallError::SystemTxNotEstimatable);
             }
             _ => {}
         }
@@ -650,8 +650,8 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 
 fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     match tx.inner.inner_mut() {
-        ZkEnvelope::InteropRoots(_) => {
-            unreachable!("interop roots transactions don't have explicit gas limit");
+        ZkEnvelope::System(_) => {
+            unreachable!("system transactions don't have explicit gas limit");
         }
         ZkEnvelope::L2(L2Envelope::Legacy(inner)) => inner.tx_mut().gas_limit = gas_limit,
         ZkEnvelope::L2(L2Envelope::Eip2930(inner)) => inner.tx_mut().gas_limit = gas_limit,
@@ -709,8 +709,8 @@ pub enum EthCallError {
     Eip7702NotSupported,
     #[error("upgrade transactions cannot be estimated")]
     UpgradeTxNotEstimatable,
-    #[error("system interop roots transactions cannot be estimated")]
-    SystemInteropRootsTxNotEstimatable,
+    #[error("system transactions cannot be estimated")]
+    SystemTxNotEstimatable,
 
     /// Error while decoding or validating transaction request fees.
     #[error(transparent)]

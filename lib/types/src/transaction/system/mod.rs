@@ -1,39 +1,82 @@
 use crate::transaction::Transaction;
-use crate::transaction::tx::InteropRootsTx;
+use crate::transaction::tx::SystemTx;
+use crate::transaction::utils::SystemTxInput;
 use alloy::consensus::transaction::{RlpEcdsaDecodableTx, RlpEcdsaEncodableTx};
 use alloy::eips::eip2718::{Eip2718Error, Eip2718Result};
 use alloy::eips::{Decodable2718, Encodable2718, Typed2718};
 use alloy::primitives::ChainId;
-use alloy::primitives::{Address, B256, Bytes, TxKind, U256, address};
+use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::rpc::types::{AccessList, SignedAuthorization};
-use alloy::sol_types::SolCall;
 use alloy_rlp::{BufMut, Decodable, Encodable};
 use serde::{Deserialize, Serialize};
-use zksync_os_contract_interface::IMessageRoot::addInteropRootCall;
+use std::sync::OnceLock;
 use zksync_os_contract_interface::InteropRoot;
 
 pub mod tx;
+pub mod utils;
+pub use utils::{L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_TX_TYPE_ID, SystemTxType};
 
-pub const BOOTLOADER_FORMAL_ADDRESS: Address =
-    address!("0x0000000000000000000000000000000000008001");
-pub const L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS: Address =
-    address!("0x0000000000000000000000000000000000010008");
-
-pub const INTEROP_ROOTS_TX_TYPE_ID: u8 = 125;
-
-#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(into = "tx_serde::TransactionSerdeHelper")]
-pub struct InteropRootsEnvelope {
+pub struct SystemTxEnvelope {
     /// Hash of the transaction
     /// Stored in an envelope and calculated separately from transaction as hash of transaction is not part of transaction itself.
-    pub hash: B256,
-    pub inner: InteropRootsTx,
+    hash: B256,
+    inner: SystemTx,
+    #[serde(skip)]
+    subtype: OnceLock<SystemTxType>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
-pub struct IndexedInteropRootsEnvelope {
-    pub log_index: InteropRootsLogIndex,
-    pub envelope: InteropRootsEnvelope,
+impl PartialEq for SystemTxEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash() == other.hash()
+            && self.inner == other.inner
+            && self.system_subtype() == other.system_subtype()
+    }
+}
+
+impl SystemTxEnvelope {
+    /// A constructor for system transaction that imports interop roots
+    pub fn import_interop_roots(roots: Vec<InteropRoot>) -> Self {
+        Self::create_from_input(SystemTxInput::ImportInteropRoots(roots))
+    }
+
+    /// A constructor for system transaction that sets the settlement layer chain id
+    pub fn set_sl_chain_id(chain_id: ChainId) -> Self {
+        Self::create_from_input(SystemTxInput::SetSLChainId(chain_id))
+    }
+
+    fn create_from_input(tx_input: SystemTxInput) -> Self {
+        let calldata = tx_input.abi_encode();
+
+        let transaction = SystemTx {
+            to: tx_input.to_address(),
+            input: Bytes::from(calldata),
+        };
+
+        Self {
+            hash: transaction.calculate_hash(),
+            inner: transaction,
+            subtype: OnceLock::new(),
+        }
+    }
+
+    pub fn system_subtype(&self) -> &SystemTxType {
+        self.subtype.get_or_init(|| {
+            let input = SystemTxInput::abi_decode(self.inner.input());
+            assert_eq!(self.to(), Some(input.to_address()));
+            match input {
+                SystemTxInput::ImportInteropRoots(roots) => {
+                    SystemTxType::ImportInteropRoots(roots.len() as u64)
+                }
+                SystemTxInput::SetSLChainId(_) => SystemTxType::SetSLChainId,
+            }
+        })
+    }
+
+    pub fn hash(&self) -> &B256 {
+        &self.hash
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -46,7 +89,7 @@ mod tx_serde {
     use alloy::primitives::TxHash;
 
     use super::*;
-    use crate::transaction::BOOTLOADER_FORMAL_ADDRESS;
+    use crate::transaction::utils::BOOTLOADER_FORMAL_ADDRESS;
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -74,12 +117,13 @@ mod tx_serde {
     }
 
     // Serialize: inject defaults for (r,s,v,yParity)
-    impl From<InteropRootsEnvelope> for TransactionSerdeHelper {
-        fn from(tx: InteropRootsEnvelope) -> Self {
+    impl From<SystemTxEnvelope> for TransactionSerdeHelper {
+        fn from(tx: SystemTxEnvelope) -> Self {
+            let tx_input = SystemTxInput::abi_decode(tx.inner.input());
             Self {
                 hash: *tx.hash(),
                 initiator: BOOTLOADER_FORMAL_ADDRESS,
-                to: L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS,
+                to: tx_input.to_address(),
                 gas_limit: tx.gas_limit(),
                 max_fee_per_gas: tx.max_fee_per_gas(),
                 max_priority_fee_per_gas: tx.max_priority_fee_per_gas().unwrap_or(0),
@@ -125,47 +169,13 @@ impl Decodable for InteropRootsLogIndex {
     }
 }
 
-impl InteropRootsEnvelope {
-    pub fn from_interop_roots(interop_roots: Vec<InteropRoot>) -> Self {
-        let calldata = addInteropRootCall {
-            chainId: interop_roots[0].chainId,
-            blockOrBatchNumber: interop_roots[0].blockOrBatchNumber,
-            sides: interop_roots[0].sides.clone(),
-        }
-        .abi_encode();
-
-        let transaction = InteropRootsTx {
-            to: L2_INTEROP_ROOT_STORAGE_ZKSYNC_OS_ADDRESS,
-            input: Bytes::from(calldata),
-        };
-
-        Self {
-            hash: transaction.calculate_hash(),
-            inner: transaction,
-        }
-    }
-
-    pub fn interop_roots_count(&self) -> u64 {
-        // todo: return back once contracts can handle multiple roots in one call
-        // addInteropRootsInBatchCall::abi_decode(self.inner.input())
-        //     .expect("failed to decode interop roots")
-        //     .interopRootsInput
-        //     .len() as u64
-        1
-    }
-
-    pub fn hash(&self) -> &B256 {
-        &self.hash
-    }
-}
-
-impl Typed2718 for InteropRootsEnvelope {
+impl Typed2718 for SystemTxEnvelope {
     fn ty(&self) -> u8 {
-        INTEROP_ROOTS_TX_TYPE_ID
+        SYSTEM_TX_TYPE_ID
     }
 }
 
-impl RlpEcdsaEncodableTx for InteropRootsEnvelope {
+impl RlpEcdsaEncodableTx for SystemTxEnvelope {
     fn rlp_encoded_fields_length(&self) -> usize {
         self.inner.rlp_encoded_fields_length()
     }
@@ -175,19 +185,20 @@ impl RlpEcdsaEncodableTx for InteropRootsEnvelope {
     }
 }
 
-impl RlpEcdsaDecodableTx for InteropRootsEnvelope {
-    const DEFAULT_TX_TYPE: u8 = INTEROP_ROOTS_TX_TYPE_ID;
+impl RlpEcdsaDecodableTx for SystemTxEnvelope {
+    const DEFAULT_TX_TYPE: u8 = SYSTEM_TX_TYPE_ID;
 
     fn rlp_decode_fields(buf: &mut &[u8]) -> alloy::rlp::Result<Self> {
-        let transaction = InteropRootsTx::rlp_decode_fields(buf)?;
+        let transaction = SystemTx::rlp_decode_fields(buf)?;
         Ok(Self {
             hash: transaction.calculate_hash(),
             inner: transaction,
+            subtype: OnceLock::new(),
         })
     }
 }
 
-impl Encodable for InteropRootsEnvelope {
+impl Encodable for SystemTxEnvelope {
     fn encode(&self, out: &mut dyn BufMut) {
         self.inner.encode(out);
     }
@@ -197,7 +208,7 @@ impl Encodable for InteropRootsEnvelope {
     }
 }
 
-impl Encodable2718 for InteropRootsEnvelope {
+impl Encodable2718 for SystemTxEnvelope {
     fn encode_2718_len(&self) -> usize {
         self.inner.encode_2718_len()
     }
@@ -207,13 +218,13 @@ impl Encodable2718 for InteropRootsEnvelope {
     }
 }
 
-impl Decodable2718 for InteropRootsEnvelope {
+impl Decodable2718 for SystemTxEnvelope {
     fn typed_decode(ty: u8, buf: &mut &[u8]) -> Eip2718Result<Self> {
-        if ty != INTEROP_ROOTS_TX_TYPE_ID {
+        if ty != SYSTEM_TX_TYPE_ID {
             return Err(Eip2718Error::UnexpectedType(ty));
         }
 
-        let transaction = InteropRootsTx::rlp_decode(buf)
+        let transaction = SystemTx::rlp_decode(buf)
             .map_err(|_| Eip2718Error::RlpError(alloy::rlp::Error::Custom("decode failed")))?;
 
         let hash = transaction.calculate_hash();
@@ -221,6 +232,7 @@ impl Decodable2718 for InteropRootsEnvelope {
         Ok(Self {
             hash,
             inner: transaction,
+            subtype: OnceLock::new(),
         })
     }
 
@@ -230,7 +242,7 @@ impl Decodable2718 for InteropRootsEnvelope {
     }
 }
 
-impl Transaction for InteropRootsEnvelope {
+impl Transaction for SystemTxEnvelope {
     fn chain_id(&self) -> Option<ChainId> {
         self.inner.chain_id()
     }
@@ -302,28 +314,25 @@ impl Transaction for InteropRootsEnvelope {
 
 #[cfg(test)]
 mod tests {
-    use crate::InteropRootsEnvelope;
-    use crate::transaction::tx::InteropRootsTx;
+    use alloy::primitives::{B256, Uint};
+    use zksync_os_contract_interface::InteropRoot;
 
+    use crate::SystemTxEnvelope;
+
+    /// System transaction serialization should be consistent with Ethereum JSON-RPC spec
+    /// See https://ethereum.github.io/execution-apis/api-documentation/
     #[test]
     fn interop_roots_tx_serialization() {
-        // Interop roots serialization should be consistent with Ethereum JSON-RPC spec
-        // See https://ethereum.github.io/execution-apis/api-documentation/
-
-        let transaction = InteropRootsTx {
-            to: Default::default(),
-            input: Default::default(),
-        };
-
-        let tx = InteropRootsEnvelope {
-            hash: transaction.calculate_hash(),
-            inner: transaction,
-        };
+        let tx = SystemTxEnvelope::import_interop_roots(vec![InteropRoot {
+            chainId: Uint::from(1),
+            blockOrBatchNumber: Uint::from(1),
+            sides: vec![B256::ZERO],
+        }]);
 
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),
             r#"{
-  "hash": "0x0b5cf6f6f3b9deb0fd6cb66f51e15f4d751e0724401c2cd7b7df59489fe5f289",
+  "hash": "0x1f7117fa6190a6da113e9b7223222d3bc3b7c4c866772385e05ec79041e8f0ba",
   "initiator": "0x0000000000000000000000000000000000008001",
   "to": "0x0000000000000000000000000000000000010008",
   "gas": "0x0",
@@ -331,7 +340,31 @@ mod tests {
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
   "value": "0x0",
-  "input": "0x",
+  "input": "0xcca2f7bc00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
+  "v": "0x0",
+  "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "yParity": "0x0"
+}"#
+        );
+    }
+
+    #[test]
+    fn set_sl_chain_id_tx_serialization() {
+        let tx = SystemTxEnvelope::set_sl_chain_id(1);
+
+        assert_eq!(
+            serde_json::to_string_pretty(&tx).unwrap(),
+            r#"{
+  "hash": "0x0db54bf16b232c227e16f783ea14f030ab983c67b5a2898452bc09028e0e5a4f",
+  "initiator": "0x0000000000000000000000000000000000008001",
+  "to": "0x000000000000000000000000000000000000800b",
+  "gas": "0x0",
+  "maxFeePerGas": "0x0",
+  "maxPriorityFeePerGas": "0x0",
+  "nonce": "0x0",
+  "value": "0x0",
+  "input": "0x040203e60000000000000000000000000000000000000000000000000000000000000001",
   "v": "0x0",
   "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
