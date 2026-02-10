@@ -1,6 +1,7 @@
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::{L1Subpool, L1TransactionsStream};
 use crate::subpools::l2::{L2Subpool, L2TransactionsStream};
+use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
 use alloy::consensus::{Block, BlockBody, Header, Sealed};
 use alloy::primitives::{B256, TxHash};
@@ -11,19 +12,18 @@ use reth_primitives_traits::SealedBlock;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    InteropRootsLogIndex, L1TxSerialId, L2Envelope, ProtocolSemanticVersion, SystemTxEnvelope,
-    SystemTxType, ZkEnvelope, ZkTransaction,
+    InteropRootsLogIndex, L1TxSerialId, L2Envelope, ProtocolSemanticVersion, SystemTxType,
+    ZkEnvelope, ZkTransaction,
 };
 
 pub struct Pool<T> {
     upgrade_subpool: UpgradeSubpool,
-    sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
+    sl_chain_id_subpool: SlChainIdSubpool,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
@@ -32,14 +32,14 @@ pub struct Pool<T> {
 impl<T: L2Subpool> Pool<T> {
     pub fn new(
         upgrade_subpool: UpgradeSubpool,
-        sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
+        sl_chain_id_subpool: SlChainIdSubpool,
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
     ) -> Self {
         Self {
             upgrade_subpool,
-            sl_chain_id_update_transactions,
+            sl_chain_id_subpool,
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
@@ -56,6 +56,9 @@ impl<T: L2Subpool> Pool<T> {
             .interop_roots_subpool
             .interop_transactions_with_delay(next_interop_tx_allowed_after);
         let mut interop_stream = crate::peekable::Peekable::new(interop_stream);
+
+        let sl_chain_id_stream = self.sl_chain_id_subpool.best_transactions_stream();
+        let mut sl_chain_id_stream = crate::peekable::Peekable::new(sl_chain_id_stream);
 
         let l1_stream = self.l1_subpool.best_transactions_stream();
         let l2_stream = self.l2_subpool.best_transactions_stream();
@@ -88,11 +91,11 @@ impl<T: L2Subpool> Pool<T> {
                         }
                     }
                 }
-                Some(sl_chain_id_tx) = self.sl_chain_id_update_transactions.recv() => {
+                Some(_) = sl_chain_id_stream.peek() => {
+                    // todo: chain with `l1_l2_stream`
                     return StreamOutcome {
                         upgrade_info,
-                        stream: todo!(),
-                        // stream: invalid_box(futures::stream::iter(vec![sl_chain_id_tx.into()])),
+                        stream: sl_chain_id_stream.boxed_tx_stream(),
                     }
                 }
                 Some(_) = interop_stream.peek() => {
@@ -127,6 +130,7 @@ impl<T: L2Subpool> Pool<T> {
     ) -> StateChangeOutcome {
         let mut upgrade_txs = Vec::new();
         let mut interop_txs = Vec::new();
+        let mut sl_chain_id_txs = Vec::new();
         let mut l1_transactions = Vec::new();
         let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
@@ -136,7 +140,7 @@ impl<T: L2Subpool> Pool<T> {
                         interop_txs.push(system_tx);
                     }
                     SystemTxType::SetSLChainId => {
-                        todo!("add SL chain id subpool")
+                        sl_chain_id_txs.push(system_tx);
                     }
                 },
                 ZkEnvelope::L1(l1_tx) => {
@@ -156,6 +160,9 @@ impl<T: L2Subpool> Pool<T> {
         let last_interop_log_index = self
             .interop_roots_subpool
             .on_canonical_state_change(interop_txs);
+        self.sl_chain_id_subpool
+            .on_canonical_state_change(sl_chain_id_txs)
+            .await;
         let last_l1_priority_id = self
             .l1_subpool
             .on_canonical_state_change(l1_transactions)

@@ -19,7 +19,7 @@ struct Inner {
     current_protocol_version: ProtocolSemanticVersion,
     notify: Arc<Notify>,
     sender: broadcast::Sender<UpgradeTransaction>,
-    pending_txs: VecDeque<UpgradeTransaction>,
+    pending_upgrades: VecDeque<UpgradeTransaction>,
 }
 
 impl UpgradeSubpool {
@@ -29,14 +29,14 @@ impl UpgradeSubpool {
                 current_protocol_version,
                 notify: Arc::new(Notify::new()),
                 sender: broadcast::Sender::new(1),
-                pending_txs: VecDeque::new(),
+                pending_upgrades: VecDeque::new(),
             })),
         }
     }
 
     pub fn upgrade_info_stream(&self) -> UpgradeInfoStream {
         let inner = self.inner.read().unwrap();
-        let state = if let Some(pending_tx) = inner.pending_txs.back() {
+        let state = if let Some(pending_tx) = inner.pending_upgrades.back() {
             StreamState::Pending(pending_tx.clone())
         } else {
             StreamState::Empty
@@ -50,7 +50,7 @@ impl UpgradeSubpool {
     pub fn insert(&self, tx: UpgradeTransaction) {
         let mut inner = self.inner.write().unwrap();
         let _ = inner.sender.send(tx.clone());
-        inner.pending_txs.push_front(tx);
+        inner.pending_upgrades.push_front(tx);
         inner.notify.notify_waiters();
     }
 
@@ -58,7 +58,7 @@ impl UpgradeSubpool {
         loop {
             let notify = {
                 let mut inner = self.inner.write().unwrap();
-                if let Some(pending_tx) = inner.pending_txs.pop_back() {
+                if let Some(pending_tx) = inner.pending_upgrades.pop_back() {
                     tracing::info!(protocol_version = %pending_tx.protocol_version, "advancing protocol version");
                     // Update current protocol version as if the upgrade got applied
                     inner.current_protocol_version = pending_tx.protocol_version.clone();

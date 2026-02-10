@@ -76,6 +76,7 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
@@ -410,6 +411,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
+    let sl_chain_id_subpool = SlChainIdSubpool::default();
+    let interop_roots_subpool = InteropRootsSubpool::new(
+        10,
+        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
+        1,
+    );
 
     // If we start from the very first block, we should start by sending upgrade tx for genesis.
     if starting_block == 1 {
@@ -422,12 +429,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         };
         upgrade_subpool.insert(upgrade_tx);
     }
-
-    let interop_roots_subpool = InteropRootsSubpool::new(
-        10,
-        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
-        1,
-    );
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
@@ -444,9 +445,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         );
     }
 
-    let (sl_chain_id_update_transactions_sender, sl_chain_id_update_transactions_receiver) =
-        tokio::sync::mpsc::channel(10);
-
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0)
         && config.l1_watcher_config.enable_gw_migration_watcher
     {
@@ -457,7 +455,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 GatewayMigrationWatcher::<Gateway>::create_watcher(
                     node_startup_state.l1_state.diamond_proxy.clone(),
                     config.l1_watcher_config.clone().into(),
-                    sl_chain_id_update_transactions_sender,
+                    sl_chain_id_subpool.clone(),
                 )
                 .await
                 .expect("failed to start L1 chain id update watcher")
@@ -469,7 +467,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 GatewayMigrationWatcher::<L1>::create_watcher(
                     node_startup_state.l1_state.diamond_proxy.clone(),
                     config.l1_watcher_config.clone().into(),
-                    sl_chain_id_update_transactions_sender,
+                    sl_chain_id_subpool.clone(),
                 )
                 .await
                 .expect("failed to start L1 chain id update watcher")
@@ -582,7 +580,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let pool = Pool::new(
         upgrade_subpool.clone(),
-        sl_chain_id_update_transactions_receiver,
+        sl_chain_id_subpool,
         interop_roots_subpool,
         l1_subpool,
         l2_subpool.clone(),

@@ -1,15 +1,13 @@
-use std::marker::PhantomData;
-
-use tokio::sync::mpsc;
-use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
-
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event};
 use alloy::primitives::{Address, ChainId};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
+use std::marker::PhantomData;
+use zksync_os_contract_interface::ServerNotifier::MigrateFromGateway;
 use zksync_os_contract_interface::{ServerNotifier::MigrateToGateway, ZkChain};
+use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
 use zksync_os_types::SystemTxEnvelope;
 
 pub trait MigrationProcessor: Send + Sync + 'static {
@@ -40,7 +38,7 @@ impl MigrationProcessor for L1 {
 
 pub struct GatewayMigrationWatcher<T> {
     server_notifier_contract: Address,
-    output: mpsc::Sender<SystemTxEnvelope>,
+    sl_chain_id_subpool: SlChainIdSubpool,
 
     _marker: PhantomData<T>,
 }
@@ -49,11 +47,11 @@ impl<T: MigrationProcessor> GatewayMigrationWatcher<T> {
     pub async fn create_watcher(
         zk_chain: ZkChain<DynProvider>,
         config: L1WatcherConfig,
-        output: mpsc::Sender<SystemTxEnvelope>,
+        sl_chain_id_subpool: SlChainIdSubpool,
     ) -> anyhow::Result<L1Watcher> {
         let this = Self {
             server_notifier_contract: zk_chain.get_server_notifier_address().await?,
-            output,
+            sl_chain_id_subpool,
             _marker: PhantomData,
         };
 
@@ -84,9 +82,7 @@ impl<T: MigrationProcessor> ProcessL1Event for GatewayMigrationWatcher<T> {
     async fn process_event(&mut self, tx: T::Event, _log: Log) -> Result<(), L1WatcherError> {
         let envelope = SystemTxEnvelope::set_sl_chain_id(T::chain_id(tx));
 
-        self.output
-            .send(envelope)
-            .await
-            .map_err(|_| L1WatcherError::OutputClosed)
+        self.sl_chain_id_subpool.insert(envelope);
+        Ok(())
     }
 }
