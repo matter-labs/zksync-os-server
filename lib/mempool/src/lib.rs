@@ -7,7 +7,7 @@ pub use config::TxValidatorConfig;
 pub mod subpools;
 
 mod pool;
-pub use pool::{BoxTxStream, Pool, TransactionsStream, TxStream, UpgradeInfo};
+pub use pool::{BoxTxStream, Pool, TxStream, UpgradeInfo};
 
 mod peekable;
 

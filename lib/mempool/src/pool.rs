@@ -1,6 +1,7 @@
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::{L1Subpool, L1TransactionsStream};
 use crate::subpools::l2::{L2Subpool, L2TransactionsStream};
+use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
 use alloy::consensus::{Block, BlockBody, Header, Sealed};
 use alloy::primitives::{B256, TxHash};
 use futures::Stream;
@@ -12,15 +13,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use tokio_stream::StreamExt;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     InteropRootsLogIndex, L1TxSerialId, L2Envelope, ProtocolSemanticVersion, SystemTxEnvelope,
-    SystemTxType, UpgradeTransaction, ZkEnvelope, ZkTransaction,
+    SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 pub struct Pool<T> {
-    upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+    upgrade_subpool: UpgradeSubpool,
     sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
@@ -29,14 +31,14 @@ pub struct Pool<T> {
 
 impl<T: L2Subpool> Pool<T> {
     pub fn new(
-        upgrade_transactions: mpsc::Receiver<UpgradeTransaction>,
+        upgrade_subpool: UpgradeSubpool,
         sl_chain_id_update_transactions: mpsc::Receiver<SystemTxEnvelope>,
         interop_roots_subpool: InteropRootsSubpool,
         l1_subpool: L1Subpool,
         l2_subpool: T,
     ) -> Self {
         Self {
-            upgrade_transactions,
+            upgrade_subpool,
             sl_chain_id_update_transactions,
             interop_roots_subpool,
             l1_subpool,
@@ -47,7 +49,9 @@ impl<T: L2Subpool> Pool<T> {
     pub async fn best_transactions_stream<'a>(
         &'a mut self,
         next_interop_tx_allowed_after: Instant,
-    ) -> TransactionsStream<'a> {
+    ) -> StreamOutcome<'a> {
+        let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream();
+
         let interop_stream = self
             .interop_roots_subpool
             .interop_transactions_with_delay(next_interop_tx_allowed_after);
@@ -62,37 +66,51 @@ impl<T: L2Subpool> Pool<T> {
         };
         let mut l1_l2_stream = crate::peekable::Peekable::new(l1_l2_stream);
 
-        tokio::select! {
-            // If you run this example without `biased;`, the polling order is
-            // pseudo-random, and the assertions on the value of count will
-            // (probably) fail.
-            biased;
+        let mut upgrade_info = None;
+        loop {
+            tokio::select! {
+                // If you run this example without `biased;`, the polling order is
+                // pseudo-random, and the assertions on the value of count will
+                // (probably) fail.
+                biased;
 
-            Some(upgrade_tx) = self.upgrade_transactions.recv() => {
-                TransactionsStream::upgrade(upgrade_tx)
-            }
-            Some(sl_chain_id_tx) = self.sl_chain_id_update_transactions.recv() => {
-                TransactionsStream {
-                    upgrade_info: None,
-                    stream: todo!(),
-                    // stream: invalid_box(futures::stream::iter(vec![sl_chain_id_tx.into()])),
+                Some(upgrade_tx) = upgrade_info_stream.next() => {
+                    upgrade_info = Some(UpgradeInfo {
+                        timestamp: upgrade_tx.timestamp,
+                        protocol_version: upgrade_tx.protocol_version,
+                        force_preimages: upgrade_tx.force_preimages,
+                    });
+                    // todo: rename `.tx` to `.envelope`
+                    if let Some(envelope) = upgrade_tx.tx {
+                        return StreamOutcome {
+                            upgrade_info,
+                            stream: UpgradeTransactionsStream::one(envelope).boxed_tx_stream(),
+                        }
+                    }
                 }
-            }
-            Some(_) = interop_stream.peek() => {
-                TransactionsStream {
-                    upgrade_info: None,
-                    stream: interop_stream.boxed_tx_stream(),
+                Some(sl_chain_id_tx) = self.sl_chain_id_update_transactions.recv() => {
+                    return StreamOutcome {
+                        upgrade_info,
+                        stream: todo!(),
+                        // stream: invalid_box(futures::stream::iter(vec![sl_chain_id_tx.into()])),
+                    }
                 }
-            }
-            Some(_) = l1_l2_stream.peek() => {
-                TransactionsStream {
-                    upgrade_info: None,
-                    stream: l1_l2_stream.boxed_tx_stream(),
+                Some(_) = interop_stream.peek() => {
+                    return StreamOutcome {
+                        upgrade_info,
+                        stream: interop_stream.boxed_tx_stream(),
+                    }
                 }
-            }
+                Some(_) = l1_l2_stream.peek() => {
+                    return StreamOutcome {
+                        upgrade_info,
+                        stream: l1_l2_stream.boxed_tx_stream(),
+                    }
+                }
 
-            else => {
-                todo!()
+                else => {
+                    todo!()
+                }
             }
         }
     }
@@ -107,6 +125,7 @@ impl<T: L2Subpool> Pool<T> {
         account_diffs: &[AccountDiff],
         replay_record: &ReplayRecord,
     ) -> StateChangeOutcome {
+        let mut upgrade_txs = Vec::new();
         let mut interop_txs = Vec::new();
         let mut l1_transactions = Vec::new();
         let mut l2_transactions = Vec::new();
@@ -114,36 +133,33 @@ impl<T: L2Subpool> Pool<T> {
             match tx.envelope() {
                 ZkEnvelope::System(system_tx) => match system_tx.system_subtype() {
                     SystemTxType::ImportInteropRoots(_) => {
-                        interop_txs.push(system_tx.clone());
+                        interop_txs.push(system_tx);
                     }
                     SystemTxType::SetSLChainId => {
-                        // todo: SL chain id subpool
+                        todo!("add SL chain id subpool")
                     }
                 },
                 ZkEnvelope::L1(l1_tx) => {
-                    l1_transactions.push(l1_tx.clone());
+                    l1_transactions.push(l1_tx);
                 }
                 ZkEnvelope::L2(l2_tx) => {
                     l2_transactions.push(*l2_tx.hash());
                 }
-                ZkEnvelope::Upgrade(_upgrade) => {
-                    // todo: upgrade subpool
-                    // // consume processed upgrade txs for non-produce commands
-                    // if matches!(
-                    //     cmd_type,
-                    //     BlockCommandType::Rebuild | BlockCommandType::Replay
-                    // ) {
-                    //     // Skip fetched patch upgrades
-                    //     let mut upgrade_tx = self.upgrade_transactions.recv().await.unwrap();
-                    //     while upgrade_tx.tx.is_none() {
-                    //         upgrade_tx = self.upgrade_transactions.recv().await.unwrap();
-                    //     }
-                    //
-                    //     assert_eq!(upgrade_tx.tx.as_ref(), Some(upgrade));
-                    // }
+                ZkEnvelope::Upgrade(upgrade) => {
+                    upgrade_txs.push(upgrade);
                 }
             }
         }
+        self.upgrade_subpool
+            .on_canonical_state_change(&replay_record.protocol_version, upgrade_txs)
+            .await;
+        let last_interop_log_index = self
+            .interop_roots_subpool
+            .on_canonical_state_change(interop_txs);
+        let last_l1_priority_id = self
+            .l1_subpool
+            .on_canonical_state_change(l1_transactions)
+            .await;
 
         let (header, hash) = header.into_parts();
         let body = BlockBody::<L2Envelope>::default();
@@ -167,13 +183,6 @@ impl<T: L2Subpool> Pool<T> {
                 update_kind: PoolUpdateKind::Commit,
             });
 
-        let last_interop_log_index = self
-            .interop_roots_subpool
-            .on_canonical_state_change(interop_txs);
-        let last_l1_priority_id = self
-            .l1_subpool
-            .on_canonical_state_change(l1_transactions)
-            .await;
         StateChangeOutcome {
             last_interop_log_index,
             last_l1_priority_id,
@@ -265,33 +274,11 @@ impl TxStream for L1L2TxStream {
     }
 }
 
-// todo: rename?
-pub struct TransactionsStream<'a> {
+pub struct StreamOutcome<'a> {
+    /// Optional upgrade info to be applied with transactions in `stream`. Note that even if this is
+    /// `Some`, `stream` is not guaranteed to contain an upgrade transaction. The stream may contain
+    /// other transaction types if the upgrade is a patch upgrade.
     pub upgrade_info: Option<UpgradeInfo>,
+    /// Non-empty stream of transactions.
     pub stream: BoxTxStream<'a>,
-}
-
-impl TransactionsStream<'_> {
-    fn upgrade(upgrade_tx: UpgradeTransaction) -> Self {
-        let upgrade_info = Some(UpgradeInfo {
-            timestamp: upgrade_tx.timestamp,
-            protocol_version: upgrade_tx.protocol_version,
-            force_preimages: upgrade_tx.force_preimages,
-        });
-        // todo: rename `.tx` to `.envelope`
-        if let Some(envelope) = upgrade_tx.tx {
-            TransactionsStream {
-                upgrade_info,
-                stream: todo!(),
-                // stream: invalid_box(futures::stream::iter(vec![envelope.into()])),
-            }
-        } else {
-            // fixme: this is different from old impl, is it okay to return empty iterator here?
-            TransactionsStream {
-                upgrade_info,
-                stream: todo!(),
-                // stream: invalid_box(futures::stream::empty()),
-            }
-        }
-    }
 }

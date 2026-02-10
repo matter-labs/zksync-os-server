@@ -61,7 +61,7 @@ impl L1Subpool {
 
     pub async fn on_canonical_state_change(
         &self,
-        txs: Vec<L1PriorityEnvelope>,
+        txs: Vec<&L1PriorityEnvelope>,
     ) -> Option<L1TxSerialId> {
         if txs.is_empty() {
             return None;
@@ -70,7 +70,7 @@ impl L1Subpool {
         let mut priority_id = 0;
         for tx in txs {
             let pending_tx = self.pop_wait().await;
-            assert_eq!(&tx, pending_tx.as_ref());
+            assert_eq!(tx, pending_tx.as_ref());
             priority_id = pending_tx.priority_id();
         }
 

@@ -99,21 +99,12 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     .best_transactions_stream(self.next_interop_tx_allowed_after)
                     .await;
 
-                // Peek to ensure that at least one transaction is available so that timestamp is accurate.
-                let peeked_tx = best_txs.upgrade_info;
-                if peeked_tx.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "BestTransactionsStream closed unexpectedly for block {}",
-                        produce_command.block_number
-                    ));
-                }
-
                 let timestamp = (millis_since_epoch() / 1000) as u64;
 
                 // Check if we peeked an upgrade transaction info.
                 // It is possible that we peek an upgrade with version <= self.protocol_version
                 // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
-                let force_preimages = if let Some(upgrade_info) = peeked_tx
+                let force_preimages = if let Some(upgrade_info) = best_txs.upgrade_info
                     && upgrade_info.protocol_version > self.protocol_version
                 {
                     tracing::info!(

@@ -52,7 +52,7 @@ impl InteropRootsSubpool {
 
     pub fn on_canonical_state_change(
         &self,
-        txs: Vec<SystemTxEnvelope>,
+        txs: Vec<&SystemTxEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
         self.inner.write().unwrap().on_canonical_state_change(txs)
     }
@@ -153,7 +153,7 @@ impl Inner {
     /// Returns the last log index of executed interop root
     fn on_canonical_state_change(
         &mut self,
-        txs: Vec<SystemTxEnvelope>,
+        txs: Vec<&SystemTxEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
         if txs.is_empty() {
             return None;
@@ -180,7 +180,7 @@ impl Inner {
             );
             log_index = roots.last().unwrap().log_index.clone();
 
-            assert_eq!(envelope, tx)
+            assert_eq!(&envelope, tx);
         }
 
         Some(log_index)

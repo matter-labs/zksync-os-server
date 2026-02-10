@@ -76,6 +76,7 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::service::NetworkService;
@@ -177,13 +178,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .leak();
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
-
-    // Channel between L1TxWatcher and Sequencer
-    let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
-
-    // Channel between L1UpgradeWatcher and Sequencer
-    let (upgrade_transactions_sender, upgrade_transactions_receiver) =
-        tokio::sync::mpsc::channel(5);
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
@@ -366,21 +360,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     node_startup_state.assert_consistency();
 
-    // If we start from the very first block, we should start by sending upgrade tx for genesis.
-    if starting_block == 1 {
-        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
-        let upgrade_tx = UpgradeTransaction {
-            tx: Some(genesis_upgrade.tx),
-            protocol_version: genesis_upgrade.protocol_version,
-            timestamp: 0, // No restrictions on timestamp.
-            force_preimages: genesis_upgrade.force_deploy_preimages,
-        };
-        upgrade_transactions_sender
-            .send(upgrade_tx)
-            .await
-            .expect("failed to send genesis upgrade transaction to sequencer");
-    }
-
     tracing::info!("Initializing L1 Watchers");
     tasks.spawn(
         L1CommitWatcher::create_watcher(
@@ -429,6 +408,20 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } else {
         genesis.genesis_upgrade_tx().await.protocol_version
     };
+
+    let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
+
+    // If we start from the very first block, we should start by sending upgrade tx for genesis.
+    if starting_block == 1 {
+        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
+        let upgrade_tx = UpgradeTransaction {
+            tx: Some(genesis_upgrade.tx),
+            protocol_version: genesis_upgrade.protocol_version,
+            timestamp: 0, // No restrictions on timestamp.
+            force_preimages: genesis_upgrade.force_deploy_preimages,
+        };
+        upgrade_subpool.insert(upgrade_tx);
+    }
 
     let interop_roots_subpool = InteropRootsSubpool::new(
         10,
@@ -487,12 +480,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     let l1_subpool = L1Subpool::new(10);
-    // todo: use in watcher below
     tasks.spawn(
         L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
-            l1_transactions_sender,
+            l1_subpool.clone(),
             next_l1_priority_id,
         )
         .await
@@ -589,7 +581,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     let pool = Pool::new(
-        upgrade_transactions_receiver,
+        upgrade_subpool.clone(),
         sl_chain_id_update_transactions_receiver,
         interop_roots_subpool,
         l1_subpool,
@@ -621,7 +613,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy.clone(),
             bytecode_supplier_address,
             current_protocol_version,
-            upgrade_transactions_sender,
+            upgrade_subpool,
         )
         .await
         .expect("failed to start L1 upgrade transaction watcher")
