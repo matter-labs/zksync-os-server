@@ -215,17 +215,29 @@ impl BlockReplayStorage {
     }
 
     /// Given `block_number` retrieve block's hash.
-    /// If the block was committed before introduction of CanonicalHash CF
-    /// or there is no record for this block, function will return None.
-    fn get_canonical_block_hash(&self, block_number: BlockNumber) -> Option<BlockHash> {
-        // TODO: Once all blocks are indexed by hash, make it work for old blocks as well
-        // After that, we can .expect("writes should be atomic") instead of ?
-        let key = block_number.to_be_bytes();
-        let hash = self
-            .db
-            .get_cf(BlockReplayColumnFamily::CanonicalHash, &key)
-            .expect("Cannot read from DB")?;
-        Some(BlockHash::from_slice(&hash))
+    fn get_canonical_block_hash(&self, block_number: BlockNumber) -> BlockHash {
+        let get_hash = |block_number: BlockNumber| -> Option<BlockHash> {
+            let key = block_number.to_be_bytes();
+            self.db
+                .get_cf(BlockReplayColumnFamily::CanonicalHash, &key)
+                .expect("Cannot read from DB")
+                .map(|bytes| BlockHash::from_slice(&bytes))
+        };
+
+        get_hash(block_number).unwrap_or_else(|| {
+            let latest = self.latest_record();
+            assert!(latest > block_number);
+            let _ = get_hash(latest).expect("Cannot guarantee correctness until latest is updated");
+            BlockHash::from(
+                *self
+                    .get_context(block_number + 1)
+                    .expect("Record is missing")
+                    .block_hashes
+                    .0
+                    .last()
+                    .unwrap(),
+            )
+        })
     }
 }
 
@@ -415,9 +427,7 @@ impl WriteReplay for BlockReplayStorage {
                 .get_replay_record(block_context.block_number)
                 .expect("Old record must exist");
             if &old_record != block_record {
-                let old_record_hash = self
-                    .get_canonical_block_hash(block_context.block_number)
-                    .unwrap();
+                let old_record_hash = self.get_canonical_block_hash(block_context.block_number);
                 let db_key = old_record_hash.0.to_vec();
                 let old_record_hex_db_key = alloy::hex::encode_prefixed(&db_key);
                 tracing::warn!(
