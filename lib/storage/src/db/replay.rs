@@ -44,7 +44,7 @@ pub enum BlockReplayColumnFamily {
     ForcePreimages,
     BlockOutputHash,
     StartingInteropEventIndex,
-    /// Mapping from block_number to block hash, maps hashes of non-canonical blocks to themselves.
+    /// Mapping from block_number to block hash.
     CanonicalHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
@@ -109,17 +109,20 @@ impl BlockReplayStorage {
                 force_preimages: genesis_tx.force_deploy_preimages,
                 starting_interop_event_index: InteropRootsLogIndex::default(),
             };
-            this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), None)
+            this.write_replay_unchecked(Sealed::new_unchecked(genesis_record, genesis_hash), true);
         }
         this
     }
 
-    fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, db_key: Option<Vec<u8>>) {
+    fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, is_canonical: bool) {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
-        // TODO: We want to change the key to be block_hash eventually
-        let db_key =
-            db_key.unwrap_or_else(|| record.block_context.block_number.to_be_bytes().to_vec());
+        // TODO: We want to change the key to be block_hash for all blocks
+        let db_key = if is_canonical {
+            record.block_context.block_number.to_be_bytes().to_vec()
+        } else {
+            block_hash.0.to_vec()
+        };
         let context_value =
             bincode::serde::encode_to_vec(record.block_context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
@@ -132,8 +135,15 @@ impl BlockReplayStorage {
             .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
-        // Batch both writes: replay entry and latest pointer
+        // Batch writes: replay entry, latest pointer and canonical hash mapping
         let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
+        if is_canonical {
+            batch.put_cf(
+                BlockReplayColumnFamily::CanonicalHash,
+                &record.block_context.block_number.to_be_bytes(),
+                &block_hash.0,
+            );
+        }
         if self
             .latest_record_checked()
             .is_none_or(|l| l < record.block_context.block_number)
@@ -156,11 +166,6 @@ impl BlockReplayStorage {
             BlockReplayColumnFamily::BlockOutputHash,
             &db_key,
             &record.block_output_hash.0,
-        );
-        batch.put_cf(
-            BlockReplayColumnFamily::CanonicalHash,
-            &db_key,
-            &block_hash.0,
         );
         batch.put_cf(
             BlockReplayColumnFamily::ProtocolVersion,
@@ -386,9 +391,9 @@ impl ReadReplay for BlockReplayStorage {
 
 impl WriteReplay for BlockReplayStorage {
     fn write(&self, sealed_record: Sealed<ReplayRecord>, override_allowed: bool) -> bool {
+        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let (block_record, _) = sealed_record.as_sealed_ref().split();
         let block_context = &sealed_record.block_context;
-        let latency_observer = BLOCK_REPLAY_ROCKS_DB_METRICS.get_latency.start();
         let current_latest_record = self.latest_record();
         if block_context.block_number <= current_latest_record && !override_allowed {
             // todo: consider asserting that the passed `ReplayRecord` matches the one currently stored
@@ -422,12 +427,12 @@ impl WriteReplay for BlockReplayStorage {
                 );
                 self.write_replay_unchecked(
                     Sealed::new_unchecked(old_record, old_record_hash),
-                    Some(db_key),
+                    false,
                 );
             }
         }
 
-        self.write_replay_unchecked(sealed_record, None);
+        self.write_replay_unchecked(sealed_record, true);
         latency_observer.observe();
         true
     }
