@@ -220,11 +220,13 @@ impl BlockReplayStorage {
             let key = block_number.to_be_bytes();
             self.db
                 .get_cf(BlockReplayColumnFamily::CanonicalHash, &key)
-                .expect("Cannot read from DB")
+                .expect("Failed to read from CanonicalHash DB")
                 .map(|bytes| BlockHash::from_slice(&bytes))
         };
 
         get_hash(block_number).unwrap_or_else(|| {
+            //There are some rare corner cases related to rebuilds right after introducing the CF
+            //I choose to panic in such cases as I really don't expect them to happen
             let latest = self.latest_record();
             assert!(latest > block_number);
             let _ = get_hash(latest).expect("Cannot guarantee correctness until latest is updated");
@@ -428,11 +430,10 @@ impl WriteReplay for BlockReplayStorage {
                 .expect("Old record must exist");
             if &old_record != block_record {
                 let old_record_hash = self.get_canonical_block_hash(block_context.block_number);
-                let db_key = old_record_hash.0.to_vec();
-                let old_record_hex_db_key = alloy::hex::encode_prefixed(&db_key);
+                let old_record_hash_hex = alloy::hex::encode_prefixed(old_record_hash.0);
                 tracing::warn!(
                     block_number = block_context.block_number,
-                    old_record_hex_db_key,
+                    old_record_hash_hex,
                     "Overriding existing block replay record",
                 );
                 self.write_replay_unchecked(
