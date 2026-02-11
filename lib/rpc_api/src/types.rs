@@ -97,3 +97,16 @@ pub struct L2ToL1Log {
     /// for l1 -> l2 txs logs - success flag(padded).
     pub value: B256,
 }
+
+impl From<L2ToL1Log> for zksync_os_types::L2ToL1Log {
+    fn from(value: L2ToL1Log) -> Self {
+        Self {
+            l2_shard_id: value.shard_id as u8,
+            is_service: value.is_service,
+            tx_number_in_block: value.transaction_index.expect("Missing transaction index") as u16,
+            sender: value.sender,
+            key: value.key,
+            value: value.value,
+        }
+    }
+}
