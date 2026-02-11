@@ -64,6 +64,7 @@ pub struct L2ToL1Log {
     #[serde(with = "alloy::serde::quantity::opt")]
     pub block_number: Option<u64>,
     /// The timestamp of the block.
+    #[serde(with = "alloy::serde::quantity::opt")]
     pub block_timestamp: Option<u64>,
     /// Transaction Hash
     #[doc(alias = "tx_hash")]
