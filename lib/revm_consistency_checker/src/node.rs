@@ -44,6 +44,7 @@ where
 
     pub fn handle_report(
         &self,
+        block_output: &BlockOutput,
         replay_record: &ReplayRecord,
         report: &CompareReport,
     ) -> anyhow::Result<()> {
@@ -63,8 +64,9 @@ where
             );
 
             let message = format!(
-                "REVM consistency check failed for block {}",
-                replay_record.block_context.block_number
+                "REVM consistency check failed for block number {}, block hash {}",
+                replay_record.block_context.block_number,
+                block_output.header.hash(),
             );
             self.internal_config_manager
                 .write_config_and_panic(&config, &message)?;
@@ -176,7 +178,7 @@ where
                     &block_output.storage_writes,
                     &block_output.account_diffs,
                 )?;
-                self.handle_report(&replay_record, &compare_report)?;
+                self.handle_report(&block_output, &replay_record, &compare_report)?;
             }
 
             latency_tracker.enter_state(GenericComponentState::WaitingSend);
