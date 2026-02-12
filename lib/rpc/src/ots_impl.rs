@@ -14,7 +14,7 @@ use alloy::rpc::types::{Header, Log};
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use zksync_os_rpc_api::ots::OtsApiServer;
-use zksync_os_rpc_api::types::{RpcBlockConvert, ZkApiTransaction};
+use zksync_os_rpc_api::types::{L2ToL1Log, RpcBlockConvert, ZkApiTransaction};
 use zksync_os_storage_api::{StoredTxData, ViewState};
 use zksync_os_types::{L1PriorityTxType, L1TxType, UpgradeTxType, ZkReceiptEnvelope};
 
@@ -390,7 +390,7 @@ impl<Repository: ReadRpcStorage> OtsApiServer for OtsNamespace<Repository> {
     }
 }
 
-fn api_receipt_type(receipt: &ZkReceiptEnvelope<Log>) -> u8 {
+fn api_receipt_type(receipt: &ZkReceiptEnvelope<Log, L2ToL1Log>) -> u8 {
     match receipt {
         ZkReceiptEnvelope::Upgrade(_) => UpgradeTxType::TX_TYPE,
         ZkReceiptEnvelope::L1(_) => L1PriorityTxType::TX_TYPE,

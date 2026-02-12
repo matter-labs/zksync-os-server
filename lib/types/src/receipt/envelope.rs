@@ -229,9 +229,10 @@ impl<T, U> ZkReceiptEnvelope<T, U> {
     }
 }
 
-impl<T> TxReceipt for ZkReceiptEnvelope<T>
+impl<T, U> TxReceipt for ZkReceiptEnvelope<T, U>
 where
     T: Clone + fmt::Debug + PartialEq + Eq + Send + Sync,
+    U: Clone + fmt::Debug + PartialEq + Eq + Send + Sync,
 {
     type Log = T;
 

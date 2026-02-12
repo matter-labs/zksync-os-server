@@ -22,7 +22,6 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
-use std::convert::identity;
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::{get_balance, get_code};
@@ -777,6 +776,28 @@ pub fn build_api_log(
     }
 }
 
+pub fn build_l2_to_l1_api_log(
+    tx_hash: TxHash,
+    primitive_l2_to_l1_log: zksync_os_types::L2ToL1Log,
+    tx_meta: TxMeta,
+    log_index_in_tx: u64,
+) -> zksync_os_rpc_api::types::L2ToL1Log {
+    zksync_os_rpc_api::types::L2ToL1Log {
+        block_hash: Some(tx_meta.block_hash),
+        block_number: Some(tx_meta.block_number),
+        block_timestamp: Some(tx_meta.block_timestamp),
+        transaction_hash: Some(tx_hash),
+        transaction_index: Some(tx_meta.tx_index_in_block),
+        log_index: Some(tx_meta.number_of_logs_before_this_tx + log_index_in_tx),
+        transaction_log_index: Some(log_index_in_tx),
+        shard_id: primitive_l2_to_l1_log.l2_shard_id.into(),
+        is_service: primitive_l2_to_l1_log.is_service,
+        sender: primitive_l2_to_l1_log.sender,
+        key: primitive_l2_to_l1_log.key,
+        value: primitive_l2_to_l1_log.value,
+    }
+}
+
 pub fn build_api_receipt(
     tx_hash: TxHash,
     receipt: ZkReceiptEnvelope,
@@ -784,14 +805,23 @@ pub fn build_api_receipt(
     meta: &TxMeta,
 ) -> ZkTransactionReceipt {
     let mut log_index_in_tx = 0;
+    let mut l2_to_l1_log_index_in_tx = 0;
     let inner = receipt.map_logs(
         |inner_log| {
             let log = build_api_log(tx_hash, inner_log, meta.clone(), log_index_in_tx);
             log_index_in_tx += 1;
             log
         },
-        // todo: convert L2->L1 logs to RPC variant when we have one
-        identity,
+        |inner_l2_to_l1_log| {
+            let l2_to_l1_log = build_l2_to_l1_api_log(
+                tx_hash,
+                inner_l2_to_l1_log,
+                meta.clone(),
+                l2_to_l1_log_index_in_tx,
+            );
+            l2_to_l1_log_index_in_tx += 1;
+            l2_to_l1_log
+        },
     );
     ZkTransactionReceipt {
         inner,

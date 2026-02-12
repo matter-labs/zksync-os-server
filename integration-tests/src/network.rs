@@ -9,6 +9,7 @@ use alloy::providers::fillers::{
 };
 use alloy::rpc::types::TransactionRequest;
 use serde::{Deserialize, Serialize};
+use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::{ZkReceiptEnvelope, ZkTxType};
 
 /// Dummy network that works on ZKsync OS-specific types.
@@ -32,8 +33,7 @@ impl Network for Zksync {
 
     type TransactionResponse = alloy::rpc::types::Transaction;
 
-    type ReceiptResponse =
-        alloy::rpc::types::TransactionReceipt<ZkReceiptEnvelope<alloy::rpc::types::Log>>;
+    type ReceiptResponse = ZkTransactionReceipt;
 
     type HeaderResponse = alloy::rpc::types::Header;
 
