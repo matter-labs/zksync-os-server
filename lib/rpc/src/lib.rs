@@ -42,6 +42,7 @@ use hyper::Method;
 use jsonrpsee::RpcModule;
 use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::ws_client::RpcServiceBuilder;
+use reth_rpc_eth_types::EthSubscriptionIdProvider;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
@@ -131,6 +132,8 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Transac
         .max_connections(config.max_connections)
         .max_request_body_size(config.max_request_size_bytes())
         .max_response_body_size(config.max_response_size_bytes())
+        // `IdProvider` that generates hex-encoded numeric ids as expected in Ethereum
+        .set_id_provider(EthSubscriptionIdProvider::default())
         .build();
     let server_builder = ServerBuilder::default()
         .set_config(server_config)
