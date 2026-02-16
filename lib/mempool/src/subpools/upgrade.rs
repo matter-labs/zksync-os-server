@@ -15,6 +15,8 @@ pub struct UpgradeSubpool {
 }
 
 struct Inner {
+    /// Tracks currently active protocol version. Needed because of patch upgrades that do not come
+    /// with an upgrade transaction.
     current_protocol_version: ProtocolSemanticVersion,
     notify: Arc<Notify>,
     sender: broadcast::Sender<UpgradeInfo>,
@@ -56,8 +58,6 @@ impl UpgradeSubpool {
                 let mut inner = self.inner.write().unwrap();
                 if let Some(upgrade) = inner.pending_upgrades.pop_back() {
                     tracing::info!(protocol_version = %upgrade.protocol_version(), "advancing protocol version");
-                    // Update current protocol version as if the upgrade got applied
-                    inner.current_protocol_version = upgrade.protocol_version().clone();
                     return upgrade;
                 } else {
                     inner.notify.clone()
@@ -72,7 +72,13 @@ impl UpgradeSubpool {
         protocol_version: &ProtocolSemanticVersion,
         txs: Vec<&L1UpgradeEnvelope>,
     ) {
-        if txs.is_empty() {
+        // We track current protocol version that we end up with after applying upgrade transaction.
+        let mut current_protocol_version =
+            self.inner.read().unwrap().current_protocol_version.clone();
+
+        // If there are no upgrade transactions and current protocol version matches the one in the
+        // block, we do not have to do anything.
+        if txs.is_empty() && protocol_version == &current_protocol_version {
             return;
         }
 
@@ -80,6 +86,8 @@ impl UpgradeSubpool {
             // Skip fetched patch upgrades
             let pending_tx = loop {
                 let pending_upgrade_info = self.pop_wait().await;
+                // Update current protocol version with discovered upgrade.
+                current_protocol_version = pending_upgrade_info.protocol_version().clone();
                 if let Some(pending_tx) = pending_upgrade_info.tx {
                     break pending_tx;
                 }
@@ -87,11 +95,12 @@ impl UpgradeSubpool {
             assert_eq!(tx, &pending_tx);
         }
 
+        // We need to make sure that our current protocol version matches the one in the block.
+        // For patch upgrades there might be no upgrade transaction, but we still have to find and
+        // consume relevant upgrade info from L1 watcher.
         loop {
-            let current_protocol_version =
-                self.inner.read().unwrap().current_protocol_version.clone();
             if &current_protocol_version == protocol_version {
-                return;
+                break;
             } else if &current_protocol_version < protocol_version {
                 let upgrade = self.pop_wait().await;
                 if upgrade.tx.is_some() {
@@ -102,12 +111,17 @@ impl UpgradeSubpool {
                         upgrade.protocol_version()
                     );
                 }
+                // Update current protocol version with discovered upgrade and do one more iteration.
+                current_protocol_version = upgrade.protocol_version().clone();
             } else {
                 panic!(
                     "current protocol version ({current_protocol_version}) is larger than block's protocol version ({protocol_version})",
                 );
             }
         }
+
+        // Write protocol version we ended up with.
+        self.inner.write().unwrap().current_protocol_version = current_protocol_version;
     }
 }
 
