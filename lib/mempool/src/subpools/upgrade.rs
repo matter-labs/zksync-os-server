@@ -127,6 +127,7 @@ pub struct UpgradeInfoStream {
     state: StreamState,
 }
 
+/// State machine to ensure we serve up to one upgrade transaction.
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
     /// No discovered upgrade yet, streaming from L1 watcher subscription.

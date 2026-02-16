@@ -2,9 +2,10 @@ use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use tokio::sync::{Notify, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use zksync_os_types::{SystemTxEnvelope, SystemTxType, ZkTransaction};
 
 #[derive(Clone)]
@@ -36,12 +37,9 @@ impl SlChainIdSubpool {
         let state = if let Some(pending_tx) = inner.pending_txs.back() {
             StreamState::Pending(pending_tx.clone())
         } else {
-            StreamState::Empty
+            StreamState::Empty(BroadcastStream::new(inner.sender.subscribe()))
         };
-        SlChainIdTransactionsStream {
-            receiver: BroadcastStream::new(inner.sender.subscribe()),
-            state,
-        }
+        SlChainIdTransactionsStream { state }
     }
 
     pub fn insert(&self, tx: SystemTxEnvelope) {
@@ -83,13 +81,17 @@ impl SlChainIdSubpool {
 }
 
 pub struct SlChainIdTransactionsStream {
-    receiver: BroadcastStream<SystemTxEnvelope>,
     state: StreamState,
 }
 
+/// State machine to ensure we serve up to one `setSLChainId` transaction.
 enum StreamState {
-    Empty,
+    /// No discovered `setSLChainId` transaction yet, streaming from gateway migration watcher subscription.
+    Empty(BroadcastStream<SystemTxEnvelope>),
+    /// `setSLChainId` transaction has been previously discovered.
     Pending(SystemTxEnvelope),
+    /// Stream is closed because either one transaction was already returned or upstream receiver was
+    /// closed prematurely.
     Closed,
 }
 
@@ -98,25 +100,30 @@ impl Stream for SlChainIdTransactionsStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
-        match &this.state {
-            StreamState::Empty => {}
+        match &mut this.state {
+            StreamState::Empty(receiver) => {
+                let Some(result) = ready!(receiver.poll_next_unpin(cx)) else {
+                    tracing::debug!("gateway migration watcher stream is closed");
+                    this.state = StreamState::Closed;
+                    return Poll::Ready(None);
+                };
+                match result {
+                    Ok(tx) => {
+                        this.state = StreamState::Closed;
+                        Poll::Ready(Some(tx.into()))
+                    }
+                    Err(BroadcastStreamRecvError::Lagged(count)) => {
+                        // Fatal error as we lost at least one gateway migration event
+                        panic!("gateway migration receiver lagged by {count} items");
+                    }
+                }
+            }
             StreamState::Pending(tx) => {
                 let tx = tx.clone();
                 this.state = StreamState::Closed;
-                return Poll::Ready(Some(tx.into()));
-            }
-            StreamState::Closed => {
-                return Poll::Ready(None);
-            }
-        }
-
-        match this.receiver.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(tx))) => {
-                this.state = StreamState::Closed;
                 Poll::Ready(Some(tx.into()))
             }
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(_) => Poll::Ready(None),
+            StreamState::Closed => Poll::Ready(None),
         }
     }
 }
