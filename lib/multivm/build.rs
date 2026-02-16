@@ -4,9 +4,10 @@ use url::Url;
 fn parse_git_ref(package_id: &PackageId) -> anyhow::Result<String> {
     let url = Url::parse(&package_id.to_string())?;
     let mut query_pairs = url.query_pairs();
+    let mut query_pairs_clone = url.query_pairs();
     let (_, git_ref) = query_pairs
         .find(|(key, _)| key == "branch")
-        .or_else(|| query_pairs.find(|(key, _)| key == "tag"))
+        .or_else(|| query_pairs_clone.find(|(key, _)| key == "tag"))
         .ok_or_else(|| anyhow::anyhow!("missing branch / tag in git url `{url}`"))?;
     Ok(git_ref.to_string())
 }
