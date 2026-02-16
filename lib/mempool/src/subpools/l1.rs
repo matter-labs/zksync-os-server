@@ -1,4 +1,3 @@
-use crate::TxStream;
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -95,11 +94,5 @@ impl Stream for L1TransactionsStream {
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => Poll::Ready(None),
         }
-    }
-}
-
-impl TxStream for L1TransactionsStream {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
-        panic!("cannot mark L1 transaction as invalid")
     }
 }

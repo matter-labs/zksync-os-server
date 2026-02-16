@@ -1,12 +1,10 @@
+use futures::{Stream, StreamExt, ready};
 use std::{
     collections::VecDeque,
     pin::Pin,
     sync::{Arc, RwLock},
     task::{Context, Poll},
 };
-
-use crate::TxStream;
-use futures::{Stream, StreamExt, ready};
 use tokio::time::Instant;
 use tokio::{
     sync::broadcast::{self},
@@ -100,12 +98,6 @@ impl Stream for InteropRootsTransactionsStream {
                 Poll::Ready(_) => return Poll::Ready(None),
             }
         }
-    }
-}
-
-impl TxStream for InteropRootsTransactionsStream {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
-        panic!("cannot mark interop transaction as invalid")
     }
 }
 

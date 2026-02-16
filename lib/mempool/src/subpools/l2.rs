@@ -1,5 +1,5 @@
 use crate::metrics::ViseRecorder;
-use crate::{L2PooledTransaction, TxStream, TxValidatorConfig};
+use crate::{L2PooledTransaction, TxValidatorConfig};
 use alloy::consensus::transaction::Recovered;
 use alloy::primitives::TxHash;
 use futures::Stream;
@@ -14,7 +14,7 @@ use reth_transaction_pool::{
 use reth_transaction_pool::{BestTransactions, ValidPoolTransaction};
 use std::fmt::Debug;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use zksync_os_reth_compat::provider::ZkProviderFactory;
@@ -45,8 +45,10 @@ pub trait L2Subpool:
 
     fn best_transactions_stream(&self) -> L2TransactionsStream {
         L2TransactionsStream {
-            last_polled_tx: None,
-            txs: self.best_transactions(),
+            inner: Arc::new(Mutex::new(Inner {
+                last_polled_tx: None,
+                txs: self.best_transactions(),
+            })),
             pending_txs_listener: self
                 .pending_transactions_listener_for(TransactionListenerKind::All),
         }
@@ -59,9 +61,17 @@ impl<State: ReadStateHistory + Clone, Repository: ReadRepository + Clone> L2Subp
 }
 
 pub struct L2TransactionsStream {
+    inner: Arc<Mutex<Inner>>,
+    pending_txs_listener: mpsc::Receiver<TxHash>,
+}
+
+pub(crate) struct L2TransactionsStreamMarker {
+    inner: Arc<Mutex<Inner>>,
+}
+
+struct Inner {
     last_polled_tx: Option<Arc<ValidPoolTransaction<L2PooledTransaction>>>,
     txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<L2PooledTransaction>>>>,
-    pending_txs_listener: mpsc::Receiver<TxHash>,
 }
 
 impl Stream for L2TransactionsStream {
@@ -70,10 +80,13 @@ impl Stream for L2TransactionsStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            if let Some(tx) = this.txs.next() {
-                this.last_polled_tx = Some(tx.clone());
-                let (tx, signer) = tx.to_consensus().into_parts();
-                return Poll::Ready(Some(Recovered::new_unchecked(tx, signer).into()));
+            {
+                let mut inner = this.inner.lock().unwrap();
+                if let Some(tx) = inner.txs.next() {
+                    inner.last_polled_tx = Some(tx.clone());
+                    let (tx, signer) = tx.to_consensus().into_parts();
+                    return Poll::Ready(Some(Recovered::new_unchecked(tx, signer).into()));
+                }
             }
 
             match this.pending_txs_listener.poll_recv(cx) {
@@ -86,16 +99,23 @@ impl Stream for L2TransactionsStream {
     }
 }
 
-impl TxStream for L2TransactionsStream {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
-        let this = self.get_mut();
-        let Some(tx) = this.last_polled_tx.take() else {
+impl L2TransactionsStream {
+    pub(crate) fn marker(&self) -> L2TransactionsStreamMarker {
+        let inner = self.inner.clone();
+        L2TransactionsStreamMarker { inner }
+    }
+}
+
+impl L2TransactionsStreamMarker {
+    pub(crate) fn mark_last_tx_as_invalid(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(tx) = inner.last_polled_tx.take() else {
             tracing::error!("tried to mark non-existing L2 transaction as invalid");
             return;
         };
         // Error kind is actually not used internally, but we need to provide it.
         // Reth provides `TxTypeNotSupported` and we do the same just in case.
-        this.txs.mark_invalid(
+        inner.txs.mark_invalid(
             &tx,
             InvalidPoolTransactionError::Consensus(InvalidTransactionError::TxTypeNotSupported),
         );

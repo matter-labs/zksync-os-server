@@ -2,7 +2,7 @@ use alloy::primitives::B256;
 use std::fmt::Display;
 use std::time::Duration;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_mempool::BoxTxStream;
+use zksync_os_mempool::MarkingTxStream;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{InteropRootsLogIndex, L1TxSerialId, ProtocolSemanticVersion};
 
@@ -98,7 +98,7 @@ pub struct PreparedBlockCommand<'a> {
     pub block_context: BlockContext,
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
-    pub tx_source: BoxTxStream<'a>,
+    pub tx_source: MarkingTxStream<'a>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,

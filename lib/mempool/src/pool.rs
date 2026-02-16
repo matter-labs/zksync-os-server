@@ -1,19 +1,15 @@
 use crate::subpools::interop_roots::InteropRootsSubpool;
-use crate::subpools::l1::{L1Subpool, L1TransactionsStream};
-use crate::subpools::l2::{L2Subpool, L2TransactionsStream};
+use crate::subpools::l1::L1Subpool;
+use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
-use crate::tx_stream::TxStreamExt;
-use crate::{BoxTxStream, TxStream};
 use alloy::consensus::{Block, BlockBody, Header, Sealed};
 use alloy::primitives::TxHash;
-use futures::Stream;
-use pin_project::pin_project;
+use futures::stream::{BoxStream, PollNext};
+use futures::{Stream, StreamExt};
 use reth_execution_types::ChangedAccount;
 use reth_primitives_traits::SealedBlock;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use tokio::time::Instant;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_storage_api::ReplayRecord;
@@ -63,24 +59,22 @@ impl<T: L2Subpool> Pool<T> {
     ) -> Option<StreamOutcome<'a>> {
         let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream();
 
-        let mut interop_stream = self
-            .interop_roots_subpool
-            .interop_transactions_with_delay(next_interop_tx_allowed_after)
-            .peekable();
+        let mut interop_stream = tokio_stream::StreamExt::peekable(
+            self.interop_roots_subpool
+                .interop_transactions_with_delay(next_interop_tx_allowed_after),
+        );
 
-        let mut sl_chain_id_stream = self
-            .sl_chain_id_subpool
-            .best_transactions_stream()
-            .peekable();
+        let mut sl_chain_id_stream =
+            tokio_stream::StreamExt::peekable(self.sl_chain_id_subpool.best_transactions_stream());
 
         let l1_stream = self.l1_subpool.best_transactions_stream();
         let l2_stream = self.l2_subpool.best_transactions_stream();
-        let mut l1_l2_stream = L1L2TxStream {
-            last_polled_tx: None,
-            l1_stream,
-            l2_stream,
+        let l2_marker = l2_stream.marker();
+        fn prio_left(_: &mut ()) -> PollNext {
+            PollNext::Left
         }
-        .peekable();
+        let l1_l2_stream = futures::stream::select_with_strategy(l1_stream, l2_stream, prio_left);
+        let mut l1_l2_stream = tokio_stream::StreamExt::peekable(l1_l2_stream);
 
         let mut upgrade_metadata = None;
         loop {
@@ -100,7 +94,7 @@ impl<T: L2Subpool> Pool<T> {
                     if let Some(tx) = upgrade.tx {
                         return Some(StreamOutcome {
                             upgrade_metadata,
-                            stream: UpgradeTransactionsStream::one(tx).boxed(),
+                            stream: MarkingTxStream::unmarkable(UpgradeTransactionsStream::one(tx)),
                         });
                     }
                 }
@@ -111,19 +105,19 @@ impl<T: L2Subpool> Pool<T> {
                     //       an optimization
                     return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: sl_chain_id_stream.boxed(),
+                        stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
                     });
                 }
                 Some(_) = interop_stream.peek() => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: interop_stream.boxed(),
+                        stream: MarkingTxStream::unmarkable(interop_stream),
                     });
                 }
                 Some(_) = l1_l2_stream.peek() => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
-                        stream: l1_l2_stream.boxed(),
+                        stream: MarkingTxStream::markable(l1_l2_stream, l2_marker),
                     });
                 }
 
@@ -219,7 +213,7 @@ pub struct StreamOutcome<'a> {
     /// contain other transaction types if the upgrade is a patch upgrade.
     pub upgrade_metadata: Option<UpgradeMetadata>,
     /// Non-empty stream of transactions.
-    pub stream: BoxTxStream<'a>,
+    pub stream: MarkingTxStream<'a>,
 }
 
 #[derive(Debug, Default)]
@@ -230,51 +224,36 @@ pub struct StateChangeOutcome {
     pub last_l1_priority_id: Option<L1TxSerialId>,
 }
 
-/// L1-biased select of two streams that also remembers which stream provided last polled
-/// transaction. Similar thing can be achieved with [`futures::stream::select_with_strategy`] but
-/// then we lose information about last polled origin.
-#[pin_project]
-pub struct L1L2TxStream {
-    last_polled_tx: Option<LastPolledType>,
-    #[pin]
-    l1_stream: L1TransactionsStream,
-    #[pin]
-    l2_stream: L2TransactionsStream,
+/// Transaction stream that is capable of marking last L2 transaction as invalid.
+pub struct MarkingTxStream<'a> {
+    pub stream: BoxStream<'a, ZkTransaction>,
+    marker: Option<L2TransactionsStreamMarker>,
 }
 
-enum LastPolledType {
-    L1,
-    L2,
-}
-
-impl Stream for L1L2TxStream {
-    type Item = ZkTransaction;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        if let Poll::Ready(tx) = this.l1_stream.poll_next(cx) {
-            *this.last_polled_tx = Some(LastPolledType::L1);
-            // We propagate `None` here on purpose. L1 stream closing is end-of-life scenario and
-            // this stream should be closed too instead of defaulting to `l2`.
-            return Poll::Ready(tx);
+impl<'a> MarkingTxStream<'a> {
+    pub fn unmarkable(stream: impl Stream<Item = ZkTransaction> + Send + 'a) -> Self {
+        Self {
+            stream: stream.boxed(),
+            marker: None,
         }
-        if let Poll::Ready(tx) = this.l2_stream.poll_next(cx) {
-            *this.last_polled_tx = Some(LastPolledType::L2);
-            // Same things here - we propagate `None` on purpose
-            return Poll::Ready(tx);
-        }
-        Poll::Pending
     }
-}
 
-impl TxStream for L1L2TxStream {
-    fn mark_last_tx_as_invalid(mut self: Pin<&mut Self>) {
-        match self.last_polled_tx {
-            None => {
-                tracing::error!("tried to mark non-existing transaction as invalid")
-            }
-            Some(LastPolledType::L1) => self.as_mut().project().l1_stream.mark_last_tx_as_invalid(),
-            Some(LastPolledType::L2) => self.as_mut().project().l2_stream.mark_last_tx_as_invalid(),
+    fn markable(
+        stream: impl Stream<Item = ZkTransaction> + Send + 'a,
+        marker: L2TransactionsStreamMarker,
+    ) -> Self {
+        Self {
+            stream: stream.boxed(),
+            marker: Some(marker),
         }
+    }
+
+    pub fn mark_last_l2_tx_as_invalid(&self) {
+        let Some(marker) = self.marker.as_ref() else {
+            panic!(
+                "tried to mark last L2 transaction as invalid but this stream does not serve L2 transactions"
+            )
+        };
+        marker.mark_last_tx_as_invalid()
     }
 }

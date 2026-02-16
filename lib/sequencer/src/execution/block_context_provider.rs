@@ -5,17 +5,14 @@ use crate::model::blocks::{
 };
 use alloy::primitives::{Address, TxHash, U256};
 use anyhow::Context as _;
-use futures::Stream;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
 use zksync_os_interface::types::{BlockContext, BlockHashes, BlockOutput};
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_mempool::{Pool, TxStream, TxStreamExt};
+use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope, ZkTransaction,
+    ExecutionVersion, InteropRootsLogIndex, ProtocolSemanticVersion, ZkEnvelope,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -195,7 +192,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                         allowed_to_finish_early: false,
                     },
                     invalid_tx_policy: InvalidTxPolicy::Abort,
-                    tx_source: ReplayTxStream::new(record.transactions).boxed(),
+                    tx_source: MarkingTxStream::unmarkable(futures::stream::iter(
+                        record.transactions,
+                    )),
                     starting_l1_priority_id: record.starting_l1_priority_id,
                     metrics_label: "replay",
                     protocol_version: record.protocol_version,
@@ -272,7 +271,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
                 PreparedBlockCommand {
                     block_context,
-                    tx_source: ReplayTxStream::new(txs).boxed(),
+                    tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
                     seal_policy: SealPolicy::UntilExhausted {
                         allowed_to_finish_early: true,
                     },
@@ -349,28 +348,4 @@ pub fn millis_since_epoch() -> u128 {
         .duration_since(UNIX_EPOCH)
         .expect("Incorrect system time")
         .as_millis()
-}
-
-pub struct ReplayTxStream {
-    iter: Box<dyn Iterator<Item = ZkTransaction> + Send>,
-}
-
-impl Stream for ReplayTxStream {
-    type Item = ZkTransaction;
-
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.iter.next())
-    }
-}
-
-impl TxStream for ReplayTxStream {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {}
-}
-
-impl ReplayTxStream {
-    pub fn new(txs: Vec<ZkTransaction>) -> Self {
-        Self {
-            iter: Box::new(txs.into_iter()),
-        }
-    }
 }

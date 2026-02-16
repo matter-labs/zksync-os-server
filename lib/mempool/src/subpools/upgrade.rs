@@ -1,4 +1,3 @@
-use crate::TxStream;
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -192,11 +191,5 @@ impl Stream for UpgradeTransactionsStream {
         } else {
             Poll::Ready(None)
         }
-    }
-}
-
-impl TxStream for UpgradeTransactionsStream {
-    fn mark_last_tx_as_invalid(self: Pin<&mut Self>) {
-        panic!("cannot mark upgrade transaction as invalid")
     }
 }
