@@ -10,11 +10,11 @@ use zksync_os_types::{SystemTxEnvelope, SystemTxType, ZkTransaction};
 
 #[derive(Clone)]
 pub struct SlChainIdSubpool {
+    notify: Arc<Notify>,
     inner: Arc<RwLock<Inner>>,
 }
 
 struct Inner {
-    notify: Arc<Notify>,
     sender: broadcast::Sender<SystemTxEnvelope>,
     pending_txs: VecDeque<SystemTxEnvelope>,
 }
@@ -22,8 +22,8 @@ struct Inner {
 impl Default for SlChainIdSubpool {
     fn default() -> Self {
         Self {
+            notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
-                notify: Arc::new(Notify::new()),
                 sender: broadcast::Sender::new(1),
                 pending_txs: VecDeque::new(),
             })),
@@ -55,20 +55,19 @@ impl SlChainIdSubpool {
         let mut inner = self.inner.write().unwrap();
         let _ = inner.sender.send(tx.clone());
         inner.pending_txs.push_front(tx);
-        inner.notify.notify_waiters();
+        self.notify.notify_waiters();
     }
 
     async fn pop_wait(&self) -> SystemTxEnvelope {
         loop {
-            let notify = {
+            let notified = self.notify.notified();
+            {
                 let mut inner = self.inner.write().unwrap();
                 if let Some(pending_tx) = inner.pending_txs.pop_back() {
                     return pending_tx;
-                } else {
-                    inner.notify.clone()
                 }
-            };
-            notify.notified().await;
+            }
+            notified.await;
         }
     }
 

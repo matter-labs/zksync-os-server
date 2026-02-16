@@ -10,11 +10,11 @@ use zksync_os_types::{L1PriorityEnvelope, L1TxSerialId, ZkTransaction};
 
 #[derive(Clone)]
 pub struct L1Subpool {
+    notify: Arc<Notify>,
     inner: Arc<RwLock<Inner>>,
 }
 
 struct Inner {
-    notify: Arc<Notify>,
     sender: broadcast::Sender<Arc<L1PriorityEnvelope>>,
     pending_txs: VecDeque<Arc<L1PriorityEnvelope>>,
 }
@@ -22,8 +22,8 @@ struct Inner {
 impl L1Subpool {
     pub fn new(buffer_size: usize) -> Self {
         Self {
+            notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
-                notify: Arc::new(Notify::new()),
                 sender: broadcast::Sender::new(buffer_size),
                 pending_txs: VecDeque::new(),
             })),
@@ -42,20 +42,19 @@ impl L1Subpool {
         let mut inner = self.inner.write().unwrap();
         let _ = inner.sender.send(tx.clone());
         inner.pending_txs.push_front(tx);
-        inner.notify.notify_waiters();
+        self.notify.notify_waiters();
     }
 
     async fn pop_wait(&self) -> Arc<L1PriorityEnvelope> {
         loop {
-            let notify = {
+            let notified = self.notify.notified();
+            {
                 let mut inner = self.inner.write().unwrap();
                 if let Some(pending_tx) = inner.pending_txs.pop_back() {
                     return pending_tx;
-                } else {
-                    inner.notify.clone()
                 }
-            };
-            notify.notified().await;
+            }
+            notified.await;
         }
     }
 

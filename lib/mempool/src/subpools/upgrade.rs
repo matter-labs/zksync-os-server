@@ -11,6 +11,7 @@ use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, Z
 
 #[derive(Clone)]
 pub struct UpgradeSubpool {
+    notify: Arc<Notify>,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -18,7 +19,6 @@ struct Inner {
     /// Tracks currently active protocol version. Needed because of patch upgrades that do not come
     /// with an upgrade transaction.
     current_protocol_version: ProtocolSemanticVersion,
-    notify: Arc<Notify>,
     sender: broadcast::Sender<UpgradeInfo>,
     pending_upgrades: VecDeque<UpgradeInfo>,
 }
@@ -26,9 +26,9 @@ struct Inner {
 impl UpgradeSubpool {
     pub fn new(current_protocol_version: ProtocolSemanticVersion) -> Self {
         Self {
+            notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
                 current_protocol_version,
-                notify: Arc::new(Notify::new()),
                 sender: broadcast::Sender::new(1),
                 pending_upgrades: VecDeque::new(),
             })),
@@ -49,21 +49,20 @@ impl UpgradeSubpool {
         let mut inner = self.inner.write().unwrap();
         let _ = inner.sender.send(upgrade.clone());
         inner.pending_upgrades.push_front(upgrade);
-        inner.notify.notify_waiters();
+        self.notify.notify_waiters();
     }
 
     async fn pop_wait(&self) -> UpgradeInfo {
         loop {
-            let notify = {
+            let notified = self.notify.notified();
+            {
                 let mut inner = self.inner.write().unwrap();
                 if let Some(upgrade) = inner.pending_upgrades.pop_back() {
                     tracing::info!(protocol_version = %upgrade.protocol_version(), "advancing protocol version");
                     return upgrade;
-                } else {
-                    inner.notify.clone()
                 }
-            };
-            notify.notified().await;
+            }
+            notified.await;
         }
     }
 
