@@ -3,9 +3,10 @@ use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use tokio::sync::{Notify, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, ZkTransaction};
 
 #[derive(Clone)]
@@ -37,12 +38,9 @@ impl UpgradeSubpool {
         let state = if let Some(pending_tx) = inner.pending_upgrades.back() {
             StreamState::Pending(pending_tx.clone())
         } else {
-            StreamState::Empty
+            StreamState::Empty(BroadcastStream::new(inner.sender.subscribe()))
         };
-        UpgradeInfoStream {
-            receiver: BroadcastStream::new(inner.sender.subscribe()),
-            state,
-        }
+        UpgradeInfoStream { state }
     }
 
     pub fn insert(&self, upgrade: UpgradeInfo) {
@@ -114,14 +112,17 @@ impl UpgradeSubpool {
 }
 
 pub struct UpgradeInfoStream {
-    receiver: BroadcastStream<UpgradeInfo>,
     state: StreamState,
 }
 
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
-    Empty,
+    /// No discovered upgrade yet, streaming from L1 watcher subscription.
+    Empty(BroadcastStream<UpgradeInfo>),
+    /// Upgrade has been previously discovered.
     Pending(UpgradeInfo),
+    /// Stream is closed because either one upgrade was already returned or upstream receiver was
+    /// closed prematurely.
     Closed,
 }
 
@@ -130,25 +131,30 @@ impl Stream for UpgradeInfoStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
-        match &this.state {
-            StreamState::Empty => {}
+        match &mut this.state {
+            StreamState::Empty(receiver) => {
+                let Some(result) = ready!(receiver.poll_next_unpin(cx)) else {
+                    tracing::debug!("upgrade watcher stream is closed");
+                    this.state = StreamState::Closed;
+                    return Poll::Ready(None);
+                };
+                match result {
+                    Ok(upgrade) => {
+                        this.state = StreamState::Closed;
+                        Poll::Ready(Some(upgrade))
+                    }
+                    Err(BroadcastStreamRecvError::Lagged(count)) => {
+                        // Fatal error as we lost at least one upgrade
+                        panic!("upgrade receiver lagged by {count} items");
+                    }
+                }
+            }
             StreamState::Pending(upgrade) => {
                 let upgrade = upgrade.clone();
                 this.state = StreamState::Closed;
-                return Poll::Ready(Some(upgrade));
-            }
-            StreamState::Closed => {
-                return Poll::Ready(None);
-            }
-        }
-
-        match this.receiver.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(upgrade))) => {
-                this.state = StreamState::Closed;
                 Poll::Ready(Some(upgrade))
             }
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(_) => Poll::Ready(None),
+            StreamState::Closed => Poll::Ready(None),
         }
     }
 }
