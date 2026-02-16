@@ -1,8 +1,6 @@
 use crate::execution::fee_provider::{FeeParams, FeeProvider};
 use crate::execution::metrics::EXECUTION_METRICS;
-use crate::model::blocks::{
-    BlockCommand, BlockCommandType, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
-};
+use crate::model::blocks::{BlockCommand, InvalidTxPolicy, PreparedBlockCommand, SealPolicy};
 use alloy::primitives::{Address, TxHash, U256};
 use anyhow::Context as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -299,7 +297,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         &mut self,
         block_output: &BlockOutput,
         replay_record: &ReplayRecord,
-        _cmd_type: BlockCommandType,
     ) {
         let outcome = self
             .pool
