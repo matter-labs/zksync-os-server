@@ -52,7 +52,6 @@ use ruint::aliases::U256;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use zksync_os_base_token_adjuster::BaseTokenPriceUpdater;
@@ -359,7 +358,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
 
     // Channel between NetworkService and Sequencer
-    let (replay_sender, replays_for_sequencer) = tokio::sync::mpsc::unbounded_channel();
+    let (replay_sender, replays_for_sequencer) = tokio::sync::mpsc::channel(128);
     if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
 
@@ -977,7 +976,7 @@ async fn run_main_node_pipeline(
 #[allow(clippy::too_many_arguments)]
 async fn run_en_pipeline(
     config: &Config,
-    replays_for_sequencer: UnboundedReceiver<ReplayRecord>,
+    replays_for_sequencer: tokio::sync::mpsc::Receiver<ReplayRecord>,
     committed_batch_provider: CommittedBatchProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,

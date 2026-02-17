@@ -1,13 +1,16 @@
 use alloy::primitives::{B256, BlockNumber};
 use assert_matches::assert_matches;
+use reth_network::test_utils::Peer;
 use reth_network::{Peers, test_utils::Testnet};
 use reth_provider::test_utils::MockEthProvider;
+use reth_provider::{BlockReader, HeaderProvider};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
-use zksync_os_network::version::{ZksProtocolV0, ZksProtocolV1};
+use zksync_os_network::version::{AnyZksProtocolVersion, ZksProtocolV0, ZksProtocolV1};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::{InteropRootsLogIndex, NodeRole, ProtocolSemanticVersion};
 
@@ -51,6 +54,49 @@ fn dummy_record(block_number: BlockNumber) -> ReplayRecord {
     )
 }
 
+trait PeerExt {
+    fn add_zks_sub_protocol<P: AnyZksProtocolVersion>(
+        &mut self,
+        node_role: NodeRole,
+        starting_block: BlockNumber,
+        replays: impl IntoIterator<Item = (BlockNumber, ReplayRecord)>,
+        max_active_connections: usize,
+    ) -> (
+        mpsc::UnboundedReceiver<ProtocolEvent>,
+        mpsc::Receiver<ReplayRecord>,
+    );
+}
+
+impl<C> PeerExt for Peer<C>
+where
+    C: BlockReader + HeaderProvider + Clone + 'static,
+{
+    fn add_zks_sub_protocol<P: AnyZksProtocolVersion>(
+        &mut self,
+        node_role: NodeRole,
+        starting_block: BlockNumber,
+        replays: impl IntoIterator<Item = (BlockNumber, ReplayRecord)>,
+        max_active_connections: usize,
+    ) -> (
+        mpsc::UnboundedReceiver<ProtocolEvent>,
+        mpsc::Receiver<ReplayRecord>,
+    ) {
+        let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
+        let (replay_tx, replay_rx) = mpsc::channel(8);
+        let handler = ZksProtocolHandler::<P, _> {
+            replay: InMemReplay(HashMap::from_iter(replays)),
+            node_role,
+            starting_block: Arc::new(RwLock::new(starting_block)),
+            record_overrides: vec![],
+            state: ProtocolState::new(protocol_tx, max_active_connections),
+            replay_sender: replay_tx,
+            _phantom: Default::default(),
+        };
+        self.add_rlpx_sub_protocol(handler);
+        (protocol_rx, replay_rx)
+    }
+}
+
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn send_replay_record_matching_version() {
     // Run two peers that both communicate on zks protocol v1 and successfully transfer one replay
@@ -58,31 +104,19 @@ async fn send_replay_record_matching_version() {
     let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
     let record1 = dummy_record(1);
 
-    let (protocol_tx, mut from_peer0) = mpsc::unbounded_channel();
-    let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
-    let peer0 = &mut net.peers_mut()[0];
-    peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        replay: InMemReplay(HashMap::from([(1, record1.clone())])),
-        node_role: NodeRole::MainNode,
-        starting_block: 0,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
-
-    let (protocol_tx, mut from_peer1) = mpsc::unbounded_channel();
-    let (replay_tx, mut replay_rx_peer1) = mpsc::unbounded_channel();
-    let peer1 = &mut net.peers_mut()[1];
-    peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        replay: InMemReplay::default(),
-        node_role: NodeRole::ExternalNode,
-        starting_block: 1,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
+    let (mut from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV1>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+    );
+    let (mut from_peer1, mut replay_rx_peer1) = net.peers_mut()[1]
+        .add_zks_sub_protocol::<ZksProtocolV1>(
+            NodeRole::ExternalNode,
+            1,
+            [(1, record1.clone())],
+            100,
+        );
 
     // Spawn and connect all the peers
     let handle = net.spawn();
@@ -107,44 +141,26 @@ async fn send_replay_record_different_versions() {
     // in tact).
     let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
     let record1 = dummy_record(1);
+    let (_, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV1>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+    );
+    let (mut from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV0>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+    );
 
-    let (protocol_tx, _from_peer0) = mpsc::unbounded_channel();
-    let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
-    let peer0 = &mut net.peers_mut()[0];
-    peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        replay: InMemReplay(HashMap::from([(1, record1.clone())])),
-        node_role: NodeRole::MainNode,
-        starting_block: 0,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
-
-    let (protocol_tx, mut from_peer0) = mpsc::unbounded_channel();
-    let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
-    peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV0, _> {
-        replay: InMemReplay(HashMap::from([(1, record1.clone())])),
-        node_role: NodeRole::MainNode,
-        starting_block: 1,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
-
-    let (protocol_tx, mut from_peer1) = mpsc::unbounded_channel();
-    let (replay_tx, mut replay_rx_peer1) = mpsc::unbounded_channel();
-    let peer1 = &mut net.peers_mut()[1];
-    peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV0, _> {
-        replay: InMemReplay::default(),
-        node_role: NodeRole::ExternalNode,
-        starting_block: 1,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
+    let (mut from_peer1, mut replay_rx_peer1) = net.peers_mut()[1]
+        .add_zks_sub_protocol::<ZksProtocolV0>(
+            NodeRole::ExternalNode,
+            1,
+            [(1, record1.clone())],
+            100,
+        );
 
     // Spawn and connect all the peers
     let handle = net.spawn();
@@ -175,48 +191,18 @@ async fn max_active_connections() {
     // `MaxActiveConnectionsExceeded`.
     let mut net = Testnet::create_with(3, MockEthProvider::default()).await;
 
-    let (protocol_tx, mut from_peer0) = mpsc::unbounded_channel();
-    let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
-    let peer0 = &mut net.peers_mut()[0];
-    peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        replay: InMemReplay::default(),
-        node_role: NodeRole::MainNode,
-        starting_block: 1,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 1),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
+    let (mut from_peer0, _) =
+        net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV1>(NodeRole::MainNode, 1, [], 1);
 
-    let (protocol_tx, _from_peer1) = mpsc::unbounded_channel();
-    let (replay_tx, _replay_rx_peer1) = mpsc::unbounded_channel();
     let peer1 = &mut net.peers_mut()[1];
     let peer1_id = peer1.peer_id();
     let peer1_addr = peer1.local_addr();
-    peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        replay: InMemReplay::default(),
-        node_role: NodeRole::ExternalNode,
-        starting_block: 1,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
+    let (_, _) = peer1.add_zks_sub_protocol::<ZksProtocolV1>(NodeRole::ExternalNode, 1, [], 100);
 
-    let (protocol_tx, _from_peer2) = mpsc::unbounded_channel();
-    let (replay_tx, _replay_rx_peer2) = mpsc::unbounded_channel();
     let peer2 = &mut net.peers_mut()[2];
     let peer2_id = peer2.peer_id();
     let peer2_addr = peer2.local_addr();
-    peer2.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-        replay: InMemReplay::default(),
-        node_role: NodeRole::ExternalNode,
-        starting_block: 1,
-        record_overrides: vec![],
-        state: ProtocolState::new(protocol_tx, 100),
-        replay_sender: replay_tx,
-        _phantom: Default::default(),
-    });
+    let (_, _) = peer2.add_zks_sub_protocol::<ZksProtocolV1>(NodeRole::ExternalNode, 1, [], 100);
 
     let handle = net.spawn();
 

@@ -3,7 +3,6 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::collections::HashSet;
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{mpsc, watch};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
@@ -29,7 +28,7 @@ pub struct RebuildOptions {
 #[derive(Debug)]
 pub struct ExternalNodeCommandSource {
     pub up_to_block: Option<u64>,
-    pub replays_for_sequencer: UnboundedReceiver<ReplayRecord>,
+    pub replays_for_sequencer: mpsc::Receiver<ReplayRecord>,
     pub stop_receiver: watch::Receiver<bool>,
 }
 
