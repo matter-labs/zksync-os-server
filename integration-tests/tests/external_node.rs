@@ -156,7 +156,7 @@ async fn transaction_replay() -> anyhow::Result<()> {
 
 /// It is easy to write to a channel that the EN doesn't need
 /// which leads to the EN getting stuck when the channel is full.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn does_not_get_stuck() -> anyhow::Result<()> {
     let main_node = Tester::setup().await?;
     let en1 = main_node.launch_external_node().await?;
@@ -165,9 +165,10 @@ async fn does_not_get_stuck() -> anyhow::Result<()> {
 
     const REPEATS: usize = 200;
 
+    let main_node_provider = main_node.l2_provider.clone();
     tokio::spawn(async move {
         for _ in 0..REPEATS {
-            let deploy_tx_receipt = EventEmitter::deploy_builder(main_node.l2_provider.clone())
+            let deploy_tx_receipt = EventEmitter::deploy_builder(&main_node_provider)
                 .send()
                 .await
                 .unwrap()
@@ -187,6 +188,9 @@ async fn does_not_get_stuck() -> anyhow::Result<()> {
         let contract_address = recv.recv().await.unwrap();
         check_contract_present(&en1, contract_address).await?;
     }
+
+    // Make sure we hold `main_node` until the end of the test
+    drop(main_node);
 
     Ok(())
 }

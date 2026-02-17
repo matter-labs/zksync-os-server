@@ -13,7 +13,6 @@ use smart_config::{
 };
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
-use std::str::FromStr;
 use std::{path::PathBuf, time::Duration};
 use zksync_os_batch_verification;
 use zksync_os_l1_sender::commands::commit::CommitCommand;
@@ -167,11 +166,14 @@ fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
 }
 
 /// "Umbrella" config for the node.
-/// If variable is shared i.e. used by multiple components OR does not belong to any specific component (e.g. `zkstack_cli_config_dir`)
+/// If variable is shared i.e. used by multiple components OR does not belong to any specific component
 /// then it belongs here.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct GeneralConfig {
+    #[config(default_t = NodeRole::MainNode, with = Serde![str])]
+    pub node_role: NodeRole,
+
     /// L1's JSON RPC API.
     #[config(default_t = "http://localhost:8545".into())]
     pub l1_rpc_url: String,
@@ -208,11 +210,8 @@ pub struct GeneralConfig {
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 
-    /// If set - initialize the configs based off the values from the yaml files from that directory.
-    pub zkstack_cli_config_dir: Option<String>,
-
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
-    /// `SequencerConfig::block_replay_download_address` is the source of truth for node type. **
+    /// [`GeneralConfig::role`] is the source of truth for node type. **
     #[config(default_t = None)]
     pub main_node_rpc_url: Option<String>,
 
@@ -236,29 +235,23 @@ pub struct NetworkConfig {
     /// Whether devp2p-based networking should be enabled.
     #[config(default_t = false)]
     pub enabled: bool,
-    /// The node's secret key, from which the node's identity is derived. Used during initial RLPx
-    /// handshake.
+    /// The node's secret key (256-bit ECDSA), from which the node's identity is derived. Used during
+    /// initial RLPx handshake.
     #[config(secret)]
-    #[config(
-        default_t = SecretKey::from_str("21b0ee131240821c39627c39d0fdde5edbda968c5877f5b63c5c542f267b5349").unwrap(),
-        with = Serde![str]
-    )]
-    pub secret_key: SecretKey,
+    #[config(default, with = Serde![str])]
+    pub secret_key: Option<SecretKey>,
     /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
-    #[config(default_t = Ipv4Addr::LOCALHOST, with = Serde![str])]
+    #[config(default_t = Ipv4Addr::UNSPECIFIED, with = Serde![str])]
     pub address: Ipv4Addr,
     /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     #[config(default_t = 3060)]
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is
-    /// `enode://<node ID>@<IP address>:<port>`.
-    // Default value corresponds to the default value of `secret_key` above. This is needed so local
-    // ENs can connect to local MN with zero configuration.
+    /// `enode://<node ID>@<IP address>:<port>` delimited by commas (`,`). For example:
+    /// `enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060`
     #[config(
-        default_t = vec![
-            NodeRecord::from_str("enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060").unwrap(),
-        ],
-        with = Delimited::repeat(Serde![str], ","),
+        default,
+        with = Delimited::repeat(Serde![str], ",")
     )]
     pub boot_nodes: Vec<NodeRecord>,
 }
@@ -314,19 +307,6 @@ pub struct RebuildBlocksConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct SequencerConfig {
-    /// Where to download replays instead of actually running blocks.
-    /// **Setting this makes the node into an external node.**
-    #[config(default_t = None)]
-    pub block_replay_download_address: Option<String>,
-
-    /// Whether to enable block replays server
-    #[config(default_t = true)]
-    pub block_replay_server_enabled: bool,
-
-    /// Where to serve block replays (EN syncing protocol)
-    #[config(default_t = "0.0.0.0:3053".into())]
-    pub block_replay_server_address: String,
-
     /// Defines the block time for the sequencer.
     /// One of the block Seal Criteria. Only affects the Main Node.
     #[config(default_t = Duration::from_millis(250))]
@@ -397,20 +377,6 @@ pub struct SequencerConfig {
     #[config(default, with = Serde![*])]
     /// List of (block_number, db_key) pairs to override when downloading replay records.
     pub en_replay_record_overrides: Vec<(u64, Bytes)>,
-}
-
-impl SequencerConfig {
-    pub fn is_main_node(&self) -> bool {
-        self.block_replay_download_address.is_none()
-    }
-
-    pub fn node_role(&self) -> NodeRole {
-        if self.is_main_node() {
-            NodeRole::MainNode
-        } else {
-            NodeRole::ExternalNode
-        }
-    }
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -939,7 +905,9 @@ pub struct FeeConfig {
 impl From<NetworkConfig> for zksync_os_network::config::NetworkConfig {
     fn from(value: NetworkConfig) -> Self {
         Self {
-            secret_key: value.secret_key,
+            secret_key: value
+                .secret_key
+                .expect("`network.secret_key` is required for running p2p networking stack"),
             address: value.address,
             port: value.port,
             boot_nodes: value.boot_nodes,
@@ -965,18 +933,17 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
     }
 }
 
-impl From<SequencerConfig> for zksync_os_sequencer::config::SequencerConfig {
-    fn from(c: SequencerConfig) -> Self {
+impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
+    fn from(c: &Config) -> Self {
         Self {
-            block_time: c.block_time,
-            max_transactions_in_block: c.max_transactions_in_block,
-            block_dump_path: c.block_dump_path,
-            block_replay_server_address: c.block_replay_server_address,
-            block_replay_download_address: c.block_replay_download_address,
-            block_gas_limit: c.block_gas_limit,
-            block_pubdata_limit_bytes: c.block_pubdata_limit_bytes,
-            max_blocks_to_produce: c.max_blocks_to_produce,
-            interop_roots_per_tx: c.interop_roots_per_tx,
+            node_role: c.general_config.node_role,
+            block_time: c.sequencer_config.block_time,
+            max_transactions_in_block: c.sequencer_config.max_transactions_in_block,
+            block_dump_path: c.sequencer_config.block_dump_path.clone(),
+            block_gas_limit: c.sequencer_config.block_gas_limit,
+            block_pubdata_limit_bytes: c.sequencer_config.block_pubdata_limit_bytes,
+            max_blocks_to_produce: c.sequencer_config.max_blocks_to_produce,
+            interop_roots_per_tx: c.sequencer_config.interop_roots_per_tx,
         }
     }
 }

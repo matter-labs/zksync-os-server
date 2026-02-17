@@ -9,7 +9,7 @@ use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use zksync_os_network::version::{ZksProtocolV0, ZksProtocolV1};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
-use zksync_os_types::{InteropRootsLogIndex, ProtocolSemanticVersion};
+use zksync_os_types::{InteropRootsLogIndex, NodeRole, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, Default)]
 struct InMemReplay(HashMap<BlockNumber, ReplayRecord>);
@@ -63,7 +63,9 @@ async fn send_replay_record_matching_version() {
     let peer0 = &mut net.peers_mut()[0];
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
         replay: InMemReplay(HashMap::from([(1, record1.clone())])),
-        to_request_blocks: false,
+        node_role: NodeRole::MainNode,
+        starting_block: 0,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -74,7 +76,9 @@ async fn send_replay_record_matching_version() {
     let peer1 = &mut net.peers_mut()[1];
     peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
         replay: InMemReplay::default(),
-        to_request_blocks: true,
+        node_role: NodeRole::ExternalNode,
+        starting_block: 1,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -109,7 +113,9 @@ async fn send_replay_record_different_versions() {
     let peer0 = &mut net.peers_mut()[0];
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
         replay: InMemReplay(HashMap::from([(1, record1.clone())])),
-        to_request_blocks: false,
+        node_role: NodeRole::MainNode,
+        starting_block: 0,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -119,7 +125,9 @@ async fn send_replay_record_different_versions() {
     let (replay_tx, _replay_rx_peer0) = mpsc::unbounded_channel();
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV0, _> {
         replay: InMemReplay(HashMap::from([(1, record1.clone())])),
-        to_request_blocks: false,
+        node_role: NodeRole::MainNode,
+        starting_block: 1,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -130,7 +138,9 @@ async fn send_replay_record_different_versions() {
     let peer1 = &mut net.peers_mut()[1];
     peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV0, _> {
         replay: InMemReplay::default(),
-        to_request_blocks: true,
+        node_role: NodeRole::ExternalNode,
+        starting_block: 1,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -170,7 +180,9 @@ async fn max_active_connections() {
     let peer0 = &mut net.peers_mut()[0];
     peer0.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
         replay: InMemReplay::default(),
-        to_request_blocks: false,
+        node_role: NodeRole::MainNode,
+        starting_block: 1,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 1),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -183,7 +195,9 @@ async fn max_active_connections() {
     let peer1_addr = peer1.local_addr();
     peer1.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
         replay: InMemReplay::default(),
-        to_request_blocks: true,
+        node_role: NodeRole::ExternalNode,
+        starting_block: 1,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),
@@ -196,7 +210,9 @@ async fn max_active_connections() {
     let peer2_addr = peer2.local_addr();
     peer2.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
         replay: InMemReplay::default(),
-        to_request_blocks: true,
+        node_role: NodeRole::ExternalNode,
+        starting_block: 1,
+        record_overrides: vec![],
         state: ProtocolState::new(protocol_tx, 100),
         replay_sender: replay_tx,
         _phantom: Default::default(),

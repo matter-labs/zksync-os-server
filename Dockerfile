@@ -50,7 +50,7 @@ COPY --from=builder /app/local-chains/v30.2/default/genesis.json /app/local-chai
 USER app
 WORKDIR /app
 
-EXPOSE 3050 3124 3312 3053
+EXPOSE 3050 3124 3312 3060
 VOLUME ["/db"]
 
 ENTRYPOINT ["/usr/bin/tini", "--", "zksync-os-server"]

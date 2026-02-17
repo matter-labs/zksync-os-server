@@ -92,12 +92,12 @@ pub trait ReadReplayExt: ReadReplay {
     /// Streams replay records with block_number ≥ `start`, in ascending block order.
     /// On reaching the latest stored record continuously waits for new records to appear. Used to send blocks to ENs.
     fn stream_from_forever(
-        &self,
+        self,
         start: BlockNumber,
         db_key_overrides: HashMap<BlockNumber, Vec<u8>>,
-    ) -> BoxStream<ReplayRecord>
+    ) -> BoxStream<'static, ReplayRecord>
     where
-        Self: Clone,
+        Self: Sized,
     {
         #[pin_project]
         struct BlockStream<Replay: ReadReplay> {
@@ -134,7 +134,7 @@ pub trait ReadReplayExt: ReadReplay {
         }
 
         Box::pin(BlockStream {
-            replays: self.clone(),
+            replays: self,
             current_block: start,
             db_key_overrides,
             sleep: tokio::time::sleep(Duration::from_millis(50)),

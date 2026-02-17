@@ -19,7 +19,7 @@ zksync_os_object_store.workspace = true
 zksync_os_rpc_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
-zksync_os_l1_sender.workspace = true
+zksync_os_network.workspace = true
 
 zksync_os_prover_service = { workspace = true, optional = true }
 
@@ -34,15 +34,14 @@ async-trait.workspace = true
 serde_json.workspace = true
 backon.workspace = true
 futures.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 regex = "1.11.1"
 smart-config.workspace = true
+serde_yaml.workspace = true
 
 # Needed for upgrade functionality tests
 zk_os_api.workspace = true
 zk_os_basic_system.workspace = true
-serde_yaml.workspace = true
 
 [dev-dependencies]
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
