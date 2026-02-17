@@ -9,7 +9,9 @@ use reth_eth_wire::HelloMessageWithProtocols;
 use reth_net_nat::NatResolver;
 use reth_network::error::NetworkError;
 use reth_network::types::peers::config::PeerBackoffDurations;
-use reth_network::{NetworkConfig as RethNetworkConfig, NetworkManager, PeersConfig};
+use reth_network::{
+    NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, PeersConfig,
+};
 use reth_provider::BlockNumReader;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::{Arc, RwLock};
@@ -43,6 +45,42 @@ impl NetworkService {
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
         replay_sender: mpsc::Sender<ReplayRecord>,
     ) -> Result<Self, NetworkError> {
+        let sub_protocol_installer = |net_cfg_builder: NetworkConfigBuilder, protocol_tx| {
+            // Add latest version of `zks` subprotocol. In the future this can be extended so that
+            // several versions are registered here.
+            net_cfg_builder.add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
+                replay,
+                node_role,
+                starting_block: Arc::new(RwLock::new(starting_block)),
+                record_overrides,
+                state: ProtocolState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS),
+                replay_sender,
+                _phantom: Default::default(),
+            })
+        };
+
+        Self::new_inner(config, client, sub_protocol_installer).await
+    }
+
+    /// Special bootstrapping mode where no subprotocols are registered. These types of nodes are
+    /// used primarily for peer discovery and do not operate an actual ZKsync OS node.
+    pub async fn bootstrap(
+        config: NetworkConfig,
+        client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
+    ) -> Result<Self, NetworkError> {
+        let noop_installer = |net_cfg_builder: NetworkConfigBuilder, _protocol_tx| net_cfg_builder;
+
+        Self::new_inner(config, client, noop_installer).await
+    }
+
+    async fn new_inner(
+        config: NetworkConfig,
+        client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
+        sub_protocol_installer: impl FnOnce(
+            NetworkConfigBuilder,
+            mpsc::UnboundedSender<ProtocolEvent>,
+        ) -> NetworkConfigBuilder,
+    ) -> Result<Self, NetworkError> {
         match NatResolver::Any.external_addr().await {
             None => {
                 tracing::info!("could not resolve external IP (STUN)");
@@ -53,7 +91,7 @@ impl NetworkService {
         };
         let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
-        let net_cfg = RethNetworkConfig::builder(config.secret_key)
+        let net_cfg_builder = RethNetworkConfig::builder(config.secret_key)
             .boot_nodes(config.boot_nodes.clone())
             // Configure node identity
             .apply(|builder| {
@@ -110,19 +148,8 @@ impl NetworkService {
             // Do not require any block hashes in `eth` RLPx protocol as it is unused
             .required_block_hashes(vec![])
             // Set network id to ZKsync OS chain's id, otherwise we might connect to unrelated peers
-            .network_id(Some(client.chain_spec().chain_id()))
-            // Add latest version of `zks` subprotocol. In the future this can be extended so that
-            // several versions are registered here.
-            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
-                replay,
-                node_role,
-                starting_block: Arc::new(RwLock::new(starting_block)),
-                record_overrides,
-                state: ProtocolState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS),
-                replay_sender,
-                _phantom: Default::default(),
-            })
-            .build(client);
+            .network_id(Some(client.chain_spec().chain_id()));
+        let net_cfg = sub_protocol_installer(net_cfg_builder, protocol_tx).build(client);
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is
         // disabled. `request_handler` is also unused as it is specific to `eth` protocol.

@@ -15594,6 +15594,8 @@ dependencies = [
  "num",
  "rand 0.9.2",
  "reqwest",
+ "reth-chainspec",
+ "reth-provider",
  "ruint",
  "semver 1.0.26",
  "sentry",
