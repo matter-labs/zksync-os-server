@@ -6,7 +6,10 @@ use std::{
 use alloy::primitives::B256;
 use anyhow::Context;
 
-use crate::{HashTree, TreeBatchOutput, TreeEntry, types::Leaf};
+use crate::{
+    hasher::HashTree,
+    types::{Leaf, TreeBatchOutput, TreeEntry},
+};
 
 /// Operation on a Merkle tree entry used in [`BatchTreeProof`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -21,17 +24,34 @@ pub enum TreeOperation {
 }
 
 #[derive(Debug)]
-pub struct IntermediateHash {
+pub struct IntermediateHash<Loc = ()> {
     pub value: B256,
     /// Level + index on level. Redundant and is only checked in tests.
-    #[cfg(test)]
-    pub location: (u8, u64),
+    pub location: Loc,
 }
 
-#[cfg(not(test))]
+pub trait IntermediateHashLocation: 'static + Copy {
+    fn location(self) -> Option<(u8, u64)>;
+}
+
+impl IntermediateHashLocation for () {
+    fn location(self) -> Option<(u8, u64)> {
+        None
+    }
+}
+
+impl IntermediateHashLocation for (u8, u64) {
+    fn location(self) -> Option<(u8, u64)> {
+        Some(self)
+    }
+}
+
 impl From<B256> for IntermediateHash {
     fn from(value: B256) -> Self {
-        Self { value }
+        Self {
+            value,
+            location: (),
+        }
     }
 }
 
@@ -56,7 +76,7 @@ pub struct MerkleTreeView {
 /// 3. `sorted_leaves` are updated / extended as per inserted / updated entries.
 /// 4. New root hash of the tree is recreated using updated `sorted_leaves` and (the same) `hashes`.
 #[derive(Debug)]
-pub struct BatchTreeProof {
+pub struct BatchTreeProof<Loc = ()> {
     /// Performed tree operations. Correspond 1-to-1 to [`TreeEntry`]s.
     pub operations: Vec<TreeOperation>,
     /// Performed read operations. Correspond 1-to-1 to read keys.
@@ -66,10 +86,10 @@ pub struct BatchTreeProof {
     pub sorted_leaves: BTreeMap<u64, Leaf>,
     /// Hashes necessary and sufficient to restore previous and updated root hashes. Provided in the ascending `(depth, index_on_level)` order,
     /// where `depth == 0` are leaves, `depth == 1` are nodes aggregating leaf pairs etc.
-    pub hashes: Vec<IntermediateHash>,
+    pub hashes: Vec<IntermediateHash<Loc>>,
 }
 
-impl BatchTreeProof {
+impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
     #[cfg(test)]
     fn empty() -> Self {
         Self {
@@ -321,7 +341,7 @@ impl BatchTreeProof {
         tree_depth: u8,
         leaf_count: u64,
         sorted_leaves: impl Iterator<Item = (u64, &'a Leaf)>,
-        mut hashes: impl Iterator<Item = &'a IntermediateHash>,
+        mut hashes: impl Iterator<Item = &'a IntermediateHash<Loc>>,
     ) -> anyhow::Result<B256> {
         let mut node_hashes: Vec<_> = sorted_leaves
             .map(|(idx, leaf)| (idx, hasher.hash_leaf(leaf)))
@@ -337,8 +357,9 @@ impl BatchTreeProof {
                     // The hash to the left is missing; get it from `hashes`
                     i += 1;
                     let lhs = hashes.next().context("ran out of hashes")?;
-                    #[cfg(test)]
-                    anyhow::ensure!(lhs.location == (depth, current_idx - 1));
+                    if let Some(lhs_location) = lhs.location.location() {
+                        anyhow::ensure!(lhs_location == (depth, current_idx - 1));
+                    }
 
                     hasher.hash_branch(&lhs.value, &current_hash)
                 } else if let Some((_, next_hash)) = node_hashes
@@ -354,8 +375,9 @@ impl BatchTreeProof {
                         hasher.empty_subtree_hash(depth)
                     } else {
                         let rhs = hashes.next().context("ran out of hashes")?;
-                        #[cfg(test)]
-                        anyhow::ensure!(rhs.location == (depth, current_idx + 1));
+                        if let Some(rhs_location) = rhs.location.location() {
+                            anyhow::ensure!(rhs_location == (depth, current_idx + 1));
+                        }
                         rhs.value
                     };
                     hasher.hash_branch(&current_hash, &rhs)
@@ -381,7 +403,7 @@ mod tests {
 
     #[test]
     fn insertion_proof_for_empty_tree() {
-        let proof = BatchTreeProof::empty();
+        let proof = <BatchTreeProof>::empty();
         let hash = proof
             .verify(&Blake2Hasher, 64, None, &[], &[])
             .unwrap()
@@ -393,7 +415,7 @@ mod tests {
                 .unwrap()
         );
 
-        let proof = BatchTreeProof::empty();
+        let proof = <BatchTreeProof>::empty();
         let entry = TreeEntry {
             key: B256::repeat_byte(0x01),
             value: B256::repeat_byte(0x10),
@@ -411,7 +433,7 @@ mod tests {
 
     #[test]
     fn basic_insertion_proof() {
-        let proof = BatchTreeProof {
+        let proof = BatchTreeProof::<()> {
             operations: vec![TreeOperation::Miss { prev_index: 0 }],
             read_operations: vec![],
             sorted_leaves: BTreeMap::from([(0, Leaf::MIN_GUARD), (1, Leaf::MAX_GUARD)]),
@@ -447,7 +469,7 @@ mod tests {
 
     #[test]
     fn basic_read_proof() {
-        let proof = BatchTreeProof {
+        let proof = BatchTreeProof::<()> {
             operations: vec![],
             read_operations: vec![TreeOperation::Miss { prev_index: 0 }],
             sorted_leaves: BTreeMap::from([(0, Leaf::MIN_GUARD), (1, Leaf::MAX_GUARD)]),
@@ -476,7 +498,7 @@ mod tests {
 
     #[test]
     fn mixed_read_write_proof() {
-        let proof = BatchTreeProof {
+        let proof = BatchTreeProof::<()> {
             operations: vec![TreeOperation::Miss { prev_index: 0 }],
             read_operations: vec![TreeOperation::Miss { prev_index: 0 }],
             sorted_leaves: BTreeMap::from([(0, Leaf::MIN_GUARD), (1, Leaf::MAX_GUARD)]),

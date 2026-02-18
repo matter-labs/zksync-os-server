@@ -8,12 +8,12 @@ use std::{
 
 use alloy::primitives::B256;
 use proptest::{prelude::*, sample::Index};
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+use zksync_os_merkle_tree_api::{Blake2Hasher, Leaf};
 
 use super::naive_hash_tree;
 use crate::{
     BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeBatchOutput, TreeEntry,
-    TreeOperation, TreeParams, types::Leaf,
+    TreeOperation, TreeParams,
 };
 
 const MAX_ENTRIES: usize = 100;

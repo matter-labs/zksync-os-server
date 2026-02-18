@@ -1,21 +1,26 @@
 //! Persistent ZK OS Merkle tree.
 
+use std::fmt;
+
 use alloy::primitives::B256;
 use anyhow::Context as _;
-use std::fmt;
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+pub use zksync_os_merkle_tree_api::{
+    Blake2Hasher, HashTree, Leaf, MAX_TREE_DEPTH, TreeBatchOutput, TreeEntry, TreeOperation,
+};
+// Create a test-specific type alias for proof types to test their consistency in unit tests.
+#[cfg(not(test))]
+pub use zksync_os_merkle_tree_api::BatchTreeProof;
+#[cfg(test)]
+pub type BatchTreeProof = zksync_os_merkle_tree_api::BatchTreeProof<(u8, u64)>;
 
 pub use self::{
     errors::DeserializeError,
-    hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
-    types::{TreeBatchOutput, TreeEntry},
     with_version::{MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
 use crate::{
     metrics::{BatchProofStage, LoadStage, METRICS, MerkleTreeInfo},
     storage::{AsEntry, TreeUpdate, WorkingPatchSet},
-    types::{Leaf, MAX_TREE_DEPTH},
 };
 
 mod consistency;
@@ -33,7 +38,7 @@ mod with_version;
 /// these types will remain stable.
 #[doc(hidden)]
 pub mod unstable {
-    pub use crate::types::{KeyLookup, Leaf, Manifest, Node, NodeKey, Root};
+    pub use crate::types::{KeyLookup, Manifest, Node, NodeKey, Root};
 }
 
 /// Marker trait for tree parameters.

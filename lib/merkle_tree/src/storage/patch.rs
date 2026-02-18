@@ -7,16 +7,22 @@ use std::{
 
 use alloy::primitives::B256;
 use anyhow::Context as _;
+#[cfg(not(test))]
+use zksync_os_merkle_tree_api::IntermediateHash;
+use zksync_os_merkle_tree_api::{Leaf, TreeOperation};
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
-    DeserializeError, HashTree, MerkleTree, TreeBatchOutput, TreeEntry, TreeParams,
+    BatchTreeProof, DeserializeError, HashTree, MerkleTree, TreeBatchOutput, TreeEntry, TreeParams,
     errors::{DeserializeContext, DeserializeErrorKind},
-    hasher::{BatchTreeProof, IntermediateHash, InternalHashes, TreeOperation},
+    hasher::InternalHashes,
     leaf_nibbles, max_nibbles_for_internal_node, max_node_children,
     metrics::{BatchProofStage, LoadStage, METRICS},
-    types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root, TreeTags},
+    types::{InternalNode, KeyLookup, Manifest, Node, NodeKey, Root, TreeTags},
 };
+
+#[cfg(test)]
+type IntermediateHash = zksync_os_merkle_tree_api::IntermediateHash<(u8, u64)>;
 
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -359,6 +365,8 @@ impl<P: TreeParams> WorkingPatchSet<P> {
                         value: internal_hashes.get(depth_in_internal_node, current_idx - 1),
                         #[cfg(test)]
                         location: (depth, current_idx - 1),
+                        #[cfg(not(test))]
+                        location: (),
                     });
                 } else if indices_on_level
                     .get(i + 1)
@@ -374,6 +382,8 @@ impl<P: TreeParams> WorkingPatchSet<P> {
                             value: internal_hashes.get(depth_in_internal_node, current_idx + 1),
                             #[cfg(test)]
                             location: (depth, current_idx + 1),
+                            #[cfg(not(test))]
+                            location: (),
                         });
                     }
                 };

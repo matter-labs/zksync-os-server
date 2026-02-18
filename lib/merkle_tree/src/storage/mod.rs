@@ -5,12 +5,13 @@ use std::{
 };
 
 use alloy::primitives::B256;
+use zksync_os_merkle_tree_api::{Leaf, TreeEntry};
 
 pub(crate) use self::patch::{TreeUpdate, WorkingPatchSet};
 pub use self::rocksdb::{MerkleTreeColumnFamily, RocksDBWrapper};
 use crate::{
     errors::{DeserializeContext, DeserializeError, DeserializeErrorKind},
-    types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root, TreeEntry},
+    types::{InternalNode, KeyLookup, Manifest, Node, NodeKey, Root},
 };
 
 mod patch;

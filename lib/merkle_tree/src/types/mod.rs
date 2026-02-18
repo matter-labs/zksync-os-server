@@ -2,39 +2,9 @@ use std::{fmt, str::FromStr};
 
 use alloy::primitives::B256;
 use anyhow::Context;
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+use zksync_os_merkle_tree_api::{Blake2Hasher, Leaf};
 
 use crate::{DefaultTreeParams, HashTree, TreeParams};
-
-/// Maximum supported tree depth (to fit indexes into `u64`).
-pub(crate) const MAX_TREE_DEPTH: u8 = 64;
-
-/// Tree leaf.
-#[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(test, derive(PartialEq))]
-pub struct Leaf {
-    pub key: B256,
-    pub value: B256,
-    /// 0-based index of a leaf with the lexicographically next key.
-    pub next_index: u64,
-}
-
-impl Leaf {
-    /// Minimum guard leaf inserted at the tree at its initialization.
-    pub const MIN_GUARD: Self = Self {
-        key: B256::ZERO,
-        value: B256::ZERO,
-        next_index: 1,
-    };
-
-    /// Maximum guard leaf inserted at the tree at its initialization.
-    pub const MAX_GUARD: Self = Self {
-        key: B256::repeat_byte(0xff),
-        value: B256::ZERO,
-        // Circular pointer to self; never updated.
-        next_index: 1,
-    };
-}
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -186,27 +156,6 @@ pub struct Root {
     pub(crate) root_node: InternalNode,
 }
 
-/// Entry in a Merkle tree associated with a key. Provided as an input for [`MerkleTree`](crate::MerkleTree) operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TreeEntry {
-    /// Tree key.
-    pub key: B256,
-    /// Value associated with the key.
-    pub value: B256,
-}
-
-impl TreeEntry {
-    pub(crate) const MIN_GUARD: Self = Self {
-        key: B256::ZERO,
-        value: B256::ZERO,
-    };
-
-    pub(crate) const MAX_GUARD: Self = Self {
-        key: B256::repeat_byte(0xff),
-        value: B256::ZERO,
-    };
-}
-
 /// Persisted tags associated with a tree.
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -274,13 +223,4 @@ pub struct Manifest {
     /// Number of tree versions stored in the database.
     pub(crate) version_count: u64,
     pub(crate) tags: TreeTags,
-}
-
-/// Output of updating / inserting data in a [`MerkleTree`](crate::MerkleTree).
-#[derive(Debug, Clone, Copy)]
-pub struct TreeBatchOutput {
-    /// New root hash of the tree.
-    pub root_hash: B256,
-    /// New leaf count (including 2 guard entries).
-    pub leaf_count: u64,
 }

@@ -3,12 +3,13 @@
 use std::str;
 
 use alloy::primitives::B256;
+use zksync_os_merkle_tree_api::Leaf;
 
 use crate::{
     DeserializeError,
     errors::{DeserializeContext, DeserializeErrorKind},
     storage::InsertedKeyEntry,
-    types::{ChildRef, InternalNode, Leaf, Manifest, Root, TreeTags},
+    types::{ChildRef, InternalNode, Manifest, Root, TreeTags},
 };
 
 const HASH_SIZE: usize = 32;
@@ -27,32 +28,29 @@ impl InsertedKeyEntry {
     }
 }
 
-impl Leaf {
-    pub(super) fn deserialize(mut buffer: &[u8]) -> Result<Self, DeserializeError> {
-        if buffer.len() < 2 * HASH_SIZE {
-            return Err(DeserializeErrorKind::UnexpectedEof.into());
-        }
-        let key = B256::from_slice(&buffer[..HASH_SIZE]);
-        let value = B256::from_slice(&buffer[HASH_SIZE..2 * HASH_SIZE]);
-
-        buffer = &buffer[2 * HASH_SIZE..];
-        let next_index =
-            leb128::read::unsigned(&mut buffer).map_err(DeserializeErrorKind::Leb128)?;
-        if !buffer.is_empty() {
-            return Err(DeserializeErrorKind::Leftovers.into());
-        }
-        Ok(Self {
-            key,
-            value,
-            next_index,
-        })
+pub(super) fn deserialize_leaf(mut buffer: &[u8]) -> Result<Leaf, DeserializeError> {
+    if buffer.len() < 2 * HASH_SIZE {
+        return Err(DeserializeErrorKind::UnexpectedEof.into());
     }
+    let key = B256::from_slice(&buffer[..HASH_SIZE]);
+    let value = B256::from_slice(&buffer[HASH_SIZE..2 * HASH_SIZE]);
 
-    pub(super) fn serialize(&self, buffer: &mut Vec<u8>) {
-        buffer.extend_from_slice(self.key.as_slice());
-        buffer.extend_from_slice(self.value.as_slice());
-        leb128::write::unsigned(buffer, self.next_index).unwrap();
+    buffer = &buffer[2 * HASH_SIZE..];
+    let next_index = leb128::read::unsigned(&mut buffer).map_err(DeserializeErrorKind::Leb128)?;
+    if !buffer.is_empty() {
+        return Err(DeserializeErrorKind::Leftovers.into());
     }
+    Ok(Leaf {
+        key,
+        value,
+        next_index,
+    })
+}
+
+pub(super) fn serialize_leaf(leaf: &Leaf, buffer: &mut Vec<u8>) {
+    buffer.extend_from_slice(leaf.key.as_slice());
+    buffer.extend_from_slice(leaf.value.as_slice());
+    leb128::write::unsigned(buffer, leaf.next_index).unwrap();
 }
 
 impl ChildRef {

@@ -1,15 +1,20 @@
 //! Tests for the public `MerkleTree` interface.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use alloy::primitives::U256;
+use rand::{
+    Rng, SeedableRng,
+    rngs::StdRng,
+    seq::{IndexedRandom, SliceRandom},
+};
+use zksync_os_merkle_tree_api::Leaf;
+
 use super::*;
 use crate::{
-    hasher::TreeOperation,
     storage::{PatchSet, Patched},
-    types::{Leaf, Node, NodeKey, TreeTags},
+    types::{Node, NodeKey, TreeTags},
 };
-use alloy::primitives::U256;
-use rand::prelude::IndexedRandom;
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
-use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod consistency;
 mod prop;

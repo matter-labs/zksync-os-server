@@ -11,12 +11,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-zksync_os_crypto.workspace = true
+zksync_os_merkle_tree_api.workspace = true
 zksync_os_rocksdb.workspace = true
 
 alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
-blake2.workspace = true
 leb128.workspace = true
 once_cell.workspace = true
 rayon.workspace = true
@@ -26,7 +25,6 @@ vise.workspace = true
 zk_os_forward_system.workspace = true
 zk_os_basic_system.workspace = true
 zk_ee.workspace = true
-tokio.workspace = true
 
 [dev-dependencies]
 alloy = { workspace = true, default-features = false, features = ["rand"] }
