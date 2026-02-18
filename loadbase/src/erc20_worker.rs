@@ -30,6 +30,21 @@ struct PendingTx {
     sent_at: Instant,
 }
 
+fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng: &RwLock<StdRng>) -> Address {
+    if dest_random {
+        return H160::random();
+    }
+    loop {
+        let cand = {
+            let mut g = rng.write();
+            *all_addrs.choose(&mut *g).unwrap()
+        };
+        if cand != self_addr {
+            return cand;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_erc20_workers(
     provider: Provider<Http>,
@@ -102,19 +117,7 @@ pub fn spawn_erc20_workers(
                         };
 
                         // choose dest
-                        let dest = if dest_rand {
-                            H160::random()
-                        } else {
-                            loop {
-                                let cand = {
-                                    let mut g = rng_c.write();
-                                    *addrs_c.choose(&mut *g).unwrap()
-                                };
-                                if cand != signer.address() {
-                                    break cand;
-                                }
-                            }
-                        };
+                        let dest = choose_dest(dest_rand, &addrs_c, signer.address(), &rng_c);
 
                         // jitter amount
                         let delta = {
