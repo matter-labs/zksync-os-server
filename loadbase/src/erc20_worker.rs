@@ -97,6 +97,55 @@ async fn build_batch(
     batch
 }
 
+fn spawn_receipt_waiter(
+    tx_hash:  H256,
+    permit:   tokio::sync::OwnedSemaphorePermit,
+    provider: Provider<Http>,
+    metrics:  Metrics,
+) {
+    tokio::spawn(async move {
+        let t_inc = Instant::now();
+        loop {
+            match provider.get_transaction_receipt(tx_hash).await {
+                Ok(Some(_)) => {
+                    let inc = t_inc.elapsed().as_millis() as u64;
+                    metrics.include.write().record(inc).ok();
+                    metrics.inc_last.lock().push_back((Instant::now(), inc));
+                    metrics.included.fetch_add(1, Ordering::Relaxed);
+                    break;
+                }
+                Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
+                Err(_)   => break,
+            }
+        }
+        drop(permit); // free slot
+    });
+}
+
+fn process_replies(
+    batch:    Vec<PendingTx>,
+    replies:  Vec<Value>,
+    provider: &Provider<Http>,
+    metrics:  &Metrics,
+) {
+    for (tx, reply) in batch.into_iter().zip(replies) {
+        let sub_ms = tx.sent_at.elapsed().as_millis() as u64;
+
+        if let Some(tx_hash_str) = reply.get("result").and_then(|v| v.as_str()) {
+            let tx_hash: H256 = tx_hash_str.parse().unwrap_or_default();
+            metrics.submit.write().record(sub_ms).ok();
+            metrics.sub_last.lock().push_back((Instant::now(), sub_ms));
+            metrics.sent.fetch_add(1, Ordering::Relaxed);
+            spawn_receipt_waiter(tx_hash, tx.permit, provider.clone(), metrics.clone());
+        } else {
+            if let Some(err) = reply.get("error") {
+                eprintln!("❗ tx error {err}");
+            }
+            // tx.permit dropped here, freeing the slot
+        }
+    }
+}
+
 async fn send_rpc_batch(http: &Client, url: &str, batch: &[PendingTx]) -> Option<Vec<Value>> {
     let payload: Vec<_> = batch
         .iter()
@@ -202,48 +251,7 @@ pub fn spawn_erc20_workers(
                     //----------------------------------------------//
                     // 3. per‑tx accounting & receipt waiters       //
                     //----------------------------------------------//
-                    for (tx, reply) in batch.into_iter().zip(replies.into_iter()) {
-                        let sub_ms = tx.sent_at.elapsed().as_millis() as u64;
-
-                        if let Some(tx_hash_str) = reply.get("result").and_then(|v| v.as_str()) {
-                            // success
-                            let tx_hash: H256 = tx_hash_str.parse().unwrap_or_default();
-                            m.submit.write().record(sub_ms).ok();
-                            m.sub_last.lock().push_back((Instant::now(), sub_ms));
-                            m.sent.fetch_add(1, Ordering::Relaxed);
-
-                            let prov   = provider_c.clone();
-                            let m_inc  = m.clone();
-                            let permit = tx.permit;
-                            tokio::spawn(async move {
-                                let t_inc = Instant::now();
-                                loop {
-                                    match prov.get_transaction_receipt(tx_hash).await {
-                                        Ok(Some(_)) => {
-                                            let inc = t_inc.elapsed().as_millis() as u64;
-                                            m_inc.include.write().record(inc).ok();
-                                            m_inc
-                                                .inc_last
-                                                .lock()
-                                                .push_back((Instant::now(), inc));
-                                            m_inc.included.fetch_add(1, Ordering::Relaxed);
-                                            break;
-                                        }
-                                        Ok(None) => {
-                                            tokio::time::sleep(Duration::from_millis(100)).await
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                                drop(permit); // free slot
-                            });
-                        } else {
-                            if let Some(err) = reply.get("error") {
-                                eprintln!("❗ tx error {err}");
-                            }
-                            // tx.permit dropped here, freeing the slot
-                        }
-                    }
+                    process_replies(batch, replies, &provider_c, &m);
                 }
             })
         })
