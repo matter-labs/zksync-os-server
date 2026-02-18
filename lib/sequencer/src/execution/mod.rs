@@ -4,6 +4,7 @@ use crate::execution::block_executor::execute_block;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
 use crate::model::blocks::BlockCommand;
+use alloy::consensus::Sealed;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio::sync::{mpsc::Sender, watch};
@@ -141,7 +142,10 @@ where
             tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
-            self.replay.write(replay_record.clone(), override_allowed);
+            self.replay.write(
+                Sealed::new_unchecked(replay_record.clone(), block_output.header.hash()),
+                override_allowed,
+            );
 
             tracing::debug!(block_number, "Added to replay storage. Adding to state...");
             latency_tracker.enter_state(SequencerState::AddingToState);

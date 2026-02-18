@@ -1,5 +1,5 @@
 use crate::ReplayRecord;
-use alloy::primitives::BlockNumber;
+use alloy::primitives::{BlockNumber, Sealed};
 use futures::Stream;
 use futures::stream::{BoxStream, StreamExt};
 use pin_project::pin_project;
@@ -164,5 +164,5 @@ pub trait WriteReplay: ReadReplay {
     ///   all [`ReadReplay`] methods should reflect its existence appropriately
     /// * MUST be atomic and always leave storage in a valid state (that satisfies all requirements
     ///   here and in [`ReadReplay`]) regardless of the method's outcome (including panic)
-    fn write(&self, record: ReplayRecord, override_allowed: bool) -> bool;
+    fn write(&self, record: Sealed<ReplayRecord>, override_allowed: bool) -> bool;
 }
