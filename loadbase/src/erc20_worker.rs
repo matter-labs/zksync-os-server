@@ -114,10 +114,7 @@ fn spawn_receipt_waiter(
         loop {
             match provider.get_transaction_receipt(tx_hash).await {
                 Ok(Some(_)) => {
-                    let inc = t_inc.elapsed().as_millis() as u64;
-                    metrics.include.write().record(inc).ok();
-                    metrics.inc_last.lock().push_back((Instant::now(), inc));
-                    metrics.included.fetch_add(1, Ordering::Relaxed);
+                    metrics.record_included(t_inc.elapsed().as_millis() as u64);
                     break;
                 }
                 Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
@@ -139,9 +136,7 @@ fn process_replies(
 
         if let Some(tx_hash_str) = reply.get("result").and_then(|v| v.as_str()) {
             let tx_hash: H256 = tx_hash_str.parse().unwrap_or_default();
-            metrics.submit.write().record(sub_ms).ok();
-            metrics.sub_last.lock().push_back((Instant::now(), sub_ms));
-            metrics.sent.fetch_add(1, Ordering::Relaxed);
+            metrics.record_submitted(sub_ms);
             spawn_receipt_waiter(tx_hash, tx.permit, provider.clone(), metrics.clone());
         } else {
             if let Some(err) = reply.get("error") {

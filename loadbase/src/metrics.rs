@@ -38,6 +38,18 @@ impl Metrics {
         })
     }
 
+    pub fn record_submitted(&self, ms: u64) {
+        self.submit.write().record(ms).ok();
+        self.sub_last.lock().push_back((Instant::now(), ms));
+        self.sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_included(&self, ms: u64) {
+        self.include.write().record(ms).ok();
+        self.inc_last.lock().push_back((Instant::now(), ms));
+        self.included.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn spawn_reporter(&self, started: Instant) {
         let me = self.clone();
         tokio::spawn(async move { me.report_loop(started).await });
