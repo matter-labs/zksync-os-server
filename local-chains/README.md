@@ -135,7 +135,7 @@ Follow the instructions in the [v30.2/multi_chain/README.md](./v30.2/multi_chain
 ## Adding a new protocol version
 
 1. Create a new directory (e.g., `v31.1/`)
-2. Use [upgrade scripts](https://github.com/matter-labs/zksync-os-workflows) to regenerate single and multi-chain configurations
+2. Use [upgrade scripts](https://github.com/matter-labs/zksync-os-scripts) to regenerate single and multi-chain configurations
 3. Optionally add new scenario-specific subfolders if required
 4. Update [protocol upgrade tests](../integration-tests/src/upgrade) to support the update to the new version
 5. When upgrade is fully finalized, make sure:
