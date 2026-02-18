@@ -24,6 +24,8 @@ use tokio::sync::Semaphore;
 const JITTER_SIGMA: f64 = 0.20;
 const BATCH_SIZE: usize = 10;
 
+type EthSigner = SignerMiddleware<Provider<Http>, LocalWallet>;
+
 struct PendingTx {
     raw:     Bytes,
     permit:  tokio::sync::OwnedSemaphorePermit,
@@ -55,6 +57,44 @@ fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng
             return cand;
         }
     }
+}
+
+async fn build_batch(
+    signer:      &EthSigner,
+    token:       &SimpleERC20<Arc<EthSigner>>,
+    sem:         &Arc<Semaphore>,
+    nonce:       &mut U256,
+    gas_price:   U256,
+    gas_limit:   U256,
+    mean_amt:    U256,
+    dest_random: bool,
+    all_addrs:   &[Address],
+    rng:         &RwLock<StdRng>,
+) -> Vec<PendingTx> {
+    let mut batch = Vec::<PendingTx>::new();
+
+    for _ in 0..BATCH_SIZE {
+        let permit = match sem.clone().try_acquire_owned() {
+            Ok(p)  => p,
+            Err(_) => break, // in‑flight limit
+        };
+
+        let dest = choose_dest(dest_random, all_addrs, signer.address(), rng);
+        let amt  = jitter_amount(mean_amt, rng);
+
+        let mut call = token.transfer(dest, amt);
+        call.tx.set_gas(gas_limit);
+        call.tx.set_gas_price(gas_price); // **the fix**
+        call.tx.set_nonce(*nonce);
+        *nonce += U256::one();
+
+        let sig = signer.signer().sign_transaction(&call.tx).await.expect("sign");
+        let raw = call.tx.rlp_signed(&sig);
+
+        batch.push(PendingTx { raw, permit, sent_at: Instant::now() });
+    }
+
+    batch
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -118,36 +158,11 @@ pub fn spawn_erc20_workers(
                     //----------------------------------------------//
                     // 1. build ≤BATCH_SIZE signed raw txs          //
                     //----------------------------------------------//
-                    let mut batch = Vec::<PendingTx>::new();
-
-                    for _ in 0..BATCH_SIZE {
-                        let permit = match sem.clone().try_acquire_owned() {
-                            Ok(p) => p,
-                            Err(_) => break, // in‑flight limit
-                        };
-
-                        // choose dest
-                        let dest = choose_dest(dest_rand, &addrs_c, signer.address(), &rng_c);
-
-                        // jitter amount
-                        let amt = jitter_amount(mean_amt, &rng_c);
-
-                        // craft + sign
-                        let mut call = token.transfer(dest, amt);
-                        call.tx.set_gas(gas_limit_c);
-                        call.tx.set_gas_price(gas_price); // **the fix**
-                        call.tx.set_nonce(nonce);
-                        nonce += U256::one();
-
-                        let sig = signer
-                            .signer()
-                            .sign_transaction(&call.tx)
-                            .await
-                            .expect("sign");
-                        let raw = call.tx.rlp_signed(&sig);
-
-                        batch.push(PendingTx { raw, permit, sent_at: Instant::now() });
-                    }
+                    let batch = build_batch(
+                        &signer, &token, &sem, &mut nonce,
+                        gas_price, gas_limit_c, mean_amt,
+                        dest_rand, &addrs_c, &rng_c,
+                    ).await;
 
                     if batch.is_empty() {
                         tokio::time::sleep(Duration::from_millis(100)).await;
