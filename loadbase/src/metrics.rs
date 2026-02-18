@@ -2,7 +2,7 @@
 //! Per-second TPS / latency reporter (no balance snapshot).
 
 use hdrhistogram::Histogram;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
     io::Write,
@@ -18,12 +18,12 @@ fn median(vals: &[u64]) -> u64 {
 
 #[derive(Clone)]
 pub struct Metrics {
-    pub sent:     Arc<AtomicU64>,
-    pub included: Arc<AtomicU64>,
-    pub submit:   Arc<RwLock<Histogram<u64>>>,
-    pub include:  Arc<RwLock<Histogram<u64>>>,
-    pub sub_last: Arc<Mutex<VecDeque<(Instant, u64)>>>,
-    pub inc_last: Arc<Mutex<VecDeque<(Instant, u64)>>>,
+    sent:     Arc<AtomicU64>,
+    included: Arc<AtomicU64>,
+    submit:   Arc<Mutex<Histogram<u64>>>,
+    include:  Arc<Mutex<Histogram<u64>>>,
+    sub_last: Arc<Mutex<VecDeque<(Instant, u64)>>>,
+    inc_last: Arc<Mutex<VecDeque<(Instant, u64)>>>,
 }
 
 impl Metrics {
@@ -31,21 +31,21 @@ impl Metrics {
         Ok(Self {
             sent:     Arc::new(AtomicU64::new(0)),
             included: Arc::new(AtomicU64::new(0)),
-            submit:   Arc::new(RwLock::new(Histogram::new_with_max(60_000, 3)?)),
-            include:  Arc::new(RwLock::new(Histogram::new_with_max(60_000, 3)?)),
+            submit:   Arc::new(Mutex::new(Histogram::new_with_max(60_000, 3)?)),
+            include:  Arc::new(Mutex::new(Histogram::new_with_max(60_000, 3)?)),
             sub_last: Arc::new(Mutex::new(VecDeque::new())),
             inc_last: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
     pub fn record_submitted(&self, ms: u64) {
-        self.submit.write().record(ms).ok();
+        self.submit.lock().record(ms).ok();
         self.sub_last.lock().push_back((Instant::now(), ms));
         self.sent.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_included(&self, ms: u64) {
-        self.include.write().record(ms).ok();
+        self.include.lock().record(ms).ok();
         self.inc_last.lock().push_back((Instant::now(), ms));
         self.included.fetch_add(1, Ordering::Relaxed);
     }
@@ -76,8 +76,8 @@ impl Metrics {
             let tps_avg = inc_now as f64 / started.elapsed().as_secs_f64();
 
             // ── latency ──
-            let sub_p50_tot = self.submit.read().value_at_quantile(0.5);
-            let inc_p50_tot = self.include.read().value_at_quantile(0.5);
+            let sub_p50_tot = self.submit.lock().value_at_quantile(0.5);
+            let inc_p50_tot = self.include.lock().value_at_quantile(0.5);
             let sub_p50_10 = {
                 let mut dq = self.sub_last.lock();
                 dq.retain(|(t, _)| *t + Duration::from_secs(10) >= now);
