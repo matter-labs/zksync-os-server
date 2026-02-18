@@ -169,6 +169,71 @@ async fn send_rpc_batch(http: &Client, url: &str, batch: &[PendingTx]) -> Option
         .ok()
 }
 
+async fn run_wallet(
+    idx:         usize,
+    wallet:      LocalWallet,
+    provider:    Provider<Http>,
+    sem:         Arc<Semaphore>,
+    metrics:     Metrics,
+    running:     Arc<AtomicBool>,
+    http:        Arc<Client>,
+    gas_limit:   U256,
+    mean_amt:    U256,
+    token_addr:  Address,
+    dest_random: bool,
+    rpc_url:     String,
+    all_addrs:   Vec<Address>,
+    rng:         Arc<RwLock<StdRng>>,
+) {
+    let signer = SignerMiddleware::new(provider.clone(), wallet);
+    let token  = SimpleERC20::new(token_addr, Arc::new(signer.clone()));
+
+    let mut nonce = signer
+        .get_transaction_count(signer.address(), Some(BlockNumber::Pending.into()))
+        .await
+        .expect("nonce");
+    println!("erc20 wallet {idx} start‑nonce {nonce}");
+
+    while running.load(Ordering::Relaxed) {
+        //----------------------------------------------//
+        // 0. fetch gas‑price once per batch            //
+        //----------------------------------------------//
+        let gas_price = match provider.get_gas_price().await {
+            Ok(p)  => p,
+            Err(e) => {
+                eprintln!("❗ gas‑price fetch error {e} – using 3 gwei");
+                U256::from(3_000_000_000u64) // 3 gwei fallback
+            }
+        };
+
+        //----------------------------------------------//
+        // 1. build ≤BATCH_SIZE signed raw txs          //
+        //----------------------------------------------//
+        let batch = build_batch(
+            &signer, &token, &sem, &mut nonce,
+            gas_price, gas_limit, mean_amt,
+            dest_random, &all_addrs, &rng,
+        ).await;
+
+        if batch.is_empty() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+
+        //----------------------------------------------//
+        // 2. send JSON‑RPC batch                       //
+        //----------------------------------------------//
+        let Some(replies) = send_rpc_batch(&http, &rpc_url, &batch).await else {
+            continue;
+        };
+
+        //----------------------------------------------//
+        // 3. per‑tx accounting & receipt waiters       //
+        //----------------------------------------------//
+        process_replies(batch, replies, &provider, &metrics);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_erc20_workers(
     provider: Provider<Http>,
@@ -193,67 +258,15 @@ pub fn spawn_erc20_workers(
         .into_iter()
         .enumerate()
         .map(|(idx, wallet)| {
-            let sem         = sems[idx].clone();
-            let provider_c  = provider.clone();
-            let addrs_c     = addrs.clone();
-            let m           = metrics.clone();
-            let running_c   = running.clone();
-            let rng_c       = rng.clone();
-            let gas_limit_c = gas_limit;
-            let token_addr_c= token_addr;
-            let dest_rand   = dest_random;
-            let rpc_url_c   = rpc_url.clone();
-            let http_c      = http.clone();
-
-            tokio::spawn(async move {
-                let signer = SignerMiddleware::new(provider_c.clone(), wallet.clone());
-                let token  = SimpleERC20::new(token_addr_c, Arc::new(signer.clone()));
-
-                let mut nonce = signer
-                    .get_transaction_count(signer.address(), Some(BlockNumber::Pending.into()))
-                    .await
-                    .expect("nonce");
-                println!("erc20 wallet {idx} start‑nonce {nonce}");
-
-                while running_c.load(Ordering::Relaxed) {
-                    //----------------------------------------------//
-                    // 0. fetch gas‑price once per batch            //
-                    //----------------------------------------------//
-                    let gas_price = match provider_c.get_gas_price().await {
-                        Ok(p)  => p,
-                        Err(e) => {
-                            eprintln!("❗ gas‑price fetch error {e} – using 3 gwei");
-                            U256::from(3_000_000_000u64) // 3 gwei fallback
-                        }
-                    };
-
-                    //----------------------------------------------//
-                    // 1. build ≤BATCH_SIZE signed raw txs          //
-                    //----------------------------------------------//
-                    let batch = build_batch(
-                        &signer, &token, &sem, &mut nonce,
-                        gas_price, gas_limit_c, mean_amt,
-                        dest_rand, &addrs_c, &rng_c,
-                    ).await;
-
-                    if batch.is_empty() {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-
-                    //----------------------------------------------//
-                    // 2. send JSON‑RPC batch                       //
-                    //----------------------------------------------//
-                    let Some(replies) = send_rpc_batch(&http_c, &rpc_url_c, &batch).await else {
-                        continue;
-                    };
-
-                    //----------------------------------------------//
-                    // 3. per‑tx accounting & receipt waiters       //
-                    //----------------------------------------------//
-                    process_replies(batch, replies, &provider_c, &m);
-                }
-            })
+            let sem = sems[idx].clone();
+            tokio::spawn(run_wallet(
+                idx, wallet,
+                provider.clone(), sem,
+                metrics.clone(), running.clone(), http.clone(),
+                gas_limit, mean_amt, token_addr, dest_random,
+                rpc_url.clone(), addrs.clone(), rng.clone(),
+            ))
         })
         .collect()
 }
+
