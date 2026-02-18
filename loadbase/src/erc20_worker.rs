@@ -32,14 +32,14 @@ struct PendingTx {
     sent_at: Instant,
 }
 
-struct WorkerConfig {
-    gas_limit:   U256,
-    mean_amt:    U256,
-    token_addr:  Address,
-    dest_random: bool,
-    rpc_url:     String,
-    all_addrs:   Vec<Address>,
-    rng:         Arc<RwLock<StdRng>>,
+pub struct WorkerConfig {
+    pub gas_limit:   U256,
+    pub mean_amt:    U256,
+    pub token_addr:  Address,
+    pub dest_random: bool,
+    pub rpc_url:     String,
+    pub all_addrs:   Vec<Address>,
+    pub rng:         Arc<RwLock<StdRng>>,
 }
 
 fn jitter_amount(mean: U256, rng: &RwLock<StdRng>) -> U256 {
@@ -167,11 +167,11 @@ async fn send_rpc_batch(http: &Client, url: &str, batch: &[PendingTx]) -> Option
         .collect();
 
     let resp = http.post(url).json(&payload).send().await
-        .map_err(|e| eprintln!("❗ batch send error {e}"))
+        .inspect_err(|e| eprintln!("❗ batch send error {e}"))
         .ok()?;
 
     resp.json::<Vec<Value>>().await
-        .map_err(|e| eprintln!("❗ bad JSON reply {e}"))
+        .inspect_err(|e| eprintln!("❗ bad JSON reply {e}"))
         .ok()
 }
 
