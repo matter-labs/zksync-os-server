@@ -11,7 +11,7 @@ use parking_lot::RwLock;
 use rand::{rngs::StdRng, seq::SliceRandom};
 use rand_distr::{Distribution, Normal};
 use reqwest::Client;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -97,6 +97,29 @@ async fn build_batch(
     batch
 }
 
+async fn send_rpc_batch(http: &Client, url: &str, batch: &[PendingTx]) -> Option<Vec<Value>> {
+    let payload: Vec<_> = batch
+        .iter()
+        .enumerate()
+        .map(|(i, tx)| {
+            json!({
+                "jsonrpc": "2.0",
+                "id":      i,
+                "method":  "eth_sendRawTransaction",
+                "params":  [format!("0x{}", hex_encode(&tx.raw))]
+            })
+        })
+        .collect();
+
+    let resp = http.post(url).json(&payload).send().await
+        .map_err(|e| eprintln!("❗ batch send error {e}"))
+        .ok()?;
+
+    resp.json::<Vec<Value>>().await
+        .map_err(|e| eprintln!("❗ bad JSON reply {e}"))
+        .ok()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_erc20_workers(
     provider: Provider<Http>,
@@ -172,33 +195,8 @@ pub fn spawn_erc20_workers(
                     //----------------------------------------------//
                     // 2. send JSON‑RPC batch                       //
                     //----------------------------------------------//
-                    let payload: Vec<_> = batch
-                        .iter()
-                        .enumerate()
-                        .map(|(i, tx)| {
-                            json!({
-                                "jsonrpc": "2.0",
-                                "id":      i,
-                                "method":  "eth_sendRawTransaction",
-                                "params":  [format!("0x{}", hex_encode(&tx.raw))]
-                            })
-                        })
-                        .collect();
-
-                    let resp = match http_c.post(&rpc_url_c).json(&payload).send().await {
-                        Ok(r)  => r,
-                        Err(e) => {
-                            eprintln!("❗ batch send error {e}");
-                            continue;
-                        }
-                    };
-
-                    let replies: Vec<serde_json::Value> = match resp.json().await {
-                        Ok(v)  => v,
-                        Err(e) => {
-                            eprintln!("❗ bad JSON reply {e}");
-                            continue;
-                        }
+                    let Some(replies) = send_rpc_batch(&http_c, &rpc_url_c, &batch).await else {
+                        continue;
                     };
 
                     //----------------------------------------------//
