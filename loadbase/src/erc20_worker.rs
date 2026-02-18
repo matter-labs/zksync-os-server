@@ -109,16 +109,27 @@ fn spawn_receipt_waiter(
     provider: Provider<Http>,
     metrics:  Metrics,
 ) {
+    const RECEIPT_TIMEOUT: Duration = Duration::from_secs(5);
+
     tokio::spawn(async move {
         let t_inc = Instant::now();
         loop {
+            if t_inc.elapsed() >= RECEIPT_TIMEOUT {
+                panic!(
+                    "tx {tx_hash:?} unconfirmed for {}s - node dropped it",
+                    RECEIPT_TIMEOUT.as_secs()
+                );
+            }
             match provider.get_transaction_receipt(tx_hash).await {
                 Ok(Some(_)) => {
                     metrics.record_included(t_inc.elapsed().as_millis() as u64);
                     break;
                 }
                 Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
-                Err(_)   => break,
+                Err(e)   => {
+                    eprintln!("receipt poll error for {tx_hash:?}: {e}");
+                    break;
+                }
             }
         }
         drop(permit); // free slot
@@ -242,4 +253,3 @@ pub fn spawn_erc20_workers(
         })
         .collect()
 }
-
