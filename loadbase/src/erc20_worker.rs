@@ -30,6 +30,18 @@ struct PendingTx {
     sent_at: Instant,
 }
 
+fn jitter_amount(mean: U256, rng: &RwLock<StdRng>) -> U256 {
+    let delta = {
+        let mut g = rng.write();
+        Normal::new(0.0, JITTER_SIGMA).unwrap().sample(&mut *g)
+    };
+    if delta == 0.0 {
+        return mean;
+    }
+    let d = U256::from((mean.as_u128() as f64 * delta.abs()) as u128);
+    if delta.is_sign_positive() { mean + d } else { mean - d }
+}
+
 fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng: &RwLock<StdRng>) -> Address {
     if dest_random {
         return H160::random();
@@ -63,7 +75,6 @@ pub fn spawn_erc20_workers(
     let sems = (0..wallets.len())
         .map(|_| Arc::new(Semaphore::new(max_in_flight as usize)))
         .collect::<Vec<_>>();
-    let normal = Normal::new(0.0, JITTER_SIGMA).unwrap();
     let http = Arc::new(Client::new());
 
     wallets
@@ -76,7 +87,6 @@ pub fn spawn_erc20_workers(
             let m           = metrics.clone();
             let running_c   = running.clone();
             let rng_c       = rng.clone();
-            let normal_c    = normal;
             let gas_limit_c = gas_limit;
             let token_addr_c= token_addr;
             let dest_rand   = dest_random;
@@ -120,15 +130,7 @@ pub fn spawn_erc20_workers(
                         let dest = choose_dest(dest_rand, &addrs_c, signer.address(), &rng_c);
 
                         // jitter amount
-                        let delta = {
-                            let mut g = rng_c.write();
-                            normal_c.sample(&mut *g)
-                        };
-                        let mut amt = mean_amt;
-                        if delta != 0.0 {
-                            let d = U256::from((mean_amt.as_u128() as f64 * delta.abs()) as u128);
-                            amt = if delta.is_sign_positive() { amt + d } else { amt - d };
-                        }
+                        let amt = jitter_amount(mean_amt, &rng_c);
 
                         // craft + sign
                         let mut call = token.transfer(dest, amt);
