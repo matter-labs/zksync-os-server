@@ -24,6 +24,12 @@ use tokio::sync::Semaphore;
 const JITTER_SIGMA: f64 = 0.20;
 const BATCH_SIZE: usize = 10;
 
+struct PendingTx {
+    raw:     Bytes,
+    permit:  tokio::sync::OwnedSemaphorePermit,
+    sent_at: Instant,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_erc20_workers(
     provider: Provider<Http>,
@@ -87,9 +93,7 @@ pub fn spawn_erc20_workers(
                     //----------------------------------------------//
                     // 1. build ≤BATCH_SIZE signed raw txs          //
                     //----------------------------------------------//
-                    let mut batch_raw    = Vec::<Bytes>::new();
-                    let mut batch_permit = Vec::<tokio::sync::OwnedSemaphorePermit>::new();
-                    let mut send_start   = Vec::<Instant>::new();
+                    let mut batch = Vec::<PendingTx>::new();
 
                     for _ in 0..BATCH_SIZE {
                         let permit = match sem.clone().try_acquire_owned() {
@@ -137,12 +141,10 @@ pub fn spawn_erc20_workers(
                             .expect("sign");
                         let raw = call.tx.rlp_signed(&sig);
 
-                        batch_raw.push(raw);
-                        batch_permit.push(permit);
-                        send_start.push(Instant::now());
+                        batch.push(PendingTx { raw, permit, sent_at: Instant::now() });
                     }
 
-                    if batch_raw.is_empty() {
+                    if batch.is_empty() {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         continue;
                     }
@@ -150,15 +152,15 @@ pub fn spawn_erc20_workers(
                     //----------------------------------------------//
                     // 2. send JSON‑RPC batch                       //
                     //----------------------------------------------//
-                    let payload: Vec<_> = batch_raw
+                    let payload: Vec<_> = batch
                         .iter()
                         .enumerate()
-                        .map(|(i, raw)| {
+                        .map(|(i, tx)| {
                             json!({
                                 "jsonrpc": "2.0",
                                 "id":      i,
                                 "method":  "eth_sendRawTransaction",
-                                "params":  [format!("0x{}", hex_encode(raw))]
+                                "params":  [format!("0x{}", hex_encode(&tx.raw))]
                             })
                         })
                         .collect();
@@ -167,7 +169,6 @@ pub fn spawn_erc20_workers(
                         Ok(r)  => r,
                         Err(e) => {
                             eprintln!("❗ batch send error {e}");
-                            for p in batch_permit { drop(p); }
                             continue;
                         }
                     };
@@ -176,7 +177,6 @@ pub fn spawn_erc20_workers(
                         Ok(v)  => v,
                         Err(e) => {
                             eprintln!("❗ bad JSON reply {e}");
-                            for p in batch_permit { drop(p); }
                             continue;
                         }
                     };
@@ -184,12 +184,8 @@ pub fn spawn_erc20_workers(
                     //----------------------------------------------//
                     // 3. per‑tx accounting & receipt waiters       //
                     //----------------------------------------------//
-                    for ((permit, t_start), reply) in batch_permit
-                        .into_iter()
-                        .zip(send_start.into_iter())
-                        .zip(replies.into_iter())
-                    {
-                        let sub_ms = t_start.elapsed().as_millis() as u64;
+                    for (tx, reply) in batch.into_iter().zip(replies.into_iter()) {
+                        let sub_ms = tx.sent_at.elapsed().as_millis() as u64;
 
                         if let Some(tx_hash_str) = reply.get("result").and_then(|v| v.as_str()) {
                             // success
@@ -198,8 +194,9 @@ pub fn spawn_erc20_workers(
                             m.sub_last.lock().push_back((Instant::now(), sub_ms));
                             m.sent.fetch_add(1, Ordering::Relaxed);
 
-                            let prov  = provider_c.clone();
-                            let m_inc = m.clone();
+                            let prov   = provider_c.clone();
+                            let m_inc  = m.clone();
+                            let permit = tx.permit;
                             tokio::spawn(async move {
                                 let t_inc = Instant::now();
                                 loop {
@@ -226,7 +223,7 @@ pub fn spawn_erc20_workers(
                             if let Some(err) = reply.get("error") {
                                 eprintln!("❗ tx error {err}");
                             }
-                            drop(permit);
+                            // tx.permit dropped here, freeing the slot
                         }
                     }
                 }
