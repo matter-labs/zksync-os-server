@@ -32,6 +32,16 @@ struct PendingTx {
     sent_at: Instant,
 }
 
+struct WorkerConfig {
+    gas_limit:   U256,
+    mean_amt:    U256,
+    token_addr:  Address,
+    dest_random: bool,
+    rpc_url:     String,
+    all_addrs:   Vec<Address>,
+    rng:         Arc<RwLock<StdRng>>,
+}
+
 fn jitter_amount(mean: U256, rng: &RwLock<StdRng>) -> U256 {
     let delta = {
         let mut g = rng.write();
@@ -60,16 +70,12 @@ fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng
 }
 
 async fn build_batch(
-    signer:      &EthSigner,
-    token:       &SimpleERC20<EthSigner>,
-    sem:         &Arc<Semaphore>,
-    nonce:       &mut U256,
-    gas_price:   U256,
-    gas_limit:   U256,
-    mean_amt:    U256,
-    dest_random: bool,
-    all_addrs:   &[Address],
-    rng:         &RwLock<StdRng>,
+    signer:    &EthSigner,
+    token:     &SimpleERC20<EthSigner>,
+    sem:       &Arc<Semaphore>,
+    nonce:     &mut U256,
+    gas_price: U256,
+    cfg:       &WorkerConfig,
 ) -> Vec<PendingTx> {
     let mut batch = Vec::<PendingTx>::new();
 
@@ -79,11 +85,11 @@ async fn build_batch(
             Err(_) => break, // in‑flight limit
         };
 
-        let dest = choose_dest(dest_random, all_addrs, signer.address(), rng);
-        let amt  = jitter_amount(mean_amt, rng);
+        let dest = choose_dest(cfg.dest_random, &cfg.all_addrs, signer.address(), &cfg.rng);
+        let amt  = jitter_amount(cfg.mean_amt, &cfg.rng);
 
         let mut call = token.transfer(dest, amt);
-        call.tx.set_gas(gas_limit);
+        call.tx.set_gas(cfg.gas_limit);
         call.tx.set_gas_price(gas_price); // **the fix**
         call.tx.set_nonce(*nonce);
         *nonce += U256::one();
@@ -170,23 +176,17 @@ async fn send_rpc_batch(http: &Client, url: &str, batch: &[PendingTx]) -> Option
 }
 
 async fn run_wallet(
-    idx:         usize,
-    wallet:      LocalWallet,
-    provider:    Provider<Http>,
-    sem:         Arc<Semaphore>,
-    metrics:     Metrics,
-    running:     Arc<AtomicBool>,
-    http:        Arc<Client>,
-    gas_limit:   U256,
-    mean_amt:    U256,
-    token_addr:  Address,
-    dest_random: bool,
-    rpc_url:     String,
-    all_addrs:   Vec<Address>,
-    rng:         Arc<RwLock<StdRng>>,
+    idx:     usize,
+    wallet:  LocalWallet,
+    provider: Provider<Http>,
+    sem:     Arc<Semaphore>,
+    metrics: Metrics,
+    running: Arc<AtomicBool>,
+    http:    Arc<Client>,
+    cfg:     Arc<WorkerConfig>,
 ) {
     let signer = SignerMiddleware::new(provider.clone(), wallet);
-    let token  = SimpleERC20::new(token_addr, Arc::new(signer.clone()));
+    let token  = SimpleERC20::new(cfg.token_addr, Arc::new(signer.clone()));
 
     let mut nonce = signer
         .get_transaction_count(signer.address(), Some(BlockNumber::Pending.into()))
@@ -211,8 +211,7 @@ async fn run_wallet(
         //----------------------------------------------//
         let batch = build_batch(
             &signer, &token, &sem, &mut nonce,
-            gas_price, gas_limit, mean_amt,
-            dest_random, &all_addrs, &rng,
+            gas_price, &cfg,
         ).await;
 
         if batch.is_empty() {
@@ -223,7 +222,7 @@ async fn run_wallet(
         //----------------------------------------------//
         // 2. send JSON‑RPC batch                       //
         //----------------------------------------------//
-        let Some(replies) = send_rpc_batch(&http, &rpc_url, &batch).await else {
+        let Some(replies) = send_rpc_batch(&http, &cfg.rpc_url, &batch).await else {
             continue;
         };
 
@@ -234,7 +233,6 @@ async fn run_wallet(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn spawn_erc20_workers(
     provider: Provider<Http>,
     wallets: Vec<LocalWallet>,
@@ -248,23 +246,23 @@ pub fn spawn_erc20_workers(
     dest_random: bool,
     rpc_url: String,
 ) -> Vec<tokio::task::JoinHandle<()>> {
-    let addrs: Vec<_> = wallets.iter().map(|w| w.address()).collect();
-    let sems = (0..wallets.len())
-        .map(|_| Arc::new(Semaphore::new(max_in_flight as usize)))
-        .collect::<Vec<_>>();
+    let cfg  = Arc::new(WorkerConfig {
+        gas_limit, mean_amt, token_addr, dest_random, rpc_url,
+        all_addrs: wallets.iter().map(|w| w.address()).collect(),
+        rng,
+    });
     let http = Arc::new(Client::new());
 
     wallets
         .into_iter()
         .enumerate()
         .map(|(idx, wallet)| {
-            let sem = sems[idx].clone();
+            let sem = Arc::new(Semaphore::new(max_in_flight as usize));
             tokio::spawn(run_wallet(
                 idx, wallet,
                 provider.clone(), sem,
                 metrics.clone(), running.clone(), http.clone(),
-                gas_limit, mean_amt, token_addr, dest_random,
-                rpc_url.clone(), addrs.clone(), rng.clone(),
+                cfg.clone(),
             ))
         })
         .collect()
