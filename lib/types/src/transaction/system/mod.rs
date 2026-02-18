@@ -110,8 +110,8 @@ mod tx_serde {
 
         #[serde(with = "alloy::serde::quantity")]
         pub v: u64,
-        pub r: B256,
-        pub s: B256,
+        pub r: U256,
+        pub s: U256,
         #[serde(with = "alloy::serde::quantity")]
         pub y_parity: bool,
     }
@@ -132,8 +132,8 @@ mod tx_serde {
                 input: Bytes::from(tx.input().to_vec()),
                 // Put defaults for signature fields
                 v: 0,
-                r: B256::ZERO,
-                s: B256::ZERO,
+                r: U256::ZERO,
+                s: U256::ZERO,
                 y_parity: false,
             }
         }

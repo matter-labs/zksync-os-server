@@ -172,9 +172,9 @@ mod tx_serde {
         #[serde(with = "alloy::serde::quantity")]
         pub v: u64,
         /// ECDSA signature r
-        pub r: B256,
+        pub r: U256,
         /// ECDSA signature s
-        pub s: B256,
+        pub s: U256,
         /// Y-parity for EIP-2930 and EIP-1559 transactions. In theory these
         /// transactions types shouldn't have a `v` field, but in practice they
         /// are returned by nodes.
@@ -203,8 +203,8 @@ mod tx_serde {
 
                 // Put defaults for signature fields
                 v: 0,
-                r: B256::ZERO,
-                s: B256::ZERO,
+                r: U256::ZERO,
+                s: U256::ZERO,
                 y_parity: false,
             }
         }
