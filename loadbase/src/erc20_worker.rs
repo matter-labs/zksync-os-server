@@ -195,9 +195,6 @@ async fn run_wallet(
     println!("erc20 wallet {idx} start‑nonce {nonce}");
 
     while running.load(Ordering::Relaxed) {
-        //----------------------------------------------//
-        // 0. fetch gas‑price once per batch            //
-        //----------------------------------------------//
         let gas_price = match provider.get_gas_price().await {
             Ok(p)  => p,
             Err(e) => {
@@ -206,9 +203,6 @@ async fn run_wallet(
             }
         };
 
-        //----------------------------------------------//
-        // 1. build ≤BATCH_SIZE signed raw txs          //
-        //----------------------------------------------//
         let batch = build_batch(
             &signer, &token, &sem, &mut nonce,
             gas_price, &cfg,
@@ -219,16 +213,10 @@ async fn run_wallet(
             continue;
         }
 
-        //----------------------------------------------//
-        // 2. send JSON‑RPC batch                       //
-        //----------------------------------------------//
         let Some(replies) = send_rpc_batch(&http, &cfg.rpc_url, &batch).await else {
             continue;
         };
 
-        //----------------------------------------------//
-        // 3. per‑tx accounting & receipt waiters       //
-        //----------------------------------------------//
         process_replies(batch, replies, &provider, &metrics);
     }
 }
