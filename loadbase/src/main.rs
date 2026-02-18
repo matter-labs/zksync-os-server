@@ -98,7 +98,6 @@ async fn main() -> anyhow::Result<()> {
     metrics.spawn_reporter(Instant::now());        // start *after* distribution
 
     let running = Arc::new(AtomicBool::new(true));
-    let rng_arc = Arc::new(RwLock::new(StdRng::from_entropy()));
     let dest_rand = matches!(args.dest, DestMode::Random);
 
     let gas = resolve(
@@ -109,12 +108,18 @@ async fn main() -> anyhow::Result<()> {
         else                 { GasMode::Fixed(U256::from(120_000)) },
     ).await?;
 
-    // ----------  NEW: pass the RPC URL for batch-sending ----------
+    let cfg = erc20_worker::WorkerConfig {
+        gas_limit:   gas,
+        mean_amt:    mean_transfer,
+        token_addr:  token_nm.address(),
+        dest_random: dest_rand,
+        rpc_url:     args.rpc_url.clone(),
+        all_addrs:   wallets.iter().map(|w| w.address()).collect(),
+        rng:         Arc::new(RwLock::new(StdRng::from_entropy())),
+    };
     erc20_worker::spawn_erc20_workers(
-        provider.clone(), wallets.clone(), gas, metrics.clone(),
-        running.clone(), args.max_in_flight, mean_transfer,
-        token_nm.address(), rng_arc.clone(), dest_rand,
-        args.rpc_url.clone(),
+        provider.clone(), wallets.clone(), metrics.clone(),
+        running.clone(), args.max_in_flight, cfg,
     );
     println!("▶ ERC-20 test started with {} wallets, gas: {}", args.wallets, gas);
 

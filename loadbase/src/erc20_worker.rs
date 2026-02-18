@@ -224,21 +224,12 @@ async fn run_wallet(
 pub fn spawn_erc20_workers(
     provider: Provider<Http>,
     wallets: Vec<LocalWallet>,
-    gas_limit: U256,
     metrics: Metrics,
     running: Arc<AtomicBool>,
     max_in_flight: u32,
-    mean_amt: U256,
-    token_addr: Address,
-    rng: Arc<RwLock<StdRng>>,
-    dest_random: bool,
-    rpc_url: String,
+    cfg: WorkerConfig,
 ) -> Vec<tokio::task::JoinHandle<()>> {
-    let cfg  = Arc::new(WorkerConfig {
-        gas_limit, mean_amt, token_addr, dest_random, rpc_url,
-        all_addrs: wallets.iter().map(|w| w.address()).collect(),
-        rng,
-    });
+    let cfg  = Arc::new(cfg);
     let http = Arc::new(Client::new());
 
     wallets
