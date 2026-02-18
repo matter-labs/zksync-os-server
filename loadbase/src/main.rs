@@ -10,6 +10,8 @@ use ethers::{
     prelude::*,
     types::U256,
 };
+use erc20::{distribute_varied, SimpleERC20};
+use erc20_worker::{spawn_erc20_workers, WorkerConfig};
 use gas::{resolve, GasMode};
 use metrics::Metrics;
 use parking_lot::RwLock;
@@ -74,7 +76,6 @@ async fn main() -> anyhow::Result<()> {
     let mean_transfer = U256::from(list[list.len()/2] / 2); // 50 %
 
     //-------------------------------- ERC-20 deploy/distribute -------------//
-    use erc20::{SimpleERC20, distribute_varied};
     let supply = U256::from_dec_str("1000000000000000000000000000000")?; // 1e6 tokens
     let per_wallet = supply / U256::from(args.wallets);
     let token_amounts = vec![per_wallet; args.wallets as usize];
@@ -108,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
         else                 { GasMode::Fixed(U256::from(120_000)) },
     ).await?;
 
-    let cfg = erc20_worker::WorkerConfig {
+    let cfg = WorkerConfig {
         gas_limit:   gas,
         mean_amt:    mean_transfer,
         token_addr:  token_nm.address(),
@@ -117,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
         all_addrs:   wallets.iter().map(|w| w.address()).collect(),
         rng:         Arc::new(RwLock::new(StdRng::from_entropy())),
     };
-    erc20_worker::spawn_erc20_workers(
+    spawn_erc20_workers(
         provider.clone(), wallets.clone(), metrics.clone(),
         running.clone(), args.max_in_flight, cfg,
     );
