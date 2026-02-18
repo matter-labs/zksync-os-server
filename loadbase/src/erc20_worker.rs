@@ -61,7 +61,7 @@ fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng
 
 async fn build_batch(
     signer:      &EthSigner,
-    token:       &SimpleERC20<Arc<EthSigner>>,
+    token:       &SimpleERC20<EthSigner>,
     sem:         &Arc<Semaphore>,
     nonce:       &mut U256,
     gas_price:   U256,
