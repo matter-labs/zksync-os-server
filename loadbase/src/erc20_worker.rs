@@ -77,7 +77,7 @@ async fn build_batch(
     gas_price: U256,
     cfg:       &WorkerConfig,
 ) -> Vec<PendingTx> {
-    let mut batch = Vec::<PendingTx>::new();
+    let mut batch = Vec::new();
 
     for _ in 0..BATCH_SIZE {
         let permit = match sem.clone().try_acquire_owned() {
