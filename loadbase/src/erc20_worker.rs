@@ -73,7 +73,7 @@ async fn build_batch(
     signer:    &EthSigner,
     token:     &SimpleERC20<EthSigner>,
     sem:       &Arc<Semaphore>,
-    nonce:     &mut U256,
+    nonce:     &mut u64,
     gas_price: U256,
     cfg:       &WorkerConfig,
 ) -> Vec<PendingTx> {
@@ -92,7 +92,7 @@ async fn build_batch(
         call.tx.set_gas(cfg.gas_limit);
         call.tx.set_gas_price(gas_price); // **the fix**
         call.tx.set_nonce(*nonce);
-        *nonce += U256::one();
+        *nonce += 1;
 
         let sig = signer.signer().sign_transaction(&call.tx).await.expect("sign");
         let raw = call.tx.rlp_signed(&sig);
@@ -183,10 +183,11 @@ async fn run_wallet(
     let signer = SignerMiddleware::new(provider.clone(), wallet);
     let token  = SimpleERC20::new(cfg.token_addr, Arc::new(signer.clone()));
 
-    let mut nonce = signer
+    let mut nonce: u64 = signer
         .get_transaction_count(signer.address(), Some(BlockNumber::Pending.into()))
         .await
-        .expect("nonce");
+        .expect("nonce")
+        .as_u64();
     println!("erc20 wallet {idx} start‑nonce {nonce}");
 
     while running.load(Ordering::Relaxed) {
