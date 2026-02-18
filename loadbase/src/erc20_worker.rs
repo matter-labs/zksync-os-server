@@ -231,15 +231,15 @@ pub fn spawn_erc20_workers(
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let cfg  = Arc::new(cfg);
     let http = Arc::new(Client::new());
+    let sem  = Arc::new(Semaphore::new(max_in_flight as usize));
 
     wallets
         .into_iter()
         .enumerate()
         .map(|(idx, wallet)| {
-            let sem = Arc::new(Semaphore::new(max_in_flight as usize));
             tokio::spawn(run_wallet(
                 idx, wallet,
-                provider.clone(), sem,
+                provider.clone(), sem.clone(),
                 metrics.clone(), running.clone(), http.clone(),
                 cfg.clone(),
             ))
