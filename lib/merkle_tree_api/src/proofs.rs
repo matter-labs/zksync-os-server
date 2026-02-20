@@ -23,7 +23,7 @@ pub enum TreeOperation {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct IntermediateHash<Loc = ()> {
     pub value: B256,
     /// Level + index on level. Redundant and is only checked in tests.
@@ -184,6 +184,7 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
             prev_output.leaf_count,
             self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
             self.hashes.iter(),
+            None,
         )?;
         anyhow::ensure!(
             restored_prev_hash == prev_output.root_hash,
@@ -236,6 +237,7 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
             next_tree_index,
             self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
             self.hashes.iter(),
+            None,
         )?;
         Ok(MerkleTreeView {
             root_hash: new_root_hash,
@@ -329,6 +331,7 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
             2 + entries.len() as u64,
             leaves_with_guards,
             iter::empty(),
+            None,
         )?;
         Ok(MerkleTreeView {
             root_hash: new_tree_hash,
@@ -336,12 +339,13 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
         })
     }
 
-    fn zip_leaves<'a>(
+    pub(crate) fn zip_leaves<'a>(
         hasher: &dyn HashTree,
         tree_depth: u8,
         leaf_count: u64,
         sorted_leaves: impl Iterator<Item = (u64, &'a Leaf)>,
         mut hashes: impl Iterator<Item = &'a IntermediateHash<Loc>>,
+        mut sibling_hashes: Option<&mut Vec<IntermediateHash<(u8, u64)>>>,
     ) -> anyhow::Result<B256> {
         let mut node_hashes: Vec<_> = sorted_leaves
             .map(|(idx, leaf)| (idx, hasher.hash_leaf(leaf)))
@@ -361,11 +365,29 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
                         anyhow::ensure!(lhs_location == (depth, current_idx - 1));
                     }
 
+                    if let Some(hashes) = sibling_hashes.as_deref_mut() {
+                        hashes.push(IntermediateHash {
+                            value: lhs.value,
+                            location: (depth, current_idx - 1),
+                        });
+                    }
                     hasher.hash_branch(&lhs.value, &current_hash)
                 } else if let Some((_, next_hash)) = node_hashes
                     .get(i + 1)
                     .filter(|(next_idx, _)| *next_idx == current_idx + 1)
                 {
+                    if let Some(hashes) = sibling_hashes.as_deref_mut() {
+                        // The order is intentionally reversed; we'll query the right sibling first,
+                        // then the left sibling.
+                        hashes.push(IntermediateHash {
+                            value: *next_hash,
+                            location: (depth, current_idx + 1),
+                        });
+                        hashes.push(IntermediateHash {
+                            value: current_hash,
+                            location: (depth, current_idx),
+                        });
+                    }
                     i += 2;
                     hasher.hash_branch(&current_hash, next_hash)
                 } else {
@@ -377,6 +399,12 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
                         let rhs = hashes.next().context("ran out of hashes")?;
                         if let Some(rhs_location) = rhs.location.location() {
                             anyhow::ensure!(rhs_location == (depth, current_idx + 1));
+                        }
+                        if let Some(hashes) = sibling_hashes.as_deref_mut() {
+                            hashes.push(IntermediateHash {
+                                value: rhs.value,
+                                location: (depth, current_idx + 1),
+                            });
                         }
                         rhs.value
                     };
@@ -398,8 +426,10 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
 
 #[cfg(test)]
 mod tests {
+    use assert_matches::assert_matches;
+
     use super::*;
-    use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+    use crate::{Blake2Hasher, api};
 
     #[test]
     fn insertion_proof_for_empty_tree() {
@@ -482,6 +512,13 @@ mod tests {
                 .parse()
                 .unwrap(),
         };
+
+        let api_proof = proof.to_api(64, empty_tree_output.leaf_count);
+        assert_eq!(api_proof.len(), 1);
+        assert_matches!(api_proof[0], api::InnerStorageSlotProof::NonExisting { .. });
+        let recovered_root = api_proof[0].verify(64, B256::repeat_byte(1)).unwrap();
+        assert_eq!(recovered_root, empty_tree_output.root_hash);
+
         let tree_view = proof
             .verify(
                 &Blake2Hasher,

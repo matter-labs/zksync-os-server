@@ -15199,6 +15199,8 @@ version = "0.15.1"
 dependencies = [
  "alloy",
  "anyhow",
+ "assert_matches",
+ "serde",
  "zksync_os_crypto",
 ]
 
