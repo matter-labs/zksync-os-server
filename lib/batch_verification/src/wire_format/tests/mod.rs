@@ -73,26 +73,26 @@ fn generate_test_data() {
     // Generate request v1
     let request = create_sample_request();
     let encoded = request.encode_with_current_version();
-    fs::write("src/wire_format/tests/encoded_request_v1.bin", &encoded)
-        .expect("Failed to write request v1");
+    fs::write("src/wire_format/tests/encoded_request_v2.bin", &encoded)
+        .expect("Failed to write request v2");
 
     // Generate response success v1
     let response_success = create_sample_response_success();
     let encoded = response_success.encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
     fs::write(
-        "src/wire_format/tests/encoded_response_success_v1.bin",
+        "src/wire_format/tests/encoded_response_success_v2.bin",
         &encoded,
     )
-    .expect("Failed to write response success v1");
+    .expect("Failed to write response success v2");
 
     // Generate response refused v1
     let response_refused = create_sample_response_refused();
     let encoded = response_refused.encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
     fs::write(
-        "src/wire_format/tests/encoded_response_refused_v1.bin",
+        "src/wire_format/tests/encoded_response_refused_v2.bin",
         &encoded,
     )
-    .expect("Failed to write response refused v1");
+    .expect("Failed to write response refused v2");
 }
 
 #[test]
@@ -123,10 +123,38 @@ pub fn can_decode_response_refused_v1() {
 }
 
 #[test]
+pub fn can_decode_request_v2() {
+    let encoded = include_bytes!("encoded_request_v2.bin");
+    let decoded = BatchVerificationRequest::decode(encoded, 2);
+    let expected = create_sample_request();
+
+    assert_eq!(decoded, expected);
+}
+
+#[test]
+pub fn can_decode_response_success_v2() {
+    let encoded = include_bytes!("encoded_response_success_v2.bin");
+    let decoded = BatchVerificationResponse::decode(encoded, 2).unwrap();
+    let expected = create_sample_response_success();
+
+    assert_eq!(decoded, expected);
+}
+
+#[test]
+pub fn can_decode_response_refused_v2() {
+    let encoded = include_bytes!("encoded_response_refused_v2.bin");
+    let decoded = BatchVerificationResponse::decode(encoded, 2).unwrap();
+    let expected = create_sample_response_refused();
+
+    assert_eq!(decoded, expected);
+}
+
+#[test]
 pub fn request_encode_decode() {
     let original = create_sample_request();
     let encoded = original.clone().encode_with_current_version();
-    let decoded = BatchVerificationRequest::decode(&encoded, 1);
+    let decoded =
+        BatchVerificationRequest::decode(&encoded, BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
 
     assert_eq!(decoded, original);
 }
@@ -137,7 +165,9 @@ pub fn response_success_encode_decode() {
     let encoded = original
         .clone()
         .encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
-    let decoded = BatchVerificationResponse::decode(&encoded, 1).unwrap();
+    let decoded =
+        BatchVerificationResponse::decode(&encoded, BATCH_VERIFICATION_WIRE_FORMAT_VERSION)
+            .unwrap();
 
     assert_eq!(decoded, original);
 }
@@ -148,7 +178,9 @@ pub fn response_refused_encode_decode() {
     let encoded = original
         .clone()
         .encode_with_version(BATCH_VERIFICATION_WIRE_FORMAT_VERSION);
-    let decoded = BatchVerificationResponse::decode(&encoded, 1).unwrap();
+    let decoded =
+        BatchVerificationResponse::decode(&encoded, BATCH_VERIFICATION_WIRE_FORMAT_VERSION)
+            .unwrap();
 
     assert_eq!(decoded, original);
 }
