@@ -5,13 +5,9 @@ use std::fmt;
 use alloy::primitives::B256;
 use anyhow::Context as _;
 pub use zksync_os_merkle_tree_api::{
-    Blake2Hasher, HashTree, Leaf, MAX_TREE_DEPTH, TreeBatchOutput, TreeEntry, TreeOperation,
+    BatchTreeProof, Blake2Hasher, HashTree, Leaf, MAX_TREE_DEPTH, MerkleTreeProver,
+    TreeBatchOutput, TreeEntry, TreeOperation,
 };
-// Create a test-specific type alias for proof types to test their consistency in unit tests.
-#[cfg(not(test))]
-pub use zksync_os_merkle_tree_api::BatchTreeProof;
-#[cfg(test)]
-pub type BatchTreeProof = zksync_os_merkle_tree_api::BatchTreeProof<(u8, u64)>;
 
 pub use self::{
     errors::DeserializeError,
@@ -189,17 +185,6 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         self.root_hash(version)
     }
 
-    /// Creates a batch proof for `keys` at the specified tree version.
-    ///
-    /// # Errors
-    ///
-    /// - Returns an error if the version doesn't exist.
-    /// - Proxies database errors.
-    pub fn prove(&self, version: u64, keys: &[B256]) -> anyhow::Result<BatchTreeProof> {
-        let (patch, mut update) = self.create_patch::<TreeEntry>(version, &[], keys)?;
-        Ok(patch.create_batch_proof(&self.hasher, vec![], update.take_read_operations()))
-    }
-
     /// Extends this tree by creating its new version.
     ///
     /// All keys in the provided entries must be distinct.
@@ -338,6 +323,29 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             self.db.truncate(manifest, ..current_version_count)?;
         }
         Ok(())
+    }
+}
+
+impl<DB: Database, P: TreeParams> MerkleTreeProver for MerkleTree<DB, P> {
+    fn tree_depth(&self) -> u8 {
+        P::TREE_DEPTH
+    }
+
+    fn prove(
+        &self,
+        version: u64,
+        keys: &[B256],
+    ) -> anyhow::Result<Option<(BatchTreeProof, TreeBatchOutput)>> {
+        let Some(root) = self.db.try_root(version)? else {
+            return Ok(None);
+        };
+        let batch_output = TreeBatchOutput {
+            root_hash: root.hash::<P>(&self.hasher),
+            leaf_count: root.leaf_count,
+        };
+        let (patch, mut update) = self.create_patch::<TreeEntry>(version, &[], keys)?;
+        let proof = patch.create_batch_proof(&self.hasher, vec![], update.take_read_operations());
+        Ok(Some((proof, batch_output)))
     }
 }
 

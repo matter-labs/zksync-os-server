@@ -78,7 +78,7 @@ pub enum InnerStorageSlotProof {
 }
 
 impl InnerStorageSlotProof {
-    pub fn verify(&self, tree_depth: u8, key: B256) -> anyhow::Result<B256> {
+    pub(crate) fn verify(&self, tree_depth: u8, key: B256) -> anyhow::Result<B256> {
         match self {
             Self::Existing(entry) => entry.hash(tree_depth, key),
             Self::NonExisting {
@@ -105,6 +105,13 @@ pub struct StorageSlotProof {
     pub proof: InnerStorageSlotProof,
 }
 
+impl StorageSlotProof {
+    /// Verifies the internal consistency of this proof and returns the recovered tree root hash.
+    pub fn verify(&self, tree_depth: u8) -> anyhow::Result<B256> {
+        self.proof.verify(tree_depth, self.key)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchStorageProof {
@@ -116,7 +123,11 @@ pub struct BatchStorageProof {
 impl BatchTreeProof {
     /// Converts this proof to the API format by filling Merkle paths that are implicitly present
     /// in the proof.
-    pub fn to_api(&self, tree_depth: u8, leaf_count: u64) -> Vec<InnerStorageSlotProof> {
+    pub(crate) fn to_api(
+        &self,
+        tree_depth: u8,
+        leaf_count: u64,
+    ) -> impl Iterator<Item = InnerStorageSlotProof> {
         assert!(self.operations.is_empty());
 
         let mut sibling_hashes = vec![];
@@ -167,18 +178,25 @@ impl BatchTreeProof {
                 if *idx % 2 == 1 {
                     let sibling_hash = get_sibling_hash(depth, *idx - 1);
                     entry.siblings.push(sibling_hash);
-                } else if *idx == last_idx_on_level {
-                    // Do not push the empty subtree hash as per the spec
                 } else {
-                    let sibling_hash = get_sibling_hash(depth, *idx + 1);
+                    let sibling_hash = if *idx == last_idx_on_level {
+                        Blake2Hasher.empty_subtree_hash(depth)
+                    } else {
+                        get_sibling_hash(depth, *idx + 1)
+                    };
                     entry.siblings.push(sibling_hash);
                 }
                 *idx /= 2;
-                last_idx_on_level /= 2;
+            }
+            last_idx_on_level /= 2;
+            if last_idx_on_level == 0 {
+                // All further added hashes would correspond to empty subtrees; thus, we've finished building
+                // sibling hashes.
+                break;
             }
         }
 
-        let proofs = self.read_operations.iter().copied().map(|op| {
+        self.read_operations.iter().copied().map(move |op| {
             match op {
                 TreeOperation::Hit { index } => {
                     // We cannot remove entries from `proof_entries` because the same entry can be used
@@ -203,7 +221,6 @@ impl BatchTreeProof {
                     }
                 }
             }
-        });
-        proofs.collect()
+        })
     }
 }

@@ -7,9 +7,7 @@ use std::{
 
 use alloy::primitives::B256;
 use anyhow::Context as _;
-#[cfg(not(test))]
-use zksync_os_merkle_tree_api::IntermediateHash;
-use zksync_os_merkle_tree_api::{Leaf, TreeOperation};
+use zksync_os_merkle_tree_api::{IntermediateHash, Leaf, TreeOperation};
 
 use super::{AsEntry, Database, InsertedKeyEntry, PartialPatchSet, PatchSet};
 use crate::{
@@ -20,9 +18,6 @@ use crate::{
     metrics::{BatchProofStage, LoadStage, METRICS},
     types::{InternalNode, KeyLookup, Manifest, Node, NodeKey, Root, TreeTags},
 };
-
-#[cfg(test)]
-type IntermediateHash = zksync_os_merkle_tree_api::IntermediateHash<(u8, u64)>;
 
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -363,9 +358,6 @@ impl<P: TreeParams> WorkingPatchSet<P> {
                     i += 1;
                     hashes.push(IntermediateHash {
                         value: internal_hashes.get(depth_in_internal_node, current_idx - 1),
-                        #[cfg(test)]
-                        location: (depth, current_idx - 1),
-                        #[cfg(not(test))]
                         location: (),
                     });
                 } else if indices_on_level
@@ -380,9 +372,6 @@ impl<P: TreeParams> WorkingPatchSet<P> {
                     if current_idx < last_idx_on_level {
                         hashes.push(IntermediateHash {
                             value: internal_hashes.get(depth_in_internal_node, current_idx + 1),
-                            #[cfg(test)]
-                            location: (depth, current_idx + 1),
-                            #[cfg(not(test))]
                             location: (),
                         });
                     }

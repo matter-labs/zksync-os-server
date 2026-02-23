@@ -513,7 +513,7 @@ mod tests {
                 .unwrap(),
         };
 
-        let api_proof = proof.to_api(64, empty_tree_output.leaf_count);
+        let api_proof: Vec<_> = proof.to_api(64, empty_tree_output.leaf_count).collect();
         assert_eq!(api_proof.len(), 1);
         assert_matches!(api_proof[0], api::InnerStorageSlotProof::NonExisting { .. });
         let recovered_root = api_proof[0].verify(64, B256::repeat_byte(1)).unwrap();
