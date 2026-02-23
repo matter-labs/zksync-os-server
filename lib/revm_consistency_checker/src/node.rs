@@ -172,7 +172,11 @@ where
                         zk_tx_into_revm_tx(transaction, tx_output.gas_used, tx_output.is_success())
                     });
 
-                evm.transact_many_commit(revm_txs)?;
+                // Commit after each tx
+                for tx in revm_txs {
+                    evm.transact_commit(tx)?;
+                }
+
                 let compare_report = CompareReport::build(
                     evm.0.db_mut(),
                     &block_output.storage_writes,
