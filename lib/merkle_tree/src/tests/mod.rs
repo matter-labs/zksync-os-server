@@ -448,7 +448,7 @@ fn test_read_proofs(db: impl Database) {
         assert_eq!(proven_tree_view.read_entries[key], None);
     }
 
-    let proofs = tree
+    let (proofs, _) = tree
         .prove_for_api(0, &inserted_keys)
         .unwrap()
         .expect("no proof");
@@ -490,7 +490,7 @@ fn test_read_proofs(db: impl Database) {
             }
 
             // Check the API version of the proof as well.
-            let proofs = tree
+            let (proofs, _) = tree
                 .prove_for_api(1, &proven_keys)
                 .unwrap()
                 .expect("no proof");

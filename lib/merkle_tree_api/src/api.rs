@@ -2,26 +2,21 @@
 
 use std::collections::BTreeMap;
 
-use alloy::primitives::{Address, B256, U32, U64};
+use alloy::primitives::B256;
 use serde::{Deserialize, Serialize};
 
 use crate::{BatchTreeProof, Blake2Hasher, HashTree, Leaf, TreeOperation};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StateCommitmentPreimage {
-    pub next_free_slot: U64,
-    pub block_number: U32,
-    pub last_256_block_hashes_blake: B256,
-    pub last_block_timestamp: U64,
-}
-
+/// Information about a Merkle tree leaf sufficient (together with the storage slot key) to recover
+/// the tree root hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageSlotProofEntry {
     pub index: u64,
     pub value: B256,
     pub next_index: u64,
+    /// Merkle path to the slot in the leaf-to-root order. May contain fewer entries than `tree_depth - 1`;
+    /// in this case, should be padded at the end by hashes of empty subtrees at the corresponding depth.
     pub siblings: Vec<B256>,
 }
 
@@ -67,12 +62,21 @@ impl NeighborStorageSlotProofEntry {
     }
 }
 
+/// Proof for a single Merkle tree storage slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum InnerStorageSlotProof {
+    /// The slot is present in the tree.
     Existing(StorageSlotProofEntry),
+    /// The slot is missing from the tree.
     NonExisting {
+        /// Proof for the left neighbor of the slot present in the tree.
         left_neighbor: NeighborStorageSlotProofEntry,
+        /// Proof for the right neighbor of the slot present in the tree.
         right_neighbor: NeighborStorageSlotProofEntry,
     },
 }
@@ -98,10 +102,13 @@ impl InnerStorageSlotProof {
     }
 }
 
+/// Storage proof for a single Merkle tree slot + the slot key (to allow for standalone verification).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageSlotProof {
+    /// Key of the slot in the tree (i.e., the *flat* key in terms of ZKsync OS).
     pub key: B256,
+    /// Proof contents.
     pub proof: InnerStorageSlotProof,
 }
 
@@ -110,14 +117,6 @@ impl StorageSlotProof {
     pub fn verify(&self, tree_depth: u8) -> anyhow::Result<B256> {
         self.proof.verify(tree_depth, self.key)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BatchStorageProof {
-    pub address: Address,
-    pub state_commitment_preimage: StateCommitmentPreimage,
-    pub storage_proofs: Vec<StorageSlotProof>,
 }
 
 impl BatchTreeProof {

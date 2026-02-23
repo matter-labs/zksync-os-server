@@ -107,6 +107,17 @@ fn test_read_proof(
     );
     let tree_view = verify_result.map_err(|err| TestCaseError::fail(format!("{err:#}")))?;
     prop_assert_eq!(tree_view.root_hash, output.root_hash);
+
+    let (proofs, _) = tree
+        .prove_for_api(version, reads)
+        .unwrap()
+        .expect("no proofs");
+    for proof in proofs {
+        let recovered_root_hash = proof
+            .verify(<DefaultTreeParams>::TREE_DEPTH)
+            .map_err(|err| TestCaseError::fail(format!("{err:#}")))?;
+        prop_assert_eq!(recovered_root_hash, output.root_hash);
+    }
     Ok(())
 }
 
