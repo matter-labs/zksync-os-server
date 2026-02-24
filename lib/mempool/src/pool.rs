@@ -95,7 +95,7 @@ impl<T: L2Subpool> Pool<T> {
                     if let Some(upgrade_tx) = &upgrade.tx {
                         tracing::info!(
                             protocol_version = %upgrade.metadata.protocol_version,
-                            tx_hash = upgrade_tx.hash(),
+                            tx_hash = %upgrade_tx.hash(),
                             "L1 upgrade transaction found for protocol version {}",
                             upgrade.metadata.protocol_version,
                         )
