@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc::Sender, watch};
 use tokio::time::Instant;
 use zksync_os_interface::types::BlockOutput;
-use zksync_os_mempool::L2TransactionPool;
+use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_observability::{ComponentStateHandle, ComponentStateReporter};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{
@@ -29,14 +29,14 @@ pub mod vm_wrapper;
 
 /// Sequencer pipeline component
 /// Contains all the dependencies needed to run the sequencer
-pub struct Sequencer<Mempool, State, Replay, Repo>
+pub struct Sequencer<Subpool, State, Replay, Repo>
 where
-    Mempool: L2TransactionPool + Send + 'static,
+    Subpool: L2Subpool + Send + 'static,
     State: ReadStateHistory + WriteState + Clone + Send + 'static,
     Replay: WriteReplay + Send + 'static,
     Repo: WriteRepository + Send + 'static,
 {
-    pub block_context_provider: BlockContextProvider<Mempool>,
+    pub block_context_provider: BlockContextProvider<Subpool>,
     pub state: State,
     pub replay: Replay,
     pub repositories: Repo,
@@ -47,9 +47,9 @@ where
 }
 
 #[async_trait]
-impl<Mempool, State, Replay, Repo> PipelineComponent for Sequencer<Mempool, State, Replay, Repo>
+impl<Subpool, State, Replay, Repo> PipelineComponent for Sequencer<Subpool, State, Replay, Repo>
 where
-    Mempool: L2TransactionPool + Send + 'static,
+    Subpool: L2Subpool + Send + 'static,
     State: ReadStateHistory + WriteState + Clone + Send + 'static,
     Replay: WriteReplay + Send + 'static,
     Repo: WriteRepository + Send + 'static,
@@ -81,7 +81,6 @@ where
                 anyhow::bail!("inbound channel closed");
             };
             let block_number = cmd.block_number();
-            let cmd_type = cmd.command_type();
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
@@ -177,10 +176,11 @@ where
 
             // TODO: would updating mempool in parallel with state make sense?
             self.block_context_provider
-                .on_canonical_state_change(&block_output, &replay_record, cmd_type)
+                .on_canonical_state_change(&block_output, &replay_record)
                 .await;
             let purged_txs_hashes = purged_txs.into_iter().map(|(hash, _)| hash).collect();
-            self.block_context_provider.remove_txs(purged_txs_hashes);
+            self.block_context_provider
+                .remove_transactions(purged_txs_hashes);
 
             tracing::debug!(
                 block_number,

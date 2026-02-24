@@ -15,8 +15,6 @@ mod prover_input_generator;
 mod state_initializer;
 pub mod tree_manager;
 
-use zksync_os_mempool::InteropRootsTxPool;
-
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{ExternalNodeCommandSource, MainNodeCommandSource};
@@ -71,7 +69,12 @@ use zksync_os_l1_watcher::{
     L1ExecuteWatcher, L1TxWatcher, L1UpgradeTxWatcher,
 };
 use zksync_os_l1_watcher::{InteropWatcher, L1PersistBatchWatcher};
-use zksync_os_mempool::L2TransactionPool;
+use zksync_os_mempool::Pool;
+use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
+use zksync_os_mempool::subpools::l1::L1Subpool;
+use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::subpools::sl_chain_id::SlChainIdSubpool;
+use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::service::NetworkService;
@@ -95,7 +98,7 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{
     InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
-    UpgradeTransaction,
+    UpgradeInfo, UpgradeMetadata,
 };
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
@@ -171,13 +174,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .leak();
     GENERAL_METRICS.fee_collector_address[&fee_collector_address].set(1);
     GENERAL_METRICS.chain_id.set(chain_id);
-
-    // Channel between L1TxWatcher and Sequencer
-    let (l1_transactions_sender, l1_transactions_for_sequencer) = tokio::sync::mpsc::channel(5);
-
-    // Channel between L1UpgradeWatcher and Sequencer
-    let (l1_upgrade_transactions_sender, l1_upgrade_transactions_receiver) =
-        tokio::sync::mpsc::channel(5);
 
     // This is the only place where we initialize L1 provider, every component shares the same
     // cloned provider.
@@ -265,7 +261,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
-    let l2_mempool = zksync_os_mempool::in_memory(
+    let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
         zk_provider_factory.clone(),
         config.mempool_config.clone().into(),
         config.tx_validator_config.clone().into(),
@@ -341,21 +337,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     node_startup_state.assert_consistency();
-
-    // If we start from the very first block, we should start by sending upgrade tx for genesis.
-    if starting_block == 1 {
-        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
-        let upgrade_tx = UpgradeTransaction {
-            tx: Some(genesis_upgrade.tx),
-            protocol_version: genesis_upgrade.protocol_version,
-            timestamp: 0, // No restrictions on timestamp.
-            force_preimages: genesis_upgrade.force_deploy_preimages,
-        };
-        l1_upgrade_transactions_sender
-            .send(upgrade_tx)
-            .await
-            .expect("failed to send genesis upgrade transaction to sequencer");
-    }
 
     // Channel between NetworkService and Sequencer
     let (replay_sender, replays_for_sequencer) = tokio::sync::mpsc::channel(128);
@@ -446,7 +427,27 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         genesis.genesis_upgrade_tx().await.protocol_version
     };
 
-    let interop_roots_tx_pool = InteropRootsTxPool::new(10);
+    let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
+    let sl_chain_id_subpool = SlChainIdSubpool::default();
+    let interop_roots_subpool = InteropRootsSubpool::new(
+        10,
+        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
+        1,
+    );
+
+    // If we start from the very first block, we should start by sending upgrade tx for genesis.
+    if starting_block == 1 {
+        let genesis_upgrade = genesis.genesis_upgrade_tx().await;
+        let upgrade_tx = UpgradeInfo {
+            tx: Some(genesis_upgrade.tx),
+            metadata: UpgradeMetadata {
+                protocol_version: genesis_upgrade.protocol_version,
+                timestamp: 0, // No restrictions on timestamp.
+                force_preimages: genesis_upgrade.force_deploy_preimages,
+            },
+        };
+        upgrade_subpool.insert(upgrade_tx);
+    }
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
         tasks.spawn(
@@ -454,7 +455,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 node_startup_state.l1_state.bridgehub.clone(),
                 config.l1_watcher_config.clone().into(),
                 next_interop_event_index.clone(),
-                interop_roots_tx_pool.clone(),
+                interop_roots_subpool.clone(),
             )
             .await
             .expect("failed to start L1 interop roots watcher")
@@ -462,9 +463,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .map(report_exit("L1 interop roots watcher")),
         );
     }
-
-    let (sl_chain_id_update_transactions_sender, sl_chain_id_update_transactions_receiver) =
-        tokio::sync::mpsc::channel(10);
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0)
         && config.l1_watcher_config.enable_gw_migration_watcher
@@ -476,7 +474,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 GatewayMigrationWatcher::<Gateway>::create_watcher(
                     node_startup_state.l1_state.diamond_proxy.clone(),
                     config.l1_watcher_config.clone().into(),
-                    sl_chain_id_update_transactions_sender,
+                    sl_chain_id_subpool.clone(),
                 )
                 .await
                 .expect("failed to start L1 chain id update watcher")
@@ -488,7 +486,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 GatewayMigrationWatcher::<L1>::create_watcher(
                     node_startup_state.l1_state.diamond_proxy.clone(),
                     config.l1_watcher_config.clone().into(),
-                    sl_chain_id_update_transactions_sender,
+                    sl_chain_id_subpool.clone(),
                 )
                 .await
                 .expect("failed to start L1 chain id update watcher")
@@ -498,11 +496,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
+    let l1_subpool = L1Subpool::new(10);
     tasks.spawn(
         L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
             node_startup_state.l1_state.diamond_proxy.clone(),
-            l1_transactions_sender,
+            l1_subpool.clone(),
             next_l1_priority_id,
         )
         .await
@@ -598,14 +597,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.l1_sender_config.pubdata_mode,
     );
 
+    let pool = Pool::new(
+        upgrade_subpool.clone(),
+        sl_chain_id_subpool,
+        interop_roots_subpool,
+        l1_subpool,
+        l2_subpool.clone(),
+    );
     let block_context_provider = BlockContextProvider::new(
         next_l1_priority_id,
         next_interop_event_index,
-        l1_transactions_for_sequencer,
-        l1_upgrade_transactions_receiver,
-        sl_chain_id_update_transactions_receiver,
-        interop_roots_tx_pool,
-        l2_mempool.clone(),
+        pool,
         block_hashes_for_next_block,
         previous_block_timestamp,
         chain_id,
@@ -613,8 +615,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.sequencer_config.block_pubdata_limit_bytes,
         // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
         config.batcher_config.interop_roots_per_batch_limit,
-        // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
-        1,
         config.sequencer_config.service_block_delay,
         current_protocol_version.clone(),
         config.sequencer_config.fee_collector_address,
@@ -630,7 +630,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state.l1_state.diamond_proxy.clone(),
             bytecode_supplier_address,
             current_protocol_version,
-            l1_upgrade_transactions_sender,
+            upgrade_subpool,
         )
         .await
         .expect("failed to start L1 upgrade transaction watcher")
@@ -773,7 +773,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             bytecode_supplier_address,
             committed_batch_provider,
             rpc_storage,
-            l2_mempool,
+            l2_subpool,
             genesis_input_source,
             tx_acceptance_state_receiver,
             last_constructed_block_ctx_receiver,
@@ -801,7 +801,7 @@ async fn run_main_node_pipeline(
     state: impl ReadStateHistory + WriteState + Clone,
     starting_block: u64,
     repositories: impl WriteRepository + Clone,
-    block_context_provider: BlockContextProvider<impl L2TransactionPool>,
+    block_context_provider: BlockContextProvider<impl L2Subpool>,
     tree: MerkleTree<RocksDBWrapper>,
     finality: impl ReadFinality + Clone,
     chain_id: u64,
@@ -981,7 +981,7 @@ async fn run_en_pipeline(
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     tasks: &mut JoinSet<()>,
-    block_context_provider: BlockContextProvider<impl L2TransactionPool>,
+    block_context_provider: BlockContextProvider<impl L2Subpool>,
     state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
     repositories: impl WriteRepository + Clone,

@@ -4,22 +4,22 @@ use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::DynProvider;
 use alloy::rpc::types::Log;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_mempool::subpools::l1::L1Subpool;
 use zksync_os_types::L1PriorityEnvelope;
 
 pub struct L1TxWatcher {
     contract_address: Address,
     next_l1_priority_id: u64,
-    output: mpsc::Sender<L1PriorityEnvelope>,
+    l1_subpool: L1Subpool,
 }
 
 impl L1TxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<DynProvider>,
-        output: mpsc::Sender<L1PriorityEnvelope>,
+        l1_subpool: L1Subpool,
         next_l1_priority_id: u64,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
@@ -37,7 +37,7 @@ impl L1TxWatcher {
         let this = Self {
             contract_address: *zk_chain.address(),
             next_l1_priority_id,
-            output,
+            l1_subpool,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
@@ -91,10 +91,7 @@ impl ProcessL1Event for L1TxWatcher {
                 hash = ?tx.hash(),
                 "sending new priority transaction for processing",
             );
-            self.output
-                .send(tx)
-                .await
-                .map_err(|_| L1WatcherError::OutputClosed)?;
+            self.l1_subpool.insert(Arc::new(tx));
         }
         Ok(())
     }

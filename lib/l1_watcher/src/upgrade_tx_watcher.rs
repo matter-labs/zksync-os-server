@@ -9,12 +9,13 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
-use tokio::sync::mpsc;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
+use zksync_os_mempool::subpools::upgrade::UpgradeSubpool;
 use zksync_os_types::{
-    L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeTransaction,
+    L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
+    UpgradeMetadata,
 };
 // TODO: disabled until bytecode supplier integration is ready
 // use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
@@ -37,7 +38,7 @@ pub struct L1UpgradeTxWatcher {
     /// Address of the CTM contract (used to detect upgrade priority transactions)
     ctm: Address,
     current_protocol_version: ProtocolSemanticVersion,
-    output: mpsc::Sender<UpgradeTransaction>,
+    upgrade_subpool: UpgradeSubpool,
 
     // Needed to process L1 blocks in chunks.
     max_blocks_to_process: u64,
@@ -49,7 +50,7 @@ impl L1UpgradeTxWatcher {
         zk_chain: ZkChain<DynProvider>,
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
-        output: mpsc::Sender<UpgradeTransaction>,
+        upgrade_subpool: UpgradeSubpool,
     ) -> anyhow::Result<L1Watcher> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -98,7 +99,7 @@ impl L1UpgradeTxWatcher {
             bytecode_supplier_address,
             ctm,
             current_protocol_version,
-            output,
+            upgrade_subpool,
             max_blocks_to_process: config.max_blocks_to_process,
         };
         let l1_watcher = L1Watcher::new(
@@ -112,10 +113,7 @@ impl L1UpgradeTxWatcher {
         Ok(l1_watcher)
     }
 
-    async fn fetch_upgrade_tx(
-        &self,
-        request: &L1UpgradeRequest,
-    ) -> anyhow::Result<UpgradeTransaction> {
+    async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {
         let L1UpgradeRequest {
             timestamp,
             protocol_version,
@@ -183,11 +181,13 @@ impl L1UpgradeTxWatcher {
             (Some(tx), force_preimages)
         };
 
-        let upgrade_tx = UpgradeTransaction {
+        let upgrade_tx = UpgradeInfo {
             tx: l2_upgrade_tx,
-            timestamp: *timestamp,
-            protocol_version: protocol_version.clone(),
-            force_preimages,
+            metadata: UpgradeMetadata {
+                timestamp: *timestamp,
+                protocol_version: protocol_version.clone(),
+                force_preimages,
+            },
         };
 
         Ok(upgrade_tx)
@@ -305,13 +305,13 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             }
         }
 
-        let upgrade_tx = self
-            .fetch_upgrade_tx(&request)
+        let upgrade_info = self
+            .fetch_upgrade_info(&request)
             .await
             .map_err(L1WatcherError::Batch)?;
 
         tracing::info!(
-            protocol_version = ?upgrade_tx.protocol_version,
+            protocol_version = ?upgrade_info.protocol_version(),
             target_timestamp = request.timestamp,
             "detected upgrade transaction to be sent"
         );
@@ -322,16 +322,12 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         self.wait_until_timestamp(request.timestamp).await;
 
         tracing::info!(
-            protocol_version = ?upgrade_tx.protocol_version,
+            protocol_version = ?upgrade_info.protocol_version(),
             "sending upgrade transaction to the mempool"
         );
 
-        self.output
-            .send(upgrade_tx.clone())
-            .await
-            .map_err(|_| L1WatcherError::OutputClosed)?;
-
-        self.current_protocol_version = upgrade_tx.protocol_version;
+        self.current_protocol_version = upgrade_info.protocol_version().clone();
+        self.upgrade_subpool.insert(upgrade_info);
 
         Ok(())
     }

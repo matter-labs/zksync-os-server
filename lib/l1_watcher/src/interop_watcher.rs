@@ -2,7 +2,7 @@ use alloy::rpc::types::Log;
 use alloy::{primitives::Address, providers::DynProvider};
 use zksync_os_contract_interface::IMessageRoot::AppendedChainRoot;
 use zksync_os_contract_interface::{Bridgehub, InteropRoot};
-use zksync_os_mempool::InteropRootsTxPool;
+use zksync_os_mempool::subpools::interop_roots::InteropRootsSubpool;
 use zksync_os_types::{IndexedInteropRoot, InteropRootsLogIndex};
 
 use crate::watcher::{L1Watcher, L1WatcherError};
@@ -11,7 +11,7 @@ use crate::{L1WatcherConfig, ProcessL1Event};
 pub struct InteropWatcher {
     contract_address: Address,
     starting_interop_event_index: InteropRootsLogIndex,
-    tx_pool: InteropRootsTxPool,
+    interop_roots_subpool: InteropRootsSubpool,
 }
 
 impl InteropWatcher {
@@ -19,7 +19,7 @@ impl InteropWatcher {
         bridgehub: Bridgehub<DynProvider>,
         config: L1WatcherConfig,
         starting_interop_event_index: InteropRootsLogIndex,
-        tx_pool: InteropRootsTxPool,
+        interop_roots_subpool: InteropRootsSubpool,
     ) -> anyhow::Result<L1Watcher> {
         let contract_address = bridgehub.message_root_address().await?;
 
@@ -32,7 +32,7 @@ impl InteropWatcher {
         let this = Self {
             contract_address,
             starting_interop_event_index,
-            tx_pool,
+            interop_roots_subpool,
         };
 
         let l1_watcher = L1Watcher::new(
@@ -83,7 +83,7 @@ impl ProcessL1Event for InteropWatcher {
             sides: vec![tx.chainRoot],
         };
 
-        self.tx_pool.add_root(IndexedInteropRoot {
+        self.interop_roots_subpool.add_root(IndexedInteropRoot {
             log_index: current_log_index,
             root: interop_root,
         });
