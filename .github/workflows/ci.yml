@@ -134,7 +134,7 @@ jobs:
 
 
   ############################################
-  # Enforce EN sync format file immutability #
+  #   Enforce wire format file immutability  #
   ############################################
   check-wire-version:
     runs-on: ubuntu-latest
@@ -151,7 +151,7 @@ jobs:
           TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
 
           # check that released wire format files that still exist are unchanged
-          DIR=lib/storage_api/src/replay_wire_format
+          DIR=lib/network/src/wire/replays
           git fetch --depth=1 origin tag "$TAG"
           for FILE in "$DIR"/v*.rs; do
             if git show "$TAG:$FILE" > /tmp/old_wire_format.rs 2>/dev/null; then

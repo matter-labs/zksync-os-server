@@ -12,10 +12,8 @@ mod node_state_on_startup;
 mod priority_tree_steps;
 pub mod prover_api;
 mod prover_input_generator;
-mod replay_transport;
 mod state_initializer;
 pub mod tree_manager;
-pub mod zkstack_config;
 
 use zksync_os_mempool::InteropRootsTxPool;
 
@@ -40,7 +38,6 @@ use crate::prover_api::prover_server;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
-use crate::replay_transport::replay_server;
 use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
@@ -78,6 +75,7 @@ use zksync_os_mempool::L2TransactionPool;
 use zksync_os_merkle_tree::{MerkleTree, MerkleTreeVersion, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_network::service::NetworkService;
+use zksync_os_network::wire::replays::RecordOverride;
 use zksync_os_object_store::ObjectStoreFactory;
 use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
@@ -92,8 +90,8 @@ use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
 use zksync_os_storage_api::{
-    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, WriteReplay,
-    WriteRepository, WriteState,
+    FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
+    WriteReplay, WriteRepository, WriteState,
 };
 use zksync_os_types::{
     InteropRootsLogIndex, ProtocolSemanticVersion, PubdataMode, TransactionAcceptanceState,
@@ -114,14 +112,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 ) {
     let mut tasks: JoinSet<()> = JoinSet::new();
 
-    let role: &'static str = if config.sequencer_config.is_main_node() {
-        "main_node"
-    } else {
-        "external_node"
-    };
+    let node_role = config.general_config.node_role;
+    let role: &'static str = node_role.as_str();
 
     // Priority tree is required for main node
-    if config.sequencer_config.is_main_node() && !config.general_config.run_priority_tree {
+    if node_role.is_main() && !config.general_config.run_priority_tree {
         panic!("`general_run_priority_tree` must be true for Main Node");
     }
 
@@ -138,7 +133,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     tracing::info!(version = NODE_VERSION, role, "Initializing Node");
 
     let (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source) =
-        if config.sequencer_config.is_main_node() {
+        if node_role.is_main() {
             let genesis_input_source: Arc<dyn GenesisInputSource> =
                 Arc::new(FileGenesisInputSource::new(
                     config
@@ -189,7 +184,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let l1_provider = build_node_l1_provider(&config.general_config.l1_rpc_url).await;
 
     tracing::info!("Reading L1 state");
-    let l1_state = if config.sequencer_config.is_main_node() {
+    let l1_state = if node_role.is_main() {
         // On the main node, we need to wait for the pending L1 transactions (commit/prove/execute) to be mined before proceeding.
         L1State::fetch_finalized(l1_provider.clone().erased(), bridgehub_address, chain_id)
             .await
@@ -276,38 +271,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.tx_validator_config.clone().into(),
     );
 
-    if config.network_config.enabled {
-        tracing::info!("Initializing p2p networking");
-        // Channel between NetworkService and Sequencer (not actually used by sequencer for now)
-        let (replay_sender, mut replays_for_sequencer) = tokio::sync::mpsc::unbounded_channel();
-
-        let network_service = NetworkService::new(
-            config.network_config.clone().into(),
-            config.sequencer_config.node_role(),
-            block_replay_storage.clone(),
-            zk_provider_factory,
-            replay_sender,
-        )
-        .await
-        .expect("failed to create network service");
-        network_service.run(&mut tasks, stop_receiver.clone());
-
-        // Consume replays to avoid channel from growing unbounded
-        tasks.spawn(async move {
-            while let Some(replay) = replays_for_sequencer.recv().await {
-                tracing::info!(
-                    block_number = replay.block_context.block_number,
-                    "received p2p replay record"
-                );
-            }
-        });
-    }
-
     let (last_l1_committed_block, last_l1_proved_block, last_l1_executed_block) =
         commit_proof_execute_block_numbers(&l1_state, &committed_batch_provider).await;
 
     let node_startup_state = NodeStateOnStartup {
-        is_main_node: config.sequencer_config.is_main_node(),
+        node_role,
         l1_state: l1_state.clone(),
         state_block_range_available: state.block_range_available(),
         block_replay_storage_last_block: block_replay_storage.latest_record(),
@@ -322,7 +290,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     if let Some(block_rebuild) = &config.sequencer_config.block_rebuild
-        && config.sequencer_config.is_main_node()
+        && node_role.is_main()
     {
         // The assertion is only relevant for the main node.
         // External node can be started at any point and doesn't have to be in sync with L1.
@@ -345,6 +313,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     // `starting_block` - the block number to go through the pipeline.
     let starting_block = if node_startup_state.l1_state.last_committed_batch > 0 {
+        // todo: ideally this should be searched through p2p networking instead of RPC
+        //       but too many things depend on this being initialized here right now
+        //       once refactored we can get rid of `main_node_rpc_url` config param
         let last_matching_block =
             if let Some(main_node_rpc_url) = &config.general_config.main_node_rpc_url {
                 find_last_matching_main_node_block(&repositories, main_node_rpc_url)
@@ -384,6 +355,46 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .send(upgrade_tx)
             .await
             .expect("failed to send genesis upgrade transaction to sequencer");
+    }
+
+    // Channel between NetworkService and Sequencer
+    let (replay_sender, replays_for_sequencer) = tokio::sync::mpsc::channel(128);
+    if config.network_config.enabled {
+        tracing::info!("initializing p2p networking");
+
+        let network_service = NetworkService::new(
+            config.network_config.clone().into(),
+            node_role,
+            block_replay_storage.clone(),
+            starting_block,
+            // This will be gone once we migrate away from record overrides
+            config
+                .sequencer_config
+                .en_replay_record_overrides
+                .iter()
+                .map(|(block_number, db_key)| RecordOverride {
+                    block_number: *block_number,
+                    db_key: db_key.clone(),
+                })
+                .collect(),
+            zk_provider_factory,
+            replay_sender,
+        )
+        .await
+        .expect("failed to create network service");
+        network_service.run(&mut tasks, stop_receiver.clone());
+    } else if node_role.is_main() {
+        tracing::info!(
+            "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
+        );
+    } else {
+        panic!(
+            "EN cannot run without p2p networking; to fix: \
+            set `network.enabled=true` to enable p2p networking, \
+            populate `network.secret_key` with a 256-bit ECDSA key (can be randomly generated locally), \
+            populate `network.boot_nodes` with at least one known node from the chain. \
+            See https://github.com/matter-labs/zksync-os-server/pull/873 for full rollout instructions."
+        );
     }
 
     tracing::info!("Initializing L1 Watchers");
@@ -527,7 +538,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (blob_fill_ratio_sender, blob_fill_ratio_receiver) = watch::channel(None);
     // Channel for Batcher->GasAdjuster communication. Batcher send sidecar to gas adjuster to estimate blob fill ratio.
     let (sidecar_sender, sidecar_receiver) = tokio::sync::mpsc::channel(10);
-    if config.sequencer_config.is_main_node() {
+    if node_role.is_main() {
         let gas_adjuster_config = gas_adjuster_config(
             config.gas_adjuster_config.clone(),
             config.l1_sender_config.pubdata_mode,
@@ -645,16 +656,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     );
 
     // ========== Start Sequencer ===========
-    if config.sequencer_config.block_replay_server_enabled {
-        tasks.spawn(
-            replay_server(
-                block_replay_storage.clone(),
-                config.sequencer_config.block_replay_server_address.clone(),
-            )
-            .map(report_exit("replay server")),
-        );
-    }
-
     let repositories_clone = repositories.clone();
     tasks.spawn(async move {
         repositories_clone
@@ -670,7 +671,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .await;
     });
 
-    if config.sequencer_config.is_main_node() {
+    if node_role.is_main() {
         let mut base_token_price_updater = BaseTokenPriceUpdater::new(
             l1_state
                 .diamond_proxy
@@ -702,7 +703,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         });
     }
 
-    if config.sequencer_config.is_main_node() {
+    if node_role.is_main() {
         // Main Node
         run_main_node_pipeline(
             &config,
@@ -727,6 +728,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // External Node
         run_en_pipeline(
             &config,
+            replays_for_sequencer,
             committed_batch_provider.clone(),
             node_startup_state,
             block_replay_storage.clone(),
@@ -734,7 +736,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             block_context_provider,
             state.clone(),
             tree_db,
-            starting_block,
             repositories.clone(),
             finality_storage.clone(),
             stop_receiver.clone(),
@@ -881,7 +882,7 @@ async fn run_main_node_pipeline(
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
-            sequencer_config: config.sequencer_config.clone().into(),
+            config: config.into(),
             tx_acceptance_state_sender,
         })
         .pipe_opt(
@@ -975,6 +976,7 @@ async fn run_main_node_pipeline(
 #[allow(clippy::too_many_arguments)]
 async fn run_en_pipeline(
     config: &Config,
+    replays_for_sequencer: tokio::sync::mpsc::Receiver<ReplayRecord>,
     committed_batch_provider: CommittedBatchProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
@@ -982,7 +984,6 @@ async fn run_en_pipeline(
     block_context_provider: BlockContextProvider<impl L2TransactionPool>,
     state: impl ReadStateHistory + WriteState + Clone,
     tree: MerkleTree<RocksDBWrapper>,
-    starting_block: u64,
     repositories: impl WriteRepository + Clone,
     finality: impl ReadFinality + Clone,
     stop_receiver: watch::Receiver<bool>,
@@ -998,14 +999,8 @@ async fn run_en_pipeline(
 
     Pipeline::new()
         .pipe(ExternalNodeCommandSource {
-            starting_block,
-            record_overrides: config.sequencer_config.en_replay_record_overrides.clone(),
             up_to_block: config.sequencer_config.en_sync_up_to_block,
-            replay_download_address: config
-                .sequencer_config
-                .block_replay_download_address
-                .clone()
-                .expect("EN must have replay_download_address"),
+            replays_for_sequencer,
             stop_receiver: stop_receiver.clone(),
         })
         .pipe(Sequencer {
@@ -1013,7 +1008,7 @@ async fn run_en_pipeline(
             state: state.clone(),
             replay: block_replay_storage.clone(),
             repositories: repositories.clone(),
-            sequencer_config: config.sequencer_config.clone().into(),
+            config: config.into(),
             tx_acceptance_state_sender,
         })
         .pipe_opt(

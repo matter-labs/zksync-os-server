@@ -2502,7 +2502,7 @@ dependencies = [
  "bitflags 2.9.4",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "proc-macro2 1.0.95",
  "quote 1.0.42",
  "regex",
@@ -2520,7 +2520,7 @@ dependencies = [
  "bitflags 2.9.4",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "proc-macro2 1.0.95",
  "quote 1.0.42",
  "regex",
@@ -3052,7 +3052,7 @@ dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5-new-rust)",
  "c-kzg",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5-new-rust)",
- "num-bigint 0.4.6",
+ "num-bigint 0.3.3",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5-new-rust)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -3066,7 +3066,7 @@ version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?branch=vv-0-0-26-new-rust-toolchain#41dbfacaa887a17e8fd3481556770dacb302d0b6"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=vv-0-0-26-new-rust-toolchain)",
- "num-bigint 0.4.6",
+ "num-bigint 0.3.3",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=vv-0-0-26-new-rust-toolchain)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -3081,7 +3081,7 @@ source = "git+https://github.com/matter-labs/zksync-os?branch=vv-0-1-0-new-rust-
 dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=vv-0-1-0-new-rust-toolchain)",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=vv-0-1-0-new-rust-toolchain)",
- "num-bigint 0.4.6",
+ "num-bigint 0.3.3",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?branch=vv-0-1-0-new-rust-toolchain)",
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
@@ -3257,7 +3257,7 @@ dependencies = [
 [[package]]
 name = "circuit_definitions"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#7ae2e679a72bdd275df98e26d94b0aba5b008981"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
 dependencies = [
  "circuit_encodings",
  "crossbeam",
@@ -3270,7 +3270,7 @@ dependencies = [
 [[package]]
 name = "circuit_encodings"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#7ae2e679a72bdd275df98e26d94b0aba5b008981"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
 dependencies = [
  "derivative",
  "serde",
@@ -5848,6 +5848,7 @@ dependencies = [
  "http 1.3.1",
  "http-body 1.0.1",
  "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -6674,9 +6675,9 @@ dependencies = [
 
 [[package]]
 name = "keccak"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecc2af9a1119c51f12a14607e783cb977bde58bc069ff0c3da1095e635d70654"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
 dependencies = [
  "cpufeatures",
 ]
@@ -6738,7 +6739,7 @@ checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
 [[package]]
 name = "lib-rv32-asm"
 version = "0.2.0"
-source = "git+https://github.com/shamatar/lib-rv32.git#869f82795f82314f17014a04fb6f2c31808e6b42"
+source = "git+https://github.com/shamatar/lib-rv32.git#d516e9d8359d8b2954d87b75adc0bfad92211c06"
 dependencies = [
  "lib-rv32-common",
  "log",
@@ -6747,7 +6748,7 @@ dependencies = [
 [[package]]
 name = "lib-rv32-common"
 version = "0.2.0"
-source = "git+https://github.com/shamatar/lib-rv32.git#869f82795f82314f17014a04fb6f2c31808e6b42"
+source = "git+https://github.com/shamatar/lib-rv32.git#d516e9d8359d8b2954d87b75adc0bfad92211c06"
 
 [[package]]
 name = "libc"
@@ -6762,7 +6763,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.53.5",
 ]
 
 [[package]]
@@ -8495,7 +8496,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.14.0",
  "proc-macro2 1.0.95",
  "quote 1.0.42",
  "syn 2.0.104",
@@ -8508,7 +8509,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9120690fafc389a67ba3803df527d0ec9cbbc9cc45e4cc20b332996dfb672425"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.14.0",
  "proc-macro2 1.0.95",
  "quote 1.0.42",
  "syn 2.0.104",
@@ -13461,7 +13462,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -14218,7 +14219,7 @@ dependencies = [
 [[package]]
 name = "zk_evm"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#7ae2e679a72bdd275df98e26d94b0aba5b008981"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -14232,7 +14233,7 @@ dependencies = [
 [[package]]
 name = "zk_evm_abstractions"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#7ae2e679a72bdd275df98e26d94b0aba5b008981"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
 dependencies = [
  "anyhow",
  "num_enum 0.6.1",
@@ -14244,7 +14245,7 @@ dependencies = [
 [[package]]
 name = "zkevm_circuits"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#7ae2e679a72bdd275df98e26d94b0aba5b008981"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
 dependencies = [
  "arrayvec 0.7.6",
  "boojum",
@@ -14264,7 +14265,7 @@ dependencies = [
 [[package]]
 name = "zkevm_opcode_defs"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#7ae2e679a72bdd275df98e26d94b0aba5b008981"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
 dependencies = [
  "bitflags 2.9.4",
  "blake2 0.10.6",
@@ -14464,17 +14465,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "backon",
- "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5-new-rust)",
  "bincode 2.0.1",
- "dashmap",
- "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5-new-rust)",
  "futures",
+ "http-body-util",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
- "reqwest",
+ "rustls",
  "secrecy",
- "semver 1.0.26",
  "serde",
  "structdiff",
  "thiserror 2.0.17",
@@ -14484,7 +14482,6 @@ dependencies = [
  "tower",
  "tracing",
  "vise",
- "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.5-new-rust)",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
  "zksync_os_interface",
@@ -14492,7 +14489,6 @@ dependencies = [
  "zksync_os_merkle_tree",
  "zksync_os_observability",
  "zksync_os_pipeline",
- "zksync_os_socket",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -14631,7 +14627,6 @@ dependencies = [
  "fs2",
  "futures",
  "regex",
- "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -14642,8 +14637,8 @@ dependencies = [
  "tracing",
  "zksync_os_api",
  "zksync_os_contract_interface",
- "zksync_os_l1_sender",
  "zksync_os_multivm",
+ "zksync_os_network",
  "zksync_os_object_store",
  "zksync_os_prover_service",
  "zksync_os_rpc_api",
@@ -15195,7 +15190,6 @@ dependencies = [
  "zksync_os_rpc",
  "zksync_os_rpc_api",
  "zksync_os_sequencer",
- "zksync_os_socket",
  "zksync_os_state",
  "zksync_os_state_full_diffs",
  "zksync_os_status_server",
@@ -15226,16 +15220,6 @@ dependencies = [
  "vise-exporter",
  "zkos-wrapper",
  "zksync_sequencer_proof_client",
-]
-
-[[package]]
-name = "zksync_os_socket"
-version = "0.15.1"
-dependencies = [
- "anyhow",
- "backon",
- "tokio",
- "tracing",
 ]
 
 [[package]]

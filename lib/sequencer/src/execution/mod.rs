@@ -4,6 +4,7 @@ use crate::execution::block_executor::execute_block;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
 use crate::execution::utils::save_dump;
 use crate::model::blocks::BlockCommand;
+use alloy::consensus::Sealed;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio::sync::{mpsc::Sender, watch};
@@ -39,7 +40,7 @@ where
     pub state: State,
     pub replay: Replay,
     pub repositories: Repo,
-    pub sequencer_config: SequencerConfig,
+    pub config: SequencerConfig,
     /// Controls transaction acceptance state.
     /// When max_blocks_to_produce limit is reached, sequencer sends NotAccepting to stop RPC from accepting new txs.
     pub tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
@@ -84,7 +85,7 @@ where
 
             // For Produce commands: check limit (will await indefinitely if limit reached) and increment counter
             if matches!(cmd, BlockCommand::Produce(_))
-                && let Some(limit) = self.sequencer_config.max_blocks_to_produce
+                && let Some(limit) = self.config.max_blocks_to_produce
             {
                 check_block_production_limit(
                     limit,
@@ -97,7 +98,7 @@ where
             }
             let override_allowed = match &cmd {
                 BlockCommand::Rebuild(_) => true,
-                BlockCommand::Replay(_) if self.sequencer_config.is_external_node() => true,
+                BlockCommand::Replay(_) if self.config.node_role.is_external() => true,
                 _ => false,
             };
 
@@ -122,9 +123,7 @@ where
                     .map_err(|dump| {
                         let error = anyhow::anyhow!("{}", dump.error);
                         tracing::info!("Saving dump..");
-                        if let Err(err) =
-                            save_dump(self.sequencer_config.block_dump_path.clone(), dump)
-                        {
+                        if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump) {
                             tracing::error!(?err, "Failed to write block dump");
                         }
                         error
@@ -143,7 +142,10 @@ where
             tracing::debug!(block_number, "Executed. Adding to block replay storage...");
             latency_tracker.enter_state(SequencerState::AddingToReplayStorage);
 
-            self.replay.write(replay_record.clone(), override_allowed);
+            self.replay.write(
+                Sealed::new_unchecked(replay_record.clone(), block_output.header.hash()),
+                override_allowed,
+            );
 
             tracing::debug!(block_number, "Added to replay storage. Adding to state...");
             latency_tracker.enter_state(SequencerState::AddingToState);

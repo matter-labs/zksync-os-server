@@ -7,7 +7,7 @@ use alloy::rlp::{Decodable, Encodable, Error as RlpError};
 use std::fmt::Debug;
 
 /// Any protocol version along with its pinned wire formats.
-pub trait AnyZksProtocolVersion: Debug + Send + Sync + Clone + 'static {
+pub trait AnyZksProtocolVersion: Debug + Send + Sync + Unpin + Clone + 'static {
     /// Wire format for replay record.
     type Record: WireReplayRecord;
 

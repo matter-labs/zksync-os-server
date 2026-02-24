@@ -10,20 +10,23 @@ use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use zksync_os_network::NodeRecord;
 use zksync_os_object_store::{ObjectStoreConfig, ObjectStoreMode};
 use zksync_os_server::config::{
     BatchVerificationConfig, Config, FakeFriProversConfig, FakeSnarkProversConfig, FeeConfig,
-    GeneralConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig, SequencerConfig,
-    StatusServerConfig,
+    GeneralConfig, NetworkConfig, ProverApiConfig, ProverInputGeneratorConfig, RpcConfig,
+    SequencerConfig, StatusServerConfig,
 };
 use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
+use zksync_os_types::NodeRole;
 
 pub mod assert_traits;
 pub mod config;
@@ -76,7 +79,7 @@ pub struct Tester {
     main_node_tempdir: Arc<tempfile::TempDir>,
 
     // Needed to be able to connect external nodes
-    replay_url: String,
+    node_record: NodeRecord,
     l2_rpc_address: String,
     batch_verification_url: String,
 }
@@ -123,7 +126,8 @@ impl Tester {
         config_overrides: Option<impl FnOnce(&mut Config)>,
     ) -> anyhow::Result<Self> {
         let overrides_fun = |config: &mut Config| {
-            config.sequencer_config.block_replay_download_address = Some(self.replay_url.clone());
+            config.general_config.node_role = NodeRole::ExternalNode;
+            config.network_config.boot_nodes = vec![self.node_record];
             config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
             config.batch_verification_config.connect_address = self.batch_verification_url.clone();
             if let Some(f) = config_overrides {
@@ -151,18 +155,16 @@ impl Tester {
         // Initialize and **hold** locked ports for the duration of node initialization.
         let l2_locked_port = LockedPort::acquire_unused().await?;
         let prover_api_locked_port = LockedPort::acquire_unused().await?;
-        let replay_locked_port = LockedPort::acquire_unused().await?;
+        let network_locked_port = LockedPort::acquire_unused().await?;
         let status_locked_port = LockedPort::acquire_unused().await?;
         let batch_verification_locked_port = LockedPort::acquire_unused().await?;
         let l2_rpc_address = format!("0.0.0.0:{}", l2_locked_port.port);
         let l2_rpc_ws_url = format!("ws://localhost:{}", l2_locked_port.port);
         let prover_api_address = format!("0.0.0.0:{}", prover_api_locked_port.port);
-        let replay_address = format!("0.0.0.0:{}", replay_locked_port.port);
         let status_address = format!("0.0.0.0:{}", status_locked_port.port);
         let batch_verification_address = format!("0.0.0.0:{}", batch_verification_locked_port.port);
         let batch_verification_url =
             format!("http://localhost:{}", batch_verification_locked_port.port);
-        let replay_url = format!("http://localhost:{}", replay_locked_port.port);
 
         let tempdir = tempfile::tempdir()?;
         let rocks_db_path = tempdir.path().join("rocksdb");
@@ -180,7 +182,6 @@ impl Tester {
             ..Default::default()
         };
         let sequencer_config = SequencerConfig {
-            block_replay_server_address: replay_address.clone(),
             fee_collector_address: Address::random(),
             ..Default::default()
         };
@@ -230,9 +231,22 @@ impl Tester {
 
         let default_config = load_chain_config(ChainLayout::Default { protocol_version });
 
+        let network_secret_key = zksync_os_network::rng_secret_key();
+        let node_record = NodeRecord::from_secret_key(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), network_locked_port.port),
+            &network_secret_key,
+        );
+        let network_config = NetworkConfig {
+            enabled: true,
+            secret_key: Some(network_secret_key),
+            address: Ipv4Addr::LOCALHOST,
+            port: network_locked_port.port,
+            boot_nodes: vec![],
+        };
+
         let mut config = Config {
             general_config,
-            network_config: Default::default(),
+            network_config,
             genesis_config: default_config.genesis_config.clone(),
             rpc_config,
             mempool_config: Default::default(),
@@ -361,7 +375,7 @@ impl Tester {
             main_task,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             batch_verification_url,
-            replay_url,
+            node_record,
             tempdir: tempdir.clone(),
             main_node_tempdir: main_node_tempdir.unwrap_or(tempdir),
         })
