@@ -16,7 +16,6 @@ use zksync_os_server::config::{
     StateBackendConfig, StatusServerConfig, TxValidatorConfig,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
-use zksync_os_server::zkstack_config::ZkStackConfig;
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
 use zksync_os_state::StateHandle;
 use zksync_os_state_full_diffs::FullDiffsState;
@@ -236,7 +235,7 @@ async fn handle_delayed_termination(stop_sender: watch::Sender<bool>) {
 }
 
 fn build_external_config(repo: ConfigRepository<'_>) -> Config {
-    let mut general_config = repo
+    let general_config = repo
         .single::<GeneralConfig>()
         .expect("Failed to load general config")
         .parse()
@@ -248,13 +247,13 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse network config");
 
-    let mut genesis_config = repo
+    let genesis_config = repo
         .single::<GenesisConfig>()
         .expect("Failed to load genesis config")
         .parse()
         .expect("Failed to parse genesis config");
 
-    let mut rpc_config = repo
+    let rpc_config = repo
         .single::<RpcConfig>()
         .expect("Failed to load rpc config")
         .parse()
@@ -272,13 +271,13 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse tx validator config");
 
-    let mut sequencer_config = repo
+    let sequencer_config = repo
         .single::<SequencerConfig>()
         .expect("Failed to load sequencer config")
         .parse()
         .expect("Failed to parse sequencer config");
 
-    let mut l1_sender_config = repo
+    let l1_sender_config = repo
         .single::<L1SenderConfig>()
         .expect("Failed to load L1 sender config")
         .parse()
@@ -302,7 +301,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse ProverInputGenerator config");
 
-    let mut prover_api_config = repo
+    let prover_api_config = repo
         .single::<ProverApiConfig>()
         .expect("Failed to load prover api config")
         .parse()
@@ -314,7 +313,7 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .parse()
         .expect("Failed to parse status server config");
 
-    let mut observability_config = repo
+    let observability_config = repo
         .single::<ObservabilityConfig>()
         .expect("Failed to load observability config")
         .parse()
@@ -349,24 +348,6 @@ fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .expect("Failed to load fee config")
         .parse()
         .expect("Failed to parse fee config");
-
-    if let Some(config_dir) = general_config.zkstack_cli_config_dir.clone() {
-        // If set, then update the configs based off the values from the yaml files.
-        // This is a temporary measure until we update zkstack cli (or create a new tool) to create
-        // configs that are specific to the new sequencer.
-        let config = ZkStackConfig::new(config_dir.clone());
-        config
-            .update(
-                &mut general_config,
-                &mut sequencer_config,
-                &mut rpc_config,
-                &mut l1_sender_config,
-                &mut genesis_config,
-                &mut prover_api_config,
-                &mut observability_config,
-            )
-            .unwrap_or_else(|_| panic!("Failed to load zkstack config from `{config_dir}`: "));
-    }
 
     // Validate that operator keys are different
     if l1_sender_config.operator_commit_sk == l1_sender_config.operator_prove_sk
@@ -426,7 +407,8 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
     // Disable services that are not needed in ephemeral mode
     config.prover_api_config.enabled = false;
     config.status_server_config.enabled = false;
-    config.sequencer_config.block_replay_server_enabled = false;
+    // todo: consider force-disabling
+    // config.network_config.enabled = false;
 
     Some(tempdir)
 }

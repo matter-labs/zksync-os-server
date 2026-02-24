@@ -43,7 +43,9 @@ pub struct ReplayRecord {
     pub node_version: semver::Version,
     /// Version of the protocol that was used to create this replay record.
     pub protocol_version: ProtocolSemanticVersion,
-    /// Hash of the block output.
+    /// Extension of traditional block hash (see hash_block_output)
+    /// Used to confirm that we executed the replay correctly
+    /// We need this because our header is missing a few important fields
     pub block_output_hash: B256,
     /// Forced preimages to be included before the block execution.
     pub force_preimages: Vec<(B256, Vec<u8>)>,

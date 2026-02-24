@@ -7,16 +7,26 @@ use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use block_cache::BlockCache;
 use futures::{SinkExt, StreamExt, TryStreamExt};
-use reqwest::Body;
+use http_body_util::{BodyExt, StreamBody};
+use hyper::body::{Bytes, Frame};
+use hyper_rustls::HttpsConnectorBuilder;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use secrecy::{ExposeSecret, SecretString};
+use std::io;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use structdiff::StructDiff;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::io::StreamReader;
+use tokio_util::sync::PollSender;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::{BatchInfo, BatchSignature};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationL1, L1State};
@@ -32,8 +42,6 @@ use zksync_os_storage_api::ReplayRecord;
 
 mod block_cache;
 mod metrics;
-
-use block_cache::BlockCache;
 
 /// Client that connects to the main sequencer for batch verification
 pub struct BatchVerificationClient<Finality> {
@@ -96,22 +104,45 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
         input: &mut PeekableReceiver<VerificationInput>,
         latency_tracker: &ComponentStateHandle<BatchVerificationClientState>,
     ) -> anyhow::Result<()> {
-        let client = reqwest::Client::new();
-        let (tx, rx) = tokio::io::duplex(16 * 1024);
+        // Create channel for sending request data
+        let (tx, rx) = mpsc::channel::<Result<Frame<Bytes>, io::Error>>(128);
 
-        let address = self.signer.address().to_string();
-        let response = client
-            .post(format!("{}/batch_verification", self.server_address))
-            .body(Body::wrap_stream(ReaderStream::new(rx)))
-            .send()
-            .await?;
+        // Convert channel receiver to a body stream
+        let request_body =
+            StreamBody::new(ReceiverStream::new(rx).map(|r| r.map_err(io::Error::other)));
+
+        let req = hyper::Request::builder()
+            .method("POST")
+            .uri(format!("{}/batch_verification", self.server_address))
+            .header("content-type", "application/octet-stream")
+            .body(request_body)?;
+
+        // Build HTTPS connector
+        let https = HttpsConnectorBuilder::new()
+            .with_provider_and_native_roots(rustls::crypto::ring::default_provider())?
+            .https_or_http() // Support both HTTPS and HTTP
+            .enable_http2()
+            .build();
+
+        let client = Client::builder(TokioExecutor::new())
+            .http2_only(true)
+            .build(https);
+
+        // Send request and get response future (doesn't block on body completion)
+        let response_future = client.request(req);
+
+        // Get response (will have headers, body streams separately)
+        let response = response_future.await?;
+
         if !response.status().is_success() {
-            let text = response.text().await?;
-            return Err(anyhow!("request failed: {text}"));
+            let body_bytes = response.collect().await?.to_bytes();
+            let text = String::from_utf8_lossy(&body_bytes);
+            return Err(anyhow!("request failed: {}", text));
         }
 
-        let stream = response.bytes_stream();
-        let stream = stream.map_err(std::io::Error::other);
+        let stream = response.into_body().into_data_stream();
+        let stream = stream.map_err(io::Error::other);
+
         let mut reader = StreamReader::new(stream);
         let batch_verification_version = reader.read_u32().await?;
         let mut reader = FramedRead::new(
@@ -119,10 +150,11 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
             BatchVerificationRequestDecoder::new(batch_verification_version),
         );
         let mut writer = FramedWrite::new(
-            tx,
+            ChannelWriter::new(tx),
             BatchVerificationResponseCodec::new(batch_verification_version),
         );
 
+        let address = self.signer.address().to_string();
         tracing::info!(
             address,
             "Connected to main sequencer for batch verification",
@@ -134,7 +166,7 @@ impl<Finality: ReadFinality> BatchVerificationClient<Finality> {
                 block = input.recv() => {
                     match block {
                         Some((block_output, replay_record, tree_data)) => {
-                            // we remove blocks from cache based on incoming singing requests.
+                            // we remove blocks from cache based on incoming signing requests.
                             // this prevent memory exhaustion / leak
                             self.block_cache.insert(
                                 replay_record.block_context.block_number,
@@ -325,5 +357,58 @@ impl<Finality: ReadFinality> PipelineComponent for BatchVerificationClient<Final
                 }
             }
         }
+    }
+}
+
+struct ChannelWriter {
+    tx: PollSender<Result<Frame<Bytes>, io::Error>>,
+}
+
+impl ChannelWriter {
+    fn new(tx: mpsc::Sender<Result<Frame<Bytes>, io::Error>>) -> Self {
+        Self {
+            tx: PollSender::new(tx),
+        }
+    }
+}
+
+impl AsyncWrite for ChannelWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        match Pin::new(&mut self.tx).poll_reserve(cx) {
+            Poll::Ready(Ok(())) => {
+                let len = buf.len();
+                let data = Bytes::copy_from_slice(buf);
+                let frame = Frame::data(data);
+
+                if self.tx.send_item(Ok(frame)).is_err() {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "channel closed",
+                    )));
+                }
+                Poll::Ready(Ok(len))
+            }
+            Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "channel closed",
+            ))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        self.tx.close();
+        Poll::Ready(Ok(()))
     }
 }

@@ -1,18 +1,23 @@
 use crate::config::NetworkConfig;
 use crate::protocol::{ProtocolEvent, ProtocolState, ZksProtocolHandler};
 use crate::version::ZksProtocolV1;
-use reth_chainspec::ChainSpecProvider;
+use crate::wire::replays::RecordOverride;
+use alloy::primitives::BlockNumber;
+use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
 use reth_net_nat::NatResolver;
 use reth_network::error::NetworkError;
-use reth_network::{NetworkConfig as RethNetworkConfig, NetworkManager};
+use reth_network::types::peers::config::PeerBackoffDurations;
+use reth_network::{NetworkConfig as RethNetworkConfig, NetworkManager, PeersConfig};
+use reth_provider::BlockNumReader;
 use std::net::{SocketAddr, SocketAddrV4};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use zksync_os_metadata::NODE_CLIENT_VERSION;
-use zksync_os_reth_compat::provider::ZkProviderFactory;
-use zksync_os_storage_api::{ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord};
+use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::NodeRole;
 
 /// Max number of active devp2p connections.
@@ -33,11 +38,10 @@ impl NetworkService {
         config: NetworkConfig,
         node_role: NodeRole,
         replay: impl ReadReplay + Clone,
-        zk_provider_factory: ZkProviderFactory<
-            impl ReadStateHistory + Clone,
-            impl ReadRepository + Clone,
-        >,
-        replay_sender: mpsc::UnboundedSender<ReplayRecord>,
+        starting_block: BlockNumber,
+        record_overrides: Vec<RecordOverride>,
+        client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
+        replay_sender: mpsc::Sender<ReplayRecord>,
     ) -> Result<Self, NetworkError> {
         match NatResolver::Any.external_addr().await {
             None => {
@@ -75,8 +79,28 @@ impl NetworkService {
                         rlpx_address.ip(),
                         config.port,
                     ))
+                    // Require only 2 peers to agree on our external IP to update our local ENR
+                    .enr_peer_update_min(2)
+                    // 2 peers from above must agree on external IP within 1h from each other.
+                    // This can make the node less responsive to dynamic IP changes.
+                    .vote_duration(Duration::from_secs(3600))
+                    // Sets peer ban duration to 1 second, effectively disabling it
+                    .ban_duration(Some(Duration::from_secs(1)))
                     .build(),
                 ),
+            )
+            .peer_config(
+                PeersConfig::default()
+                    // Sets peer ban duration to 1 second, effectively disabling it
+                    .with_ban_duration(Duration::from_secs(1))
+                    // Tune backoff durations to be low, useful while we are in exploratory phase
+                    // and infra issues are expected.
+                    .with_backoff_durations(PeerBackoffDurations {
+                        low: Duration::from_secs(30),
+                        medium: Duration::from_secs(60),
+                        high: Duration::from_secs(60 * 2),
+                        max: Duration::from_secs(60 * 3),
+                    }),
             )
             // Use the same port for RLPx (TCP) and for discv5 (UDP)
             .listener_addr(rlpx_address)
@@ -86,18 +110,19 @@ impl NetworkService {
             // Do not require any block hashes in `eth` RLPx protocol as it is unused
             .required_block_hashes(vec![])
             // Set network id to ZKsync OS chain's id, otherwise we might connect to unrelated peers
-            .network_id(Some(zk_provider_factory.chain_spec().chain.id()))
+            .network_id(Some(client.chain_spec().chain_id()))
             // Add latest version of `zks` subprotocol. In the future this can be extended so that
             // several versions are registered here.
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _> {
                 replay,
-                // we only want to request blocks if this is external node
-                to_request_blocks: node_role.is_external(),
+                node_role,
+                starting_block: Arc::new(RwLock::new(starting_block)),
+                record_overrides,
                 state: ProtocolState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS),
                 replay_sender,
                 _phantom: Default::default(),
             })
-            .build(zk_provider_factory.clone());
+            .build(client);
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is
         // disabled. `request_handler` is also unused as it is specific to `eth` protocol.

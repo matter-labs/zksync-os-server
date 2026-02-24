@@ -287,7 +287,7 @@ async fn assert_successful_deposit_l2_part(
         1,
         "expected L1->L2 deposit transaction to only produce one L2->L1 log"
     );
-    let l2_to_l1_log = l2_to_l1_logs.remove(0);
+    let l2_to_l1_log: L2ToL1Log = l2_to_l1_logs.remove(0).into();
     assert_eq!(
         l2_to_l1_log,
         L2ToL1Log {

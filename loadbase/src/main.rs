@@ -10,6 +10,8 @@ use ethers::{
     prelude::*,
     types::U256,
 };
+use erc20::{distribute_varied, SimpleERC20};
+use erc20_worker::{spawn_erc20_workers, WorkerConfig};
 use gas::{resolve, GasMode};
 use metrics::Metrics;
 use parking_lot::RwLock;
@@ -74,7 +76,6 @@ async fn main() -> anyhow::Result<()> {
     let mean_transfer = U256::from(list[list.len()/2] / 2); // 50 %
 
     //-------------------------------- ERC-20 deploy/distribute -------------//
-    use erc20::{SimpleERC20, distribute_varied};
     let supply = U256::from_dec_str("1000000000000000000000000000000")?; // 1e6 tokens
     let per_wallet = supply / U256::from(args.wallets);
     let token_amounts = vec![per_wallet; args.wallets as usize];
@@ -98,7 +99,6 @@ async fn main() -> anyhow::Result<()> {
     metrics.spawn_reporter(Instant::now());        // start *after* distribution
 
     let running = Arc::new(AtomicBool::new(true));
-    let rng_arc = Arc::new(RwLock::new(StdRng::from_entropy()));
     let dest_rand = matches!(args.dest, DestMode::Random);
 
     let gas = resolve(
@@ -109,12 +109,18 @@ async fn main() -> anyhow::Result<()> {
         else                 { GasMode::Fixed(U256::from(120_000)) },
     ).await?;
 
-    // ----------  NEW: pass the RPC URL for batch-sending ----------
-    erc20_worker::spawn_erc20_workers(
-        provider.clone(), wallets.clone(), gas, metrics.clone(),
-        running.clone(), args.max_in_flight, mean_transfer,
-        token_nm.address(), rng_arc.clone(), dest_rand,
-        args.rpc_url.clone(),
+    let cfg = WorkerConfig {
+        gas_limit:   gas,
+        mean_amt:    mean_transfer,
+        token_addr:  token_nm.address(),
+        dest_random: dest_rand,
+        rpc_url:     args.rpc_url.clone(),
+        all_addrs:   wallets.iter().map(|w| w.address()).collect(),
+        rng:         Arc::new(RwLock::new(StdRng::from_entropy())),
+    };
+    spawn_erc20_workers(
+        provider.clone(), wallets.clone(), metrics.clone(),
+        running.clone(), args.max_in_flight, cfg,
     );
     println!("▶ ERC-20 test started with {} wallets, gas: {}", args.wallets, gas);
 

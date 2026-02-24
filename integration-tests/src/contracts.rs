@@ -7,9 +7,10 @@ use crate::provider::ZksyncApi;
 use alloy::network::ReceiptResponse;
 use alloy::primitives::{Address, B256, U256, address};
 use alloy::providers::{PendingTransactionBuilder, Provider};
-use alloy::rpc::types::{Log, TransactionReceipt};
+use alloy::rpc::types::TransactionReceipt;
 use zksync_os_contract_interface::Bridgehub;
-use zksync_os_types::{L2_INTEROP_ROOT_STORAGE_ADDRESS, ZkReceiptEnvelope};
+use zksync_os_rpc_api::types::ZkTransactionReceipt;
+use zksync_os_types::L2_INTEROP_ROOT_STORAGE_ADDRESS;
 
 alloy::sol!(
     /// Simple contract that can emit events on demand.
@@ -173,7 +174,7 @@ impl<P1: Provider, P2: Provider<Zksync>> L1Nullifier<P1, P2> {
 
     pub async fn finalize_withdrawal(
         &self,
-        withdrawal_l2_receipt: TransactionReceipt<ZkReceiptEnvelope<Log>>,
+        withdrawal_l2_receipt: ZkTransactionReceipt,
     ) -> anyhow::Result<TransactionReceipt> {
         let l1_message_sent = withdrawal_l2_receipt
             .logs()
