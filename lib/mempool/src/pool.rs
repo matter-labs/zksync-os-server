@@ -80,16 +80,32 @@ impl<T: L2Subpool> Pool<T> {
         loop {
             tokio::select! {
                 // This select is biased on purpose, meaning `tokio::select!` branches are checked
-                // sequentially top to bottom. It is very important to maintain the fairness of the
-                // order here: rarest transaction types must be generally polled first while common
-                // ones last. Otherwise, we might never pick rarer transaction types under load.
+                // sequentially top to bottom. Transaction types must be ordered by priority -
+                // otherwise, if there is some frequent transaction type in the top, under load
+                // we might never poll and pick a rarer but important transaction type.
                 biased;
 
                 // Upgrade branch is a bit special as it does not always produce a stream of
                 // transactions. Sometimes it only sets `upgrade_metadata` and some other stream
                 // needs to provide transactions. This is the reason behind `loop` above (which can
                 // iterate twice at max).
+                // todo: patch upgrades without upgrade transactions might have been a temporary measure
+                //       likely we will not have any starting from v31
                 Some(upgrade) = tokio_stream::StreamExt::next(&mut upgrade_info_stream) => {
+                    if let Some(upgrade_tx) = &upgrade.tx {
+                        tracing::info!(
+                            protocol_version = %upgrade.metadata.protocol_version,
+                            tx_hash = upgrade_tx.hash(),
+                            "L1 upgrade transaction found for protocol version {}",
+                            upgrade.metadata.protocol_version,
+                        )
+                    } else {
+                        tracing::info!(
+                            protocol_version = %upgrade.metadata.protocol_version,
+                            "L1 patch upgrade (no tx) found for protocol version {}",
+                            upgrade.metadata.protocol_version,
+                        )
+                    }
                     upgrade_metadata = Some(upgrade.metadata);
                     if let Some(tx) = upgrade.tx {
                         return Some(StreamOutcome {
@@ -102,7 +118,7 @@ impl<T: L2Subpool> Pool<T> {
                     // todo: this will make sure that SL chain ID transaction is in its own block.
                     //       But we only need to ensure that, if present, it is the first transaction
                     //       in the block. In other words, we could chain it with `l1_l2_stream` as
-                    //       an optimization
+                    //       a micro-optimization. Given how rare it is, likely not worth the trouble.
                     return Some(StreamOutcome {
                         upgrade_metadata,
                         stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
