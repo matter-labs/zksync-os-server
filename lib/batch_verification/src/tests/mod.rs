@@ -53,6 +53,7 @@ pub fn dummy_commit_batch_info(batch_number: u64, from: u64, to: u64) -> CommitB
         last_block_number: Some(to),
         chain_id: 270,
         operator_da_input: Vec::new(),
+        sl_chain_id: 123,
     }
 }
 

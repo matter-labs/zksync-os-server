@@ -502,6 +502,7 @@ mod tests {
                     last_block_number: Some(batch_number),
                     chain_id: 1,
                     operator_da_input: vec![],
+                    sl_chain_id: 2,
                 },
                 chain_address: Address::ZERO,
                 upgrade_tx_hash: None,

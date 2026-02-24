@@ -916,6 +916,7 @@ async fn run_main_node_pipeline(
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
+            sl_chain_id: node_state_on_startup.l1_state.l1_chain_id,
             chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),

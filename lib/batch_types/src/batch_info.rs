@@ -41,6 +41,7 @@ impl BatchInfo {
         chain_address: Address,
         batch_number: u64,
         pubdata_mode: PubdataMode,
+        sl_chain_id: u64,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -146,6 +147,7 @@ impl BatchInfo {
             last_block_number: Some(last_block_output.header.number),
             chain_id,
             operator_da_input: da_fields.operator_da_input,
+            sl_chain_id,
         };
         Self {
             commit_info,
@@ -190,6 +192,7 @@ impl BatchInfo {
                     commit_info.l2_to_l1_logs_root_hash,
                     upgrade_tx_hash,
                     commit_info.dependency_roots_rolling_hash,
+                    U256::from(commit_info.sl_chain_id),
                 )
                     .abi_encode_packed(),
             )),
