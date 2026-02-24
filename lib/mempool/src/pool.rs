@@ -89,8 +89,6 @@ impl<T: L2Subpool> Pool<T> {
                 // transactions. Sometimes it only sets `upgrade_metadata` and some other stream
                 // needs to provide transactions. This is the reason behind `loop` above (which can
                 // iterate twice at max).
-                // todo: patch upgrades without upgrade transactions might have been a temporary measure
-                //       likely we will not have any starting from v31
                 Some(upgrade) = tokio_stream::StreamExt::next(&mut upgrade_info_stream) => {
                     if let Some(upgrade_tx) = &upgrade.tx {
                         tracing::info!(
