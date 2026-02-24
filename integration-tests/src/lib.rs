@@ -286,20 +286,40 @@ impl Tester {
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
+
+            #[cfg(feature = "gpu-prover-tests")]
+            let path = env!("ZKSYNC_OS_PROVER_SERVICE_0_7_0_PATH");
+            #[cfg(not(feature = "gpu-prover-tests"))]
+            let path = todo!(
+                "unsupported right now, please compile zksync_os_prover_service without gpu feature and upload to Github release"
+            );
+
+            let mut child = tokio::process::Command::new(path)
+                .arg("--sequencer-urls")
+                .arg(base_url)
+                .arg("--app-bin-path")
+                .arg(app_bin_path)
+                .arg("--circuit-limit")
+                .arg("10000")
+                .arg("--output-dir")
+                .arg(output_dir)
+                .arg("--trusted-setup-file")
+                .arg(trusted_setup_file)
+                .arg("--iterations")
+                .arg("1")
+                .arg("--max-fris-per-snark")
+                .arg("1")
+                .arg("--disable-zk")
+                .stdout(std::process::Stdio::piped())
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .expect("failed to spawn prover service");
             tokio::task::spawn(async move {
-                zksync_os_prover_service::run(zksync_os_prover_service::Args {
-                    sequencer_urls: vec![base_url.parse().unwrap()],
-                    app_bin_path: Some(app_bin_path),
-                    circuit_limit: 10000,
-                    output_dir: output_dir.to_str().unwrap().to_string(),
-                    trusted_setup_file: trusted_setup_file.to_string(),
-                    iterations: Some(1),
-                    fri_path: None,
-                    max_snark_latency: None,
-                    max_fris_per_snark: Some(1),
-                    disable_zk: true,
-                })
-                .await
+                let code = child
+                    .wait()
+                    .await
+                    .expect("failed to wait for prover service");
+                panic!("prover service terminated with exit code {}", code);
             });
         }
 
