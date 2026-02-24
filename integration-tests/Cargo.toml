@@ -45,9 +45,6 @@ zk_os_basic_system.workspace = true
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 regex.workspace = true
 
-[build-dependencies]
-reqwest = { workspace = true, features = ["blocking"] }
-
 [features]
 prover-tests = []
 gpu-prover-tests = ["prover-tests"]

@@ -7,9 +7,11 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+use alloy::transports::http::reqwest;
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
+use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -288,7 +290,7 @@ impl Tester {
             std::fs::create_dir_all(&output_dir).unwrap();
 
             #[cfg(feature = "gpu-prover-tests")]
-            let path = env!("ZKSYNC_OS_PROVER_SERVICE_0_7_0_PATH");
+            let path = download_gpu_prover().await;
             #[cfg(not(feature = "gpu-prover-tests"))]
             let path = todo!(
                 "unsupported right now, please compile zksync_os_prover_service without gpu feature and upload to Github release"
@@ -639,4 +641,43 @@ impl AnvilL1 {
             _tempdir: Arc::new(tempdir),
         })
     }
+}
+
+async fn download_gpu_prover() -> String {
+    let dir = "prover-binaries";
+    if !std::fs::exists(&dir).expect("failed to check dir existence") {
+        std::fs::create_dir_all(dir).expect("failed to create dir");
+    }
+    let path = format!("{dir}/zksync_os_prover_service_v0_7_0");
+    if !std::fs::exists(&path).expect("failed to check file existence") {
+        let url = "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync_os_prover_service";
+        tracing::info!("downloading prover service binary from {url} to {path}");
+        let resp = reqwest::get(url).await.expect("failed to download");
+        let body = resp
+            .bytes()
+            .await
+            .expect("failed to read response body")
+            .to_vec();
+        std::fs::write(&path, body).expect("failed to write file");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let file = File::open(&path).expect("failed to open file");
+            let mut perms = file
+                .metadata()
+                .expect("failed to load metadata")
+                .permissions();
+            perms.set_mode(0o755); // Sets rwxr-xr-x
+            std::fs::set_permissions(&path, perms).expect("failed to set permissions");
+        }
+        #[cfg(not(unix))]
+        {
+            panic!("unsupported platform (UNIX required)");
+        }
+    } else {
+        tracing::info!("prover service binary is already present at {path}");
+    }
+    path
 }
