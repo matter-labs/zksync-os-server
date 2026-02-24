@@ -30,22 +30,6 @@ pub struct IntermediateHash<Loc = ()> {
     pub location: Loc,
 }
 
-pub trait IntermediateHashLocation: 'static + Copy {
-    fn location(self) -> Option<(u8, u64)>;
-}
-
-impl IntermediateHashLocation for () {
-    fn location(self) -> Option<(u8, u64)> {
-        None
-    }
-}
-
-impl IntermediateHashLocation for (u8, u64) {
-    fn location(self) -> Option<(u8, u64)> {
-        Some(self)
-    }
-}
-
 impl From<B256> for IntermediateHash {
     fn from(value: B256) -> Self {
         Self {
@@ -76,7 +60,7 @@ pub struct MerkleTreeView {
 /// 3. `sorted_leaves` are updated / extended as per inserted / updated entries.
 /// 4. New root hash of the tree is recreated using updated `sorted_leaves` and (the same) `hashes`.
 #[derive(Debug)]
-pub struct BatchTreeProof<Loc = ()> {
+pub struct BatchTreeProof {
     /// Performed tree operations. Correspond 1-to-1 to [`TreeEntry`]s.
     pub operations: Vec<TreeOperation>,
     /// Performed read operations. Correspond 1-to-1 to read keys.
@@ -86,10 +70,10 @@ pub struct BatchTreeProof<Loc = ()> {
     pub sorted_leaves: BTreeMap<u64, Leaf>,
     /// Hashes necessary and sufficient to restore previous and updated root hashes. Provided in the ascending `(depth, index_on_level)` order,
     /// where `depth == 0` are leaves, `depth == 1` are nodes aggregating leaf pairs etc.
-    pub hashes: Vec<IntermediateHash<Loc>>,
+    pub hashes: Vec<IntermediateHash>,
 }
 
-impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
+impl BatchTreeProof {
     #[cfg(test)]
     fn empty() -> Self {
         Self {
@@ -344,7 +328,10 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
         tree_depth: u8,
         leaf_count: u64,
         sorted_leaves: impl Iterator<Item = (u64, &'a Leaf)>,
-        mut hashes: impl Iterator<Item = &'a IntermediateHash<Loc>>,
+        mut hashes: impl Iterator<Item = &'a IntermediateHash>,
+        // Buffer for all hashes in Merkle paths that will be used to flatten the proof in `Self::to_api()`.
+        // Ordered *roughly* by `(depth, index_on_level)`, except for adjacent hashes on the same level
+        // (see the corresponding comment).
         mut sibling_hashes: Option<&mut Vec<IntermediateHash<(u8, u64)>>>,
     ) -> anyhow::Result<B256> {
         let mut node_hashes: Vec<_> = sorted_leaves
@@ -361,9 +348,6 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
                     // The hash to the left is missing; get it from `hashes`
                     i += 1;
                     let lhs = hashes.next().context("ran out of hashes")?;
-                    if let Some(lhs_location) = lhs.location.location() {
-                        anyhow::ensure!(lhs_location == (depth, current_idx - 1));
-                    }
 
                     if let Some(hashes) = sibling_hashes.as_deref_mut() {
                         hashes.push(IntermediateHash {
@@ -397,9 +381,6 @@ impl<Loc: IntermediateHashLocation> BatchTreeProof<Loc> {
                         hasher.empty_subtree_hash(depth)
                     } else {
                         let rhs = hashes.next().context("ran out of hashes")?;
-                        if let Some(rhs_location) = rhs.location.location() {
-                            anyhow::ensure!(rhs_location == (depth, current_idx + 1));
-                        }
                         if let Some(hashes) = sibling_hashes.as_deref_mut() {
                             hashes.push(IntermediateHash {
                                 value: rhs.value,
@@ -429,7 +410,7 @@ mod tests {
     use assert_matches::assert_matches;
 
     use super::*;
-    use crate::{Blake2Hasher, api};
+    use crate::{Blake2Hasher, flat};
 
     #[test]
     fn insertion_proof_for_empty_tree() {
@@ -463,7 +444,7 @@ mod tests {
 
     #[test]
     fn basic_insertion_proof() {
-        let proof = BatchTreeProof::<()> {
+        let proof = BatchTreeProof {
             operations: vec![TreeOperation::Miss { prev_index: 0 }],
             read_operations: vec![],
             sorted_leaves: BTreeMap::from([(0, Leaf::MIN_GUARD), (1, Leaf::MAX_GUARD)]),
@@ -499,7 +480,7 @@ mod tests {
 
     #[test]
     fn basic_read_proof() {
-        let proof = BatchTreeProof::<()> {
+        let proof = BatchTreeProof {
             operations: vec![],
             read_operations: vec![TreeOperation::Miss { prev_index: 0 }],
             sorted_leaves: BTreeMap::from([(0, Leaf::MIN_GUARD), (1, Leaf::MAX_GUARD)]),
@@ -513,9 +494,12 @@ mod tests {
                 .unwrap(),
         };
 
-        let api_proof: Vec<_> = proof.to_api(64, empty_tree_output.leaf_count).collect();
+        let api_proof: Vec<_> = proof.to_flat(64, empty_tree_output.leaf_count).collect();
         assert_eq!(api_proof.len(), 1);
-        assert_matches!(api_proof[0], api::InnerStorageSlotProof::NonExisting { .. });
+        assert_matches!(
+            api_proof[0],
+            flat::InnerStorageSlotProof::NonExisting { .. }
+        );
         let recovered_root = api_proof[0].verify(64, B256::repeat_byte(1)).unwrap();
         assert_eq!(recovered_root, empty_tree_output.root_hash);
 
@@ -535,7 +519,7 @@ mod tests {
 
     #[test]
     fn mixed_read_write_proof() {
-        let proof = BatchTreeProof::<()> {
+        let proof = BatchTreeProof {
             operations: vec![TreeOperation::Miss { prev_index: 0 }],
             read_operations: vec![TreeOperation::Miss { prev_index: 0 }],
             sorted_leaves: BTreeMap::from([(0, Leaf::MIN_GUARD), (1, Leaf::MAX_GUARD)]),

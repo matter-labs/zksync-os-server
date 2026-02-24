@@ -9,7 +9,7 @@ pub use crate::{
     types::{Leaf, MAX_TREE_DEPTH, TreeBatchOutput, TreeEntry},
 };
 
-pub mod api;
+pub mod flat;
 mod hasher;
 mod proofs;
 mod types;
@@ -45,18 +45,18 @@ pub trait MerkleTreeProver {
     /// # Errors
     ///
     /// Proxies I/O errors.
-    fn prove_for_api(
+    fn prove_flat(
         &self,
         version: u64,
         keys: &[B256],
-    ) -> anyhow::Result<Option<(Vec<api::StorageSlotProof>, TreeBatchOutput)>> {
+    ) -> anyhow::Result<Option<(Vec<flat::StorageSlotProof>, TreeBatchOutput)>> {
         let Some((proof, batch_output)) = self.prove(version, keys)? else {
             return Ok(None);
         };
         let proofs = proof
-            .to_api(self.tree_depth(), batch_output.leaf_count)
+            .to_flat(self.tree_depth(), batch_output.leaf_count)
             .zip(keys)
-            .map(|(proof, key)| api::StorageSlotProof { key: *key, proof });
+            .map(|(proof, key)| flat::StorageSlotProof { key: *key, proof });
         let proofs = proofs.collect();
         Ok(Some((proofs, batch_output)))
     }

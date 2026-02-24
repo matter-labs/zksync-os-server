@@ -1,5 +1,7 @@
 //! Merkle tree-related types suitable for use in RPC.
 
+// TODO: most (all?) type defs should be removed once getProof types are defined in the ZK OS side
+
 use std::collections::BTreeMap;
 
 use alloy::primitives::B256;
@@ -120,15 +122,19 @@ impl StorageSlotProof {
 }
 
 impl BatchTreeProof {
-    /// Converts this proof to the API format by filling Merkle paths that are implicitly present
+    /// Converts this proof to the flat format by filling Merkle paths that are implicitly present
     /// in the proof.
-    pub(crate) fn to_api(
+    pub(crate) fn to_flat(
         &self,
         tree_depth: u8,
         leaf_count: u64,
     ) -> impl Iterator<Item = InnerStorageSlotProof> {
         assert!(self.operations.is_empty());
 
+        // Get all sibling hashes – essentially, an extension of `self.hashes` that allow to construct
+        // Merkle paths for all returned `InnerStorageSlotProof`s. The hashes will be ordered
+        // in the same way they will be queried below; the order correctness is asserted
+        // (see the `get_sibling_hash` closure).
         let mut sibling_hashes = vec![];
         Self::zip_leaves(
             &Blake2Hasher,
@@ -159,8 +165,13 @@ impl BatchTreeProof {
         let mut get_sibling_hash = move |depth: u8, idx: u64| -> B256 {
             let current = sibling_hashes[sibling_idx];
             if current.location == (depth, idx) {
+                // We may query the same hash multiple times, e.g. if multiple proven slots have the same index
+                // on upper levels.
                 return current.value;
             }
+
+            // If we've moved past the current sibling hash, the next one is always the one we need due to how `sibling_hashes`
+            // are filled in `zip_leaves()`.
             sibling_idx += 1;
             let current = sibling_hashes[sibling_idx];
             assert_eq!(
