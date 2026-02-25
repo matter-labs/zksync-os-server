@@ -3257,7 +3257,7 @@ dependencies = [
 [[package]]
 name = "circuit_definitions"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#e62fcdc9c0a8864946d742cd81a77d4f3d0d4bef"
 dependencies = [
  "circuit_encodings",
  "crossbeam",
@@ -3270,7 +3270,7 @@ dependencies = [
 [[package]]
 name = "circuit_encodings"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#e62fcdc9c0a8864946d742cd81a77d4f3d0d4bef"
 dependencies = [
  "derivative",
  "serde",
@@ -3281,7 +3281,7 @@ dependencies = [
 [[package]]
 name = "circuit_mersenne_field"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zkos-wrapper.git?branch=di%2Fbump-rustc-test#3b4e56d8bd15bdacc0fb6d5f5735c1e765aef67c"
+source = "git+https://github.com/matter-labs/zkos-wrapper.git?branch=di%2Fbump-rustc-test#b6d688da13460ff145469ebb68dcd5211da20e04"
 dependencies = [
  "boojum",
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
@@ -6739,7 +6739,7 @@ checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
 [[package]]
 name = "lib-rv32-asm"
 version = "0.2.0"
-source = "git+https://github.com/shamatar/lib-rv32.git#d516e9d8359d8b2954d87b75adc0bfad92211c06"
+source = "git+https://github.com/shamatar/lib-rv32.git#869f82795f82314f17014a04fb6f2c31808e6b42"
 dependencies = [
  "lib-rv32-common",
  "log",
@@ -6748,7 +6748,7 @@ dependencies = [
 [[package]]
 name = "lib-rv32-common"
 version = "0.2.0"
-source = "git+https://github.com/shamatar/lib-rv32.git#d516e9d8359d8b2954d87b75adc0bfad92211c06"
+source = "git+https://github.com/shamatar/lib-rv32.git#869f82795f82314f17014a04fb6f2c31808e6b42"
 
 [[package]]
 name = "libc"
@@ -14219,7 +14219,7 @@ dependencies = [
 [[package]]
 name = "zk_evm"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#e62fcdc9c0a8864946d742cd81a77d4f3d0d4bef"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -14233,7 +14233,7 @@ dependencies = [
 [[package]]
 name = "zk_evm_abstractions"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#e62fcdc9c0a8864946d742cd81a77d4f3d0d4bef"
 dependencies = [
  "anyhow",
  "num_enum 0.6.1",
@@ -14245,7 +14245,7 @@ dependencies = [
 [[package]]
 name = "zkevm_circuits"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#e62fcdc9c0a8864946d742cd81a77d4f3d0d4bef"
 dependencies = [
  "arrayvec 0.7.6",
  "boojum",
@@ -14265,7 +14265,7 @@ dependencies = [
 [[package]]
 name = "zkevm_opcode_defs"
 version = "0.153.9"
-source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#c598cfad484436f23979feaed0e3a1ae23287f2e"
+source = "git+https://github.com/matter-labs/zksync-protocol?branch=di%2Fbump-rustc-test#e62fcdc9c0a8864946d742cd81a77d4f3d0d4bef"
 dependencies = [
  "bitflags 2.9.4",
  "blake2 0.10.6",
@@ -14282,7 +14282,7 @@ dependencies = [
 [[package]]
 name = "zkos-wrapper"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zkos-wrapper.git?branch=di%2Fbump-rustc-test#3b4e56d8bd15bdacc0fb6d5f5735c1e765aef67c"
+source = "git+https://github.com/matter-labs/zkos-wrapper.git?branch=di%2Fbump-rustc-test#b6d688da13460ff145469ebb68dcd5211da20e04"
 dependencies = [
  "blake2_with_compression_verifier",
  "boojum",
