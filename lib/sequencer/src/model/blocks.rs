@@ -1,11 +1,10 @@
 use alloy::primitives::B256;
 use std::fmt::Display;
-use std::pin::Pin;
 use std::time::Duration;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_mempool::TxStream;
+use zksync_os_mempool::MarkingTxStream;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{InteropRootsLogIndex, L1TxSerialId, ProtocolSemanticVersion, ZkTransaction};
+use zksync_os_types::{InteropRootsLogIndex, L1TxSerialId, ProtocolSemanticVersion};
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from block replay storage
@@ -23,14 +22,6 @@ pub enum BlockCommand {
     Produce(ProduceCommand),
     /// Rebuild an existing block.
     Rebuild(Box<RebuildCommand>),
-}
-
-/// Type of the block command.
-#[derive(Debug, Clone, Copy)]
-pub enum BlockCommandType {
-    Replay,
-    Produce,
-    Rebuild,
 }
 
 /// Command to produce a new block.
@@ -54,14 +45,6 @@ impl BlockCommand {
             BlockCommand::Replay(record) => record.block_context.block_number,
             BlockCommand::Produce(command) => command.block_number,
             BlockCommand::Rebuild(command) => command.replay_record.block_context.block_number,
-        }
-    }
-
-    pub fn command_type(&self) -> BlockCommandType {
-        match self {
-            BlockCommand::Replay(_) => BlockCommandType::Replay,
-            BlockCommand::Produce(_) => BlockCommandType::Produce,
-            BlockCommand::Rebuild(_) => BlockCommandType::Rebuild,
         }
     }
 }
@@ -99,7 +82,7 @@ pub struct PreparedBlockCommand<'a> {
     pub block_context: BlockContext,
     pub seal_policy: SealPolicy,
     pub invalid_tx_policy: InvalidTxPolicy,
-    pub tx_source: Pin<Box<dyn TxStream<Item = ZkTransaction> + Send + 'a>>,
+    pub tx_source: MarkingTxStream<'a>,
     /// L1 transaction serial id expected at the beginning of this block.
     /// Not used in execution directly, but required to construct ReplayRecord
     pub starting_l1_priority_id: L1TxSerialId,
