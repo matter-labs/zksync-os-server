@@ -327,7 +327,7 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
         );
 
         self.current_protocol_version = upgrade_info.protocol_version().clone();
-        self.upgrade_subpool.insert(upgrade_info);
+        self.upgrade_subpool.insert(upgrade_info).await;
 
         Ok(())
     }

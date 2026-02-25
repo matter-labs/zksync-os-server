@@ -91,7 +91,7 @@ impl ProcessL1Event for L1TxWatcher {
                 hash = ?tx.hash(),
                 "sending new priority transaction for processing",
             );
-            self.l1_subpool.insert(Arc::new(tx));
+            self.l1_subpool.insert(Arc::new(tx)).await;
         }
         Ok(())
     }

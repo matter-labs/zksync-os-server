@@ -1,9 +1,9 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll, ready};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{SystemTxEnvelope, SystemTxType, ZkTransaction};
 
@@ -34,10 +34,10 @@ impl Default for SlChainIdSubpool {
 }
 
 impl SlChainIdSubpool {
-    pub fn best_transactions_stream(&self) -> SlChainIdTransactionsStream {
+    pub async fn best_transactions_stream(&self) -> SlChainIdTransactionsStream {
         // `1` as buffer is enough because `setSLChainId` transactions are rare.
         let (sender, receiver) = mpsc::channel(1);
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().await;
         inner.sender = Some(sender);
         let state = if let Some(pending_tx) = inner.pending_txs.back() {
             StreamState::Pending(pending_tx.clone())
@@ -47,17 +47,17 @@ impl SlChainIdSubpool {
         SlChainIdTransactionsStream { state }
     }
 
-    pub fn insert(&self, tx: SystemTxEnvelope) {
+    pub async fn insert(&self, tx: SystemTxEnvelope) {
         assert_eq!(
             tx.system_subtype(),
             &SystemTxType::SetSLChainId,
             "tried to insert unrelated system tx ({:?}) into `SlChainIdSubpool`",
             tx.system_subtype()
         );
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().await;
         if let Some(sender) = &inner.sender {
             // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
-            if sender.blocking_send(tx.clone()).is_err() {
+            if sender.send(tx.clone()).await.is_err() {
                 inner.sender.take();
             }
         }
@@ -69,7 +69,7 @@ impl SlChainIdSubpool {
         loop {
             let notified = self.notify.notified();
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = self.inner.write().await;
                 if let Some(pending_tx) = inner.pending_txs.pop_back() {
                     return pending_tx;
                 }

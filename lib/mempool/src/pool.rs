@@ -57,17 +57,19 @@ impl<T: L2Subpool> Pool<T> {
         &'a mut self,
         next_interop_tx_allowed_after: Instant,
     ) -> Option<StreamOutcome<'a>> {
-        let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream();
+        let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream().await;
 
         let mut interop_stream = tokio_stream::StreamExt::peekable(
             self.interop_roots_subpool
-                .interop_transactions_with_delay(next_interop_tx_allowed_after),
+                .interop_transactions_with_delay(next_interop_tx_allowed_after)
+                .await,
         );
 
-        let mut sl_chain_id_stream =
-            tokio_stream::StreamExt::peekable(self.sl_chain_id_subpool.best_transactions_stream());
+        let mut sl_chain_id_stream = tokio_stream::StreamExt::peekable(
+            self.sl_chain_id_subpool.best_transactions_stream().await,
+        );
 
-        let l1_stream = self.l1_subpool.best_transactions_stream();
+        let l1_stream = self.l1_subpool.best_transactions_stream().await;
         let l2_stream = self.l2_subpool.best_transactions_stream();
         let l2_marker = l2_stream.marker();
         fn prio_left(_: &mut ()) -> PollNext {
@@ -183,7 +185,8 @@ impl<T: L2Subpool> Pool<T> {
             .await;
         let last_interop_log_index = self
             .interop_roots_subpool
-            .on_canonical_state_change(interop_txs);
+            .on_canonical_state_change(interop_txs)
+            .await;
         self.sl_chain_id_subpool
             .on_canonical_state_change(sl_chain_id_txs)
             .await;

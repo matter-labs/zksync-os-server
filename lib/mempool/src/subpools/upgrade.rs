@@ -1,9 +1,9 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll, ready};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, ZkTransaction};
 
@@ -36,10 +36,10 @@ impl UpgradeSubpool {
         }
     }
 
-    pub fn upgrade_info_stream(&self) -> UpgradeInfoStream {
+    pub async fn upgrade_info_stream(&self) -> UpgradeInfoStream {
         // `1` as buffer is enough because upgrade transactions are rare.
         let (sender, receiver) = mpsc::channel(1);
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().await;
         inner.sender = Some(sender);
         let state = if let Some(pending_tx) = inner.pending_upgrades.back() {
             StreamState::Pending(pending_tx.clone())
@@ -49,11 +49,11 @@ impl UpgradeSubpool {
         UpgradeInfoStream { state }
     }
 
-    pub fn insert(&self, upgrade: UpgradeInfo) {
-        let mut inner = self.inner.write().unwrap();
+    pub async fn insert(&self, upgrade: UpgradeInfo) {
+        let mut inner = self.inner.write().await;
         if let Some(sender) = &inner.sender {
             // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
-            if sender.blocking_send(upgrade.clone()).is_err() {
+            if sender.send(upgrade.clone()).await.is_err() {
                 inner.sender.take();
             }
         }
@@ -65,7 +65,7 @@ impl UpgradeSubpool {
         loop {
             let notified = self.notify.notified();
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = self.inner.write().await;
                 if let Some(upgrade) = inner.pending_upgrades.pop_back() {
                     tracing::info!(protocol_version = %upgrade.protocol_version(), "advancing protocol version");
                     return upgrade;
@@ -81,8 +81,7 @@ impl UpgradeSubpool {
         txs: Vec<&L1UpgradeEnvelope>,
     ) {
         // We track current protocol version that we end up with after applying upgrade transaction.
-        let mut current_protocol_version =
-            self.inner.read().unwrap().current_protocol_version.clone();
+        let mut current_protocol_version = self.inner.read().await.current_protocol_version.clone();
 
         // If there are no upgrade transactions and current protocol version matches the one in the
         // block, we do not have to do anything.
@@ -129,7 +128,7 @@ impl UpgradeSubpool {
         }
 
         // Write protocol version we ended up with.
-        self.inner.write().unwrap().current_protocol_version = current_protocol_version;
+        self.inner.write().await.current_protocol_version = current_protocol_version;
     }
 }
 

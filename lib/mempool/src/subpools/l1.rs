@@ -1,9 +1,9 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1PriorityEnvelope, L1TxSerialId, ZkTransaction};
 
@@ -34,9 +34,9 @@ impl L1Subpool {
         }
     }
 
-    pub fn best_transactions_stream(&self) -> L1TransactionsStream {
+    pub async fn best_transactions_stream(&self) -> L1TransactionsStream {
         let (sender, receiver) = mpsc::channel(self.channel_size);
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().await;
         inner.sender = Some(sender);
         L1TransactionsStream {
             receiver: ReceiverStream::new(receiver),
@@ -44,11 +44,11 @@ impl L1Subpool {
         }
     }
 
-    pub fn insert(&mut self, tx: Arc<L1PriorityEnvelope>) {
-        let mut inner = self.inner.write().unwrap();
+    pub async fn insert(&mut self, tx: Arc<L1PriorityEnvelope>) {
+        let mut inner = self.inner.write().await;
         if let Some(sender) = &inner.sender {
             // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
-            if sender.blocking_send(tx.clone()).is_err() {
+            if sender.send(tx.clone()).await.is_err() {
                 inner.sender.take();
             }
         }
@@ -60,7 +60,7 @@ impl L1Subpool {
         loop {
             let notified = self.notify.notified();
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = self.inner.write().await;
                 if let Some(pending_tx) = inner.pending_txs.pop_back() {
                     return pending_tx;
                 }

@@ -2,12 +2,12 @@ use futures::{Stream, StreamExt, ready};
 use std::{
     collections::VecDeque,
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::Arc,
     task::{Context, Poll},
 };
 use tokio::time::Instant;
 use tokio::{
-    sync::mpsc,
+    sync::{RwLock, mpsc},
     time::{Sleep, sleep_until},
 };
 use tokio_stream::wrappers::ReceiverStream;
@@ -36,25 +36,25 @@ impl InteropRootsSubpool {
 }
 
 impl InteropRootsSubpool {
-    pub fn interop_transactions_with_delay(
+    pub async fn interop_transactions_with_delay(
         &self,
         next_tx_allowed_after: Instant,
     ) -> InteropRootsTransactionsStream {
         self.inner
             .write()
-            .unwrap()
+            .await
             .interop_transactions_with_delay(next_tx_allowed_after, self.channel_size)
     }
 
-    pub fn add_root(&mut self, root: IndexedInteropRoot) {
-        self.inner.write().unwrap().add_root(root);
+    pub async fn add_root(&mut self, root: IndexedInteropRoot) {
+        self.inner.write().await.add_root(root).await;
     }
 
-    pub fn on_canonical_state_change(
+    pub async fn on_canonical_state_change(
         &self,
         txs: Vec<&SystemTxEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
-        self.inner.write().unwrap().on_canonical_state_change(txs)
+        self.inner.write().await.on_canonical_state_change(txs)
     }
 }
 
@@ -144,10 +144,10 @@ impl Inner {
         }
     }
 
-    fn add_root(&mut self, root: IndexedInteropRoot) {
+    async fn add_root(&mut self, root: IndexedInteropRoot) {
         if let Some(sender) = &self.sender {
             // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
-            if sender.blocking_send(root.root.clone()).is_err() {
+            if sender.send(root.root.clone()).await.is_err() {
                 self.sender.take();
             }
         }

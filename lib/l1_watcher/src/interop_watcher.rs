@@ -83,10 +83,12 @@ impl ProcessL1Event for InteropWatcher {
             sides: vec![tx.chainRoot],
         };
 
-        self.interop_roots_subpool.add_root(IndexedInteropRoot {
-            log_index: current_log_index,
-            root: interop_root,
-        });
+        self.interop_roots_subpool
+            .add_root(IndexedInteropRoot {
+                log_index: current_log_index,
+                root: interop_root,
+            })
+            .await;
 
         Ok(())
     }

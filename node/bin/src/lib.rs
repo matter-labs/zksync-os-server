@@ -445,7 +445,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 force_preimages: genesis_upgrade.force_deploy_preimages,
             },
         };
-        upgrade_subpool.insert(upgrade_tx);
+        upgrade_subpool.insert(upgrade_tx).await;
     }
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {
