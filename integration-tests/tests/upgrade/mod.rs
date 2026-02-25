@@ -95,9 +95,9 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
         facet: *committer_facet.address(),
         action: Action::Replace,
         isFreezable: true,
-        selectors: vec![
-            FixedBytes(CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR),
-        ],
+        selectors: vec![FixedBytes(
+            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
+        )],
     };
 
     upgrade_tester
