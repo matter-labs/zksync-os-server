@@ -14,9 +14,9 @@ build = "build.rs"
 [dependencies]
 zksync_os_interface.workspace = true
 zk_os_forward_system.workspace = true
-zk_os_forward_system_0_1_0.workspace = true
-zk_os_forward_system_0_0_26.workspace = true
-zk_os_forward_system_0_2_6.workspace = true
+zk_os_forward_system_0_1_1.workspace = true
+zk_os_forward_system_0_0_27.workspace = true
+zk_os_forward_system_0_2_7.workspace = true
 zk_os_forward_system_dev.workspace = true
 anyhow.workspace = true
 zksync_os_types.workspace = true
