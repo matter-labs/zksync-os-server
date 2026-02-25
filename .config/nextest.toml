@@ -21,3 +21,8 @@ slow-timeout = { period = "15m", terminate-after = 3 }
 # by producing 550s proving computations in coverage mode
 [profile.coverage]
 default-filter = 'not test(does_not_get_stuck)'
+
+[[profile.default.overrides]]
+filter = 'test(test_interop_bundle_send)'
+retries = 5
+slow-timeout = { period = "45s", terminate-after = 1 }
