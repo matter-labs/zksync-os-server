@@ -14,6 +14,7 @@ use crate::transaction::SYSTEM_TX_TYPE_ID;
 pub struct SystemTx {
     pub to: Address,
     pub input: Bytes,
+    pub salt: u64,
 }
 
 impl SystemTx {
@@ -129,6 +130,7 @@ impl RlpEcdsaDecodableTx for SystemTx {
         Ok(Self {
             to: Decodable::decode(buf)?,
             input: Decodable::decode(buf)?,
+            salt: 0,
         })
     }
 }

@@ -52,6 +52,7 @@ impl SystemTxEnvelope {
         let transaction = SystemTx {
             to: tx_input.to_address(),
             input: Bytes::from(calldata),
+            salt: 0,
         };
 
         Self {
