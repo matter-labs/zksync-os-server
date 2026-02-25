@@ -653,6 +653,13 @@ async fn download_gpu_prover() -> String {
         let url = "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service";
         tracing::info!("downloading prover service binary from {url} to {path}");
         let resp = reqwest::get(url).await.expect("failed to download");
+        if !resp.status().is_success() {
+            panic!(
+                "could not download prover service binary from {url}: status={}, response={}",
+                resp.status(),
+                resp.text().await.expect("response was not valid text"),
+            );
+        }
         let body = resp
             .bytes()
             .await
