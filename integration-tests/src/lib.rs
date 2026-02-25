@@ -312,8 +312,6 @@ impl Tester {
                 .arg("--max-fris-per-snark")
                 .arg("1")
                 .arg("--disable-zk")
-                .stdout(std::process::Stdio::piped())
-                .stdin(std::process::Stdio::piped())
                 .spawn()
                 .expect("failed to spawn prover service");
             tokio::task::spawn(async move {
