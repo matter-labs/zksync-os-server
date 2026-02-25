@@ -430,9 +430,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let upgrade_subpool = UpgradeSubpool::new(current_protocol_version.clone());
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_roots_subpool = InteropRootsSubpool::new(
-        10,
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
-        1,
+        1, 10,
     );
 
     // If we start from the very first block, we should start by sending upgrade tx for genesis.
@@ -446,7 +445,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 force_preimages: genesis_upgrade.force_deploy_preimages,
             },
         };
-        upgrade_subpool.insert(upgrade_tx);
+        upgrade_subpool.insert(upgrade_tx).await;
     }
 
     if current_protocol_version >= ProtocolSemanticVersion::new(0, 31, 0) {

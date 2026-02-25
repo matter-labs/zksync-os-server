@@ -1,13 +1,15 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll, ready};
-use tokio::sync::{Notify, broadcast};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio::sync::{Notify, RwLock, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, ZkTransaction};
 
+/// New upgrades are added to `Inner` as well as it's used to create `UpgradeInfoStream`.
+/// `sender` is used to submit new upgrades to the active stream.
+/// If there is no active stream, then sender will be dropped on the next access; tx is inserted to `pending_txs` anyway.
 #[derive(Clone)]
 pub struct UpgradeSubpool {
     notify: Arc<Notify>,
@@ -18,7 +20,7 @@ struct Inner {
     /// Tracks currently active protocol version. Needed because of patch upgrades that do not come
     /// with an upgrade transaction.
     current_protocol_version: ProtocolSemanticVersion,
-    sender: broadcast::Sender<UpgradeInfo>,
+    sender: Option<mpsc::Sender<UpgradeInfo>>,
     pending_upgrades: VecDeque<UpgradeInfo>,
 }
 
@@ -28,25 +30,33 @@ impl UpgradeSubpool {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
                 current_protocol_version,
-                sender: broadcast::Sender::new(1),
+                sender: None,
                 pending_upgrades: VecDeque::new(),
             })),
         }
     }
 
-    pub fn upgrade_info_stream(&self) -> UpgradeInfoStream {
-        let inner = self.inner.read().unwrap();
+    pub async fn upgrade_info_stream(&self) -> UpgradeInfoStream {
+        // `1` as buffer is enough because upgrade transactions are rare.
+        let (sender, receiver) = mpsc::channel(1);
+        let mut inner = self.inner.write().await;
+        inner.sender = Some(sender);
         let state = if let Some(pending_tx) = inner.pending_upgrades.back() {
             StreamState::Pending(pending_tx.clone())
         } else {
-            StreamState::Empty(BroadcastStream::new(inner.sender.subscribe()))
+            StreamState::Empty(ReceiverStream::new(receiver))
         };
         UpgradeInfoStream { state }
     }
 
-    pub fn insert(&self, upgrade: UpgradeInfo) {
-        let mut inner = self.inner.write().unwrap();
-        let _ = inner.sender.send(upgrade.clone());
+    pub async fn insert(&self, upgrade: UpgradeInfo) {
+        let mut inner = self.inner.write().await;
+        if let Some(sender) = &inner.sender {
+            // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
+            if sender.send(upgrade.clone()).await.is_err() {
+                inner.sender.take();
+            }
+        }
         inner.pending_upgrades.push_front(upgrade);
         self.notify.notify_waiters();
     }
@@ -55,7 +65,7 @@ impl UpgradeSubpool {
         loop {
             let notified = self.notify.notified();
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = self.inner.write().await;
                 if let Some(upgrade) = inner.pending_upgrades.pop_back() {
                     tracing::info!(protocol_version = %upgrade.protocol_version(), "advancing protocol version");
                     return upgrade;
@@ -71,8 +81,7 @@ impl UpgradeSubpool {
         txs: Vec<&L1UpgradeEnvelope>,
     ) {
         // We track current protocol version that we end up with after applying upgrade transaction.
-        let mut current_protocol_version =
-            self.inner.read().unwrap().current_protocol_version.clone();
+        let mut current_protocol_version = self.inner.read().await.current_protocol_version.clone();
 
         // If there are no upgrade transactions and current protocol version matches the one in the
         // block, we do not have to do anything.
@@ -119,7 +128,7 @@ impl UpgradeSubpool {
         }
 
         // Write protocol version we ended up with.
-        self.inner.write().unwrap().current_protocol_version = current_protocol_version;
+        self.inner.write().await.current_protocol_version = current_protocol_version;
     }
 }
 
@@ -131,7 +140,7 @@ pub struct UpgradeInfoStream {
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
     /// No discovered upgrade yet, streaming from L1 watcher subscription.
-    Empty(BroadcastStream<UpgradeInfo>),
+    Empty(ReceiverStream<UpgradeInfo>),
     /// Upgrade has been previously discovered.
     Pending(UpgradeInfo),
     /// Stream is closed because either one upgrade was already returned or upstream receiver was
@@ -146,21 +155,13 @@ impl Stream for UpgradeInfoStream {
         let mut this = self.as_mut();
         match &mut this.state {
             StreamState::Empty(receiver) => {
-                let Some(result) = ready!(receiver.poll_next_unpin(cx)) else {
+                let Some(upgrade) = ready!(receiver.poll_next_unpin(cx)) else {
                     tracing::debug!("upgrade watcher stream is closed");
                     this.state = StreamState::Closed;
                     return Poll::Ready(None);
                 };
-                match result {
-                    Ok(upgrade) => {
-                        this.state = StreamState::Closed;
-                        Poll::Ready(Some(upgrade))
-                    }
-                    Err(BroadcastStreamRecvError::Lagged(count)) => {
-                        // Fatal error as we lost at least one upgrade
-                        panic!("upgrade receiver lagged by {count} items");
-                    }
-                }
+                this.state = StreamState::Closed;
+                Poll::Ready(Some(upgrade))
             }
             StreamState::Pending(upgrade) => {
                 let upgrade = upgrade.clone();

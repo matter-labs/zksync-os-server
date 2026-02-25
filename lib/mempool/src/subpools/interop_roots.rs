@@ -2,15 +2,15 @@ use futures::{Stream, StreamExt, ready};
 use std::{
     collections::VecDeque,
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::Arc,
     task::{Context, Poll},
 };
 use tokio::time::Instant;
 use tokio::{
-    sync::broadcast::{self},
+    sync::{RwLock, mpsc},
     time::{Sleep, sleep_until},
 };
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{
     IndexedInteropRoot, InteropRoot, InteropRootsLogIndex, SystemTxEnvelope, SystemTxType,
     ZkTransaction,
@@ -19,52 +19,57 @@ use zksync_os_types::{
 #[derive(Clone)]
 pub struct InteropRootsSubpool {
     inner: Arc<RwLock<Inner>>,
+    channel_size: usize,
 }
 
 impl InteropRootsSubpool {
-    pub fn new(interop_roots_per_tx: usize, buffer_size: usize) -> Self {
+    pub fn new(interop_roots_per_tx: usize, channel_size: usize) -> Self {
         Self {
             inner: Arc::new(RwLock::new(Inner {
                 interop_roots_per_tx,
-                sender: broadcast::Sender::new(buffer_size),
+                sender: None,
                 pending_roots: VecDeque::new(),
             })),
+            channel_size,
         }
     }
 }
 
 impl InteropRootsSubpool {
-    pub fn interop_transactions_with_delay(
+    pub async fn interop_transactions_with_delay(
         &self,
         next_tx_allowed_after: Instant,
     ) -> InteropRootsTransactionsStream {
         self.inner
-            .read()
-            .unwrap()
-            .interop_transactions_with_delay(next_tx_allowed_after)
+            .write()
+            .await
+            .interop_transactions_with_delay(next_tx_allowed_after, self.channel_size)
     }
 
-    pub fn add_root(&mut self, root: IndexedInteropRoot) {
-        self.inner.write().unwrap().add_root(root);
+    pub async fn add_root(&mut self, root: IndexedInteropRoot) {
+        self.inner.write().await.add_root(root).await;
     }
 
-    pub fn on_canonical_state_change(
+    pub async fn on_canonical_state_change(
         &self,
         txs: Vec<&SystemTxEnvelope>,
     ) -> Option<InteropRootsLogIndex> {
-        self.inner.write().unwrap().on_canonical_state_change(txs)
+        self.inner.write().await.on_canonical_state_change(txs)
     }
 }
 
+/// New root are added to `Inner` as well as it's used to create `InteropRootsTransactionsStream`.
+/// `sender` is used to submit new roots to the active stream.
+/// If there is no active stream, then sender will be dropped on the next access; root is inserted to `pending_txs` anyway.
 #[derive(Clone)]
 struct Inner {
     interop_roots_per_tx: usize,
-    sender: broadcast::Sender<InteropRoot>,
+    sender: Option<mpsc::Sender<InteropRoot>>,
     pending_roots: VecDeque<IndexedInteropRoot>,
 }
 
 pub struct InteropRootsTransactionsStream {
-    receiver: BroadcastStream<InteropRoot>,
+    receiver: ReceiverStream<InteropRoot>,
     pending_roots: VecDeque<InteropRoot>,
     interop_roots_per_tx: usize,
     sleep: Option<Pin<Box<Sleep>>>,
@@ -85,7 +90,7 @@ impl Stream for InteropRootsTransactionsStream {
             }
 
             match self.receiver.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(root))) => {
+                Poll::Ready(Some(root)) => {
                     self.pending_roots.push_front(root);
                     continue;
                 }
@@ -125,19 +130,27 @@ impl InteropRootsTransactionsStream {
 
 impl Inner {
     fn interop_transactions_with_delay(
-        &self,
+        &mut self,
         next_tx_allowed_after: Instant,
+        channel_size: usize,
     ) -> InteropRootsTransactionsStream {
+        let (sender, receiver) = mpsc::channel(channel_size);
+        self.sender = Some(sender);
         InteropRootsTransactionsStream {
-            receiver: BroadcastStream::new(self.sender.subscribe()),
+            receiver: ReceiverStream::new(receiver),
             pending_roots: self.pending_roots.iter().map(|r| r.root.clone()).collect(),
             interop_roots_per_tx: self.interop_roots_per_tx,
             sleep: Some(Box::pin(sleep_until(next_tx_allowed_after))),
         }
     }
 
-    fn add_root(&mut self, root: IndexedInteropRoot) {
-        let _ = self.sender.send(root.root.clone());
+    async fn add_root(&mut self, root: IndexedInteropRoot) {
+        if let Some(sender) = &self.sender {
+            // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
+            if sender.send(root.root.clone()).await.is_err() {
+                self.sender.take();
+            }
+        }
         self.pending_roots.push_front(root);
     }
 

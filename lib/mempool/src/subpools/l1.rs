@@ -1,45 +1,57 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::{Notify, broadcast};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{Notify, RwLock, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1PriorityEnvelope, L1TxSerialId, ZkTransaction};
 
 #[derive(Clone)]
 pub struct L1Subpool {
     notify: Arc<Notify>,
     inner: Arc<RwLock<Inner>>,
+    channel_size: usize,
 }
 
+/// New txs are added to `Inner` as well as it's used to create `L1TransactionsStream`.
+/// `sender` is used to submit new transactions to the active stream.
+/// If there is no active stream, then sender will be dropped on the next access; tx is inserted to `pending_txs` anyway.
 struct Inner {
-    sender: broadcast::Sender<Arc<L1PriorityEnvelope>>,
+    sender: Option<mpsc::Sender<Arc<L1PriorityEnvelope>>>,
     pending_txs: VecDeque<Arc<L1PriorityEnvelope>>,
 }
 
 impl L1Subpool {
-    pub fn new(buffer_size: usize) -> Self {
+    pub fn new(channel_size: usize) -> Self {
         Self {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
-                sender: broadcast::Sender::new(buffer_size),
+                sender: None,
                 pending_txs: VecDeque::new(),
             })),
+            channel_size,
         }
     }
 
-    pub fn best_transactions_stream(&self) -> L1TransactionsStream {
-        let inner = self.inner.read().unwrap();
+    pub async fn best_transactions_stream(&self) -> L1TransactionsStream {
+        let (sender, receiver) = mpsc::channel(self.channel_size);
+        let mut inner = self.inner.write().await;
+        inner.sender = Some(sender);
         L1TransactionsStream {
-            receiver: BroadcastStream::new(inner.sender.subscribe()),
+            receiver: ReceiverStream::new(receiver),
             pending_txs: inner.pending_txs.clone(),
         }
     }
 
-    pub fn insert(&mut self, tx: Arc<L1PriorityEnvelope>) {
-        let mut inner = self.inner.write().unwrap();
-        let _ = inner.sender.send(tx.clone());
+    pub async fn insert(&mut self, tx: Arc<L1PriorityEnvelope>) {
+        let mut inner = self.inner.write().await;
+        if let Some(sender) = &inner.sender {
+            // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
+            if sender.send(tx.clone()).await.is_err() {
+                inner.sender.take();
+            }
+        }
         inner.pending_txs.push_front(tx);
         self.notify.notify_waiters();
     }
@@ -48,7 +60,7 @@ impl L1Subpool {
         loop {
             let notified = self.notify.notified();
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = self.inner.write().await;
                 if let Some(pending_tx) = inner.pending_txs.pop_back() {
                     return pending_tx;
                 }
@@ -77,7 +89,7 @@ impl L1Subpool {
 }
 
 pub struct L1TransactionsStream {
-    receiver: BroadcastStream<Arc<L1PriorityEnvelope>>,
+    receiver: ReceiverStream<Arc<L1PriorityEnvelope>>,
     pending_txs: VecDeque<Arc<L1PriorityEnvelope>>,
 }
 
@@ -90,7 +102,7 @@ impl Stream for L1TransactionsStream {
         }
 
         match self.receiver.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(tx))) => Poll::Ready(Some(tx.as_ref().clone().into())),
+            Poll::Ready(Some(tx)) => Poll::Ready(Some(tx.as_ref().clone().into())),
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => Poll::Ready(None),
         }

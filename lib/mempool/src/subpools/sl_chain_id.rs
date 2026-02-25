@@ -1,11 +1,10 @@
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll, ready};
-use tokio::sync::{Notify, broadcast};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio::sync::{Notify, RwLock, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{SystemTxEnvelope, SystemTxType, ZkTransaction};
 
 #[derive(Clone)]
@@ -14,8 +13,11 @@ pub struct SlChainIdSubpool {
     inner: Arc<RwLock<Inner>>,
 }
 
+/// New txs are added to `Inner` as well as it's used to create `SlChainIdTransactionsStream`.
+/// `sender` is used to submit new transactions to the active stream.
+/// If there is no active stream, then sender will be dropped on the next access; tx is inserted to `pending_txs` anyway.
 struct Inner {
-    sender: broadcast::Sender<SystemTxEnvelope>,
+    sender: Option<mpsc::Sender<SystemTxEnvelope>>,
     pending_txs: VecDeque<SystemTxEnvelope>,
 }
 
@@ -24,7 +26,7 @@ impl Default for SlChainIdSubpool {
         Self {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
-                sender: broadcast::Sender::new(1),
+                sender: None,
                 pending_txs: VecDeque::new(),
             })),
         }
@@ -32,25 +34,33 @@ impl Default for SlChainIdSubpool {
 }
 
 impl SlChainIdSubpool {
-    pub fn best_transactions_stream(&self) -> SlChainIdTransactionsStream {
-        let inner = self.inner.read().unwrap();
+    pub async fn best_transactions_stream(&self) -> SlChainIdTransactionsStream {
+        // `1` as buffer is enough because `setSLChainId` transactions are rare.
+        let (sender, receiver) = mpsc::channel(1);
+        let mut inner = self.inner.write().await;
+        inner.sender = Some(sender);
         let state = if let Some(pending_tx) = inner.pending_txs.back() {
             StreamState::Pending(pending_tx.clone())
         } else {
-            StreamState::Empty(BroadcastStream::new(inner.sender.subscribe()))
+            StreamState::Empty(ReceiverStream::new(receiver))
         };
         SlChainIdTransactionsStream { state }
     }
 
-    pub fn insert(&self, tx: SystemTxEnvelope) {
+    pub async fn insert(&self, tx: SystemTxEnvelope) {
         assert_eq!(
             tx.system_subtype(),
             &SystemTxType::SetSLChainId,
             "tried to insert unrelated system tx ({:?}) into `SlChainIdSubpool`",
             tx.system_subtype()
         );
-        let mut inner = self.inner.write().unwrap();
-        let _ = inner.sender.send(tx.clone());
+        let mut inner = self.inner.write().await;
+        if let Some(sender) = &inner.sender {
+            // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
+            if sender.send(tx.clone()).await.is_err() {
+                inner.sender.take();
+            }
+        }
         inner.pending_txs.push_front(tx);
         self.notify.notify_waiters();
     }
@@ -59,7 +69,7 @@ impl SlChainIdSubpool {
         loop {
             let notified = self.notify.notified();
             {
-                let mut inner = self.inner.write().unwrap();
+                let mut inner = self.inner.write().await;
                 if let Some(pending_tx) = inner.pending_txs.pop_back() {
                     return pending_tx;
                 }
@@ -87,7 +97,7 @@ pub struct SlChainIdTransactionsStream {
 /// State machine to ensure we serve up to one `setSLChainId` transaction.
 enum StreamState {
     /// No discovered `setSLChainId` transaction yet, streaming from gateway migration watcher subscription.
-    Empty(BroadcastStream<SystemTxEnvelope>),
+    Empty(ReceiverStream<SystemTxEnvelope>),
     /// `setSLChainId` transaction has been previously discovered.
     Pending(SystemTxEnvelope),
     /// Stream is closed because either one transaction was already returned or upstream receiver was
@@ -102,21 +112,13 @@ impl Stream for SlChainIdTransactionsStream {
         let mut this = self.as_mut();
         match &mut this.state {
             StreamState::Empty(receiver) => {
-                let Some(result) = ready!(receiver.poll_next_unpin(cx)) else {
+                let Some(tx) = ready!(receiver.poll_next_unpin(cx)) else {
                     tracing::debug!("gateway migration watcher stream is closed");
                     this.state = StreamState::Closed;
                     return Poll::Ready(None);
                 };
-                match result {
-                    Ok(tx) => {
-                        this.state = StreamState::Closed;
-                        Poll::Ready(Some(tx.into()))
-                    }
-                    Err(BroadcastStreamRecvError::Lagged(count)) => {
-                        // Fatal error as we lost at least one gateway migration event
-                        panic!("gateway migration receiver lagged by {count} items");
-                    }
-                }
+                this.state = StreamState::Closed;
+                Poll::Ready(Some(tx.into()))
             }
             StreamState::Pending(tx) => {
                 let tx = tx.clone();
