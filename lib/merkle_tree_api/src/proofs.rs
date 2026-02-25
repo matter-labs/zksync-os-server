@@ -329,7 +329,7 @@ impl BatchTreeProof {
         leaf_count: u64,
         sorted_leaves: impl Iterator<Item = (u64, &'a Leaf)>,
         mut hashes: impl Iterator<Item = &'a IntermediateHash>,
-        // Buffer for all hashes in Merkle paths that will be used to flatten the proof in `Self::to_api()`.
+        // Buffer for all hashes in Merkle paths that will be used to flatten the proof in `Self::to_flat()`.
         // Ordered *roughly* by `(depth, index_on_level)`, except for adjacent hashes on the same level
         // (see the corresponding comment).
         mut sibling_hashes: Option<&mut Vec<IntermediateHash<(u8, u64)>>>,

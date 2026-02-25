@@ -1,7 +1,5 @@
 //! Merkle tree-related types suitable for use in RPC.
 
-// TODO: most (all?) type defs should be removed once getProof types are defined in the ZK OS side
-
 use std::collections::BTreeMap;
 
 use alloy::primitives::B256;
@@ -232,5 +230,58 @@ impl BatchTreeProof {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    use super::*;
+
+    fn random_entry(rng: &mut impl Rng) -> StorageSlotProofEntry {
+        StorageSlotProofEntry {
+            index: rng.random(),
+            value: B256::random_with(rng),
+            next_index: rng.random(),
+            siblings: (0..rng.random_range(5..=15))
+                .map(|_| B256::random_with(rng))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn existing_proof_serialization_snapshot() {
+        const RNG_SEED: u64 = 42;
+
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let proof = StorageSlotProof {
+            key: B256::random_with(&mut rng),
+            proof: InnerStorageSlotProof::Existing(random_entry(&mut rng)),
+        };
+
+        insta::assert_yaml_snapshot!("existing_proof", proof);
+    }
+
+    #[test]
+    fn missing_proof_serialization_snapshot() {
+        const RNG_SEED: u64 = 123;
+
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let proof = StorageSlotProof {
+            key: B256::random_with(&mut rng),
+            proof: InnerStorageSlotProof::NonExisting {
+                left_neighbor: NeighborStorageSlotProofEntry {
+                    inner: random_entry(&mut rng),
+                    leaf_key: B256::random_with(&mut rng),
+                },
+                right_neighbor: NeighborStorageSlotProofEntry {
+                    inner: random_entry(&mut rng),
+                    leaf_key: B256::random_with(&mut rng),
+                },
+            },
+        };
+
+        insta::assert_yaml_snapshot!("non_existing_proof", proof);
     }
 }

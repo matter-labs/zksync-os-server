@@ -15201,6 +15201,8 @@ dependencies = [
  "alloy",
  "anyhow",
  "assert_matches",
+ "insta",
+ "rand 0.9.2",
  "serde",
  "zksync_os_crypto",
 ]
