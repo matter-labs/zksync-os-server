@@ -1,6 +1,7 @@
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::network::Zksync;
 use crate::provider::ZksyncApi;
+use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
@@ -43,11 +44,18 @@ impl ProverTester {
         )
         .await?;
         let diamond_proxy_address = l1_state.diamond_proxy_address();
+        tracing::info!(
+            batch_number,
+            %diamond_proxy_address,
+            "checking batch #{batch_number} status on L1 state: {l1_state:?}"
+        );
 
         let blocks_verification_signature = keccak256(b"BlocksVerification(uint256,uint256)");
         let filter = Filter::new()
             .event_signature(blocks_verification_signature)
-            .address(diamond_proxy_address);
+            .address(diamond_proxy_address)
+            .from_block(0)
+            .to_block(BlockNumberOrTag::Latest);
         let logs = self.l1_provider.get_logs(&filter).await?;
         if logs.is_empty() {
             tracing::info!("no `BlocksVerification` events discovered on L1");
