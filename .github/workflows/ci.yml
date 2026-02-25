@@ -184,28 +184,6 @@ jobs:
         run: |
           nvcc --version
 
-      - name: Checkout era-bellman-cuda
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: matter-labs/era-bellman-cuda
-          ref: main
-          path: bellman-cuda
-          fetch-depth: '1'
-
-      - name: Cache bellman-cuda
-        id: bellman-cuda-cache
-        uses: actions/cache@v4
-        with:
-          path: 'bellman-cuda/build'
-          key: bellman-cuda-${{ hashFiles('bellman-cuda/**') }}
-
-      - name: Build bellman-cuda
-        shell: 'bash -ex {0}'
-        if: steps.bellman-cuda-cache.outputs.cache-hit != 'true'
-        run: |
-          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
-          cmake --build bellman-cuda/build/
-
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
@@ -217,7 +195,6 @@ jobs:
           # are correct inside prebuilt binary.
           # This variable overwrites the default relative `./` in the .cargo/config.toml.
           WORKSPACE_DIR: "/opt/./actions-runner/_work/zksync-os-server/zksync-os-server"
-          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           cargo nextest archive --release -p zksync_os_integration_tests \
             --features gpu-prover-tests --test prover --archive-file ${PROVER_GPU_TESTS}.tar.zst
@@ -250,6 +227,31 @@ jobs:
           pwd
           nvidia-smi
 
+      - name: Check uname
+        run: uname -a
+
+      - name: Checkout era-bellman-cuda
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matter-labs/era-bellman-cuda
+          ref: main
+          path: bellman-cuda
+          fetch-depth: '1'
+
+      - name: Cache bellman-cuda
+        id: bellman-cuda-cache
+        uses: actions/cache@v4
+        with:
+          path: 'bellman-cuda/build'
+          key: bellman-cuda-${{ hashFiles('bellman-cuda/**') }}
+
+      - name: Build bellman-cuda
+        shell: 'bash -ex {0}'
+        if: steps.bellman-cuda-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
+          cmake --build bellman-cuda/build/
+
       - name: Download prebuilt tests
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -262,12 +264,24 @@ jobs:
           CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
         run: wget -q --show-progress "${CRS_FILE_URL}"
 
+      - name: Download and run prover
+        env:
+          COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
+          RUST_MIN_STACK: 267108864
+          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
+        continue-on-error: true
+        run: |
+          wget -q --show-progress https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync_os_prover_service
+          chmod +x zksync_os_prover_service
+          ./zksync_os_prover_service
+
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
           RUST_MIN_STACK: 267108864
+          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
