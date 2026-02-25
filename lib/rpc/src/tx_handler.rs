@@ -7,7 +7,8 @@ use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
 use std::time::Duration;
 use tokio::sync::watch;
-use zksync_os_mempool::{L2TransactionPool, PoolError};
+use zksync_os_mempool::PoolError;
+use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_types::{L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState};
 
@@ -24,7 +25,7 @@ pub struct TxHandler<RpcStorage, Mempool> {
     tx_forwarder: Option<DynProvider>,
 }
 
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> TxHandler<RpcStorage, Mempool> {
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempool> {
     pub fn new(
         config: RpcConfig,
         storage: RpcStorage,
