@@ -207,6 +207,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1 # delete sooner to not waste storage
 
+  prover-debug:
+    runs-on: [matterlabs-ci-hetzner-rtx6000-gpu]
+    steps:
+      - name: Check uname
+        run: uname -a
+
+      - name: Download and run prover
+        continue-on-error: true
+        run: |
+          wget -q --show-progress https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service-di
+          chmod +x zksync-os-prover-service-di
+          ./zksync-os-prover-service-di --version
 
   #################################################
   #  Run prover integration tests on GPU machine  #
