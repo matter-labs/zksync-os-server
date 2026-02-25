@@ -319,7 +319,11 @@ impl Tester {
                     .wait()
                     .await
                     .expect("failed to wait for prover service");
-                panic!("prover service terminated with exit code {}", code);
+                if code.success() {
+                    tracing::info!("prover service finished running");
+                } else {
+                    panic!("prover service terminated with exit code {}", code);
+                }
             });
         }
 
