@@ -170,8 +170,6 @@ jobs:
   ####################################
   build-prover-tests:
     runs-on: matterlabs-ci-runner-ultra-performance
-    container:
-      image: nvidia/cuda:12.9.1-devel-ubuntu22.04
     steps:
 
       - name: Checkout code
@@ -179,10 +177,6 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
-
-      - name: Check CUDA version
-        run: |
-          nvcc --version
 
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
@@ -225,9 +219,6 @@ jobs:
           echo $WORKSPACE
           pwd
           nvidia-smi
-
-      - name: Check uname
-        run: uname -a
 
       - name: Download prebuilt tests
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
