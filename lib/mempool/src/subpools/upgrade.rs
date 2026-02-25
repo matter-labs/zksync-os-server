@@ -3,11 +3,13 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll, ready};
-use tokio::sync::{Notify, broadcast};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio::sync::{Notify, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1UpgradeEnvelope, ProtocolSemanticVersion, UpgradeInfo, ZkTransaction};
 
+/// New upgrades are added to `Inner` as well as it's used to create `UpgradeInfoStream`.
+/// `sender` is used to submit new upgrades to the active stream.
+/// If there is no active stream, then sender will be dropped on the next access; tx is inserted to `pending_txs` anyway.
 #[derive(Clone)]
 pub struct UpgradeSubpool {
     notify: Arc<Notify>,
@@ -18,7 +20,7 @@ struct Inner {
     /// Tracks currently active protocol version. Needed because of patch upgrades that do not come
     /// with an upgrade transaction.
     current_protocol_version: ProtocolSemanticVersion,
-    sender: broadcast::Sender<UpgradeInfo>,
+    sender: Option<mpsc::Sender<UpgradeInfo>>,
     pending_upgrades: VecDeque<UpgradeInfo>,
 }
 
@@ -28,25 +30,33 @@ impl UpgradeSubpool {
             notify: Arc::new(Notify::new()),
             inner: Arc::new(RwLock::new(Inner {
                 current_protocol_version,
-                sender: broadcast::Sender::new(1),
+                sender: None,
                 pending_upgrades: VecDeque::new(),
             })),
         }
     }
 
     pub fn upgrade_info_stream(&self) -> UpgradeInfoStream {
-        let inner = self.inner.read().unwrap();
+        // `1` as buffer is enough because upgrade transactions are rare.
+        let (sender, receiver) = mpsc::channel(1);
+        let mut inner = self.inner.write().unwrap();
+        inner.sender = Some(sender);
         let state = if let Some(pending_tx) = inner.pending_upgrades.back() {
             StreamState::Pending(pending_tx.clone())
         } else {
-            StreamState::Empty(BroadcastStream::new(inner.sender.subscribe()))
+            StreamState::Empty(ReceiverStream::new(receiver))
         };
         UpgradeInfoStream { state }
     }
 
     pub fn insert(&self, upgrade: UpgradeInfo) {
         let mut inner = self.inner.write().unwrap();
-        let _ = inner.sender.send(upgrade.clone());
+        if let Some(sender) = &inner.sender {
+            // If the receiver has been dropped, we should stop sending transactions and clear the sender to avoid unnecessary work.
+            if sender.blocking_send(upgrade.clone()).is_err() {
+                inner.sender.take();
+            }
+        }
         inner.pending_upgrades.push_front(upgrade);
         self.notify.notify_waiters();
     }
@@ -131,7 +141,7 @@ pub struct UpgradeInfoStream {
 #[allow(clippy::large_enum_variant)]
 enum StreamState {
     /// No discovered upgrade yet, streaming from L1 watcher subscription.
-    Empty(BroadcastStream<UpgradeInfo>),
+    Empty(ReceiverStream<UpgradeInfo>),
     /// Upgrade has been previously discovered.
     Pending(UpgradeInfo),
     /// Stream is closed because either one upgrade was already returned or upstream receiver was
@@ -146,21 +156,13 @@ impl Stream for UpgradeInfoStream {
         let mut this = self.as_mut();
         match &mut this.state {
             StreamState::Empty(receiver) => {
-                let Some(result) = ready!(receiver.poll_next_unpin(cx)) else {
+                let Some(upgrade) = ready!(receiver.poll_next_unpin(cx)) else {
                     tracing::debug!("upgrade watcher stream is closed");
                     this.state = StreamState::Closed;
                     return Poll::Ready(None);
                 };
-                match result {
-                    Ok(upgrade) => {
-                        this.state = StreamState::Closed;
-                        Poll::Ready(Some(upgrade))
-                    }
-                    Err(BroadcastStreamRecvError::Lagged(count)) => {
-                        // Fatal error as we lost at least one upgrade
-                        panic!("upgrade receiver lagged by {count} items");
-                    }
-                }
+                this.state = StreamState::Closed;
+                Poll::Ready(Some(upgrade))
             }
             StreamState::Pending(upgrade) => {
                 let upgrade = upgrade.clone();
