@@ -207,33 +207,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1 # delete sooner to not waste storage
 
-  prover-debug:
-    runs-on: [matterlabs-ci-hetzner-rtx6000-gpu]
-    steps:
-      - name: Check uname
-        run: uname -a
-
-      - name: Download and run regular prover
-        continue-on-error: true
-        run: |
-          wget -q --show-progress https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service
-          chmod +x zksync-os-prover-service
-          ./zksync-os-prover-service --version
-
-      - name: Download and run di prover
-        continue-on-error: true
-        run: |
-          wget -q --show-progress https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service-di
-          chmod +x zksync-os-prover-service-di
-          ./zksync-os-prover-service-di --version
-
-      - name: Download and run hetzner prover
-        continue-on-error: true
-        run: |
-          wget -q --show-progress https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service-hetzner
-          chmod +x zksync-os-prover-service-hetzner
-          ./zksync-os-prover-service-hetzner --version
-
   #################################################
   #  Run prover integration tests on GPU machine  #
   #################################################
@@ -256,28 +229,6 @@ jobs:
       - name: Check uname
         run: uname -a
 
-      - name: Checkout era-bellman-cuda
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: matter-labs/era-bellman-cuda
-          ref: main
-          path: bellman-cuda
-          fetch-depth: '1'
-
-      - name: Cache bellman-cuda
-        id: bellman-cuda-cache
-        uses: actions/cache@v4
-        with:
-          path: 'bellman-cuda/build'
-          key: bellman-cuda-${{ hashFiles('bellman-cuda/**') }}
-
-      - name: Build bellman-cuda
-        shell: 'bash -ex {0}'
-        if: steps.bellman-cuda-cache.outputs.cache-hit != 'true'
-        run: |
-          cmake -Bbellman-cuda/build -Sbellman-cuda/ -DCMAKE_BUILD_TYPE=Release
-          cmake --build bellman-cuda/build/
-
       - name: Download prebuilt tests
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -290,24 +241,11 @@ jobs:
           CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
         run: wget -q --show-progress "${CRS_FILE_URL}"
 
-      - name: Download and run prover
-        env:
-          COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
-          RUST_MIN_STACK: 267108864
-          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
-        continue-on-error: true
-        run: |
-          wget -q --show-progress https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service
-          chmod +x zksync-os-prover-service
-          ./zksync-os-prover-service
-
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       - name: Run prover tests on GPU
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
-          RUST_MIN_STACK: 267108864
-          BELLMAN_CUDA_DIR: ${{ github.workspace }}/bellman-cuda
         run: |
           ulimit -s 300000
           cargo nextest run -E 'binary(prover)' --no-capture \
