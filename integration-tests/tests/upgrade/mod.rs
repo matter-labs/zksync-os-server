@@ -96,7 +96,7 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
         action: Action::Replace,
         isFreezable: true,
         selectors: vec![
-            FixedBytes(CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR).into(),
+            FixedBytes(CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR),
         ],
     };
 

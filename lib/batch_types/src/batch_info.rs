@@ -58,15 +58,14 @@ impl BatchInfo {
 
             for tx in transactions {
                 match tx.envelope() {
-                    ZkEnvelope::System(_) => {}
+                    ZkEnvelope::System(_) | ZkEnvelope::L2(_) => {
+                        number_of_layer2_txs += 1;
+                    }
                     ZkEnvelope::L1(l1_tx) => {
                         let onchain_data_hash = l1_tx.hash();
                         priority_operations_hash =
                             keccak256([priority_operations_hash.0, onchain_data_hash.0].concat());
                         number_of_layer1_txs += 1;
-                    }
-                    ZkEnvelope::L2(_) => {
-                        number_of_layer2_txs += 1;
                     }
                     ZkEnvelope::Upgrade(_) => {
                         assert!(
