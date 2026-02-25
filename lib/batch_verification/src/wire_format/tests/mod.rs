@@ -31,7 +31,7 @@ fn create_sample_request() -> BatchVerificationRequest {
             last_block_number: Some(2),
             chain_id: 6565,
             operator_da_input: vec![],
-            sl_chain_id: 123,
+            sl_chain_id: 0,
         },
         prev_commit_data: StoredBatchInfo {
             batch_number: 41,
