@@ -16,6 +16,7 @@ use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
+use alloy::hex;
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::types::BlockContext;
@@ -48,6 +49,10 @@ pub struct GenesisInput {
     /// Same format as before.
     #[serde(default)]
     pub additional_storage_raw: Vec<(B256, B256)>,
+
+    /// Additional preimages to add to the genesis state.
+    #[serde(default)]
+    pub additional_preimages: Vec<(B256, String)>,
 
     /// Execution version used for genesis.
     pub execution_version: u32,
@@ -259,6 +264,10 @@ async fn build_genesis(
                  This likely conflicts with additional_storage_raw."
             );
         }
+    }
+
+    for (hash, preimage) in genesis_input.additional_preimages {
+        preimages.push((hash, hex::decode(preimage).expect("Failed to decode preimage")));
     }
 
     let header = Header {
