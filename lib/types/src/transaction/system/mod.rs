@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),
             r#"{
-  "hash": "0x1f7117fa6190a6da113e9b7223222d3bc3b7c4c866772385e05ec79041e8f0ba",
+  "hash": "0x7bc1a669ea68562d2b22fb56757a7f85c69b286d5d4c0e1fb1b09cd8bd340aee",
   "initiator": "0x0000000000000000000000000000000000008001",
   "to": "0x0000000000000000000000000000000000010008",
   "gas": "0x0",
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),
             r#"{
-  "hash": "0x0db54bf16b232c227e16f783ea14f030ab983c67b5a2898452bc09028e0e5a4f",
+  "hash": "0x2045e379b7d45667d30c025f4cb764acfcccbf993a6744db09a4f2ad12c2981c",
   "initiator": "0x0000000000000000000000000000000000008001",
   "to": "0x000000000000000000000000000000000000800b",
   "gas": "0x0",

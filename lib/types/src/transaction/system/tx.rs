@@ -114,12 +114,13 @@ impl Encodable2718 for SystemTx {
 
 impl RlpEcdsaEncodableTx for SystemTx {
     fn rlp_encoded_fields_length(&self) -> usize {
-        self.to.length() + self.input.length()
+        self.to.length() + self.input.length() + self.salt.length()
     }
 
     fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
         self.to.encode(out);
         self.input.encode(out);
+        self.salt.encode(out);
     }
 }
 
@@ -130,7 +131,7 @@ impl RlpEcdsaDecodableTx for SystemTx {
         Ok(Self {
             to: Decodable::decode(buf)?,
             input: Decodable::decode(buf)?,
-            salt: 0,
+            salt: Decodable::decode(buf)?,
         })
     }
 }
