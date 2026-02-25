@@ -648,9 +648,9 @@ async fn download_gpu_prover() -> String {
     if !std::fs::exists(&dir).expect("failed to check dir existence") {
         std::fs::create_dir_all(dir).expect("failed to create dir");
     }
-    let path = format!("{dir}/zksync_os_prover_service_v0_7_0");
+    let path = format!("{dir}/zksync-os-prover-service-v0-7-0");
     if !std::fs::exists(&path).expect("failed to check file existence") {
-        let url = "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync_os_prover_service";
+        let url = "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service";
         tracing::info!("downloading prover service binary from {url} to {path}");
         let resp = reqwest::get(url).await.expect("failed to download");
         let body = resp
