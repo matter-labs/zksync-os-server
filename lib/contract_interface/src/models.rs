@@ -163,6 +163,8 @@ pub struct CommitBatchInfo {
     pub last_block_number: Option<u64>,
     pub chain_id: u64,
     pub operator_da_input: Vec<u8>,
+    #[serde(default)]
+    pub sl_chain_id: u64,
 }
 
 // `l2_da_commitment_scheme` is not present in storage for old batches, by default we use `BlobsAndPubdataKeccak256`.
@@ -191,6 +193,7 @@ impl From<CommitBatchInfo> for IExecutor::CommitBatchInfoZKsyncOS {
             value.last_block_number.unwrap(),
             U256::from(value.chain_id),
             Bytes::from(value.operator_da_input),
+            U256::from(value.sl_chain_id),
         ))
     }
 }
@@ -256,6 +259,7 @@ impl From<IExecutor::CommitBatchInfoZKsyncOS> for CommitBatchInfo {
             last_block_number: Some(value.lastBlockNumber),
             chain_id: value.chainId.to::<u64>(),
             operator_da_input: value.operatorDAInput.as_ref().to_vec(),
+            sl_chain_id: value.slChainId.to::<u64>(),
         }
     }
 }
@@ -278,6 +282,7 @@ impl From<IExecutorV30::CommitBatchInfoZKsyncOS> for CommitBatchInfo {
             last_block_number: Some(value.lastBlockNumber),
             chain_id: value.chainId.to::<u64>(),
             operator_da_input: value.operatorDAInput.as_ref().to_vec(),
+            sl_chain_id: 0,
         }
     }
 }

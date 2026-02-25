@@ -252,6 +252,7 @@ alloy::sol! {
             uint64 lastBlockNumber;
             uint256 chainId;
             bytes operatorDAInput;
+            uint256 slChainId;
         }
 
         event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
