@@ -292,7 +292,8 @@ async fn fund_wallet_via_l1_deposit(tester: &Tester, wallet: Address, amount: U2
                 .to(wallet)
                 .value(amount),
         )
-        .await? * 2;
+        .await?
+        * 2;
 
     let tx_base_cost = bridgehub
         .l2_transaction_base_cost(
