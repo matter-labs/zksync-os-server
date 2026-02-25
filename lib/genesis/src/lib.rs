@@ -1,5 +1,6 @@
 use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header};
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
+use alloy::hex;
 use alloy::primitives::{Address, B64, B256, Bloom, Sealable, Sealed, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
@@ -16,7 +17,6 @@ use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
 };
-use alloy::hex;
 use zksync_os_contract_interface::IL1GenesisUpgrade::GenesisUpgrade;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_interface::types::BlockContext;
@@ -267,7 +267,10 @@ async fn build_genesis(
     }
 
     for (hash, preimage) in genesis_input.additional_preimages {
-        preimages.push((hash, hex::decode(preimage).expect("Failed to decode preimage")));
+        preimages.push((
+            hash,
+            hex::decode(preimage).expect("Failed to decode preimage"),
+        ));
     }
 
     let header = Header {
