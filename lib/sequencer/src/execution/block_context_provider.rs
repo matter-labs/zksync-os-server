@@ -149,7 +149,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                     execution_version: execution_version as u32,
-                    blob_fee: U256::ZERO,
+                    blob_fee: U256::ONE,
                     code_size_limit: None,
                 };
                 self.last_constructed_block_ctx_sender

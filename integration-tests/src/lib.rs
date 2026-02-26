@@ -11,8 +11,9 @@ use alloy::transports::http::reqwest;
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
-use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -289,12 +290,7 @@ impl Tester {
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
 
-            #[cfg(feature = "gpu-prover-tests")]
-            let path = download_gpu_prover().await;
-            #[cfg(not(feature = "gpu-prover-tests"))]
-            let path = todo!(
-                "unsupported right now, please compile zksync_os_prover_service without gpu feature and upload to Github release"
-            );
+            let path = download_prover(cfg!(feature = "gpu-prover-tests")).await;
 
             let mut child = tokio::process::Command::new(path)
                 .arg("--sequencer-urls")
@@ -645,19 +641,58 @@ impl AnvilL1 {
     }
 }
 
-async fn download_gpu_prover() -> String {
-    let dir = "prover-binaries";
+async fn download_prover(gpu: bool) -> String {
+    const RELEASE_VERSION: &str = "v0.7.1";
+    const RELEASE_BASE_URL: &str =
+        "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.1";
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let asset_name = match (os, arch, gpu) {
+        ("linux", "x86_64", true) => {
+            "zksync-os-prover-service-v0.7.1-x86_64-unknown-linux-gnu-gpu.tar.gz"
+        }
+        ("linux", "x86_64", false) => {
+            "zksync-os-prover-service-v0.7.1-x86_64-unknown-linux-gnu-cpu.tar.gz"
+        }
+        ("macos", _, true) => {
+            panic!("GPU prover binary is not available for macOS in {RELEASE_VERSION}")
+        }
+        ("macos", _, false) => "zksync-os-prover-service-v0.7.1-universal-apple-darwin-cpu.tar.gz",
+        ("linux", _, _) => panic!(
+            "unsupported Linux architecture `{arch}` for prover binaries; supported architecture: x86_64"
+        ),
+        _ => panic!(
+            "unsupported platform `{os}-{arch}` for prover binaries; supported platforms: linux-x86_64 (cpu/gpu), macos-* (cpu)"
+        ),
+    };
+
+    let local_binary_name = asset_name.trim_end_matches(".tar.gz");
+    let dir = Path::new("prover-binaries");
     if !std::fs::exists(dir).expect("failed to check dir existence") {
         std::fs::create_dir_all(dir).expect("failed to create dir");
     }
-    let path = format!("{dir}/zksync-os-prover-service-v0-7-0");
-    if !std::fs::exists(path.as_str()).expect("failed to check file existence") {
-        let url = "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service-hetzner";
-        tracing::info!("downloading prover service binary from {url} to {path}");
-        let resp = reqwest::get(url).await.expect("failed to download");
+
+    let binary_path = dir.join(local_binary_name);
+    if std::fs::exists(binary_path.as_path()).expect("failed to check binary existence") {
+        tracing::info!(
+            "prover service binary is already present at {}",
+            binary_path.display()
+        );
+        return binary_path.display().to_string();
+    }
+
+    let archive_path = dir.join(asset_name);
+    if !std::fs::exists(archive_path.as_path()).expect("failed to check archive existence") {
+        let url = format!("{RELEASE_BASE_URL}/{asset_name}");
+        tracing::info!(
+            "downloading prover service archive from {url} to {}",
+            archive_path.display()
+        );
+        let resp = reqwest::get(&url).await.expect("failed to download");
         if !resp.status().is_success() {
             panic!(
-                "could not download prover service binary from {url}: status={}, response={}",
+                "could not download prover service archive from {url}: status={}, response={}",
                 resp.status(),
                 resp.text().await.expect("response was not valid text"),
             );
@@ -667,26 +702,74 @@ async fn download_gpu_prover() -> String {
             .await
             .expect("failed to read response body")
             .to_vec();
-        std::fs::write(path.as_str(), body).expect("failed to write file");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let file = File::open(path.as_str()).expect("failed to open file");
-            let mut perms = file
-                .metadata()
-                .expect("failed to load metadata")
-                .permissions();
-            perms.set_mode(0o755); // Sets rwxr-xr-x
-            std::fs::set_permissions(path.as_str(), perms).expect("failed to set permissions");
-        }
-        #[cfg(not(unix))]
-        {
-            panic!("unsupported platform (UNIX required)");
-        }
-    } else {
-        tracing::info!("prover service binary is already present at {path}");
+        std::fs::write(archive_path.as_path(), body).expect("failed to write archive");
     }
-    path
+
+    let extract_dir = dir.join(format!("{local_binary_name}-extract"));
+    if std::fs::exists(extract_dir.as_path()).expect("failed to check extraction dir existence") {
+        std::fs::remove_dir_all(extract_dir.as_path())
+            .expect("failed to clear previous extraction dir");
+    }
+    std::fs::create_dir_all(extract_dir.as_path()).expect("failed to create extraction dir");
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive_path.as_path())
+        .arg("-C")
+        .arg(extract_dir.as_path())
+        .status()
+        .expect("failed to execute `tar` to unpack prover archive");
+    if !status.success() {
+        panic!(
+            "failed to unpack prover archive {} with status {status}",
+            archive_path.display()
+        );
+    }
+
+    let extracted_binary_path =
+        find_first_prover_binary(extract_dir.as_path()).unwrap_or_else(|| {
+            panic!(
+                "failed to locate prover binary after unpacking archive {}",
+                archive_path.display()
+            )
+        });
+    std::fs::copy(extracted_binary_path.as_path(), binary_path.as_path())
+        .expect("failed to copy extracted prover binary");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = std::fs::metadata(binary_path.as_path())
+            .expect("failed to load binary metadata")
+            .permissions();
+        perms.set_mode(0o755); // Sets rwxr-xr-x
+        std::fs::set_permissions(binary_path.as_path(), perms)
+            .expect("failed to set binary permissions");
+    }
+    #[cfg(not(unix))]
+    {
+        panic!("unsupported platform (UNIX required)");
+    }
+
+    binary_path.display().to_string()
+}
+
+fn find_first_prover_binary(dir: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()? {
+        let path = entry.ok()?.path();
+        if path.is_dir() {
+            if let Some(found) = find_first_prover_binary(path.as_path()) {
+                return Some(found);
+            }
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
+        if file_name.starts_with("zksync-os-prover-service") && !file_name.ends_with(".tar.gz") {
+            return Some(path);
+        }
+    }
+    None
 }
