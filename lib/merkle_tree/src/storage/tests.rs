@@ -5,7 +5,7 @@ use crate::{
 };
 use alloy::primitives::U256;
 use std::collections::HashSet;
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+use zksync_os_merkle_tree_api::Blake2Hasher;
 
 #[test]
 fn creating_min_update_for_empty_tree() {

@@ -1,12 +1,18 @@
-use super::v1::{BatchVerificationRequestWireFormatV1, BatchVerificationResponseWireFormatV1};
+use super::v1::{
+    BatchVerificationRequestWireFormatV1, BatchVerificationResponseResultWireFormatV1,
+    BatchVerificationResponseWireFormatV1,
+};
+use super::v2::{
+    BatchVerificationRequestWireFormatV2, BatchVerificationResponseResultWireFormatV2,
+    BatchVerificationResponseWireFormatV2,
+};
 use crate::{
     BatchVerificationRequest, BatchVerificationResponse, response::BatchVerificationResult,
-    wire_format::v1::BatchVerificationResponseResultWireFormatV1,
 };
 use alloy::sol_types::SolValue;
 use zksync_os_batch_types::BatchSignature;
 use zksync_os_contract_interface::{
-    IExecutor::{self, CommitBatchInfoZKsyncOS},
+    IExecutor, IExecutorV30,
     models::{CommitBatchInfo, StoredBatchInfo},
 };
 use zksync_os_types::PubdataMode;
@@ -22,8 +28,9 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
             commit_data,
             prev_commit_data,
         } = value;
-        let decoded_commit_data_alloy = CommitBatchInfoZKsyncOS::abi_decode(&commit_data)
-            .expect("Failed to decode commit data");
+        let decoded_commit_data_alloy =
+            IExecutorV30::CommitBatchInfoZKsyncOS::abi_decode(&commit_data)
+                .expect("Failed to decode commit data");
         let decoded_commit_data = CommitBatchInfo::from(decoded_commit_data_alloy);
         let decoded_prev_commit_data_alloy =
             IExecutor::StoredBatchInfo::abi_decode(&prev_commit_data)
@@ -42,7 +49,39 @@ impl From<BatchVerificationRequestWireFormatV1> for BatchVerificationRequest {
     }
 }
 
-impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
+impl From<BatchVerificationRequestWireFormatV2> for BatchVerificationRequest {
+    fn from(value: BatchVerificationRequestWireFormatV2) -> Self {
+        let BatchVerificationRequestWireFormatV2 {
+            batch_number,
+            first_block_number,
+            last_block_number,
+            pubdata_mode,
+            request_id,
+            commit_data,
+            prev_commit_data,
+        } = value;
+        let decoded_commit_data_alloy =
+            IExecutor::CommitBatchInfoZKsyncOS::abi_decode(&commit_data)
+                .expect("Failed to decode commit data");
+        let decoded_commit_data = CommitBatchInfo::from(decoded_commit_data_alloy);
+        let decoded_prev_commit_data_alloy =
+            IExecutor::StoredBatchInfo::abi_decode(&prev_commit_data)
+                .expect("Failed to decode prev commit data");
+        let decoded_prev_commit_data = StoredBatchInfo::from(decoded_prev_commit_data_alloy);
+        Self {
+            batch_number,
+            first_block_number,
+            last_block_number,
+            pubdata_mode: PubdataMode::from_u8(pubdata_mode)
+                .expect("Failed to decode pubdata mode"),
+            request_id,
+            commit_data: decoded_commit_data,
+            prev_commit_data: decoded_prev_commit_data,
+        }
+    }
+}
+
+impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV2 {
     fn from(value: BatchVerificationRequest) -> Self {
         let BatchVerificationRequest {
             batch_number,
@@ -53,7 +92,7 @@ impl From<BatchVerificationRequest> for BatchVerificationRequestWireFormatV1 {
             commit_data,
             prev_commit_data,
         } = value;
-        let commit_data_alloy = CommitBatchInfoZKsyncOS::from(commit_data);
+        let commit_data_alloy = IExecutor::CommitBatchInfoZKsyncOS::from(commit_data);
         let encoded_commit_data = commit_data_alloy.abi_encode();
         // StoredBatchInfo conversion is not lossless last_commit_timestamp is zeroed. It is fine, because it is a legacy field unused in L1.
         let prev_commit_data_alloy = IExecutor::StoredBatchInfo::from(&prev_commit_data);
@@ -95,7 +134,32 @@ impl TryFrom<BatchVerificationResponseWireFormatV1> for BatchVerificationRespons
     }
 }
 
-impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV1 {
+impl TryFrom<BatchVerificationResponseWireFormatV2> for BatchVerificationResponse {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BatchVerificationResponseWireFormatV2) -> Result<Self, Self::Error> {
+        let BatchVerificationResponseWireFormatV2 {
+            request_id,
+            batch_number,
+            result: wire_result,
+        } = value;
+        let result = match wire_result {
+            BatchVerificationResponseResultWireFormatV2::Success(bytes) => {
+                BatchVerificationResult::Success(BatchSignature::from_raw_array(&bytes)?)
+            }
+            BatchVerificationResponseResultWireFormatV2::Refused(reason) => {
+                BatchVerificationResult::Refused(reason)
+            }
+        };
+        Ok(Self {
+            request_id,
+            batch_number,
+            result,
+        })
+    }
+}
+
+impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV2 {
     fn from(value: BatchVerificationResponse) -> Self {
         let BatchVerificationResponse {
             request_id,
@@ -104,10 +168,10 @@ impl From<BatchVerificationResponse> for BatchVerificationResponseWireFormatV1 {
         } = value;
         let wire_result = match result {
             BatchVerificationResult::Success(signature) => {
-                BatchVerificationResponseResultWireFormatV1::Success(signature.into_raw())
+                BatchVerificationResponseResultWireFormatV2::Success(signature.into_raw())
             }
             BatchVerificationResult::Refused(reason) => {
-                BatchVerificationResponseResultWireFormatV1::Refused(reason)
+                BatchVerificationResponseResultWireFormatV2::Refused(reason)
             }
         };
         Self {

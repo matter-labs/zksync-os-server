@@ -110,7 +110,7 @@ fn command_source(
     block_time: Duration,
     max_transactions_in_block: usize,
     rebuild_options: Option<RebuildOptions>,
-) -> BoxStream<BlockCommand> {
+) -> BoxStream<'_, BlockCommand> {
     let last_block_in_wal = block_replay_wal.latest_record();
     tracing::info!(
         last_block_in_wal,

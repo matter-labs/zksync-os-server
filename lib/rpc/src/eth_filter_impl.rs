@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::MissedTickBehavior;
-use zksync_os_mempool::{L2PooledTransaction, L2TransactionPool, NewSubpoolTransactionStream};
+use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::{L2PooledTransaction, NewSubpoolTransactionStream};
 use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_storage_api::RepositoryError;
 use zksync_os_types::L2Envelope;
@@ -33,9 +34,7 @@ pub struct EthFilterNamespace<RpcStorage, Mempool> {
     active_filters: Arc<DashMap<FilterId, ActiveFilter>>,
 }
 
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
-    EthFilterNamespace<RpcStorage, Mempool>
-{
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStorage, Mempool> {
     pub fn new(config: RpcConfig, storage: RpcStorage, mempool: Mempool) -> Self {
         let query_limits =
             QueryLimits::new(config.max_blocks_per_filter, config.max_logs_per_response);
@@ -57,9 +56,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
     }
 }
 
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
-    EthFilterNamespace<RpcStorage, Mempool>
-{
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterNamespace<RpcStorage, Mempool> {
     fn install_filter(&self, kind: FilterKind) -> RpcResult<FilterId> {
         let last_poll_block_number = self.storage.repository().get_latest_block();
         let id = FilterId::Str(format!("0x{:x}", U128::random()));
@@ -311,7 +308,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
 }
 
 #[async_trait]
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthFilterApiServer
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthFilterApiServer
     for EthFilterNamespace<RpcStorage, Mempool>
 {
     async fn new_filter(&self, filter: Filter) -> RpcResult<FilterId> {

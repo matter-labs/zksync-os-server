@@ -84,7 +84,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
             }
 
             /* -------- stream branch ------------------------------- */
-            maybe_tx = command.tx_source.next() => {
+            maybe_tx = command.tx_source.stream.next() => {
                 latency_tracker.enter_state(SequencerState::Execution);
                 let Some(tx) = maybe_tx else {
                     tracing::debug!(
@@ -207,7 +207,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                                 let rejection_method = rejection_method(&e);
 
                                 // mark the tx as invalid regardless of the `rejection_method`.
-                                command.tx_source.as_mut().mark_last_tx_as_invalid();
+                                command.tx_source.mark_last_l2_tx_as_invalid();
                                 // add tx to `purged_txs` only if we are purging it.
                                 match (rejection_method, command.seal_policy, executed_txs.is_empty()) {
                                     (TxRejectionMethod::Purge, _, _) => {
@@ -314,7 +314,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         .observe(executed_txs.len() as u64);
     EXECUTION_METRICS
         .computational_native_used_per_block
-        .observe(output.computaional_native_used);
+        .observe(output.computational_native_used);
 
     tracing::info!(
         block_number = output.header.number,
@@ -459,7 +459,8 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::OtherUnrecoverable(_)
         | InvalidTransaction::EIP7702HasNullDestination
         | InvalidTransaction::BlobListTooLong
-        | InvalidTransaction::EmptyBlobList => TxRejectionMethod::Purge,
+        | InvalidTransaction::EmptyBlobList
+        | InvalidTransaction::FilteredByValidator => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }

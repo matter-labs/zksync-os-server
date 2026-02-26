@@ -1,11 +1,12 @@
 use crate::{
     Database, DefaultTreeParams, HashTree, MerkleTree, RocksDBWrapper, TreeParams, leaf_nibbles,
-    types::{KeyLookup, Leaf, Node, NodeKey},
+    types::{KeyLookup, Node, NodeKey},
 };
 use alloy::primitives::{B256, FixedBytes};
 use zk_ee::utils::Bytes32;
 use zk_os_basic_system::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
+use zksync_os_merkle_tree_api::Leaf;
 
 pub struct MerkleTreeVersion<DB: Database = RocksDBWrapper, P: TreeParams = DefaultTreeParams> {
     pub tree: MerkleTree<DB, P>,

@@ -343,7 +343,7 @@ impl FriJobManager {
 
     fn try_reserve_permit_downstream(
         &self,
-    ) -> Result<Permit<SignedBatchEnvelope<FriProof>>, SubmitError> {
+    ) -> Result<Permit<'_, SignedBatchEnvelope<FriProof>>, SubmitError> {
         Ok(match self.batches_with_proof_sender.try_reserve() {
             Ok(permit) => {
                 self.latency_tracker

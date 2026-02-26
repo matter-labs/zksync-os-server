@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.16.0](https://github.com/matter-labs/zksync-os-server/compare/v0.15.1...v0.16.0) (2026-02-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **network:** fully migrate replay transport to p2p network ([#873](https://github.com/matter-labs/zksync-os-server/issues/873))
+* change api l2 l1 log format ([#875](https://github.com/matter-labs/zksync-os-server/issues/875))
+
+### Features
+
+* add block hash to revm divergence panic message ([#880](https://github.com/matter-labs/zksync-os-server/issues/880)) ([92a9eaf](https://github.com/matter-labs/zksync-os-server/commit/92a9eafb6c5e89eb27f931a9e9892b99334323ac))
+* **batch-verification:** make HTTPS connection a 2-way stream ([#862](https://github.com/matter-labs/zksync-os-server/issues/862)) ([a96e9a0](https://github.com/matter-labs/zksync-os-server/commit/a96e9a0974f7d13d86a3eaa9ab8ef03f9ebe5f29))
+* change api l2 l1 log format ([#875](https://github.com/matter-labs/zksync-os-server/issues/875)) ([26ea56f](https://github.com/matter-labs/zksync-os-server/commit/26ea56f6e84febede0278995dbdd5c670c36eb88))
+* index reverted blocks by hash ([#867](https://github.com/matter-labs/zksync-os-server/issues/867)) ([8e360fb](https://github.com/matter-labs/zksync-os-server/commit/8e360fb75f774e8acee65ef1c380308a4e7ece61))
+* **mempool:** rewrite via in-memory subpools ([#869](https://github.com/matter-labs/zksync-os-server/issues/869)) ([b3bbca8](https://github.com/matter-labs/zksync-os-server/commit/b3bbca84481b624b959a00af98cb06f0af459927))
+* **network:** bounded channel + shared starting block state ([#884](https://github.com/matter-labs/zksync-os-server/issues/884)) ([5de34e2](https://github.com/matter-labs/zksync-os-server/commit/5de34e26404e727ee0f2e92258714c12a6f73547))
+* **network:** fully migrate replay transport to p2p network ([#873](https://github.com/matter-labs/zksync-os-server/issues/873)) ([a8e963a](https://github.com/matter-labs/zksync-os-server/commit/a8e963a00aa287a625eb57e63a628ec22101de10))
+
+
+### Bug Fixes
+
+* Apply fixes for cargo deny ([#892](https://github.com/matter-labs/zksync-os-server/issues/892)) ([e4eef3c](https://github.com/matter-labs/zksync-os-server/commit/e4eef3c99011aac6b7da6aeea8017d093292d0d5))
+* Commit after each tx in revm consistency checker ([#898](https://github.com/matter-labs/zksync-os-server/issues/898)) ([384ff31](https://github.com/matter-labs/zksync-os-server/commit/384ff3134e2ba9dcaed035818845428a2c338647))
+* get rid of broadcast in mempool ([#910](https://github.com/matter-labs/zksync-os-server/issues/910)) ([01b53fd](https://github.com/matter-labs/zksync-os-server/commit/01b53fd8dc2b23e7c38c9f4ec62e48d3643a76b8))
+* remove transaction r and s paddings ([#890](https://github.com/matter-labs/zksync-os-server/issues/890)) ([3079e59](https://github.com/matter-labs/zksync-os-server/commit/3079e5968def203a09debd34f119dff79c04f700))
+* **rpc:** return hex-encoded subscription ids ([#877](https://github.com/matter-labs/zksync-os-server/issues/877)) ([0dbc703](https://github.com/matter-labs/zksync-os-server/commit/0dbc703741dbd429960d9397e250581047016d5d))
+
 ## [0.15.1](https://github.com/matter-labs/zksync-os-server/compare/v0.15.0...v0.15.1) (2026-02-10)
 
 

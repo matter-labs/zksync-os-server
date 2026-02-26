@@ -4,11 +4,12 @@ use std::{
 };
 
 use alloy::primitives::B256;
+use zksync_os_merkle_tree_api::Leaf;
 
 use crate::{
     Database, DeserializeError, HashTree, MerkleTree, TreeParams, leaf_nibbles,
     max_nibbles_for_internal_node, max_node_children,
-    types::{InternalNode, KeyLookup, Leaf, Node, NodeKey},
+    types::{InternalNode, KeyLookup, Node, NodeKey},
 };
 
 #[derive(Debug, Clone, Copy)]

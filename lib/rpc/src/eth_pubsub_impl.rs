@@ -12,7 +12,8 @@ use jsonrpsee::{PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink};
 use serde::Serialize;
 use std::ops::Deref;
 use tokio_stream::wrappers::ReceiverStream;
-use zksync_os_mempool::{L2PooledTransaction, L2TransactionPool, NewTransactionEvent};
+use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_mempool::{L2PooledTransaction, NewTransactionEvent};
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
 use zksync_os_types::BlockExt;
 
@@ -28,9 +29,7 @@ impl<RpcStorage, Mempool> EthPubsubNamespace<RpcStorage, Mempool> {
     }
 }
 
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
-    EthPubsubNamespace<RpcStorage, Mempool>
-{
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthPubsubNamespace<RpcStorage, Mempool> {
     /// Returns a stream that yields all new RPC blocks.
     fn new_headers_stream(
         &self,
@@ -145,7 +144,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>
 }
 
 #[async_trait]
-impl<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool> EthPubSubApiServer
+impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthPubSubApiServer
     for EthPubsubNamespace<RpcStorage, Mempool>
 {
     async fn subscribe(

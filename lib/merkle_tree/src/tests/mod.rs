@@ -1,15 +1,20 @@
 //! Tests for the public `MerkleTree` interface.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use alloy::primitives::U256;
+use rand::{
+    Rng, SeedableRng,
+    rngs::StdRng,
+    seq::{IndexedRandom, SliceRandom},
+};
+use zksync_os_merkle_tree_api::Leaf;
+
 use super::*;
 use crate::{
-    hasher::TreeOperation,
     storage::{PatchSet, Patched},
-    types::{Leaf, Node, NodeKey, TreeTags},
+    types::{Node, NodeKey, TreeTags},
 };
-use alloy::primitives::U256;
-use rand::prelude::IndexedRandom;
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
-use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod consistency;
 mod prop;
@@ -433,7 +438,7 @@ fn test_read_proofs(db: impl Database) {
     let new_tree_output = tree.extend(&inserts).unwrap();
 
     // Create and check a proof at version 0 (i.e., before inserting entries).
-    let proof = tree.prove(0, &inserted_keys).unwrap();
+    let (proof, _) = tree.prove(0, &inserted_keys).unwrap().expect("no proof");
     let proven_tree_view = proof
         .verify_reads(&Blake2Hasher, 64, empty_tree_output, &inserted_keys)
         .unwrap();
@@ -443,8 +448,21 @@ fn test_read_proofs(db: impl Database) {
         assert_eq!(proven_tree_view.read_entries[key], None);
     }
 
+    let (proofs, _) = tree
+        .prove_flat(0, &inserted_keys)
+        .unwrap()
+        .expect("no proof");
+    for proof in proofs {
+        assert_eq!(
+            proof.verify(64).unwrap(),
+            empty_tree_output.root_hash,
+            "key={:?}",
+            proof.key
+        );
+    }
+
     // Create a proof for all inserted keys.
-    let proof = tree.prove(1, &inserted_keys).unwrap();
+    let (proof, _) = tree.prove(1, &inserted_keys).unwrap().expect("no proof");
     let proven_tree_view = proof
         .verify_reads(&Blake2Hasher, 64, new_tree_output, &inserted_keys)
         .unwrap();
@@ -461,7 +479,7 @@ fn test_read_proofs(db: impl Database) {
             let mut proven_keys = proven_keys.to_vec();
             proven_keys.extend((0..chunk_size).map(|_| rng.random::<B256>()));
 
-            let proof = tree.prove(1, &proven_keys).unwrap();
+            let (proof, batch_output) = tree.prove(1, &proven_keys).unwrap().expect("no proof");
             let proven_tree_view = proof
                 .verify_reads(&Blake2Hasher, 64, new_tree_output, &proven_keys)
                 .unwrap();
@@ -469,6 +487,17 @@ fn test_read_proofs(db: impl Database) {
             assert_eq!(proven_tree_view.read_entries.len(), proven_keys.len());
             for (i, key) in proven_keys.iter().enumerate() {
                 assert_eq!(proven_tree_view.read_entries[key].is_some(), i < chunk_size);
+            }
+
+            // Check the API version of the proof as well.
+            let (proofs, _) = tree.prove_flat(1, &proven_keys).unwrap().expect("no proof");
+            for proof in proofs {
+                assert_eq!(
+                    proof.verify(64).unwrap(),
+                    batch_output.root_hash,
+                    "key={:?}",
+                    proof.key
+                );
             }
         }
     }
@@ -558,7 +587,6 @@ mod rocksdb {
     }
 
     #[test]
-    #[ignore = "fails for unknown reason to be investigated"]
     fn snapshot_for_empty_tree() {
         let temp_dir = TempDir::new().unwrap();
         let db = RocksDBWrapper::new(temp_dir.path()).unwrap();
@@ -570,7 +598,6 @@ mod rocksdb {
     }
 
     #[test]
-    #[ignore = "fails for unknown reason to be investigated"]
     fn snapshot_for_incremental_tree() {
         const RNG_SEED: u64 = 123_321;
 
@@ -662,7 +689,6 @@ mod rocksdb {
     }
 
     #[test]
-    #[ignore = "fails for unknown reason to be investigated"]
     fn using_patched_database() {
         let temp_dir = TempDir::new().unwrap();
         let db = RocksDBWrapper::new(temp_dir.path()).unwrap();

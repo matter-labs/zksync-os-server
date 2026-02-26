@@ -1,15 +1,9 @@
-use std::iter;
-use zksync_os_crypto::hasher::Hasher;
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+use std::{iter, sync::LazyLock};
 
-pub(crate) use self::nodes::InternalHashes;
-pub use self::proofs::{BatchTreeProof, IntermediateHash, TreeOperation};
-use crate::types::{Leaf, MAX_TREE_DEPTH};
 use alloy::primitives::B256;
-use once_cell::sync::Lazy;
+use zksync_os_crypto::hasher::{Hasher, blake2::Blake2Hasher};
 
-mod nodes;
-mod proofs;
+use crate::types::{Leaf, MAX_TREE_DEPTH};
 
 /// Tree hashing functionality.
 pub trait HashTree: Send + Sync {
@@ -84,7 +78,7 @@ impl HashTree for Blake2Hasher {
     }
 
     fn empty_subtree_hash(&self, depth: u8) -> B256 {
-        static EMPTY_TREE_HASHES: Lazy<Vec<B256>> = Lazy::new(compute_empty_tree_hashes);
+        static EMPTY_TREE_HASHES: LazyLock<Vec<B256>> = LazyLock::new(compute_empty_tree_hashes);
         EMPTY_TREE_HASHES[usize::from(depth)]
     }
 }

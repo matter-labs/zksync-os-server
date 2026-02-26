@@ -1,10 +1,14 @@
 use std::time::Duration;
 
+use super::ProtocolUpgradeBuilder;
+use super::default_upgrade::DefaultUpgrade;
+use super::interfaces;
 use crate::Tester;
 use crate::assert_traits::ReceiptAssert;
 use crate::config::{ChainLayout, load_chain_config};
 use crate::dyn_wallet_provider::EthDynProvider;
 use crate::provider::{ZksyncApi as _, ZksyncTestingProvider as _};
+use crate::upgrade::interfaces::FacetCut;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
 use alloy::providers::ext::AnvilApi;
@@ -14,10 +18,6 @@ use anyhow::Context;
 use zksync_os_server::config::Config;
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 use zksync_os_types::ProtocolSemanticVersion;
-
-use super::ProtocolUpgradeBuilder;
-use super::default_upgrade::DefaultUpgrade;
-use super::interfaces;
 
 /// Object that helps with preparation and execution of protocol upgrades in integration tests.
 ///
@@ -65,6 +65,7 @@ impl UpgradeTester {
         deadline: U256,
         upgrade_timestamp: U256,
         patch_only: bool,
+        facet_cuts: Vec<FacetCut>,
     ) -> anyhow::Result<()> {
         // Deploy the upgrade contract on L1.
         let upgrade_contract =
@@ -76,7 +77,7 @@ impl UpgradeTester {
         tracing::info!("Bridgehub migrations are paused");
 
         // CTM upgrade, `setNewVersionUpgrade` call;
-        let upgrade_data = upgrade_contract.diamond_cut_data();
+        let upgrade_data = upgrade_contract.diamond_cut_data(facet_cuts);
         self.set_new_version_on_ctm(
             upgrade_data.clone(),
             deadline,

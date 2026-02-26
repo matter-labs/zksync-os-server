@@ -1,5 +1,6 @@
 pub use self::builder::ProtocolUpgradeBuilder;
 pub use self::default_upgrade::DefaultUpgrade;
+pub use self::interfaces::{Action, CommitterFacetV31, FacetCut};
 pub use self::tester::UpgradeTester;
 
 mod builder;

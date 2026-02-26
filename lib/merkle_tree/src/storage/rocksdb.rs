@@ -11,8 +11,11 @@ use crate::{
     Database, DeserializeError,
     errors::{DeserializeContext, DeserializeErrorKind},
     metrics::{LoadStage, METRICS},
-    storage::{InsertedKeyEntry, PartialPatchSet, PatchSet},
-    types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root},
+    storage::{
+        InsertedKeyEntry, PartialPatchSet, PatchSet,
+        serialization::{deserialize_leaf, serialize_leaf},
+    },
+    types::{InternalNode, KeyLookup, Manifest, Node, NodeKey, Root},
 };
 
 impl NodeKey {
@@ -142,7 +145,7 @@ impl RocksDBWrapper {
         // If we didn't succeed with the patch set, or the key version is old,
         // access the underlying storage.
         let node = if key.nibble_count == leaf_nibbles {
-            Leaf::deserialize(raw_node).map(Node::Leaf)
+            deserialize_leaf(raw_node).map(Node::Leaf)
         } else {
             InternalNode::deserialize(raw_node).map(Node::Internal)
         };
@@ -390,7 +393,7 @@ impl Database for RocksDBWrapper {
                     index_on_level,
                 };
                 node_bytes.clear();
-                leaf.serialize(&mut node_bytes);
+                serialize_leaf(&leaf, &mut node_bytes);
                 write_batch.put_cf(tree_cf, &node_key.as_db_key(), &node_bytes);
             }
         }
@@ -469,7 +472,7 @@ impl Database for RocksDBWrapper {
                     // Otherwise, we're no longer iterating over leaves for `truncated_version`
                     raw_key[..9] == start_leaf_key[..9]
                 })
-                .map(|(_, raw_leaf)| Leaf::deserialize(&raw_leaf));
+                .map(|(_, raw_leaf)| deserialize_leaf(&raw_leaf));
             for new_leaf in new_leaves {
                 let new_key = new_leaf?.key;
                 write_batch.delete_cf(MerkleTreeColumnFamily::KeyIndices, new_key.as_slice());
@@ -490,7 +493,7 @@ mod tests {
     use alloy::primitives::U256;
     use std::collections::{BTreeMap, HashMap};
     use tempfile::TempDir;
-    use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+    use zksync_os_merkle_tree_api::{Blake2Hasher, Leaf};
 
     use super::*;
     use crate::{

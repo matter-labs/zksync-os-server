@@ -1,6 +1,6 @@
 ---
 source: lib/merkle_tree/src/tests/mod.rs
-assertion_line: 568
+assertion_line: 574
 expression: "DatabaseSnapshot::new(&raw_db)"
 ---
 key_indices:

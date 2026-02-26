@@ -5,12 +5,13 @@ use std::{
 };
 
 use alloy::primitives::B256;
+use zksync_os_merkle_tree_api::{Leaf, TreeEntry};
 
 pub(crate) use self::patch::{TreeUpdate, WorkingPatchSet};
 pub use self::rocksdb::{MerkleTreeColumnFamily, RocksDBWrapper};
 use crate::{
     errors::{DeserializeContext, DeserializeError, DeserializeErrorKind},
-    types::{InternalNode, KeyLookup, Leaf, Manifest, Node, NodeKey, Root, TreeEntry},
+    types::{InternalNode, KeyLookup, Manifest, Node, NodeKey, Root},
 };
 
 mod patch;
@@ -465,6 +466,7 @@ impl<DB: Database> Database for Patched<DB> {
         let Some(patch) = &mut self.patch else {
             return self.inner.truncate(manifest, truncated_versions);
         };
+        let min_version_in_patch = patch.patches_by_version.keys().copied().min();
         patch.truncate(manifest.clone(), truncated_versions)?;
 
         // If the patch set is fully truncated, we want to flush truncation to the underlying DB since it won't be applied
@@ -473,6 +475,8 @@ impl<DB: Database> Database for Patched<DB> {
             assert!(patch.sorted_new_leaves.is_empty());
 
             self.patch = None;
+            // Use the reduced range of truncated versions for the underlying DB.
+            let truncated_versions = min_version_in_patch.map_or(truncated_versions, |ver| ..ver);
             self.inner.truncate(manifest, truncated_versions)?;
         }
         Ok(())

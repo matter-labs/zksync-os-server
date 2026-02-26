@@ -36,12 +36,6 @@ pub(super) struct SnarkProofPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct AvailableProofsPayload {
-    batch_number: u64,
-    available_proofs: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub(super) struct FailedProofResponse {
     pub batch_number: u64,
     pub last_batch_timestamp: u64,

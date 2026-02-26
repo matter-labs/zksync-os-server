@@ -41,6 +41,7 @@ pub fn dummy_commit_batch_info(batch_number: u64, from: u64, to: u64) -> CommitB
         batch_number,
         new_state_commitment: B256::ZERO,
         number_of_layer1_txs: 0,
+        number_of_layer2_txs: 0,
         priority_operations_hash: B256::ZERO,
         dependency_roots_rolling_hash: B256::ZERO,
         l2_to_l1_logs_root_hash: B256::ZERO,
@@ -52,6 +53,7 @@ pub fn dummy_commit_batch_info(batch_number: u64, from: u64, to: u64) -> CommitB
         last_block_number: Some(to),
         chain_id: 270,
         operator_da_input: Vec::new(),
+        sl_chain_id: 123,
     }
 }
 
