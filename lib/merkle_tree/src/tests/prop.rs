@@ -8,12 +8,12 @@ use std::{
 
 use alloy::primitives::B256;
 use proptest::{prelude::*, sample::Index};
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+use zksync_os_merkle_tree_api::{Blake2Hasher, Leaf, MerkleTreeProver};
 
 use super::naive_hash_tree;
 use crate::{
     BatchTreeProof, DefaultTreeParams, MerkleTree, PatchSet, TreeBatchOutput, TreeEntry,
-    TreeOperation, TreeParams, types::Leaf,
+    TreeOperation, TreeParams,
 };
 
 const MAX_ENTRIES: usize = 100;
@@ -97,7 +97,7 @@ fn test_read_proof(
 
     let output = tree.extend(prev_writes).unwrap();
     let version = tree.latest_version().unwrap().expect("no versions");
-    let proof = tree.prove(version, reads).unwrap();
+    let (proof, _) = tree.prove(version, reads).unwrap().expect("no proof");
 
     let verify_result = proof.verify_reads(
         &Blake2Hasher,
@@ -107,6 +107,14 @@ fn test_read_proof(
     );
     let tree_view = verify_result.map_err(|err| TestCaseError::fail(format!("{err:#}")))?;
     prop_assert_eq!(tree_view.root_hash, output.root_hash);
+
+    let (proofs, _) = tree.prove_flat(version, reads).unwrap().expect("no proofs");
+    for proof in proofs {
+        let recovered_root_hash = proof
+            .verify(<DefaultTreeParams>::TREE_DEPTH)
+            .map_err(|err| TestCaseError::fail(format!("{err:#}")))?;
+        prop_assert_eq!(recovered_root_hash, output.root_hash);
+    }
     Ok(())
 }
 
@@ -246,7 +254,7 @@ fn test_proof_mutation(
 
     let output = tree.extend(prev_writes).unwrap();
     let version = tree.latest_version().unwrap().expect("no versions");
-    let mut proof = tree.prove(version, reads).unwrap();
+    let (mut proof, _) = tree.prove(version, reads).unwrap().expect("no proof");
 
     mutation.apply(&mut proof);
     let verify_result = proof.verify_reads(

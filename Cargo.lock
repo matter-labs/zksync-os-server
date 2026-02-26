@@ -15192,7 +15192,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.7-interface-v0.0.13)",
- "blake2 0.10.6",
  "clap",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.7-interface-v0.0.13)",
  "insta",
@@ -15205,13 +15204,25 @@ dependencies = [
  "serde_with",
  "tempfile",
  "thiserror 2.0.17",
- "tokio",
  "tracing",
  "tracing-subscriber 0.3.20",
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.7-interface-v0.0.13)",
- "zksync_os_crypto",
+ "zksync_os_merkle_tree_api",
  "zksync_os_rocksdb",
+]
+
+[[package]]
+name = "zksync_os_merkle_tree_api"
+version = "0.16.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "assert_matches",
+ "insta",
+ "rand 0.9.2",
+ "serde",
+ "zksync_os_crypto",
 ]
 
 [[package]]

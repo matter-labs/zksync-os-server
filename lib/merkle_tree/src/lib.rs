@@ -1,21 +1,22 @@
 //! Persistent ZK OS Merkle tree.
 
+use std::fmt;
+
 use alloy::primitives::B256;
 use anyhow::Context as _;
-use std::fmt;
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
+pub use zksync_os_merkle_tree_api::{
+    BatchTreeProof, Blake2Hasher, HashTree, Leaf, MAX_TREE_DEPTH, MerkleTreeProver,
+    TreeBatchOutput, TreeEntry, TreeOperation,
+};
 
 pub use self::{
     errors::DeserializeError,
-    hasher::{BatchTreeProof, HashTree, TreeOperation},
     storage::{Database, MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper},
-    types::{TreeBatchOutput, TreeEntry},
     with_version::{MerkleTreeVersion, fixed_bytes_to_bytes32},
 };
 use crate::{
     metrics::{BatchProofStage, LoadStage, METRICS, MerkleTreeInfo},
     storage::{AsEntry, TreeUpdate, WorkingPatchSet},
-    types::{Leaf, MAX_TREE_DEPTH},
 };
 
 mod consistency;
@@ -33,7 +34,7 @@ mod with_version;
 /// these types will remain stable.
 #[doc(hidden)]
 pub mod unstable {
-    pub use crate::types::{KeyLookup, Leaf, Manifest, Node, NodeKey, Root};
+    pub use crate::types::{KeyLookup, Manifest, Node, NodeKey, Root};
 }
 
 /// Marker trait for tree parameters.
@@ -184,17 +185,6 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
         self.root_hash(version)
     }
 
-    /// Creates a batch proof for `keys` at the specified tree version.
-    ///
-    /// # Errors
-    ///
-    /// - Returns an error if the version doesn't exist.
-    /// - Proxies database errors.
-    pub fn prove(&self, version: u64, keys: &[B256]) -> anyhow::Result<BatchTreeProof> {
-        let (patch, mut update) = self.create_patch::<TreeEntry>(version, &[], keys)?;
-        Ok(patch.create_batch_proof(&self.hasher, vec![], update.take_read_operations()))
-    }
-
     /// Extends this tree by creating its new version.
     ///
     /// All keys in the provided entries must be distinct.
@@ -333,6 +323,29 @@ impl<DB: Database, P: TreeParams> MerkleTree<DB, P> {
             self.db.truncate(manifest, ..current_version_count)?;
         }
         Ok(())
+    }
+}
+
+impl<DB: Database, P: TreeParams> MerkleTreeProver for MerkleTree<DB, P> {
+    fn tree_depth(&self) -> u8 {
+        P::TREE_DEPTH
+    }
+
+    fn prove(
+        &self,
+        version: u64,
+        keys: &[B256],
+    ) -> anyhow::Result<Option<(BatchTreeProof, TreeBatchOutput)>> {
+        let Some(root) = self.db.try_root(version)? else {
+            return Ok(None);
+        };
+        let batch_output = TreeBatchOutput {
+            root_hash: root.hash::<P>(&self.hasher),
+            leaf_count: root.leaf_count,
+        };
+        let (patch, mut update) = self.create_patch::<TreeEntry>(version, &[], keys)?;
+        let proof = patch.create_batch_proof(&self.hasher, vec![], update.take_read_operations());
+        Ok(Some((proof, batch_output)))
     }
 }
 

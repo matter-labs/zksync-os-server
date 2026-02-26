@@ -7,6 +7,7 @@ members = [
     "lib/l1_watcher",
     "lib/mempool",
     "lib/merkle_tree",
+    "lib/merkle_tree_api",
     "lib/mini_merkle_tree",
     "lib/priority_tree",
     "lib/rocksdb",
@@ -249,6 +250,7 @@ zksync_os_l1_watcher = { version = "=0.16.0", path = "lib/l1_watcher" }
 zksync_os_mempool = { version = "=0.16.0", path = "lib/mempool" }
 zksync_os_mini_merkle_tree = { version = "=0.16.0", path = "lib/mini_merkle_tree" }
 zksync_os_merkle_tree = { version = "=0.16.0", path = "lib/merkle_tree" }
+zksync_os_merkle_tree_api = { version = "=0.16.0", path = "lib/merkle_tree_api" }
 zksync_os_priority_tree = { version = "=0.16.0", path = "lib/priority_tree" }
 zksync_os_observability = { version = "=0.16.0", path = "lib/observability" }
 zksync_os_rocksdb = { version = "=0.16.0", path = "lib/rocksdb" }

@@ -11,12 +11,11 @@ use rand::{
 };
 use tempfile::TempDir;
 use tracing_subscriber::EnvFilter;
-use zksync_os_crypto::hasher::Hasher;
-use zksync_os_crypto::hasher::blake2::Blake2Hasher;
 use zksync_os_merkle_tree::{
-    Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree, MerkleTreeColumnFamily,
-    PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams, unstable,
+    Blake2Hasher, Database, DefaultTreeParams, DeserializeError, HashTree, MerkleTree,
+    MerkleTreeColumnFamily, PatchSet, Patched, RocksDBWrapper, TreeEntry, TreeParams, unstable,
 };
+use zksync_os_merkle_tree_api::Hasher;
 use zksync_os_rocksdb::{RocksDB, RocksDBOptions, db::NamedColumnFamily};
 
 #[derive(Debug)]
