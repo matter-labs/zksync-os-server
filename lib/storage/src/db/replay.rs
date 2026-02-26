@@ -428,7 +428,7 @@ impl WriteReplay for BlockReplayStorage {
             let old_record = self
                 .get_replay_record(block_context.block_number)
                 .expect("Old record must exist");
-            if &old_record != block_record {
+            if old_record.block_output_hash != block_record.block_output_hash {
                 let old_record_hash = self.get_canonical_block_hash(block_context.block_number);
                 let old_record_hash_hex = alloy::hex::encode_prefixed(old_record_hash.0);
                 tracing::warn!(
