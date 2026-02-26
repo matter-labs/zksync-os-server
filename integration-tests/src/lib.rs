@@ -7,12 +7,15 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+#[cfg(feature = "prover-tests")]
 use alloy::transports::http::reqwest;
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(feature = "prover-tests")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "prover-tests")]
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -641,6 +644,7 @@ impl AnvilL1 {
     }
 }
 
+#[cfg(feature = "prover-tests")]
 async fn download_prover(gpu: bool) -> String {
     const RELEASE_VERSION: &str = "v0.7.1";
     const RELEASE_BASE_URL: &str =
@@ -754,6 +758,7 @@ async fn download_prover(gpu: bool) -> String {
     binary_path.display().to_string()
 }
 
+#[cfg(feature = "prover-tests")]
 fn find_first_prover_binary(dir: &Path) -> Option<PathBuf> {
     for entry in std::fs::read_dir(dir).ok()? {
         let path = entry.ok()?.path();
