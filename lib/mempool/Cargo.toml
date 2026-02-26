@@ -14,8 +14,11 @@ zksync_os_types = { workspace = true, features = ["reth"] }
 zksync_os_storage_api.workspace = true
 zksync_os_reth_compat.workspace = true
 
+zksync_os_interface = { workspace = true }
+
 reth-transaction-pool = { workspace = true }
 reth-primitives-traits = { workspace = true }
+reth-execution-types = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips"] }
 auto_impl.workspace = true
@@ -25,3 +28,4 @@ tokio-stream.workspace = true
 tracing.workspace = true
 vise.workspace = true
 metrics.workspace = true
+pin-project.workspace = true

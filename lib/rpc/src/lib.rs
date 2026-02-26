@@ -47,7 +47,7 @@ use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
 use zksync_os_l1_watcher::CommittedBatchProvider;
-use zksync_os_mempool::L2TransactionPool;
+use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
 use zksync_os_rpc_api::filter::EthFilterApiServer;
@@ -59,7 +59,7 @@ use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_types::TransactionAcceptanceState;
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2TransactionPool>(
+pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     config: RpcConfig,
     chain_id: u64,
     bridgehub_address: Address,

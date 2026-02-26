@@ -244,6 +244,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             mix_hash: latest_block_context.mix_hash,
             execution_version: latest_block_context.execution_version,
             blob_fee: latest_block_context.blob_fee,
+            code_size_limit: None,
         }
     }
 

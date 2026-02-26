@@ -5,7 +5,7 @@ use alloy::{
 
 use crate::{
     dyn_wallet_provider::EthDynProvider,
-    upgrade::interfaces::{self, ProposedUpgrade},
+    upgrade::interfaces::{self, FacetCut, ProposedUpgrade},
 };
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ impl DefaultUpgrade {
         })
     }
 
-    pub fn diamond_cut_data(&self) -> interfaces::DiamondCutData {
+    pub fn diamond_cut_data(&self, facet_cuts: Vec<FacetCut>) -> interfaces::DiamondCutData {
         let init_calldata = self
             .instance
             .upgrade(self.proposed_upgrade.clone())
@@ -35,7 +35,7 @@ impl DefaultUpgrade {
             .clone();
 
         interfaces::DiamondCutData {
-            facetCuts: vec![],
+            facetCuts: facet_cuts,
             initAddress: *self.instance.address(),
             initCalldata: init_calldata,
         }

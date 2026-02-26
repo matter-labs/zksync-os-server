@@ -30,7 +30,6 @@ members = [
     "lib/gas_adjuster",
     "lib/batch_verification",
     "lib/batch_types",
-    "lib/socket",
     "lib/internal_config",
     "lib/network",
     "lib/metadata",
@@ -42,7 +41,7 @@ resolver = "3"
 default-members = ["node/bin"]
 
 [workspace.package]
-version = "0.15.1"
+version = "0.16.0"
 edition = "2024"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"
@@ -79,17 +78,17 @@ regex = "1.11.3"
 # current and dev). If you bump interface version you will have to back-port the changes to all historical versions of
 # zksync-os.
 
-zksync_os_evm_errors = { version = "0.0.10" }
-zksync_os_interface = { version = "0.0.10" }
+zksync_os_evm_errors = { version = "0.0.13" }
+zksync_os_interface = { version = "0.0.13" }
 
 # Historical versions of zksync-os that are kept to be able to replay old blocks and simulate calls on them. Only
 # forward system dependencies are expected to be in this section.
 
-zk_os_forward_system_0_0_26 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.26-rc2", features = [
+zk_os_forward_system_0_0_27 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.27-interface-v0.0.13", features = [
     "evm-compatibility",
     "no_print",
 ] }
-zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.0-rc1", features = [
+zk_os_forward_system_0_1_1 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.1.1-interface-v0.0.13", features = [
     "production",
     "no_print",
     # We had an issue in this version - it's compilable only with the testing feature.
@@ -98,7 +97,7 @@ zk_os_forward_system_0_1_0 = { package = "forward_system", git = "https://github
 ], default-features = false }
 # v0.2.x is not historical yet, but we use a separate version for simulation so that `eth_estimateGas` can work with
 # 0-balance accounts. The fix was not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
-zk_os_forward_system_0_2_6 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.6-simulation-only", features = [
+zk_os_forward_system_0_2_7 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.7-simulation-only-interface-v0.0.13", features = [
     "production",
     "no_print",
 ], default-features = false }
@@ -123,14 +122,14 @@ zk_os_forward_system_0_2_6 = { package = "forward_system", git = "https://github
 #
 # When a new version is released this version gets downgraded to the "previous version" section above.
 
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5", features = [
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.7-interface-v0.0.13", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.5" }
+zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.7-interface-v0.0.13" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.7-interface-v0.0.13" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.7-interface-v0.0.13" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.7-interface-v0.0.13" }
 execution_utils = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
 full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbender.git", tag = "v0.5.2" }
 zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airbender-prover.git", tag = "v0.7.0" }
@@ -139,7 +138,7 @@ zksync_os_prover_service = { git = "https://github.com/matter-labs/zksync-airben
 #
 # Can be updated at any time and changing it does not count as a breaking change.
 
-zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260122-4", features = [
+zk_os_forward_system_dev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "dev-20260220", features = [
     "production",
     "no_print",
 ], default-features = false }
@@ -213,6 +212,9 @@ num = { version = "0.4" }
 httpmock = "0.8"
 rangemap = "1.7.1"
 flate2 = "1.1.8"
+http-body-util = "0.1.3"
+hyper-rustls = { version = "0.27.7", default-features = false, features = ["native-tokio", "ring", "tls12"] }
+rustls = { version = "0.23.31", default-features = false, features = ["ring", "std"] }
 
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
@@ -241,43 +243,42 @@ reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.0.3" }
 
 # "Local" dependencies
-zksync_os_contract_interface = { version = "=0.15.1", path = "lib/contract_interface" }
-zksync_os_crypto = { version = "=0.15.1", path = "lib/crypto" }
-zksync_os_l1_sender = { version = "=0.15.1", path = "lib/l1_sender" }
-zksync_os_l1_watcher = { version = "=0.15.1", path = "lib/l1_watcher" }
-zksync_os_mempool = { version = "=0.15.1", path = "lib/mempool" }
-zksync_os_mini_merkle_tree = { version = "=0.15.1", path = "lib/mini_merkle_tree" }
-zksync_os_merkle_tree_api = { version = "=0.15.1", path = "lib/merkle_tree_api" }
-zksync_os_merkle_tree = { version = "=0.15.1", path = "lib/merkle_tree" }
-zksync_os_priority_tree = { version = "=0.15.1", path = "lib/priority_tree" }
-zksync_os_observability = { version = "=0.15.1", path = "lib/observability" }
-zksync_os_rocksdb = { version = "=0.15.1", path = "lib/rocksdb" }
-zksync_os_rpc = { version = "=0.15.1", path = "lib/rpc" }
-zksync_os_rpc_api = { version = "=0.15.1", path = "lib/rpc_api" }
-zksync_os_sequencer = { version = "=0.15.1", path = "lib/sequencer" }
-zksync_os_state = { version = "=0.15.1", path = "lib/state" }
-zksync_os_state_full_diffs = { version = "=0.15.1", path = "lib/state_full_diffs" }
-zksync_os_storage = { version = "=0.15.1", path = "lib/storage" }
-zksync_os_storage_api = { version = "=0.15.1", path = "lib/storage_api" }
-zksync_os_types = { version = "=0.15.1", path = "lib/types" }
-zksync_os_genesis = { version = "=0.15.1", path = "lib/genesis" }
-zksync_os_object_store = { version = "=0.15.1", path = "lib/object_store" }
-zksync_os_status_server = { version = "=0.15.1", path = "lib/status" }
-zksync_os_multivm = { version = "=0.15.1", path = "lib/multivm" }
-zksync_os_pipeline = { version = "=0.15.1", path = "lib/pipeline" }
-zksync_os_revm_consistency_checker = { version = "=0.15.1", path = "lib/revm_consistency_checker" }
-zksync_os_gas_adjuster = { version = "=0.15.1", path = "lib/gas_adjuster" }
-zksync_os_batch_verification = { version = "=0.15.1", path = "lib/batch_verification" }
-zksync_os_batch_types = { version = "=0.15.1", path = "lib/batch_types" }
-zksync_os_socket = { version = "=0.15.1", path = "lib/socket" }
-zksync_os_internal_config = { version = "=0.15.1", path = "lib/internal_config" }
-zksync_os_network = { version = "=0.15.1", path = "lib/network" }
-zksync_os_metadata = { version = "=0.15.1", path = "lib/metadata" }
-zksync_os_external_price_api = { version = "=0.15.1", path = "lib/external_price_api" }
-zksync_os_base_token_adjuster = { version = "=0.15.1", path = "lib/base_token_adjuster" }
-zksync_os_reth_compat = { version = "=0.15.1", path = "lib/reth_compat" }
+zksync_os_contract_interface = { version = "=0.16.0", path = "lib/contract_interface" }
+zksync_os_crypto = { version = "=0.16.0", path = "lib/crypto" }
+zksync_os_l1_sender = { version = "=0.16.0", path = "lib/l1_sender" }
+zksync_os_l1_watcher = { version = "=0.16.0", path = "lib/l1_watcher" }
+zksync_os_mempool = { version = "=0.16.0", path = "lib/mempool" }
+zksync_os_mini_merkle_tree = { version = "=0.16.0", path = "lib/mini_merkle_tree" }
+zksync_os_merkle_tree = { version = "=0.16.0", path = "lib/merkle_tree" }
+zksync_os_merkle_tree_api = { version = "=0.16.0", path = "lib/merkle_tree_api" }
+zksync_os_priority_tree = { version = "=0.16.0", path = "lib/priority_tree" }
+zksync_os_observability = { version = "=0.16.0", path = "lib/observability" }
+zksync_os_rocksdb = { version = "=0.16.0", path = "lib/rocksdb" }
+zksync_os_rpc = { version = "=0.16.0", path = "lib/rpc" }
+zksync_os_rpc_api = { version = "=0.16.0", path = "lib/rpc_api" }
+zksync_os_sequencer = { version = "=0.16.0", path = "lib/sequencer" }
+zksync_os_state = { version = "=0.16.0", path = "lib/state" }
+zksync_os_state_full_diffs = { version = "=0.16.0", path = "lib/state_full_diffs" }
+zksync_os_storage = { version = "=0.16.0", path = "lib/storage" }
+zksync_os_storage_api = { version = "=0.16.0", path = "lib/storage_api" }
+zksync_os_types = { version = "=0.16.0", path = "lib/types" }
+zksync_os_genesis = { version = "=0.16.0", path = "lib/genesis" }
+zksync_os_object_store = { version = "=0.16.0", path = "lib/object_store" }
+zksync_os_status_server = { version = "=0.16.0", path = "lib/status" }
+zksync_os_multivm = { version = "=0.16.0", path = "lib/multivm" }
+zksync_os_pipeline = { version = "=0.16.0", path = "lib/pipeline" }
+zksync_os_revm_consistency_checker = { version = "=0.16.0", path = "lib/revm_consistency_checker" }
+zksync_os_gas_adjuster = { version = "=0.16.0", path = "lib/gas_adjuster" }
+zksync_os_batch_verification = { version = "=0.16.0", path = "lib/batch_verification" }
+zksync_os_batch_types = { version = "=0.16.0", path = "lib/batch_types" }
+zksync_os_internal_config = { version = "=0.16.0", path = "lib/internal_config" }
+zksync_os_network = { version = "=0.16.0", path = "lib/network" }
+zksync_os_metadata = { version = "=0.16.0", path = "lib/metadata" }
+zksync_os_external_price_api = { version = "=0.16.0", path = "lib/external_price_api" }
+zksync_os_base_token_adjuster = { version = "=0.16.0", path = "lib/base_token_adjuster" }
+zksync_os_reth_compat = { version = "=0.16.0", path = "lib/reth_compat" }
 
-zksync_os_server = { version = "=0.15.1", path = "node/bin" }
+zksync_os_server = { version = "=0.16.0", path = "node/bin" }
 
 #[patch.crates-io]
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }

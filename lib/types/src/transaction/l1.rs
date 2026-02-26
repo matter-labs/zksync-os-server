@@ -25,34 +25,47 @@ pub type L1UpgradeTx = L1Tx<UpgradeTxType>;
 pub type L1UpgradeEnvelope = L1Envelope<UpgradeTxType>;
 
 /// Upgrade transaction with metadata fetched from L1.
-/// Important: `UpgradeTransaction` as a structure is not expected to be widely
+/// Important: `UpgradeInfo` as a structure is not expected to be widely
 /// exposed within the system.
 /// From the sequencer step onwards, upgrade tx should be represented as
 /// `L1PriorityEnvelope` or `ZkTransaction` only.
 #[derive(Clone)]
-pub struct UpgradeTransaction {
+pub struct UpgradeInfo {
+    /// The L2 upgrade transaction itself.
+    pub tx: Option<L1UpgradeEnvelope>,
+    /// Upgrade metadata fetched from L1.
+    pub metadata: UpgradeMetadata,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpgradeMetadata {
     /// Instruction for the sequencer to NOT execute the upgrade transaction
     /// until the given timestamp.
     /// Represents a timestamp in seconds since UNIX_EPOCH
     pub timestamp: u64,
     /// Which protocol version will be used after the upgrade transaction is executed.
     pub protocol_version: ProtocolSemanticVersion,
-    /// The L2 upgrade transaction itself.
-    pub tx: Option<L1UpgradeEnvelope>,
     /// Preimages (e.g. force deployments) for the upgrade transaction (if any).
     pub force_preimages: Vec<(B256, Vec<u8>)>,
 }
 
-// UpgradeTransaction has huge content. Especially force_preimage values and upgrade transaction input field. Display only some hashes.
-impl Debug for UpgradeTransaction {
+impl UpgradeInfo {
+    pub fn protocol_version(&self) -> &ProtocolSemanticVersion {
+        &self.metadata.protocol_version
+    }
+}
+
+// UpgradeInfo has huge content. Especially force_preimage values and upgrade transaction input field. Display only some hashes.
+impl Debug for UpgradeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UpgradeTransaction")
-            .field("timestamp", &self.timestamp)
-            .field("protocol_version", &self.protocol_version)
+            .field("timestamp", &self.metadata.timestamp)
+            .field("protocol_version", &self.metadata.protocol_version)
             .field("tx_hash", &self.tx.as_ref().map(|tx| tx.hash()))
             .field(
                 "force_preimages_hashes",
                 &self
+                    .metadata
                     .force_preimages
                     .iter()
                     .map(|(hash, _)| hash)
@@ -172,9 +185,9 @@ mod tx_serde {
         #[serde(with = "alloy::serde::quantity")]
         pub v: u64,
         /// ECDSA signature r
-        pub r: B256,
+        pub r: U256,
         /// ECDSA signature s
-        pub s: B256,
+        pub s: U256,
         /// Y-parity for EIP-2930 and EIP-1559 transactions. In theory these
         /// transactions types shouldn't have a `v` field, but in practice they
         /// are returned by nodes.
@@ -203,8 +216,8 @@ mod tx_serde {
 
                 // Put defaults for signature fields
                 v: 0,
-                r: B256::ZERO,
-                s: B256::ZERO,
+                r: U256::ZERO,
+                s: U256::ZERO,
                 y_parity: false,
             }
         }
@@ -622,8 +635,8 @@ mod tests {
           "from": "0x357fe6c9f85dc429596577cf2e7a191f60b6865b",
           "gasPrice": "0xee6fcf4",
           "v": "0x0",
-          "r": "0x0000000000000000000000000000000000000000000000000000000000000000",
-          "s": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "r": "0x0",
+          "s": "0x0",
           "yParity": "0x0",
         });
         let l1_tx: alloy::rpc::types::Transaction<ZkEnvelope> =

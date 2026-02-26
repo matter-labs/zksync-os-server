@@ -1,9 +1,10 @@
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, FixedBytes, U256};
 use alloy::providers::Provider;
+use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
-use zksync_os_integration_tests::upgrade::UpgradeTester;
+use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -31,15 +32,21 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
         .build();
 
     upgrade_tester
-        .execute_default_upgrade(&protocol_upgrade, deadline, upgrade_timestamp, true)
+        .execute_default_upgrade(
+            &protocol_upgrade,
+            deadline,
+            upgrade_timestamp,
+            true,
+            Vec::new(),
+        )
         .await?;
 
     Ok(())
 }
 
-/// Performs a minor protocol upgrade which also does a force deployment.
+/// Performs V30->V31 protocol upgrade which also does a force deployment.
 #[test_log::test(tokio::test)]
-async fn upgrade_minor_with_deployments() -> anyhow::Result<()> {
+async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(0); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
@@ -75,8 +82,32 @@ async fn upgrade_minor_with_deployments() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
+    // Deploy new CommitterFacet.
+    let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
+    let committer_facet = CommitterFacetV31::deploy(
+        upgrade_tester.tester.l1_provider().clone(),
+        U256::from(l1_chain_id),
+    )
+    .await?;
+
+    // For simplicity, we only do a replacement for `commitBatchesSharedBridge`.
+    let facet_cut = FacetCut {
+        facet: *committer_facet.address(),
+        action: Action::Replace,
+        isFreezable: true,
+        selectors: vec![FixedBytes(
+            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
+        )],
+    };
+
     upgrade_tester
-        .execute_default_upgrade(&protocol_upgrade, deadline, upgrade_timestamp, false)
+        .execute_default_upgrade(
+            &protocol_upgrade,
+            deadline,
+            upgrade_timestamp,
+            false,
+            vec![facet_cut],
+        )
         .await?;
 
     // Ensure that the contract is now callable.
