@@ -37,7 +37,7 @@ impl StorageSlotProofEntry {
                 .get(usize::from(depth))
                 .copied()
                 .unwrap_or_else(|| Blake2Hasher.empty_subtree_hash(depth));
-            hash = if index % 2 == 0 {
+            hash = if index.is_multiple_of(2) {
                 Blake2Hasher.hash_branch(&hash, &sibling_hash)
             } else {
                 Blake2Hasher.hash_branch(&sibling_hash, &hash)

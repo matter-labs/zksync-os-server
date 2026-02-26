@@ -647,11 +647,11 @@ impl AnvilL1 {
 
 async fn download_gpu_prover() -> String {
     let dir = "prover-binaries";
-    if !std::fs::exists(&dir).expect("failed to check dir existence") {
+    if !std::fs::exists(dir).expect("failed to check dir existence") {
         std::fs::create_dir_all(dir).expect("failed to create dir");
     }
     let path = format!("{dir}/zksync-os-prover-service-v0-7-0");
-    if !std::fs::exists(&path).expect("failed to check file existence") {
+    if !std::fs::exists(path.as_str()).expect("failed to check file existence") {
         let url = "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.0/zksync-os-prover-service-hetzner";
         tracing::info!("downloading prover service binary from {url} to {path}");
         let resp = reqwest::get(url).await.expect("failed to download");
@@ -667,19 +667,19 @@ async fn download_gpu_prover() -> String {
             .await
             .expect("failed to read response body")
             .to_vec();
-        std::fs::write(&path, body).expect("failed to write file");
+        std::fs::write(path.as_str(), body).expect("failed to write file");
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let file = File::open(&path).expect("failed to open file");
+            let file = File::open(path.as_str()).expect("failed to open file");
             let mut perms = file
                 .metadata()
                 .expect("failed to load metadata")
                 .permissions();
             perms.set_mode(0o755); // Sets rwxr-xr-x
-            std::fs::set_permissions(&path, perms).expect("failed to set permissions");
+            std::fs::set_permissions(path.as_str(), perms).expect("failed to set permissions");
         }
         #[cfg(not(unix))]
         {
