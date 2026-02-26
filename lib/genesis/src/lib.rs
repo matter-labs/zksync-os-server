@@ -1,5 +1,6 @@
 use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header};
 use alloy::eips::eip1559::INITIAL_BASE_FEE;
+use alloy::hex;
 use alloy::primitives::{Address, B64, B256, Bloom, Sealable, Sealed, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Filter;
@@ -48,6 +49,10 @@ pub struct GenesisInput {
     /// Same format as before.
     #[serde(default)]
     pub additional_storage_raw: Vec<(B256, B256)>,
+
+    /// Additional preimages to add to the genesis state.
+    #[serde(default)]
+    pub additional_preimages: Vec<(B256, String)>,
 
     /// Execution version used for genesis.
     pub execution_version: u32,
@@ -261,6 +266,13 @@ async fn build_genesis(
         }
     }
 
+    for (hash, preimage) in genesis_input.additional_preimages {
+        preimages.push((
+            hash,
+            hex::decode(preimage).expect("Failed to decode preimage"),
+        ));
+    }
+
     let header = Header {
         parent_hash: B256::ZERO,
         ommers_hash: EMPTY_OMMER_ROOT_HASH,
@@ -300,6 +312,7 @@ async fn build_genesis(
         mix_hash: U256::ZERO,
         execution_version: genesis_input.execution_version,
         blob_fee: U256::ZERO,
+        code_size_limit: None,
     };
 
     Ok(GenesisState {

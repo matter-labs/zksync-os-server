@@ -80,7 +80,7 @@ impl<'a> fmt::Debug for BlockOutputDebug<'a> {
             .field("account_diffs", &o.account_diffs)
             .field("published_preimages", &preimages)
             .field("pubdata", &Hex(&o.pubdata))
-            .field("computaional_native_used", &o.computaional_native_used)
+            .field("computaional_native_used", &o.computational_native_used)
             .finish()
     }
 }

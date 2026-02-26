@@ -125,6 +125,7 @@ impl From<v1::BlockContext> for InterfaceBlockContext {
             mix_hash: value.mix_hash,
             execution_version: value.execution_version,
             blob_fee: value.blob_fee,
+            code_size_limit: None,
         }
     }
 }

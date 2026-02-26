@@ -314,7 +314,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         .observe(executed_txs.len() as u64);
     EXECUTION_METRICS
         .computational_native_used_per_block
-        .observe(output.computaional_native_used);
+        .observe(output.computational_native_used);
 
     tracing::info!(
         block_number = output.header.number,
@@ -459,7 +459,8 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::OtherUnrecoverable(_)
         | InvalidTransaction::EIP7702HasNullDestination
         | InvalidTransaction::BlobListTooLong
-        | InvalidTransaction::EmptyBlobList => TxRejectionMethod::Purge,
+        | InvalidTransaction::EmptyBlobList
+        | InvalidTransaction::FilteredByValidator => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
