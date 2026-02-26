@@ -28,9 +28,9 @@ fn main() {
         }
         let tag = match parse_git_tag(&package.id) {
             Ok(tag) => tag,
-            Err(_) => {
-                // No git tag attached to package, assuming it is not used for proving
-                continue;
+            Err(err) => {
+                println!("cargo::error=failed to parse forward_system's git tag: {err}");
+                return;
             }
         };
 

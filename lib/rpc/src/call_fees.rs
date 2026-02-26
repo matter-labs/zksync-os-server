@@ -34,7 +34,7 @@ impl CallFees {
                         gas_price.unwrap_or_default()
                     }
                     // ignore base fee when tx's gas price is missing
-                    (_, None | Some(0)) => block_base_fee,
+                    (_, None | Some(0)) => 0,
                     // only enforce the fee cap if provided input is not zero
                     (_, Some(gas_price)) if gas_price < block_base_fee => {
                         return Err(CallFeesError::FeeCapTooLow);

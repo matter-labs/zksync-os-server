@@ -51,7 +51,7 @@ cleanup() {
     done
 
     echo -e "${GREEN}All services stopped${NC}"
-    # rm -rf "$TEMP_DIR"
+    rm -rf "$TEMP_DIR"
     exit 0
 }
 
@@ -154,8 +154,7 @@ if [ -n "$LOGS_DIR" ]; then
     anvil --load-state "$L1_STATE_FILE" --port 8545 > "$ANVIL_LOG_FILE" 2>&1 &
     echo -e "${GREEN}Anvil logs: $ANVIL_LOG_FILE${NC}"
 else
-    echo "EMIL WAS HERE $L1_STATE_FILE"
-    anvil --load-state "$L1_STATE_FILE" --port 8545
+    anvil --load-state "$L1_STATE_FILE" --port 8545 > /dev/null 2>&1 &
 fi
 ANVIL_PID=$!
 PIDS+=($ANVIL_PID)
