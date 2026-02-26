@@ -431,7 +431,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let sl_chain_id_subpool = SlChainIdSubpool::default();
     let interop_roots_subpool = InteropRootsSubpool::new(
         // todo: change to config.sequencer_config.interop_roots_per_tx when contracts are updated
-        1, 10,
+        1,
     );
 
     // If we start from the very first block, we should start by sending upgrade tx for genesis.
