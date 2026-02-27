@@ -290,27 +290,36 @@ alloy::sol! {
             bytes calldata _commitData
         ) external;
 
-       function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
+        function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
 
-       function proveBatchesSharedBridge(
+        function proveBatchesSharedBridge(
             address _chainAddress,
             uint256 _processBatchFrom,
             uint256 _processBatchTo,
             bytes calldata _proofData
-       );
+        );
 
-       struct PriorityOpsBatchInfo {
-           bytes32[] leftPath;
-           bytes32[] rightPath;
-           bytes32[] itemHashes;
+        struct PriorityOpsBatchInfo {
+            bytes32[] leftPath;
+            bytes32[] rightPath;
+            bytes32[] itemHashes;
+        }
+
+        struct L2Log {
+           uint8 l2ShardId;
+           bool isService;
+           uint16 txNumberInBatch;
+           address sender;
+           bytes32 key;
+           bytes32 value;
        }
 
-       function executeBatchesSharedBridge(
-           address _chainAddress,
-           uint256 _processFrom,
-           uint256 _processTo,
-           bytes calldata _executeData
-       );
+        function executeBatchesSharedBridge(
+            address _chainAddress,
+            uint256 _processFrom,
+            uint256 _processTo,
+            bytes calldata _executeData
+        );
     }
 
     // taken from v29 version of `IExecutor.sol`

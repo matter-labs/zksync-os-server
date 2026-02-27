@@ -31,7 +31,7 @@ impl SendToL1 for ProofCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
 
-    fn solidity_call(&self) -> Bytes {
+    fn solidity_call(&self, _gateway: bool) -> Bytes {
         proveBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.batch_info.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),

@@ -1,5 +1,5 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
-use alloy::primitives::Bytes;
+use alloy::primitives::{B256, Bytes};
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -7,7 +7,7 @@ use std::fmt::{Debug, Formatter};
 use std::time::SystemTime;
 use time::UtcDateTime;
 use zksync_os_batch_types::{BatchInfo, BatchSignatureSet};
-use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_types::PubdataMode;
 use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
@@ -41,6 +41,12 @@ pub struct BatchMetadata {
     pub protocol_version: ProtocolSemanticVersion,
     #[serde(default)]
     pub computational_native_used: Option<u64>,
+    #[serde(default)]
+    pub logs: Vec<L2Log>,
+    #[serde(default)]
+    pub messages: Vec<Vec<u8>>,
+    #[serde(default)]
+    pub multichain_batch_root: B256,
 }
 
 impl BatchMetadata {

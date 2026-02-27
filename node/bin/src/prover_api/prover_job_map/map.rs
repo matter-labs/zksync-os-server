@@ -514,6 +514,9 @@ mod tests {
             execution_version: 1,
             protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
             computational_native_used: None,
+            logs: vec![],
+            messages: vec![],
+            multichain_batch_root: Default::default(),
         };
 
         BatchForSigning::new(batch, vec![1, 2, 3])

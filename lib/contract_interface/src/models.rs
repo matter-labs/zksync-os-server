@@ -1,5 +1,5 @@
 use crate::{IExecutor, IExecutorV29, IExecutorV30};
-use alloy::primitives::{B256, Bytes, U256, keccak256};
+use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -20,6 +20,30 @@ impl From<PriorityOpsBatchInfo> for IExecutor::PriorityOpsBatchInfo {
             leftPath: value.left_path,
             rightPath: value.right_path,
             itemHashes: value.item_hashes,
+        }
+    }
+}
+
+/// User-friendly version of [`IExecutor::L2Log`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct L2Log {
+    pub l2_shard_id: u8,
+    pub is_service: bool,
+    pub tx_number_in_batch: u16,
+    pub sender: Address,
+    pub key: B256,
+    pub value: B256,
+}
+
+impl From<L2Log> for IExecutor::L2Log {
+    fn from(value: L2Log) -> Self {
+        IExecutor::L2Log {
+            l2ShardId: value.l2_shard_id,
+            isService: value.is_service,
+            txNumberInBatch: value.tx_number_in_batch,
+            sender: value.sender,
+            key: value.key,
+            value: value.value,
         }
     }
 }
