@@ -29,7 +29,7 @@ impl CommittedBatchProvider {
         // Special case for genesis
         if l1_state.last_executed_batch == 0 {
             let batch_info = load_genesis_batch_info().await;
-            let batch_hash_l1 = l1_state.diamond_proxy.stored_batch_hash(0).await?;
+            let batch_hash_l1 = l1_state.diamond_proxy_l1.stored_batch_hash(0).await?;
             anyhow::ensure!(
                 batch_hash_l1 == batch_info.hash(),
                 "genesis batch hash mismatch: L1 {}, local {}",
@@ -44,15 +44,15 @@ impl CommittedBatchProvider {
         // todo: this can take a while and should ideally happen in the background
         // Ignore genesis here as it was handled above
         for batch_number in l1_state.last_executed_batch.max(1)..=l1_state.last_committed_batch {
-            let l1_block_with_commit = util::find_l1_commit_block_by_batch_number(
-                l1_state.diamond_proxy.clone(),
+            let sl_block_with_commit = util::find_l1_commit_block_by_batch_number(
+                l1_state.diamond_proxy_sl.clone(),
                 batch_number,
                 max_l1_blocks_to_scan,
             )
             .await?;
             let discovered_batch = util::fetch_stored_batch_data(
-                &l1_state.diamond_proxy,
-                l1_block_with_commit,
+                &l1_state.diamond_proxy_sl,
+                sl_block_with_commit,
                 batch_number,
             )
             .await?

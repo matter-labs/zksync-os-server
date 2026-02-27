@@ -2,61 +2,74 @@ use crate::metrics::L1_STATE_METRICS;
 use crate::models::BatchDaInputMode;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
-use alloy::primitives::{Address, U256};
-use alloy::providers::DynProvider;
-use alloy::providers::Provider;
+use alloy::primitives::{Address, U256, address};
+use alloy::providers::{DynProvider, Provider};
 use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
+const L2_BRIDGEHUB_ADDRESS: Address = address!("0x0000000000000000000000000000000000010002");
+
 #[derive(Clone, Debug)]
-pub struct BatchVerificationL1Config {
+pub struct BatchVerificationSLConfig {
     pub threshold: u64,
     pub validators: Vec<Address>,
 }
 
 #[derive(Clone, Debug)]
-pub enum BatchVerificationL1 {
+pub enum BatchVerificationSL {
     Disabled,
-    Enabled(BatchVerificationL1Config),
+    Enabled(BatchVerificationSLConfig),
 }
 
 #[derive(Clone, Debug)]
 pub struct L1State {
-    pub bridgehub: Bridgehub<DynProvider>,
-    pub diamond_proxy: ZkChain<DynProvider>,
-    pub validator_timelock: Address,
-    pub batch_verification: BatchVerificationL1,
+    pub bridgehub_l1: Bridgehub<DynProvider>,
+    pub bridgehub_sl: Bridgehub<DynProvider>,
+    pub diamond_proxy_l1: ZkChain<DynProvider>,
+    pub diamond_proxy_sl: ZkChain<DynProvider>,
+    pub validator_timelock_sl: Address,
+    pub batch_verification: BatchVerificationSL,
     pub last_committed_batch: u64,
     pub last_proved_batch: u64,
     pub last_executed_batch: u64,
     pub da_input_mode: BatchDaInputMode,
     pub l1_chain_id: u64,
+    pub sl_chain_id: u64,
 }
 
 impl L1State {
     /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
     pub async fn fetch(
-        provider: DynProvider,
-        bridgehub_address: Address,
-        chain_id: u64,
+        l1_provider: DynProvider,
+        sl_provider: DynProvider,
+        bridgehub_address_l1: Address,
+        l2_chain_id: u64,
     ) -> anyhow::Result<Self> {
-        let bridgehub = Bridgehub::new(bridgehub_address, provider, chain_id);
-        let all_chain_ids = bridgehub.get_all_zk_chain_chain_ids().await?;
-        anyhow::ensure!(
-            all_chain_ids.contains(&U256::from(chain_id)),
-            "chain ID {chain_id} is not registered on L1"
-        );
-        let diamond_proxy = bridgehub.zk_chain().await?;
-        let validator_timelock_address = bridgehub.validator_timelock_address().await?;
+        let l1_chain_id = l1_provider.get_chain_id().await?;
+        let sl_chain_id = sl_provider.get_chain_id().await?;
+
+        let bridgehub_l1 = Bridgehub::new(bridgehub_address_l1, l1_provider, l2_chain_id);
+        let bridgehub_address_sl = if l1_chain_id == sl_chain_id {
+            bridgehub_address_l1
+        } else {
+            L2_BRIDGEHUB_ADDRESS
+        };
+        let bridgehub_sl = Bridgehub::new(bridgehub_address_sl, sl_provider, l2_chain_id);
+
+        Self::validate_chain_ids(&bridgehub_l1, &bridgehub_sl, l2_chain_id).await?;
+
+        let diamond_proxy_l1 = bridgehub_l1.zk_chain().await?;
+        let diamond_proxy_sl = bridgehub_sl.zk_chain().await?;
+        let validator_timelock_sl = bridgehub_sl.validator_timelock_address().await?;
 
         let latest = BlockId::latest();
-        let last_committed_batch = diamond_proxy.get_total_batches_committed(latest).await?;
-        let last_proved_batch = diamond_proxy.get_total_batches_proved(latest).await?;
-        let last_executed_batch = diamond_proxy.get_total_batches_executed(latest).await?;
+        let last_committed_batch = diamond_proxy_sl.get_total_batches_committed(latest).await?;
+        let last_proved_batch = diamond_proxy_sl.get_total_batches_proved(latest).await?;
+        let last_executed_batch = diamond_proxy_sl.get_total_batches_executed(latest).await?;
 
-        let pubdata_pricing_mode = diamond_proxy.get_pubdata_pricing_mode().await?;
+        let pubdata_pricing_mode = diamond_proxy_sl.get_pubdata_pricing_mode().await?;
         let da_input_mode = match pubdata_pricing_mode {
             PubdataPricingMode::Rollup => BatchDaInputMode::Rollup,
             PubdataPricingMode::Validium => BatchDaInputMode::Validium,
@@ -64,9 +77,9 @@ impl L1State {
         };
 
         let batch_verification = match MultisigCommitter::try_new(
-            validator_timelock_address,
-            diamond_proxy.provider().clone(),
-            *diamond_proxy.address(),
+            validator_timelock_sl,
+            diamond_proxy_sl.provider().clone(),
+            *diamond_proxy_sl.address(),
         )
         .await
         .context("failed to check MultisigCommitter interface")?
@@ -80,27 +93,53 @@ impl L1State {
                     .get_validators()
                     .await
                     .context("failed to get validators")?;
-                BatchVerificationL1::Enabled(BatchVerificationL1Config {
+                BatchVerificationSL::Enabled(BatchVerificationSLConfig {
                     threshold,
                     validators,
                 })
             }
-            None => BatchVerificationL1::Disabled,
+            None => BatchVerificationSL::Disabled,
         };
 
-        let l1_chain_id = diamond_proxy.provider().get_chain_id().await?;
-
         Ok(Self {
-            bridgehub,
-            diamond_proxy,
-            validator_timelock: validator_timelock_address,
+            bridgehub_l1,
+            bridgehub_sl,
+            diamond_proxy_l1,
+            diamond_proxy_sl,
+            validator_timelock_sl,
             batch_verification,
             last_committed_batch,
             last_proved_batch,
             last_executed_batch,
             da_input_mode,
             l1_chain_id,
+            sl_chain_id,
         })
+    }
+
+    async fn validate_chain_ids(
+        bridgehub_l1: &Bridgehub<DynProvider>,
+        bridgehub_sl: &Bridgehub<DynProvider>,
+        l2_chain_id: u64,
+    ) -> anyhow::Result<()> {
+        let all_chain_ids_l1 = bridgehub_l1.get_all_zk_chain_chain_ids().await?;
+        let all_chain_ids_sl = bridgehub_sl.get_all_zk_chain_chain_ids().await?;
+        anyhow::ensure!(
+            all_chain_ids_l1.contains(&U256::from(l2_chain_id)),
+            "chain ID {l2_chain_id} is not registered on L1"
+        );
+        anyhow::ensure!(
+            all_chain_ids_sl.contains(&U256::from(l2_chain_id)),
+            "chain ID {l2_chain_id} is not registered on SL"
+        );
+
+        let sl_chain_id = bridgehub_sl.instance.provider().get_chain_id().await?;
+        let is_sl_whitelisted = bridgehub_l1
+            .whitelisted_settlement_layers(U256::from(sl_chain_id))
+            .await?;
+        anyhow::ensure!(is_sl_whitelisted, "SL is not whitelisted on L1 Bridgehub");
+
+        Ok(())
     }
 
     /// Equivalent to [`Self::fetch`] that also waits until the pending L1 state is consistent with the
@@ -110,51 +149,51 @@ impl L1State {
     /// NOTE: This should only be called on the main node as ENs will observe pending changes that
     /// are being submitted by the main node.
     pub async fn fetch_finalized(
-        provider: DynProvider,
+        l1_provider: DynProvider,
+        sl_provider: DynProvider,
         bridgehub_address: Address,
         chain_id: u64,
     ) -> anyhow::Result<Self> {
-        let this = Self::fetch(provider, bridgehub_address, chain_id).await?;
-        let zk_chain = &this.diamond_proxy;
+        let this = Self::fetch(l1_provider, sl_provider, bridgehub_address, chain_id).await?;
+        let zk_chain_sl = &this.diamond_proxy_sl;
         let last_committed_batch =
-            wait_to_finalize(|block_id| zk_chain.get_total_batches_committed(block_id))
+            wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_committed(block_id))
                 .await
                 .context("getTotalBatchesCommitted")?;
         let last_proved_batch =
-            wait_to_finalize(|block_id| zk_chain.get_total_batches_proved(block_id))
+            wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_proved(block_id))
                 .await
                 .context("getTotalBatchesVerified")?;
         let last_executed_batch =
-            wait_to_finalize(|block_id| zk_chain.get_total_batches_executed(block_id))
+            wait_to_finalize(|block_id| zk_chain_sl.get_total_batches_executed(block_id))
                 .await
                 .context("getTotalBatchesExecuted")?;
         Ok(Self {
-            bridgehub: this.bridgehub,
-            diamond_proxy: this.diamond_proxy,
-            validator_timelock: this.validator_timelock,
+            bridgehub_l1: this.bridgehub_l1,
+            bridgehub_sl: this.bridgehub_sl,
+            diamond_proxy_l1: this.diamond_proxy_l1,
+            diamond_proxy_sl: this.diamond_proxy_sl,
+            validator_timelock_sl: this.validator_timelock_sl,
             batch_verification: this.batch_verification,
             last_committed_batch,
-            l1_chain_id: this.l1_chain_id,
             last_proved_batch,
             last_executed_batch,
             da_input_mode: this.da_input_mode,
+            l1_chain_id: this.l1_chain_id,
+            sl_chain_id: this.sl_chain_id,
         })
     }
 
-    pub fn bridgehub_address(&self) -> Address {
-        *self.bridgehub.address()
-    }
-
-    pub fn diamond_proxy_address(&self) -> Address {
-        *self.diamond_proxy.address()
+    pub fn diamond_proxy_address_sl(&self) -> Address {
+        *self.diamond_proxy_sl.address()
     }
 
     pub fn report_metrics(&self) {
         // Need to leak Strings here as metric exporter expects label names as `&'static`
         // This only happens once per process lifetime so is safe
-        let bridgehub: &'static str = self.bridgehub.address().to_string().leak();
-        let diamond_proxy: &'static str = self.diamond_proxy.address().to_string().leak();
-        let validator_timelock: &'static str = self.validator_timelock.to_string().leak();
+        let bridgehub: &'static str = self.bridgehub_l1.address().to_string().leak();
+        let diamond_proxy: &'static str = self.diamond_proxy_l1.address().to_string().leak();
+        let validator_timelock: &'static str = self.validator_timelock_sl.to_string().leak();
         L1_STATE_METRICS.l1_contract_addresses[&(bridgehub, diamond_proxy, validator_timelock)]
             .set(1);
 

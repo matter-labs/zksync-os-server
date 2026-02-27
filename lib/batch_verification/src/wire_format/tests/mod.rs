@@ -41,7 +41,6 @@ fn create_sample_request() -> BatchVerificationRequest {
             dependency_roots_rolling_hash: B256::ZERO,
             l2_to_l1_logs_root_hash: B256::ZERO,
             commitment: B256::ZERO,
-            last_block_timestamp: 0, //intentionally set to 0, this is unused in L1 and loosing it in transport is fine
         },
     }
 }

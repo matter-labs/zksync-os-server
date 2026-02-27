@@ -9,6 +9,7 @@ use crate::eth_call_handler::EthCallError;
 use crate::eth_filter_impl::EthFilterError;
 use crate::eth_impl::EthError;
 use crate::tx_handler::{EthSendRawTransactionError, EthSendRawTransactionSyncError};
+use crate::unstable_impl::UnstableError;
 use crate::zks_impl::ZksError;
 use alloy::primitives::Bytes;
 use alloy::rpc::types::error::EthRpcErrorCode;
@@ -43,6 +44,7 @@ impl_to_rpc_result!(EthFilterError);
 impl_to_rpc_result!(EthError);
 impl_to_rpc_result!(ZksError);
 impl_to_rpc_result!(DebugError);
+impl_to_rpc_result!(UnstableError);
 
 impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
     fn to_rpc_result(self) -> RpcResult<Ok> {

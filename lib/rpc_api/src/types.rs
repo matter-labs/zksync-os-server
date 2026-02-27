@@ -1,7 +1,7 @@
 use alloy::consensus::Sealed;
 use alloy::network::primitives::BlockTransactions;
 use alloy::primitives::{Address, B256, BlockHash, TxHash, U256};
-use alloy::rpc::types::Log;
+use alloy::rpc::types::{FeeHistory, Log};
 use jsonrpsee::core::Serialize;
 use serde::Deserialize;
 use zksync_os_types::{BlockExt, ZkEnvelope, ZkReceiptEnvelope};
@@ -53,6 +53,15 @@ pub struct BlockMetadata {
     pub pubdata_price_per_byte: U256,
     pub native_price: U256,
     pub execution_version: u32,
+}
+
+/// Extended FeeHistory struct including L2 pubdata price history.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct L2FeeHistory {
+    #[serde(flatten)]
+    pub base: FeeHistory,
+    pub pubdata_price_per_byte: Option<Vec<U256>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

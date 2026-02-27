@@ -29,14 +29,15 @@ const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
 const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 
 pub struct L1UpgradeTxWatcher {
-    admin_contract: Address,
+    admin_contract_l1: Address,
 
-    provider: DynProvider,
+    provider_l1: DynProvider,
+    provider_sl: DynProvider,
     /// Address of the bytecode supplier contract (used to detect published bytecode preimages)
     #[allow(dead_code)] // TODO: enable once bytecode supplier integration is ready
     bytecode_supplier_address: Address,
     /// Address of the CTM contract (used to detect upgrade priority transactions)
-    ctm: Address,
+    ctm_sl: Address,
     current_protocol_version: ProtocolSemanticVersion,
     upgrade_subpool: UpgradeSubpool,
 
@@ -47,7 +48,8 @@ pub struct L1UpgradeTxWatcher {
 impl L1UpgradeTxWatcher {
     pub async fn create_watcher(
         config: L1WatcherConfig,
-        zk_chain: ZkChain<DynProvider>,
+        zk_chain_l1: ZkChain<DynProvider>,
+        zk_chain_sl: ZkChain<DynProvider>,
         bytecode_supplier_address: Address,
         current_protocol_version: ProtocolSemanticVersion,
         upgrade_subpool: UpgradeSubpool,
@@ -55,18 +57,19 @@ impl L1UpgradeTxWatcher {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
-            zk_chain_address = ?zk_chain.address(),
+            zk_chain_address_l1 = ?zk_chain_l1.address(),
+            zk_chain_address_sl = ?zk_chain_sl.address(),
             "initializing upgrade transaction watcher"
         );
 
-        let admin = zk_chain.get_admin().await?;
-        tracing::info!(admin = ?admin, "resolved chain admin");
+        let admin_l1 = zk_chain_l1.get_admin().await?;
+        tracing::info!(admin_l1 = ?admin_l1, "resolved chain admin");
 
-        let ctm = zk_chain.get_chain_type_manager().await?;
-        tracing::info!(ctm = ?ctm, "resolved chain type manager");
+        let ctm_sl = zk_chain_sl.get_chain_type_manager().await?;
+        tracing::info!(ctm_sl = ?ctm_sl, "resolved chain type manager");
 
-        let current_l1_block = zk_chain.provider().get_block_number().await?;
-        let last_l1_block = find_l1_block_by_protocol_version(zk_chain.clone(), current_protocol_version.clone())
+        let current_l1_block = zk_chain_l1.provider().get_block_number().await?;
+        let last_l1_block = find_l1_block_by_protocol_version(zk_chain_l1.clone(), current_protocol_version.clone())
             .await
             .or_else(|err| {
                 // This may error on Anvil with `--load-state` - as it doesn't support `eth_call` even for recent blocks.
@@ -83,7 +86,7 @@ impl L1UpgradeTxWatcher {
         // Right now, bytecodes supplied address is provided as a configuration, since it's not discoverable from L1
         // Sanity check: make sure that the value provided for this config is correct.
         anyhow::ensure!(
-            !zk_chain
+            !zk_chain_l1
                 .provider()
                 .get_code_at(bytecode_supplier_address)
                 .await?
@@ -94,16 +97,17 @@ impl L1UpgradeTxWatcher {
         tracing::info!(last_l1_block, "checking block starting from");
 
         let this = Self {
-            admin_contract: admin,
-            provider: zk_chain.provider().clone(),
+            admin_contract_l1: admin_l1,
+            provider_l1: zk_chain_l1.provider().clone(),
+            provider_sl: zk_chain_sl.provider().clone(),
             bytecode_supplier_address,
-            ctm,
+            ctm_sl,
             current_protocol_version,
             upgrade_subpool,
             max_blocks_to_process: config.max_blocks_to_process,
         };
         let l1_watcher = L1Watcher::new(
-            zk_chain.provider().clone(),
+            zk_chain_l1.provider().clone(),
             last_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
@@ -123,7 +127,7 @@ impl L1UpgradeTxWatcher {
         // TODO: for now we assume that upgrades cannot be skipped, e.g.
         // each chain upgrades before the new upgrade is published.
         // This is a temporary solution and should be fixed ASAP.
-        let mut current_block = self.provider.get_block_number().await?;
+        let mut current_block = self.provider_sl.get_block_number().await?;
         let start_block = current_block
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS) // Upgrade could've been set a long time ago.
             .max(1u64);
@@ -140,10 +144,10 @@ impl L1UpgradeTxWatcher {
             let filter = Filter::new()
                 .from_block(from_block)
                 .to_block(current_block)
-                .address(self.ctm)
+                .address(self.ctm_sl)
                 .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
                 .topic1(*raw_protocol_version);
-            upgrade_cut_data_logs = self.provider.get_logs(&filter).await?;
+            upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
             current_block = from_block.saturating_sub(1);
         }
 
@@ -272,7 +276,7 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
     type WatchedEvent = L1UpgradeRequest;
 
     fn contract_address(&self) -> Address {
-        self.admin_contract
+        self.admin_contract_l1
     }
 
     async fn process_event(
@@ -297,7 +301,7 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
                 "received a protocol version that is not marked as live"
             );
             // Only allow non-live versions in localhost environment.
-            if self.provider.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
+            if self.provider_l1.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
                 panic!(
                     "Received an upgrade to a non-live protocol version: {:?}",
                     request.protocol_version

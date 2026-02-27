@@ -178,6 +178,10 @@ pub struct GeneralConfig {
     #[config(default_t = "http://localhost:8545".into())]
     pub l1_rpc_url: String,
 
+    /// Gateway's JSON RPC API.
+    /// Currently, it's a marker of whether chain settles to Gateway or not.
+    pub gateway_rpc_url: Option<String>,
+
     /// Min number of blocks to replay on restart
     /// Depending on L1/persistence state, we may need to replay more blocks than this number
     /// In some cases, we need to replay the whole blockchain (e.g. switching state backends) -

@@ -40,8 +40,8 @@ impl RetryPolicy for OptimisticRetryPolicy {
     }
 }
 
-pub async fn build_node_l1_provider(
-    l1_rpc_url: &str,
+pub async fn build_node_provider(
+    rpc_url: &str,
 ) -> FillProvider<
     impl TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet> + 'static,
     impl Provider<Ethereum> + Clone + 'static,
@@ -54,7 +54,7 @@ pub async fn build_node_l1_provider(
     );
     let client = RpcClient::builder()
         .layer(retry_layer)
-        .connect(l1_rpc_url)
+        .connect(rpc_url)
         .await
         .expect("failed to connect to L1 api");
     ProviderBuilder::new()

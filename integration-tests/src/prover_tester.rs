@@ -39,11 +39,12 @@ impl ProverTester {
         // Get L1 state which contains diamond proxy address
         let l1_state = L1State::fetch(
             self.l1_provider.clone().erased(),
+            self.l1_provider.clone().erased(),
             bridgehub_address,
             chain_id,
         )
         .await?;
-        let diamond_proxy_address = l1_state.diamond_proxy_address();
+        let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
 
         let blocks_verification_signature = keccak256(b"BlocksVerification(uint256,uint256)");
         let filter = Filter::new()

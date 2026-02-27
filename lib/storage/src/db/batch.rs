@@ -2,10 +2,9 @@ use crate::metrics::BATCH_STORAGE_METRICS;
 use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use std::path::Path;
-use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch as RocksdbWriteBatch};
-use zksync_os_storage_api::{ReadBatch, WriteBatch};
+use zksync_os_storage_api::{PersistedBatch, ReadBatch, WriteBatch};
 
 #[derive(Clone, Debug)]
 pub struct ExecutedBatchStorage {
@@ -52,7 +51,7 @@ impl ExecutedBatchStorage {
         Self { db }
     }
 
-    fn write_batch_unchecked(&self, executed_batch: DiscoveredCommittedBatch) {
+    fn write_batch_unchecked(&self, executed_batch: PersistedBatch) {
         let persist_latency_observer = BATCH_STORAGE_METRICS.persist_latency.start();
         let batch_number_key = executed_batch.number().to_be_bytes().to_vec();
         let first_block_number_key = executed_batch.first_block_number().to_be_bytes().to_vec();
@@ -91,7 +90,7 @@ impl ReadBatch for ExecutedBatchStorage {
     fn get_batch_by_block_number(
         &self,
         block_number: BlockNumber,
-    ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    ) -> anyhow::Result<Option<PersistedBatch>> {
         let block_key = block_number.to_be_bytes();
 
         let mut iter = self.db.to_iterator_cf(
@@ -115,10 +114,7 @@ impl ReadBatch for ExecutedBatchStorage {
         }
     }
 
-    fn get_batch_by_number(
-        &self,
-        batch_number: u64,
-    ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    fn get_batch_by_number(&self, batch_number: u64) -> anyhow::Result<Option<PersistedBatch>> {
         let batch_key = batch_number.to_be_bytes();
         let Some(bytes) = self
             .db
@@ -145,7 +141,7 @@ impl ReadBatch for ExecutedBatchStorage {
 }
 
 impl WriteBatch for ExecutedBatchStorage {
-    fn write(&self, batch: DiscoveredCommittedBatch) {
+    fn write(&self, batch: PersistedBatch) {
         self.write_batch_unchecked(batch)
     }
 }

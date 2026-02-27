@@ -63,7 +63,7 @@ impl BatchSignature {
     pub async fn sign_batch(
         prev_batch_info: &StoredBatchInfo,
         batch_info: &BatchInfo,
-        l1_chain_id: u64,
+        sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
         private_key: &PrivateKeySigner,
@@ -71,7 +71,7 @@ impl BatchSignature {
         let digest = eip712_multisig_digest(
             prev_batch_info,
             batch_info,
-            l1_chain_id,
+            sl_chain_id,
             multisig_committer,
             protocol_version,
         );
@@ -83,7 +83,7 @@ impl BatchSignature {
         self,
         prev_batch_info: &StoredBatchInfo,
         batch_info: &BatchInfo,
-        l1_chain_id: u64,
+        sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
     ) -> Result<ValidatedBatchSignature, SignatureError> {
@@ -93,7 +93,7 @@ impl BatchSignature {
                 .recover_address_from_prehash(&eip712_multisig_digest(
                     prev_batch_info,
                     batch_info,
-                    l1_chain_id,
+                    sl_chain_id,
                     multisig_committer,
                     protocol_version,
                 ))?,
@@ -126,7 +126,7 @@ sol! {
 fn eip712_multisig_digest(
     prev_batch_info: &StoredBatchInfo,
     batch_info: &BatchInfo,
-    l1_chain_id: u64,
+    sl_chain_id: u64,
     multisig_committer: Address,
     protocol_version: &ProtocolSemanticVersion,
 ) -> B256 {
@@ -146,7 +146,7 @@ fn eip712_multisig_digest(
     let domain = Eip712Domain {
         name: Some("MultisigCommitter".into()),
         version: Some("1".into()),
-        chain_id: Some(U256::from(l1_chain_id)),
+        chain_id: Some(U256::from(sl_chain_id)),
         verifying_contract: Some(multisig_committer),
         salt: None,
     };

@@ -19,7 +19,9 @@ zksync_os_multivm.workspace = true
 zksync_os_genesis.workspace = true
 zk_os_basic_system.workspace = true
 zksync_os_metadata.workspace = true
+zksync_os_batch_types.workspace = true
 zksync_os_l1_watcher.workspace = true
+zksync_os_contract_interface.workspace = true
 
 zksync_os_evm_errors.workspace = true
 zksync_os_interface.workspace = true
@@ -28,8 +30,7 @@ zk_os_api.workspace = true
 zk_ee.workspace = true
 
 reth-rpc-eth-types.workspace = true
-
-alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc"] }
+alloy = { workspace = true, default-features = false, features = ["eips", "eip712", "dyn-abi", "rpc-types", "json-rpc", "rand"] }
 anyhow.workspace = true
 async-trait.workspace = true
 dashmap.workspace = true

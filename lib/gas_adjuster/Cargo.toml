@@ -19,3 +19,4 @@ vise.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["time"] }
 num.workspace = true
+zksync_os_rpc_api.workspace = true

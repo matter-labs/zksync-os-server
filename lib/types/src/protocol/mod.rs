@@ -61,6 +61,10 @@ impl ProtocolSemanticVersion {
         }
     }
 
+    pub fn is_post_v31(&self) -> bool {
+        self.minor >= 31
+    }
+
     /// This version was used for all the chains prior to the introduction of protocol upgrades
     /// support.
     pub const fn legacy_genesis_version() -> Self {

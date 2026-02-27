@@ -21,7 +21,7 @@ use zksync_os_observability::{
     ComponentStateHandle, ComponentStateReporter, GenericComponentState,
 };
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_storage_api::ReplayRecord;
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::PubdataMode;
 
 pub mod batch_builder;
@@ -42,20 +42,23 @@ pub struct BatcherStartupConfig {
 }
 
 /// Batcher component - handles batching logic, receives blocks and prepares batch data
-pub struct Batcher {
+pub struct Batcher<ReadState> {
     pub startup_config: BatcherStartupConfig,
     pub chain_id: u64,
     pub sl_chain_id: u64,
-    pub chain_address: Address,
+    pub chain_address_sl: Address,
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
     pub pubdata_mode: PubdataMode,
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
+    pub read_state: ReadState,
 }
 
 #[async_trait]
-impl PipelineComponent for Batcher {
+impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
+    for Batcher<ReadState>
+{
     type Input = (BlockOutput, ReplayRecord, ProverInput, BlockMerkleTreeData);
     type Output = BatchEnvelope<ProverInput, MissingSignature>;
 
@@ -207,7 +210,7 @@ impl PipelineComponent for Batcher {
     }
 }
 
-impl Batcher {
+impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     async fn create_batch(
         &mut self,
         block_receiver: &mut PeekableReceiver<(
@@ -320,11 +323,12 @@ impl Batcher {
             prev_batch_info.clone(),
             batch_number,
             self.chain_id,
-            self.chain_address,
+            self.chain_address_sl,
             // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
             self.pubdata_mode
                 .adapt_for_protocol_version(protocol_version),
             self.sl_chain_id,
+            &self.read_state,
         )?;
         Ok(batch_envelope)
     }
@@ -389,10 +393,11 @@ impl Batcher {
             prev_batch_info.clone(),
             batch_number,
             self.chain_id,
-            self.chain_address,
+            self.chain_address_sl,
             // Assume pubdata mode does not change
             self.pubdata_mode,
             self.sl_chain_id,
+            &self.read_state,
         )?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
