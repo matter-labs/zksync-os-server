@@ -437,7 +437,7 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::CreateInitCodeSizeLimit
         | InvalidTransaction::InvalidChainId
         | InvalidTransaction::AccessListNotSupported
-        | InvalidTransaction::GasPerPubdataTooHigh
+        | InvalidTransaction::PubdataPriceTooHigh
         | InvalidTransaction::BlockGasLimitTooHigh
         | InvalidTransaction::UpgradeTxNotFirst
         | InvalidTransaction::Revert { .. }
@@ -460,7 +460,8 @@ fn rejection_method(error: &InvalidTransaction) -> TxRejectionMethod {
         | InvalidTransaction::EIP7702HasNullDestination
         | InvalidTransaction::BlobListTooLong
         | InvalidTransaction::EmptyBlobList
-        | InvalidTransaction::FilteredByValidator => TxRejectionMethod::Purge,
+        | InvalidTransaction::FilteredByValidator
+        | InvalidTransaction::CallerGasLimitTooHigh => TxRejectionMethod::Purge,
 
         InvalidTransaction::GasPriceLessThanBasefee
         | InvalidTransaction::LackOfFundForMaxFee { .. }
