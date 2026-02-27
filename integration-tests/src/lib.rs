@@ -8,7 +8,11 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 #[cfg(feature = "prover-tests")]
-use alloy::transports::http::reqwest;
+use alloy::transports::http::reqwest::{
+    self, StatusCode,
+    blocking::Client,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT},
+};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
@@ -293,7 +297,7 @@ impl Tester {
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
 
-            let path = download_prover(cfg!(feature = "gpu-prover-tests")).await;
+            let path = download_prover_and_unpack(cfg!(feature = "gpu-prover-tests")).await;
 
             let mut child = tokio::process::Command::new(path)
                 .arg("--sequencer-urls")
@@ -645,7 +649,7 @@ impl AnvilL1 {
 }
 
 #[cfg(feature = "prover-tests")]
-async fn download_prover(gpu: bool) -> String {
+async fn download_prover_and_unpack(gpu: bool) -> String {
     const RELEASE_VERSION: &str = "v0.7.1";
     const RELEASE_BASE_URL: &str =
         "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.1";
@@ -693,19 +697,8 @@ async fn download_prover(gpu: bool) -> String {
             "downloading prover service archive from {url} to {}",
             archive_path.display()
         );
-        let resp = reqwest::get(&url).await.expect("failed to download");
-        if !resp.status().is_success() {
-            panic!(
-                "could not download prover service archive from {url}: status={}, response={}",
-                resp.status(),
-                resp.text().await.expect("response was not valid text"),
-            );
-        }
-        let body = resp
-            .bytes()
-            .await
-            .expect("failed to read response body")
-            .to_vec();
+        let resp = download_prover_binary(&url).expect("failed to download");
+        let body = resp.bytes().expect("failed to read response body").to_vec();
         std::fs::write(archive_path.as_path(), body).expect("failed to write archive");
     }
 
@@ -777,4 +770,75 @@ fn find_first_prover_binary(dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(feature = "prover-tests")]
+fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::blocking::Response> {
+    const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
+    const DOWNLOAD_TIMEOUT_SECS: u64 = 60;
+    const DOWNLOAD_BASE_BACKOFF_MS: u64 = 500;
+
+    fn is_retryable_status(status: StatusCode) -> bool {
+        status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("zksync-os-integration-tests/1.0"),
+    );
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        let bearer = format!("Bearer {}", token.trim());
+        match HeaderValue::from_str(&bearer) {
+            Ok(value) => {
+                headers.insert(AUTHORIZATION, value);
+            }
+            Err(err) => {
+                tracing::warn!("Ignoring invalid GITHUB_TOKEN format: {err}");
+            }
+        }
+    }
+
+    let client = Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .build()
+        .unwrap();
+
+    for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
+        let response = client.get(url).send();
+        match response {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return Ok(response);
+                }
+
+                if is_retryable_status(status) && attempt < DOWNLOAD_MAX_ATTEMPTS {
+                    let delay_ms = DOWNLOAD_BASE_BACKOFF_MS * attempt as u64;
+                    tracing::warn!(
+                        "download attempt {attempt}/{DOWNLOAD_MAX_ATTEMPTS} failed with status {status} for {url}; retrying in {delay_ms}ms"
+                    );
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                    continue;
+                }
+
+                anyhow::bail!("download failed with status {status} for {url}");
+            }
+            Err(err) => {
+                if attempt < DOWNLOAD_MAX_ATTEMPTS {
+                    let delay_ms = DOWNLOAD_BASE_BACKOFF_MS * attempt as u64;
+                    tracing::warn!(
+                        "download attempt {attempt}/{DOWNLOAD_MAX_ATTEMPTS} failed for {url}: {err}; retrying in {delay_ms}ms"
+                    );
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                    continue;
+                }
+
+                anyhow::bail!("download request failed for {url}: {err}");
+            }
+        }
+    }
+    unreachable!("loop always returns on success or final attempt");
 }
