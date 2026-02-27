@@ -45,6 +45,5 @@ pub async fn load_genesis_stored_batch_info(
         // See `era-contracts/l1-contracts/contracts/common/Config.sol`.
         l2_to_l1_logs_root_hash: B256::ZERO,
         commitment: B256::from(U256::ONE.to_be_bytes()),
-        last_block_timestamp: timestamp,
     })
 }

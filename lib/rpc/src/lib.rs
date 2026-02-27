@@ -17,11 +17,13 @@ mod rpc_storage;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
+mod log_proof_utils;
 mod monitoring_middleware;
 mod net_impl;
 mod sandbox;
 mod tx_handler;
 mod types;
+mod unstable_impl;
 mod web3_impl;
 mod zks_impl;
 
@@ -33,6 +35,7 @@ use crate::eth_pubsub_impl::EthPubsubNamespace;
 use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
+use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
@@ -46,7 +49,6 @@ use reth_rpc_eth_types::EthSubscriptionIdProvider;
 use tower_http::cors::{Any, CorsLayer};
 use zksync_os_genesis::GenesisInputSource;
 use zksync_os_interface::types::BlockContext;
-use zksync_os_l1_watcher::CommittedBatchProvider;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_rpc_api::debug::DebugApiServer;
 use zksync_os_rpc_api::eth::EthApiServer;
@@ -54,6 +56,7 @@ use zksync_os_rpc_api::filter::EthFilterApiServer;
 use zksync_os_rpc_api::net::NetApiServer;
 use zksync_os_rpc_api::ots::OtsApiServer;
 use zksync_os_rpc_api::pubsub::EthPubSubApiServer;
+use zksync_os_rpc_api::unstable::UnstableApiServer;
 use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_types::TransactionAcceptanceState;
@@ -64,13 +67,13 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
     chain_id: u64,
     bridgehub_address: Address,
     bytecode_supplier_address: Address,
-    committed_batch_provider: CommittedBatchProvider,
     storage: RpcStorage,
     mempool: Mempool,
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<DynProvider>,
+    gateway_provider: Option<DynProvider>,
 ) -> anyhow::Result<()> {
     tracing::info!("Starting JSON-RPC server at {}", config.address);
 
@@ -101,9 +104,10 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
         ZksNamespace::new(
             bridgehub_address,
             bytecode_supplier_address,
-            committed_batch_provider,
             storage.clone(),
             genesis_input_source,
+            chain_id,
+            gateway_provider,
         )
         .into_rpc(),
     )?;
@@ -111,6 +115,7 @@ pub async fn run_jsonrpsee_server<RpcStorage: ReadRpcStorage, Mempool: L2Subpool
     rpc.merge(DebugNamespace::new(storage.clone(), eth_call_handler).into_rpc())?;
     rpc.merge(NetNamespace::new(chain_id).into_rpc())?;
     rpc.merge(Web3Namespace.into_rpc())?;
+    rpc.merge(UnstableNamespace::new(storage).into_rpc())?;
 
     // Add a CORS middleware for handling HTTP requests.
     // This middleware does affect the response, including appropriate

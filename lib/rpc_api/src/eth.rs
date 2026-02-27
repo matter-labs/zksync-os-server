@@ -1,7 +1,7 @@
 // The code in this file was copied from reth with some minor changes. Source:
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-eth-api/src/core.rs
 
-use crate::types::{ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt};
+use crate::types::{L2FeeHistory, ZkApiBlock, ZkApiTransaction, ZkHeader, ZkTransactionReceipt};
 use alloy::consensus::Account;
 use alloy::dyn_abi::TypedData;
 use alloy::eips::{BlockId, BlockNumberOrTag};
@@ -10,7 +10,7 @@ use alloy::rpc::types::simulate::{SimulatePayload, SimulatedBlock};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::{
     AccessListResult, AccountInfo, BlockOverrides, Bundle, EIP1186AccountProofResponse,
-    EthCallResponse, FeeHistory, Index, StateContext, SyncStatus, TransactionRequest,
+    EthCallResponse, Index, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
 use jsonrpsee::core::RpcResult;
@@ -274,13 +274,15 @@ pub trait EthApi {
     /// Returns transaction base fee per gas and effective priority fee per gas for the
     /// requested/supported block range. The returned Fee history for the returned block range
     /// can be a subsection of the requested range if not all blocks are available.
+    ///
+    /// The L2 pubdata price history is also included in the response.
     #[method(name = "feeHistory")]
     async fn fee_history(
         &self,
         block_count: U64,
         newest_block: BlockNumberOrTag,
         reward_percentiles: Option<Vec<f64>>,
-    ) -> RpcResult<FeeHistory>;
+    ) -> RpcResult<L2FeeHistory>;
 
     /// Sends transaction; will block waiting for signer to return the
     /// transaction hash.

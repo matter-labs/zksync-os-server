@@ -36,7 +36,7 @@ pub struct FeeConfig {
 pub struct FeeProvider {
     fee_config: FeeConfig,
     previous_block_fee_params: Option<FeeParams>,
-    pubdata_price_provider: watch::Receiver<Option<u128>>,
+    pubdata_price_provider: watch::Receiver<Option<U256>>,
     blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
     token_price_provider: watch::Receiver<Option<TokenPricesForFees>>,
     pubdata_mode: PubdataMode,
@@ -46,7 +46,7 @@ impl FeeProvider {
     pub fn new(
         fee_config: FeeConfig,
         previous_block_fee_params: Option<FeeParams>,
-        pubdata_price_provider: watch::Receiver<Option<u128>>,
+        pubdata_price_provider: watch::Receiver<Option<U256>>,
         blob_fill_ratio_provider: watch::Receiver<Option<Ratio<u64>>>,
         token_price_provider: watch::Receiver<Option<TokenPricesForFees>>,
         pubdata_mode: PubdataMode,
@@ -172,10 +172,11 @@ impl FeeProvider {
             return o;
         }
 
-        let base_pubdata_price_in_sl_token = BigUint::from(
+        let base_pubdata_price_in_sl_token = BigUint::from_bytes_le(
             self.pubdata_price_provider
                 .borrow()
-                .expect("Pubdata price must be available"),
+                .expect("Pubdata price must be available")
+                .as_le_slice(),
         );
         let sl_to_base_ratio =
             &token_prices.sl_token_usd_price.ratio / &token_prices.base_token_usd_price.ratio;

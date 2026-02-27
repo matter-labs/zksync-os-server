@@ -30,6 +30,7 @@ pub struct BatchInfo {
 }
 
 impl BatchInfo {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         blocks: Vec<(
             &BlockOutput,
@@ -42,6 +43,8 @@ impl BatchInfo {
         batch_number: u64,
         pubdata_mode: PubdataMode,
         sl_chain_id: u64,
+        aggregated_root: B256,
+        protocol_version: &ProtocolSemanticVersion,
     ) -> Self {
         let mut priority_operations_hash = keccak256([]);
         let mut number_of_layer1_txs = 0;
@@ -127,8 +130,14 @@ impl BatchInfo {
             Some(L2_TO_L1_TREE_SIZE),
         )
         .merkle_root();
-        // The result should be Keccak(l2_l1_local_root, aggreagation_root) - we don't compute aggregation root yet
-        let l2_to_l1_logs_root_hash = keccak256([l2_l1_local_root.0, [0u8; 32]].concat());
+
+        let l2_to_l1_logs_root_hash = if protocol_version.is_post_v31() {
+            // The result should be Keccak(l2_l1_local_root, aggregated_root).
+            keccak256([l2_l1_local_root.0, aggregated_root.0].concat())
+        } else {
+            // For older protocol versions, aggregated root should be set to zero.
+            keccak256([l2_l1_local_root.0, [0u8; 32]].concat())
+        };
 
         let commit_info = CommitBatchInfo {
             batch_number,
@@ -210,7 +219,6 @@ impl BatchInfo {
             dependency_roots_rolling_hash: commit_info.dependency_roots_rolling_hash,
             l2_to_l1_logs_root_hash: commit_info.l2_to_l1_logs_root_hash,
             commitment,
-            last_block_timestamp: commit_info.last_block_timestamp,
         }
     }
 }
@@ -242,7 +250,8 @@ fn calculate_da_fields(
 ) -> DAFields {
     let (da_commitment, operator_da_input, blob_sidecar) =
         match (pubdata_mode, batch_execution_version) {
-            (PubdataMode::Calldata, _) | (PubdataMode::Validium, 4) => {
+            (PubdataMode::Calldata | PubdataMode::RelayedL2Calldata, _)
+            | (PubdataMode::Validium, 4) => {
                 let mut operator_da_input = Vec::with_capacity(32 * 3 + 1 + pubdata.len() + 1 + 32);
 
                 // reference for this header is taken from zk_ee: https://github.com/matter-labs/zk_ee/blob/ad-aggregation-program/aggregator/src/aggregation/da_commitment.rs#L27

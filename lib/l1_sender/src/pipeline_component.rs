@@ -16,6 +16,7 @@ pub struct L1Sender<F: TxFiller<Ethereum>, P: Provider<Ethereum>, C> {
     pub provider: FillProvider<F, P>,
     pub config: L1SenderConfig<C>,
     pub to_address: Address,
+    pub gateway: bool,
 }
 
 #[async_trait]
@@ -36,6 +37,14 @@ where
         input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
     ) -> anyhow::Result<()> {
-        run_l1_sender(input, output, self.to_address, self.provider, self.config).await
+        run_l1_sender(
+            input,
+            output,
+            self.to_address,
+            self.provider,
+            self.config,
+            self.gateway,
+        )
+        .await
     }
 }

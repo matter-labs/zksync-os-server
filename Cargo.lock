@@ -13806,7 +13806,6 @@ dependencies = [
  "alloy",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-interface-v0.0.14)",
  "blake2",
- "ruint",
  "serde",
  "thiserror 2.0.17",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-interface-v0.0.14)",
@@ -13915,6 +13914,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vise",
+ "zksync_os_rpc_api",
  "zksync_os_types",
 ]
 
@@ -14360,6 +14360,8 @@ dependencies = [
  "vise",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.8-interface-v0.0.14)",
  "zksync_os_api",
+ "zksync_os_batch_types",
+ "zksync_os_contract_interface",
  "zksync_os_evm_errors",
  "zksync_os_genesis",
  "zksync_os_interface",
@@ -14382,6 +14384,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "zksync_os_genesis",
+ "zksync_os_storage_api",
  "zksync_os_types",
 ]
 

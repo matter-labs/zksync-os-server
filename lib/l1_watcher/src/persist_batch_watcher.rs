@@ -1,12 +1,16 @@
+use crate::traits::ProcessRawEvents;
 use crate::watcher::{L1Watcher, L1WatcherError};
-use crate::{L1WatcherConfig, ProcessL1Event, util};
+use crate::{L1WatcherConfig, util};
 use alloy::primitives::Address;
 use alloy::providers::{DynProvider, Provider};
-use alloy::rpc::types::Log;
+use alloy::rpc::types::{Log, Topic, ValueOrArray};
+use alloy::sol_types::SolEvent;
+use anyhow::Context;
+use std::collections::HashMap;
 use zksync_os_batch_types::{BatchInfo, DiscoveredCommittedBatch};
-use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
+use zksync_os_contract_interface::IExecutor::{BlockExecution, ReportCommittedBatchRangeZKsyncOS};
 use zksync_os_contract_interface::ZkChain;
-use zksync_os_storage_api::{WriteBatch, WriteFinality};
+use zksync_os_storage_api::{PersistedBatch, WriteBatch, WriteFinality};
 
 /// Persists executed batches via [`WriteBatch`].
 /// Note: batches are discovered by `commit_watcher.rs` from L1 as soon as they are committed.
@@ -18,6 +22,9 @@ pub struct L1PersistBatchWatcher<BatchStorage, Finality> {
     zk_chain: ZkChain<DynProvider>,
     batch_storage: BatchStorage,
     finality: Finality,
+    committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
+    last_processed_commit_batch: u64,
+    last_persisted_batch_on_start: u64,
 }
 
 impl<BatchStorage: WriteBatch, Finality: WriteFinality>
@@ -30,7 +37,24 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
         finality: Finality,
     ) -> anyhow::Result<L1Watcher> {
         let current_l1_block = zk_chain.provider().get_block_number().await?;
-        let last_persisted_batch = batch_storage.latest_batch();
+        let last_persisted_batch = {
+            let last_persisted_batch_number = batch_storage.latest_batch();
+            if last_persisted_batch_number == 0 {
+                last_persisted_batch_number
+            } else {
+                // `execute_sl_block_number` was added recently and in order for it to be present in all persisted batches,
+                // we check if it is set for the last persisted batch. If not, it means that migration wasn't complete and
+                // pretend as if we don't have any persisted batches so they get overwritten.
+                let last_persisted_batch = batch_storage
+                    .get_batch_by_number(last_persisted_batch_number)?
+                    .context("Failed to get last persisted batch from storage")?;
+                if last_persisted_batch.execute_sl_block_number.is_some() {
+                    last_persisted_batch_number
+                } else {
+                    0
+                }
+            }
+        };
         tracing::info!(
             current_l1_block,
             last_persisted_batch,
@@ -51,6 +75,9 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
             zk_chain: zk_chain.clone(),
             batch_storage,
             finality,
+            committed_batches: HashMap::new(),
+            last_processed_commit_batch: last_persisted_batch,
+            last_persisted_batch_on_start: last_persisted_batch,
         };
         let l1_watcher = L1Watcher::new(
             zk_chain.provider().clone(),
@@ -59,7 +86,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
             last_l1_block,
             config.max_blocks_to_process,
             config.poll_interval,
-            this.into(),
+            Box::new(this),
         );
 
         Ok(l1_watcher)
@@ -86,32 +113,18 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality>
             block_range: report.firstBlockNumber..=report.lastBlockNumber,
         })
     }
-}
 
-#[async_trait::async_trait]
-impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
-    for L1PersistBatchWatcher<BatchStorage, Finality>
-{
-    const NAME: &'static str = "persist_batch";
-
-    type SolEvent = ReportCommittedBatchRangeZKsyncOS;
-    type WatchedEvent = ReportCommittedBatchRangeZKsyncOS;
-
-    fn contract_address(&self) -> Address {
-        *self.zk_chain.address()
-    }
-
-    async fn process_event(
+    async fn process_commit(
         &mut self,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let batch_number = report.batchNumber;
-        let latest_persisted_batch = self.batch_storage.latest_batch();
-        if batch_number <= latest_persisted_batch {
+        let latest_processed_batch = self.last_processed_commit_batch;
+        if batch_number <= latest_processed_batch {
             tracing::debug!(
                 batch_number,
-                "discovered already persisted batch, validating"
+                "discovered already processed batch, validating"
             );
             let committed_batch = self.parse_committed_batch(report, log).await?;
             let stored_batch = self
@@ -119,7 +132,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                 .get_batch_by_number(batch_number)
                 .map_err(L1WatcherError::Other)?
                 .expect("persisted batch not found in DB");
-            if stored_batch != committed_batch {
+            if stored_batch.committed_batch != committed_batch {
                 tracing::error!(
                     ?stored_batch,
                     ?committed_batch,
@@ -131,8 +144,8 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                 )));
             }
         } else {
-            if batch_number > latest_persisted_batch + 1 {
-                if latest_persisted_batch == 0 {
+            if batch_number > latest_processed_batch + 1 {
+                if latest_processed_batch == 0 {
                     // We did not have `ReportCommittedBatchRangeZKsyncOS` event on some of the older
                     // testnet chains (e.g. `stage`, `testnet-alpha`). These batches are considered to
                     // be legacy and are not persisted in batch storage. Users will not be able to
@@ -147,7 +160,7 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                     // discovering more reverted batches.
                     tracing::warn!(
                         batch_number,
-                        latest_persisted_batch,
+                        latest_processed_batch,
                         "non-sequential batch discovered; assuming revert and skipping"
                     );
                     return Ok(());
@@ -186,7 +199,67 @@ impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessL1Event
                 return Ok(());
             }
 
-            self.batch_storage.write(committed_batch);
+            self.committed_batches.insert(batch_number, committed_batch);
+            self.last_processed_commit_batch = batch_number;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl<BatchStorage: WriteBatch, Finality: WriteFinality> ProcessRawEvents
+    for L1PersistBatchWatcher<BatchStorage, Finality>
+{
+    fn name(&self) -> &'static str {
+        "persist_batch"
+    }
+
+    fn event_signatures(&self) -> Topic {
+        Topic::default()
+            .extend(ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH)
+            .extend(BlockExecution::SIGNATURE_HASH)
+    }
+
+    fn contract_addresses(&self) -> ValueOrArray<Address> {
+        (*self.zk_chain.address()).into()
+    }
+
+    async fn process_raw_event(&mut self, log: Log) -> Result<(), L1WatcherError> {
+        let event_signature = log.topics()[0];
+        match event_signature {
+            s if s == ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH => {
+                let report = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)?.data;
+                self.process_commit(report, log).await?;
+            }
+            s if s == BlockExecution::SIGNATURE_HASH => {
+                let execute = BlockExecution::decode_log(&log.inner)?.data;
+                let batch_number = execute.batchNumber.to::<u64>();
+                if batch_number > self.last_persisted_batch_on_start {
+                    let batch_hash = execute.batchHash;
+                    if let Some(committed_batch) = self.committed_batches.remove(&batch_number) {
+                        tracing::debug!(
+                            batch_number,
+                            ?batch_hash,
+                            "discovered executed batch, persisting"
+                        );
+                        self.batch_storage.write(PersistedBatch {
+                            committed_batch,
+                            execute_sl_block_number: Some(
+                                log.block_number.expect("Missing block number in log"),
+                            ),
+                        });
+                    } else {
+                        return Err(L1WatcherError::Other(anyhow::anyhow!(
+                            "discovered executed batch #{batch_number} was not previously discovered as committed"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(L1WatcherError::Other(anyhow::anyhow!(
+                    "unexpected event topic"
+                )));
+            }
         }
         Ok(())
     }

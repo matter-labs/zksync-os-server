@@ -44,7 +44,7 @@ pub trait SendToL1:
     const MINED_STAGE: BatchExecutionStage;
     const PASSTHROUGH_STAGE: BatchExecutionStage;
     /// We use `Bytes` instead of `SolCall`, because SolCall is a trait that cannot be dyn
-    fn solidity_call(&self) -> Bytes;
+    fn solidity_call(&self, gateway: bool) -> Bytes;
 
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
         None

@@ -67,7 +67,6 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
             dependency_roots_rolling_hash: B256::ZERO,
             l2_to_l1_logs_root_hash: B256::ZERO,
             commitment: B256::ZERO,
-            last_block_timestamp: 0,
         },
         batch_info: BatchInfo {
             commit_info: dummy_commit_batch_info(batch_number, from, to),
@@ -82,6 +81,9 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         execution_version: 1,
         protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
         computational_native_used: None,
+        logs: vec![],
+        messages: vec![],
+        multichain_batch_root: Default::default(),
     }
 }
 

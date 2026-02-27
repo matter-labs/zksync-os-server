@@ -1,7 +1,7 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
-use alloy::primitives::{Bytes, FixedBytes, U256};
+use alloy::primitives::{Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
@@ -33,12 +33,12 @@ impl SendToL1 for ExecuteCommand {
 
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1Passthrough;
 
-    fn solidity_call(&self) -> Bytes {
+    fn solidity_call(&self, gateway: bool) -> Bytes {
         IExecutor::executeBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.batch_info.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
-            self.to_calldata_suffix().into(),
+            self.to_calldata_suffix(gateway).into(),
         ))
         .abi_encode()
         .into()
@@ -76,7 +76,7 @@ impl Display for ExecuteCommand {
 }
 
 impl ExecuteCommand {
-    fn to_calldata_suffix(&self) -> Vec<u8> {
+    fn to_calldata_suffix(&self, gateway: bool) -> Vec<u8> {
         let stored_batch_infos = self
             .batches
             .iter()
@@ -102,19 +102,41 @@ impl ExecuteCommand {
         {
             29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
             31 | 32 => {
-                // For now, these are not validated, so they can be empty.
-                // IMPORTANT: the struct is not correct, it only works while the array is empty
-                let logs: Vec<u8> = Default::default();
-                let messages: Vec<Vec<u8>> = Default::default();
-                let message_roots: Vec<FixedBytes<32>> = Default::default();
-
+                let mut logs = Vec::new();
+                let mut messages = Vec::new();
+                let mut multichain_batch_roots = Vec::new();
+                if gateway {
+                    logs = self
+                        .batches
+                        .iter()
+                        .map(|batch| {
+                            batch
+                                .batch
+                                .logs
+                                .iter()
+                                .cloned()
+                                .map(IExecutor::L2Log::from)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    messages = self
+                        .batches
+                        .iter()
+                        .map(|batch| batch.batch.messages.clone())
+                        .collect::<Vec<_>>();
+                    multichain_batch_roots = self
+                        .batches
+                        .iter()
+                        .map(|batch| batch.batch.multichain_batch_root)
+                        .collect::<Vec<_>>();
+                }
                 (
                     stored_batch_infos,
                     priority_ops,
                     interop_roots,
                     logs,
                     messages,
-                    message_roots,
+                    multichain_batch_roots,
                 )
                     .abi_encode_params()
             }

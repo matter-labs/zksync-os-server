@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::time::Instant;
 use zksync_os_batch_types::{BatchSignatureSet, ValidatedBatchSignature};
-use zksync_os_contract_interface::l1_discovery::{BatchVerificationL1, L1State};
+use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchForSigning, BatchSignatureData, SignedBatchEnvelope,
@@ -51,7 +51,7 @@ impl<E> BatchVerificationPipelineStep<E> {
             .collect();
         // If on L1 batch verifiers re configured, we use that configuration instead
         let (threshold, validators) = match &l1_state.batch_verification {
-            BatchVerificationL1::Enabled(l1_config) => {
+            BatchVerificationSL::Enabled(l1_config) => {
                 if !l1_config.validators.is_empty() || l1_config.threshold > 0 {
                     (
                         config.threshold.max(l1_config.threshold),
@@ -61,7 +61,7 @@ impl<E> BatchVerificationPipelineStep<E> {
                     (config.threshold, config_validators)
                 }
             }
-            BatchVerificationL1::Disabled => (config.threshold, config_validators),
+            BatchVerificationSL::Disabled => (config.threshold, config_validators),
         };
 
         Self {
@@ -225,8 +225,8 @@ impl BatchVerifier {
             request_id_counter: AtomicU64::new(1),
             response_channels,
             server,
-            l1_chain_id: component.l1_state.l1_chain_id,
-            multisig_committer: component.l1_state.validator_timelock,
+            l1_chain_id: component.l1_state.sl_chain_id,
+            multisig_committer: component.l1_state.validator_timelock_sl,
             last_committed_batch_number: component.last_committed_batch_number,
         }
     }

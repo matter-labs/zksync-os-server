@@ -53,6 +53,13 @@ alloy::sol! {
         function setSettlementLayerChainId(uint256 _newSettlementLayerChainId);
     }
 
+    // `DynamicIncrementalMerkle.sol`
+    struct Bytes32PushTree {
+        uint256 _nextLeafIndex;
+        bytes32[] _sides;
+        bytes32[] _zeros;
+    }
+
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
@@ -74,6 +81,15 @@ alloy::sol! {
         );
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
+
+        // mapping(uint256 chainId => Bytes32PushTree tree) public chainTree;
+        // For some reason macro translates mapping to a function that returns uint256 instead of Bytes32PushTree.
+        // TODO: Worth opening an issue in alloy-rs.
+        function chainTree(uint256 chainId) public view returns (Bytes32PushTree);
+
+        event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot);
+        function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
+        mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
     }
 
     // `ZKChainStorage.sol`
@@ -101,6 +117,7 @@ alloy::sol! {
         function sharedBridge() public view returns (address);
         function getAllZKChainChainIDs() external view returns (uint256[] memory);
         function messageRoot() external view returns (address);
+        function whitelistedSettlementLayers(uint256 _chainId) external view returns (bool);
 
         struct L2TransactionRequestDirect {
             uint256 chainId;
@@ -273,27 +290,36 @@ alloy::sol! {
             bytes calldata _commitData
         ) external;
 
-       function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
+        function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
 
-       function proveBatchesSharedBridge(
+        function proveBatchesSharedBridge(
             address _chainAddress,
             uint256 _processBatchFrom,
             uint256 _processBatchTo,
             bytes calldata _proofData
-       );
+        );
 
-       struct PriorityOpsBatchInfo {
-           bytes32[] leftPath;
-           bytes32[] rightPath;
-           bytes32[] itemHashes;
+        struct PriorityOpsBatchInfo {
+            bytes32[] leftPath;
+            bytes32[] rightPath;
+            bytes32[] itemHashes;
+        }
+
+        struct L2Log {
+           uint8 l2ShardId;
+           bool isService;
+           uint16 txNumberInBatch;
+           address sender;
+           bytes32 key;
+           bytes32 value;
        }
 
-       function executeBatchesSharedBridge(
-           address _chainAddress,
-           uint256 _processFrom,
-           uint256 _processTo,
-           bytes calldata _executeData
-       );
+        function executeBatchesSharedBridge(
+            address _chainAddress,
+            uint256 _processFrom,
+            uint256 _processTo,
+            bytes calldata _executeData
+        );
     }
 
     // taken from v29 version of `IExecutor.sol`
@@ -519,6 +545,16 @@ impl<P: Provider + Clone> Bridgehub<P> {
 
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
         self.instance.getAllZKChainChainIDs().call().await
+    }
+
+    pub async fn whitelisted_settlement_layers(
+        &self,
+        chain_id: impl Into<U256>,
+    ) -> alloy::contract::Result<bool> {
+        self.instance
+            .whitelistedSettlementLayers(chain_id.into())
+            .call()
+            .await
     }
 }
 
@@ -746,6 +782,24 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getBaseToken", None)
+    }
+
+    /// Returns base token gas price multiplier nominator.
+    pub async fn base_token_gas_price_multiplier_nominator(&self) -> Result<u128> {
+        self.instance
+            .baseTokenGasPriceMultiplierNominator()
+            .call()
+            .await
+            .enrich("baseTokenGasPriceMultiplierNominator", None)
+    }
+
+    /// Returns base token gas price multiplier denominator.
+    pub async fn base_token_gas_price_multiplier_denominator(&self) -> Result<u128> {
+        self.instance
+            .baseTokenGasPriceMultiplierDenominator()
+            .call()
+            .await
+            .enrich("baseTokenGasPriceMultiplierDenominator", None)
     }
 
     pub async fn get_server_notifier_address(&self) -> Result<Address> {

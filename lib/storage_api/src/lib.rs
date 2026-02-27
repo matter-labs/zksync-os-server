@@ -5,7 +5,7 @@ mod replay;
 pub use replay::{ReadReplay, ReadReplayExt, WriteReplay};
 
 mod batch;
-pub use batch::{ReadBatch, WriteBatch};
+pub use batch::{PersistedBatch, ReadBatch, WriteBatch};
 
 pub mod notifications;
 
@@ -25,3 +25,6 @@ pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState
 
 pub mod state_override_view;
 pub use state_override_view::OverriddenStateView;
+
+mod read_aggregated_root;
+pub use read_aggregated_root::read_aggregated_root;

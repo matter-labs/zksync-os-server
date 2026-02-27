@@ -13,17 +13,17 @@ use zksync_os_types::ProtocolSemanticVersion;
 /// Makes sure that batches are only passed to L1 if batch version matches the current protocol version.
 #[derive(Debug)]
 pub struct UpgradeGatekeeper {
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain_sl: ZkChain<DynProvider>,
 }
 
 impl UpgradeGatekeeper {
-    pub fn new(zk_chain: ZkChain<DynProvider>) -> Self {
-        Self { zk_chain }
+    pub fn new(zk_chain_sl: ZkChain<DynProvider>) -> Self {
+        Self { zk_chain_sl }
     }
 
     async fn current_protocol_version(&self) -> anyhow::Result<ProtocolSemanticVersion> {
         let current_protocol_version = self
-            .zk_chain
+            .zk_chain_sl
             .get_raw_protocol_version(BlockId::latest())
             .await
             .context("Failed to fetch current protocol version from L1")?;

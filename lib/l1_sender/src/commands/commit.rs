@@ -7,7 +7,7 @@ use alloy::sol_types::SolCall;
 use std::fmt::Display;
 use zksync_os_batch_types::BatchSignatureSet;
 use zksync_os_contract_interface::calldata::encode_commit_batch_data;
-use zksync_os_contract_interface::l1_discovery::BatchVerificationL1;
+use zksync_os_contract_interface::l1_discovery::BatchVerificationSL;
 use zksync_os_contract_interface::{IExecutor, IMultisigCommitter};
 
 #[derive(Debug)]
@@ -29,16 +29,16 @@ impl CommitCommand {
     /// attached to batch do not allow for submission to L1 it will error
     /// instead of causing a reverted transaction.
     pub fn try_new(
-        l1_config: &BatchVerificationL1,
+        l1_config: &BatchVerificationSL,
         input: SignedBatchEnvelope<FriProof>,
     ) -> Result<Self, BatchVerificationError> {
         match (l1_config, input.signature_data.clone()) {
-            (BatchVerificationL1::Disabled, _) => Ok(Self {
+            (BatchVerificationSL::Disabled, _) => Ok(Self {
                 input,
                 signatures: None,
             }),
             (
-                BatchVerificationL1::Enabled(l1_config),
+                BatchVerificationSL::Enabled(l1_config),
                 BatchSignatureData::Signed { signatures },
             ) => {
                 let allowed_signers = &l1_config.validators;
@@ -55,7 +55,7 @@ impl CommitCommand {
                     signatures: Some(filtered_signatures),
                 })
             }
-            (BatchVerificationL1::Enabled(l1_config), _) => {
+            (BatchVerificationSL::Enabled(l1_config), _) => {
                 // actually if threshold is 0 its still ok without signing enabled
                 if l1_config.threshold == 0 {
                     Ok(Self {
@@ -80,7 +80,7 @@ impl SendToL1 for CommitCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;
 
-    fn solidity_call(&self) -> Bytes {
+    fn solidity_call(&self, _gateway: bool) -> Bytes {
         if let Some(signatures_set) = &self.signatures {
             let mut signatures = signatures_set.to_vec().clone();
             signatures.sort_by(|a, b| a.signer().cmp(b.signer()));

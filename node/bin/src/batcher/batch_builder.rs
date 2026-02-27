@@ -1,17 +1,17 @@
 use alloy::primitives::Address;
 use zksync_os_batch_types::BatchInfo;
-use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_interface::types::BlockOutput;
 use zksync_os_l1_sender::batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::batcher_model::{
     BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
 };
-use zksync_os_storage_api::ReplayRecord;
+use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_aggregated_root};
 use zksync_os_types::{ProvingVersion, PubdataMode};
 
 /// Takes a vector of blocks and produces a batch envelope.
-/// This is a pure function that is meant to be stateless and not contained in the `Batcher` struct.
-pub(crate) fn seal_batch(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     blocks: &[(
         BlockOutput,
         ReplayRecord,
@@ -21,14 +21,18 @@ pub(crate) fn seal_batch(
     prev_batch_info: StoredBatchInfo,
     batch_number: u64,
     chain_id: u64,
-    chain_address: Address,
+    chain_address_sl: Address,
     pubdata_mode: PubdataMode,
     sl_chain_id: u64,
+    read_state: &ReadState,
 ) -> anyhow::Result<BatchForSigning<ProverInput>> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let execution_version = blocks.first().unwrap().1.block_context.execution_version;
+    let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
 
+    let state_view = read_state.state_view_at(block_number_to)?;
+    let multichain_batch_root = read_aggregated_root(state_view);
     let batch_info = BatchInfo::new(
         blocks
             .iter()
@@ -42,11 +46,33 @@ pub(crate) fn seal_batch(
             })
             .collect(),
         chain_id,
-        chain_address,
+        chain_address_sl,
         batch_number,
         pubdata_mode,
         sl_chain_id,
+        multichain_batch_root,
+        &protocol_version,
     );
+
+    let mut logs = Vec::new();
+    let mut messages = Vec::new();
+    for block in blocks {
+        for output in block.0.tx_results.iter().flatten() {
+            for l2_to_l1_log in &output.l2_to_l1_logs {
+                logs.push(L2Log {
+                    l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+                    is_service: l2_to_l1_log.log.is_service,
+                    tx_number_in_batch: l2_to_l1_log.log.tx_number_in_block,
+                    sender: l2_to_l1_log.log.sender,
+                    key: l2_to_l1_log.log.key,
+                    value: l2_to_l1_log.log.value,
+                });
+                if let Some(preimage) = l2_to_l1_log.preimage.as_ref() {
+                    messages.push(preimage.clone());
+                }
+            }
+        }
+    }
 
     use zk_os_forward_system::run::generate_batch_proof_input;
 
@@ -79,7 +105,6 @@ pub(crate) fn seal_batch(
         }
     };
 
-    let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
     // Sanity check: all blocks in the batch should have the same protocol version
     for (_, replay_record, _, _) in blocks.iter().skip(1) {
         anyhow::ensure!(
@@ -110,6 +135,9 @@ pub(crate) fn seal_batch(
                     .map(|(block_output, _, _, _)| block_output.computational_native_used)
                     .sum(),
             ),
+            logs,
+            messages,
+            multichain_batch_root,
         },
         batch_prover_input,
     )

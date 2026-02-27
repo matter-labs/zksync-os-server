@@ -24,4 +24,3 @@ alloy.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 blake2.workspace = true
-ruint.workspace = true

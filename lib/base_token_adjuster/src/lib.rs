@@ -4,7 +4,7 @@ use alloy::primitives::Address;
 use alloy::primitives::utils::format_ether;
 use alloy::providers::ext::DebugApi;
 use alloy::providers::fillers::{FillProvider, TxFiller};
-use alloy::providers::{Provider, WalletProvider};
+use alloy::providers::{DynProvider, Provider, WalletProvider};
 use alloy::rpc::types::TransactionReceipt;
 use alloy::rpc::types::trace::geth::{CallConfig, GethDebugTracingOptions};
 use alloy::signers::k256::ecdsa::SigningKey;
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_contract_interface::{
     IChainAdminOwnable::{self, IChainAdminOwnableInstance},
-    IERC20, IZKChain,
+    IERC20, ZkChain,
 };
 use zksync_os_external_price_api::cmc_api::CmcPriceApiClient;
 use zksync_os_external_price_api::coingecko_api::CoinGeckoPriceAPIClient;
@@ -115,14 +115,14 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
     BaseTokenPriceUpdater<F, P>
 {
     pub async fn new(
-        base_token_address: Address,
-        zk_chain_address: Address,
-        chain_admin_address: Address,
+        zk_chain_l1: ZkChain<DynProvider>,
         mut l1_provider: FillProvider<F, P>,
         base_token_adjuster_config: BaseTokenPriceUpdaterConfig,
         external_price_api_client_config: ExternalPriceApiClientConfig,
         token_price_sender: watch::Sender<Option<TokenPricesForFees>>,
     ) -> anyhow::Result<Self> {
+        let base_token_address = zk_chain_l1.get_base_token_address().await?;
+
         let token_multiplier_setter_address = if let Some(sk) = base_token_adjuster_config
             .token_multiplier_setter_sk
             .clone()
@@ -193,19 +193,15 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             )?) as Box<dyn PriceApiClient>,
         };
 
-        let zk_chain = IZKChain::new(zk_chain_address, l1_provider.clone());
-        let l1_nominator = zk_chain
-            .baseTokenGasPriceMultiplierNominator()
-            .call()
-            .await
-            .context("Failed to call `baseTokenGasPriceMultiplierNominator`")?;
-        let l1_denominator = zk_chain
-            .baseTokenGasPriceMultiplierDenominator()
-            .call()
-            .await
-            .context("Failed to call `baseTokenGasPriceMultiplierDenominator`")?;
+        let l1_nominator = zk_chain_l1
+            .base_token_gas_price_multiplier_nominator()
+            .await?;
+        let l1_denominator = zk_chain_l1
+            .base_token_gas_price_multiplier_denominator()
+            .await?;
         let last_l1_ratio = Ratio::new(BigUint::from(l1_nominator), BigUint::from(l1_denominator));
 
+        let chain_admin_address = zk_chain_l1.get_admin().await?;
         let chain_admin_contract = IChainAdminOwnable::new(chain_admin_address, l1_provider);
         let token_multiplier_setter_on_l1 = chain_admin_contract
             .tokenMultiplierSetter()
@@ -233,7 +229,7 @@ impl<F: TxFiller<Ethereum> + WalletProvider<Wallet = EthereumWallet>, P: Provide
             last_l1_ratio,
             chain_admin_contract,
             token_multiplier_setter_address,
-            zk_chain_address,
+            zk_chain_address: *zk_chain_l1.address(),
             token_price_sender,
         })
     }
