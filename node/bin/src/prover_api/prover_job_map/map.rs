@@ -516,7 +516,7 @@ mod tests {
             computational_native_used: None,
             logs: vec![],
             messages: vec![],
-            multichain_batch_root: Default::default(),
+            multichain_root: Default::default(),
         };
 
         BatchForSigning::new(batch, vec![1, 2, 3])
