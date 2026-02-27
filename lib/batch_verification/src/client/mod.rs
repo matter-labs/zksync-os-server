@@ -38,7 +38,7 @@ use zksync_os_observability::GenericComponentState;
 use zksync_os_observability::StateLabel;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{ReplayRecord, StateError, read_aggregated_root};
+use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
 
 mod block_cache;
 mod metrics;
@@ -251,7 +251,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
                 .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
-        let aggregated_root = read_aggregated_root(state_view);
+        let multichain_root = read_multichain_root(state_view);
 
         let batch_info = BatchInfo::new(
             blocks
@@ -270,7 +270,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             request.batch_number,
             request.pubdata_mode,
             self.l1_state.sl_chain_id,
-            aggregated_root,
+            multichain_root,
             &blocks.first().unwrap().1.protocol_version,
         );
 

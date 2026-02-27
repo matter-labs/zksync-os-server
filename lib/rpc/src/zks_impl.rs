@@ -12,7 +12,7 @@ use std::sync::Arc;
 use zksync_os_genesis::{GenesisInput, GenesisInputSource};
 use zksync_os_mini_merkle_tree::MiniMerkleTree;
 use zksync_os_rpc_api::{types::BlockMetadata, types::L2ToL1LogProof, zks::ZksApiServer};
-use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_aggregated_root};
+use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
@@ -104,16 +104,16 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .replay_storage()
             .get_replay_record(*batch.block_range.end())
             .ok_or(ZksError::BlockNotAvailable(*batch.block_range.end()))?;
-        let aggregated_root = if last_block_replay_record.protocol_version.is_post_v31() {
-            read_aggregated_root(state)
+        let multichain_root = if last_block_replay_record.protocol_version.is_post_v31() {
+            read_multichain_root(state)
         } else {
             B256::new([0u8; 32])
         };
-        let root = keccak256([local_root.0, aggregated_root.0].concat());
+        let root = keccak256([local_root.0, multichain_root.0].concat());
 
         let log_leaf_proof = proof
             .into_iter()
-            .chain(std::iter::once(aggregated_root))
+            .chain(std::iter::once(multichain_root))
             .collect::<Vec<_>>();
 
         let (batch_proof_len, batch_chain_proof, is_final_node) = match &self.gateway_provider {
