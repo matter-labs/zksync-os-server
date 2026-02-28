@@ -27,5 +27,8 @@ pub struct L1SenderConfig<Input> {
     /// Use Fusaka blob transaction format if the timestamp has passed.
     pub fusaka_upgrade_timestamp: u64,
 
+    /// When enabled, use `settleBatchesSharedBridge` instead of separate commit/prove/execute.
+    pub settle_mode: bool,
+
     pub phantom_data: PhantomData<Input>,
 }

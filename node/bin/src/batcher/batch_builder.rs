@@ -138,6 +138,8 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             logs,
             messages,
             multichain_batch_root,
+            snark_proof: None,
+            commit_blob_sidecar: None,
         },
         batch_prover_input,
     )

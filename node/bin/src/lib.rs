@@ -988,6 +988,7 @@ async fn run_main_node_pipeline(
                 &priority_tree_db_path,
                 finality,
                 committed_batch_provider,
+                config.l1_sender_config.settle_mode,
             )
             .await
             .unwrap(),
@@ -995,7 +996,11 @@ async fn run_main_node_pipeline(
         .pipe(L1Sender {
             provider: sl_provider,
             config: config.l1_sender_config.clone().into(),
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
+            to_address: if config.l1_sender_config.settle_mode {
+                config.l1_sender_config.settle_contract_address
+            } else {
+                node_state_on_startup.l1_state.validator_timelock_sl
+            },
             gateway: config.general_config.gateway_rpc_url.is_some(),
         })
         .pipe(BatchSink::new(internal_config_manager))

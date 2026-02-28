@@ -42,6 +42,39 @@ const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(300);
 type TransactionReceiptFuture =
     BoxFuture<'static, Result<TransactionReceipt, PendingTransactionError>>;
 
+/// In settle mode, commit and prove L1Senders pass through without sending to L1.
+/// The prove passthrough additionally stores the SNARK proof in the batch envelope.
+async fn run_settle_passthrough<Input: SendToL1>(
+    mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
+    outbound: Sender<SignedBatchEnvelope<FriProof>>,
+) -> anyhow::Result<()> {
+    let command_name = Input::NAME;
+    let mut cmd_buffer = Vec::new();
+    loop {
+        let received = inbound.recv_many(&mut cmd_buffer, 16).await;
+        if received == 0 {
+            anyhow::bail!("inbound channel closed");
+        }
+        for cmd in cmd_buffer.drain(..) {
+            match cmd {
+                L1SenderCommand::SendToL1(mut command) => {
+                    tracing::info!(command_name, "settle passthrough (skipping L1 send)");
+                    command.prepare_settle_passthrough();
+                    for mut envelope in command.into() {
+                        envelope.set_stage(Input::MINED_STAGE);
+                        outbound.send(envelope).await?;
+                    }
+                }
+                L1SenderCommand::Passthrough(batch) => {
+                    outbound
+                        .send((*batch).with_stage(Input::PASSTHROUGH_STAGE))
+                        .await?;
+                }
+            }
+        }
+    }
+}
+
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
 /// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
@@ -74,6 +107,10 @@ pub async fn run_l1_sender<Input: SendToL1>(
     config: L1SenderConfig<Input>,
     gateway: bool,
 ) -> anyhow::Result<()> {
+    if config.settle_mode && Input::SETTLE_PASSTHROUGH {
+        return run_settle_passthrough(inbound, outbound).await;
+    }
+
     let latency_tracker =
         ComponentStateReporter::global().handle_for(Input::NAME, L1SenderState::WaitingRecv);
     let command_name = Input::NAME;

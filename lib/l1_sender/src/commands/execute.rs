@@ -1,27 +1,34 @@
 use crate::batcher_metrics::BatchExecutionStage;
 use crate::batcher_model::{FriProof, SignedBatchEnvelope};
 use crate::commands::SendToL1;
+use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
+use zksync_os_contract_interface::calldata::encode_commit_batch_data;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
-use zksync_os_contract_interface::{IExecutor, InteropRoot};
+use zksync_os_contract_interface::{IExecutor, IPermissionlessValidator, InteropRoot};
+
+use super::prove::encode_prove_calldata_suffix;
 
 #[derive(Debug)]
 pub struct ExecuteCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     priority_ops: Vec<PriorityOpsBatchInfo>,
+    pub settle_mode: bool,
 }
 
 impl ExecuteCommand {
     pub fn new(
         batches: Vec<SignedBatchEnvelope<FriProof>>,
         priority_ops: Vec<PriorityOpsBatchInfo>,
+        settle_mode: bool,
     ) -> Self {
         assert_eq!(batches.len(), priority_ops.len());
         Self {
             batches,
             priority_ops,
+            settle_mode,
         }
     }
 }
@@ -32,8 +39,12 @@ impl SendToL1 for ExecuteCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1TxMined;
 
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1Passthrough;
+    const SETTLE_PASSTHROUGH: bool = false;
 
     fn solidity_call(&self, gateway: bool) -> Bytes {
+        if self.settle_mode {
+            return self.settle_solidity_call(gateway);
+        }
         IExecutor::executeBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.batch_info.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
@@ -42,6 +53,17 @@ impl SendToL1 for ExecuteCommand {
         ))
         .abi_encode()
         .into()
+    }
+
+    fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
+        if self.settle_mode {
+            // In settle mode, return the blob sidecar from the commit stage
+            self.batches
+                .first()
+                .and_then(|b| b.batch.commit_blob_sidecar.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -76,6 +98,42 @@ impl Display for ExecuteCommand {
 }
 
 impl ExecuteCommand {
+    fn settle_solidity_call(&self, gateway: bool) -> Bytes {
+        let first_batch = self.batches.first().unwrap();
+        let chain_address = first_batch.batch.batch_info.chain_address;
+        let batch_from = U256::from(first_batch.batch_number());
+        let batch_to = U256::from(self.batches.last().unwrap().batch_number());
+
+        // Build commit data
+        let commit_data = encode_commit_batch_data(
+            &first_batch.batch.previous_stored_batch_info,
+            first_batch.batch.batch_info.commit_info.clone(),
+            first_batch.batch.protocol_version.minor,
+        );
+
+        // Build prove data using the SNARK proof stored in the batch during passthrough
+        let snark_proof = first_batch
+            .batch
+            .snark_proof
+            .as_ref()
+            .expect("settle mode requires snark_proof to be stored in batch metadata");
+        let prove_data = encode_prove_calldata_suffix(&self.batches, snark_proof);
+
+        // Build execute data
+        let execute_data = self.to_calldata_suffix(gateway);
+
+        IPermissionlessValidator::settleBatchesSharedBridgeCall::new((
+            chain_address,
+            batch_from,
+            batch_to,
+            commit_data.into(),
+            prove_data.into(),
+            execute_data.into(),
+        ))
+        .abi_encode()
+        .into()
+    }
+
     fn to_calldata_suffix(&self, gateway: bool) -> Vec<u8> {
         let stored_batch_infos = self
             .batches

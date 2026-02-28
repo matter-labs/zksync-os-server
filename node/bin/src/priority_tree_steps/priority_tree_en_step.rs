@@ -30,6 +30,7 @@ where
             db_path,
             finality.clone(),
             committed_batch_provider,
+            false, // settle_mode is not applicable for EN
         )
         .await?;
 

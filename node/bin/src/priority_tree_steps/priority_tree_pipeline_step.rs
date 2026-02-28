@@ -33,12 +33,14 @@ where
         db_path: &Path,
         finality: Finality,
         committed_batch_provider: CommittedBatchProvider,
+        settle_mode: bool,
     ) -> anyhow::Result<Self> {
         let priority_tree_manager = PriorityTreeManager::new(
             block_storage,
             db_path,
             finality.clone(),
             committed_batch_provider,
+            settle_mode,
         )
         .await?;
 

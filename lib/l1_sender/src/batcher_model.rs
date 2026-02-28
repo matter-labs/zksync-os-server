@@ -1,4 +1,5 @@
 use crate::batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
+use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{B256, Bytes};
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,10 @@ pub struct BatchMetadata {
     pub messages: Vec<Vec<u8>>,
     #[serde(default)]
     pub multichain_batch_root: B256,
+    #[serde(default)]
+    pub snark_proof: Option<SnarkProof>,
+    #[serde(skip)]
+    pub commit_blob_sidecar: Option<BlobTransactionSidecar>,
 }
 
 impl BatchMetadata {

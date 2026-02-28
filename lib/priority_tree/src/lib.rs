@@ -31,6 +31,7 @@ pub struct PriorityTreeManager<ReplayStorage, Finality> {
     finality: Finality,
     committed_batch_provider: CommittedBatchProvider,
     last_executed_batch_on_init: u64,
+    settle_mode: bool,
 }
 
 impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
@@ -41,6 +42,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
         db_path: &Path,
         finality: Finality,
         committed_batch_provider: CommittedBatchProvider,
+        settle_mode: bool,
     ) -> anyhow::Result<Self> {
         let started_at = Instant::now();
         let db = PriorityTreeDB::new(db_path);
@@ -80,6 +82,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
             finality,
             committed_batch_provider,
             last_executed_batch_on_init: last_executed_batch,
+            settle_mode,
         })
     }
 
@@ -254,6 +257,7 @@ impl<ReplayStorage: ReadReplay, Finality: ReadFinality>
                 s.send(L1SenderCommand::SendToL1(ExecuteCommand::new(
                     batch_envelopes.unwrap(),
                     priority_ops,
+                    self.settle_mode,
                 )))
                 .await?;
             }

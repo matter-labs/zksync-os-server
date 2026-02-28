@@ -84,6 +84,8 @@ pub fn dummy_batch_metadata(batch_number: u64, from: u64, to: u64) -> BatchMetad
         logs: vec![],
         messages: vec![],
         multichain_batch_root: Default::default(),
+        snark_proof: None,
+        commit_blob_sidecar: None,
     }
 }
 

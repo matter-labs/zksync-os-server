@@ -1,5 +1,5 @@
 use crate::models::{CommitBatchInfo, StoredBatchInfo};
-use crate::{IExecutor, IExecutorV29, IExecutorV30, IMultisigCommitter};
+use crate::{IExecutor, IExecutorV29, IExecutorV30, IMultisigCommitter, IPermissionlessValidator};
 use alloy::primitives::Address;
 use alloy::sol_types::{SolCall, SolValue};
 
@@ -43,6 +43,19 @@ impl CommitCalldata {
                     commit_call._processBatchFrom.to(),
                     commit_call._processBatchTo.to(),
                     commit_call._batchData,
+                )
+            } else if selector
+                == IPermissionlessValidator::settleBatchesSharedBridgeCall::SELECTOR
+            {
+                let settle_call =
+                    <IPermissionlessValidator::settleBatchesSharedBridgeCall as SolCall>::abi_decode(
+                        data,
+                    )?;
+                (
+                    settle_call._chainAddress,
+                    settle_call._processBatchFrom.to(),
+                    settle_call._processBatchTo.to(),
+                    settle_call._commitData,
                 )
             } else {
                 anyhow::bail!(

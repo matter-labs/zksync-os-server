@@ -493,6 +493,15 @@ pub struct L1SenderConfig {
     #[config(default_t = PubdataMode::Blobs)]
     #[config(with = Serde![str])]
     pub pubdata_mode: PubdataMode,
+
+    /// When enabled, use `settleBatchesSharedBridge` to commit+prove+execute in a single L1 call.
+    /// Requires `settle_contract_address` to be set.
+    #[config(default_t = false)]
+    pub settle_mode: bool,
+
+    /// Address of the PermissionlessValidator contract for settle mode.
+    #[config(default_t = Address::ZERO)]
+    pub settle_contract_address: Address,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -965,6 +974,7 @@ impl L1SenderConfig {
             command_limit: self.command_limit,
             poll_interval: self.poll_interval,
             fusaka_upgrade_timestamp: self.fusaka_upgrade_timestamp,
+            settle_mode: self.settle_mode,
             phantom_data: Default::default(),
         }
     }

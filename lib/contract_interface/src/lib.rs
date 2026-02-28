@@ -415,6 +415,17 @@ alloy::sol! {
     interface IERC20 {
         function decimals() external view returns (uint8);
     }
+
+    interface IPermissionlessValidator {
+        function settleBatchesSharedBridge(
+            address _chainAddress,
+            uint256 _processBatchFrom,
+            uint256 _processBatchTo,
+            bytes calldata _commitData,
+            bytes calldata _proveData,
+            bytes calldata _executeData
+        ) external;
+    }
 }
 
 #[derive(Clone, Debug)]
