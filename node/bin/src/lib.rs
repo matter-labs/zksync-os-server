@@ -836,6 +836,26 @@ async fn run_main_node_pipeline(
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
 ) {
+    // Validate settle mode configuration
+    if config.l1_sender_config.settle_mode {
+        assert!(
+            config.l1_sender_config.settle_contract_address != alloy::primitives::Address::ZERO,
+            "settle_mode is enabled but settle_contract_address is not set (defaults to 0x0). \
+             Set l1_sender_settle_contract_address to the PermissionlessValidator contract address."
+        );
+        assert!(
+            node_state_on_startup.l1_state.last_proved_batch
+                == node_state_on_startup.l1_state.last_executed_batch,
+            "settle_mode requires last_proved_batch == last_executed_batch on L1 \
+             (found proved={}, executed={}). \
+             settleBatchesSharedBridge atomically commits+proves+executes, so it cannot process \
+             batches that are already committed or proved but not yet executed. \
+             Run in normal mode first to execute the remaining batches, then switch to settle mode.",
+            node_state_on_startup.l1_state.last_proved_batch,
+            node_state_on_startup.l1_state.last_executed_batch,
+        );
+    }
+
     tracing::info!("Initializing ProofStorage");
     // todo: this is used purely for prover API
     //       decide what to do with it - might still be useful to debug failed proofs

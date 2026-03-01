@@ -112,11 +112,13 @@ impl ExecuteCommand {
         );
 
         // Build prove data using the SNARK proof stored in the batch during passthrough
-        let snark_proof = first_batch
-            .batch
-            .snark_proof
-            .as_ref()
-            .expect("settle mode requires snark_proof to be stored in batch metadata");
+        let snark_proof = first_batch.batch.snark_proof.as_ref().expect(
+            "settle mode requires snark_proof in batch metadata. \
+             This can happen if already-proved batches are passed through without \
+             prepare_settle_passthrough() being called (e.g., when transitioning from \
+             normal mode to settle mode with last_proved_batch > last_executed_batch). \
+             Ensure the startup validation in run_main_node_pipeline catches this state.",
+        );
         let prove_data = encode_prove_calldata_suffix(&self.batches, snark_proof);
 
         // Build execute data

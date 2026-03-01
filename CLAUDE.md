@@ -86,3 +86,17 @@ The ZKsync OS Sequencer is organized into three main subsystems:
 
 ### State Recovery
 Most components are designed to be stateless or recover from persistent storage. The system follows a replay-based recovery model where components can reconstruct their state by replaying blocks from the last compacted state.
+
+## Implementation Checklist
+
+When implementing new features, always verify the following:
+
+### Pipeline Restart Safety
+The batcher pipeline has recovery logic where components compare batch numbers against L1 state and emit `L1SenderCommand::Passthrough` for already-processed batches. When adding new behavior to the pipeline:
+- **Trace every `Passthrough` code path** - not just `SendToL1`. Pipeline steps like `snark_proving_pipeline_step` and `fri_proving_pipeline_step` emit Passthrough for batches where `batch_number <= last_proved_batch`. Verify your feature handles these correctly.
+- **Consider mode transitions** - if adding a new mode/flag, think about what happens when the operator switches modes on a running chain where L1 state has `committed > proved > executed`. Batches in intermediate states may not be processable by the new mode.
+- **Test the restart scenario** - ask: "what if the server crashes after step X but before step Y, and restarts with the new config?"
+
+### Config Validation
+- **Validate sentinel defaults at startup** - if a config field defaults to a sentinel value (e.g., `Address::ZERO`) and is required under certain conditions, add an explicit startup assertion with a clear error message. Don't let invalid config silently produce wrong behavior.
+- **Validate cross-field invariants** - when one config flag enables a feature that depends on another field, validate the dependency at startup (e.g., `settle_mode=true` requires `settle_contract_address != 0x0`).
