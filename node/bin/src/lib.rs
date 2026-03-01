@@ -873,6 +873,16 @@ async fn run_main_node_pipeline(
              Set prover_api_max_fris_per_snark=1.",
             config.prover_api_config.max_fris_per_snark,
         );
+        assert!(
+            matches!(
+                l1.batch_verification,
+                zksync_os_contract_interface::l1_discovery::BatchVerificationSL::Disabled
+            ),
+            "settle_mode is incompatible with multisig batch verification. \
+             settleBatchesSharedBridge builds commit calldata using commitBatchesSharedBridge \
+             format (without signatures), which bypasses the multisig verification path. \
+             Disable batch verification or run in normal mode."
+        );
     }
 
     tracing::info!("Initializing ProofStorage");
