@@ -3,7 +3,7 @@ use alloy::primitives::{Address, B256, U256, address, keccak256};
 use zk_ee::common_structs::derive_flat_storage_key;
 use zksync_os_interface::traits::ReadStorage;
 
-pub fn read_aggregated_root(mut state: impl ReadStorage) -> B256 {
+pub fn read_multichain_root(mut state: impl ReadStorage) -> B256 {
     const L2_MESSAGE_ROOT_ADDRESS: Address = address!("0x0000000000000000000000000000000000010005");
     const AGG_TREE_HEIGHT_KEY: B256 = B256::with_last_byte(0x04);
     const AGG_TREE_NODES_KEY: B256 = B256::with_last_byte(0x06);

@@ -36,6 +36,7 @@ impl RpcBlockConvert for Sealed<alloy::consensus::Block<TxHash>> {
 
 /// A struct with the proof for the L2->L1 log in a specific block.
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct L2ToL1LogProof {
     /// The L1 batch number containing the log.
     pub batch_number: u64,

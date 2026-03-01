@@ -28,7 +28,7 @@ pub struct StoredTxData {
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
     pub block_context: BlockContext,
     /// L1 transaction serial id (0-based) expected at the beginning of this block.
@@ -40,18 +40,35 @@ pub struct ReplayRecord {
     /// Will be moved to the BlockContext at some point
     pub previous_block_timestamp: u64,
     /// Version of the node that created this replay record.
+    /// NOTE: Excluded from equality check, different node versions can produce identical blocks.
     pub node_version: semver::Version,
     /// Version of the protocol that was used to create this replay record.
     pub protocol_version: ProtocolSemanticVersion,
     /// Extension of traditional block hash (see hash_block_output)
     /// Used to confirm that we executed the replay correctly
     /// We need this because our header is missing a few important fields
+    // TODO: We may want to add more information about block_output_hash (currently tracks only output, but different input can result in same output)
     pub block_output_hash: B256,
     /// Forced preimages to be included before the block execution.
     pub force_preimages: Vec<(B256, Vec<u8>)>,
     /// Event index(block number and index in block) of the interop root tx executed first in the block
     /// If there is no interop root tx in the block, equals to the previous block's value
     pub starting_interop_event_index: InteropRootsLogIndex,
+}
+
+impl PartialEq for ReplayRecord {
+    fn eq(&self, other: &Self) -> bool {
+        // Same as #[derive(PartialEq)], but without `node_version`.
+        // During replay, we care about block identity, node_version is binary metadata.
+        self.block_context == other.block_context
+            && self.starting_l1_priority_id == other.starting_l1_priority_id
+            && self.transactions == other.transactions
+            && self.previous_block_timestamp == other.previous_block_timestamp
+            && self.protocol_version == other.protocol_version
+            && self.block_output_hash == other.block_output_hash
+            && self.force_preimages == other.force_preimages
+            && self.starting_interop_event_index == other.starting_interop_event_index
+    }
 }
 
 impl ReplayRecord {

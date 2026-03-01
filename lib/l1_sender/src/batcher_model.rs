@@ -47,7 +47,7 @@ pub struct BatchMetadata {
     #[serde(default)]
     pub messages: Vec<Vec<u8>>,
     #[serde(default)]
-    pub multichain_batch_root: B256,
+    pub multichain_root: B256,
     #[serde(default)]
     pub snark_proof: Option<SnarkProof>,
     #[serde(skip)]

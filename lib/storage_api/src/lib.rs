@@ -26,5 +26,5 @@ pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState
 pub mod state_override_view;
 pub use state_override_view::OverriddenStateView;
 
-mod read_aggregated_root;
-pub use read_aggregated_root::read_aggregated_root;
+mod read_multichain_root;
+pub use read_multichain_root::read_multichain_root;

@@ -516,7 +516,7 @@ mod tests {
             computational_native_used: None,
             logs: vec![],
             messages: vec![],
-            multichain_batch_root: Default::default(),
+            multichain_root: Default::default(),
             snark_proof: None,
             commit_blob_sidecar: None,
         };
