@@ -843,16 +843,35 @@ async fn run_main_node_pipeline(
             "settle_mode is enabled but settle_contract_address is not set (defaults to 0x0). \
              Set l1_sender_settle_contract_address to the PermissionlessValidator contract address."
         );
+        let l1 = &node_state_on_startup.l1_state;
         assert!(
-            node_state_on_startup.l1_state.last_proved_batch
-                == node_state_on_startup.l1_state.last_executed_batch,
+            l1.last_committed_batch == l1.last_executed_batch,
+            "settle_mode requires last_committed_batch == last_executed_batch on L1 \
+             (found committed={}, executed={}). \
+             settleBatchesSharedBridge atomically commits+proves+executes, so it cannot process \
+             batches that are already committed or proved but not yet executed. \
+             Run in normal mode first to execute the remaining batches, then switch to settle mode.",
+            l1.last_committed_batch,
+            l1.last_executed_batch,
+        );
+        assert!(
+            l1.last_proved_batch == l1.last_executed_batch,
             "settle_mode requires last_proved_batch == last_executed_batch on L1 \
              (found proved={}, executed={}). \
              settleBatchesSharedBridge atomically commits+proves+executes, so it cannot process \
              batches that are already committed or proved but not yet executed. \
              Run in normal mode first to execute the remaining batches, then switch to settle mode.",
-            node_state_on_startup.l1_state.last_proved_batch,
-            node_state_on_startup.l1_state.last_executed_batch,
+            l1.last_proved_batch,
+            l1.last_executed_batch,
+        );
+        assert!(
+            config.prover_api_config.max_fris_per_snark == 1,
+            "settle_mode requires max_fris_per_snark == 1 (found {}). \
+             In settle mode, each batch is settled individually via settleBatchesSharedBridge. \
+             A SNARK proof covering multiple batches cannot be used in single-batch settle calls \
+             because the proof's public input won't match the single batch's data. \
+             Set prover_api_max_fris_per_snark=1.",
+            config.prover_api_config.max_fris_per_snark,
         );
     }
 
