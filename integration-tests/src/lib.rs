@@ -7,10 +7,20 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WalletProvider};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+#[cfg(feature = "prover-tests")]
+use alloy::transports::http::reqwest::{
+    self, StatusCode,
+    blocking::Client,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT},
+};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(feature = "prover-tests")]
+use std::path::{Path, PathBuf};
+#[cfg(feature = "prover-tests")]
+use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -286,20 +296,37 @@ impl Tester {
             let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
             let output_dir = tempdir.path().join("outputs");
             std::fs::create_dir_all(&output_dir).unwrap();
+
+            let path = download_prover_and_unpack(cfg!(feature = "gpu-prover-tests")).await;
+
+            let mut child = tokio::process::Command::new(path)
+                .arg("--sequencer-urls")
+                .arg(base_url)
+                .arg("--app-bin-path")
+                .arg(app_bin_path)
+                .arg("--circuit-limit")
+                .arg("10000")
+                .arg("--output-dir")
+                .arg(output_dir)
+                .arg("--trusted-setup-file")
+                .arg(trusted_setup_file)
+                .arg("--iterations")
+                .arg("1")
+                .arg("--max-fris-per-snark")
+                .arg("1")
+                .arg("--disable-zk")
+                .spawn()
+                .expect("failed to spawn prover service");
             tokio::task::spawn(async move {
-                zksync_os_prover_service::run(zksync_os_prover_service::Args {
-                    sequencer_urls: vec![base_url.parse().unwrap()],
-                    app_bin_path: Some(app_bin_path),
-                    circuit_limit: 10000,
-                    output_dir: output_dir.to_str().unwrap().to_string(),
-                    trusted_setup_file: trusted_setup_file.to_string(),
-                    iterations: Some(1),
-                    fri_path: None,
-                    max_snark_latency: None,
-                    max_fris_per_snark: Some(1),
-                    disable_zk: true,
-                })
-                .await
+                let code = child
+                    .wait()
+                    .await
+                    .expect("failed to wait for prover service");
+                if code.success() {
+                    tracing::info!("prover service finished running");
+                } else {
+                    panic!("prover service terminated with exit code {}", code);
+                }
             });
         }
 
@@ -619,4 +646,199 @@ impl AnvilL1 {
             _tempdir: Arc::new(tempdir),
         })
     }
+}
+
+#[cfg(feature = "prover-tests")]
+async fn download_prover_and_unpack(gpu: bool) -> String {
+    const RELEASE_VERSION: &str = "v0.7.1";
+    const RELEASE_BASE_URL: &str =
+        "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.1";
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let asset_name = match (os, arch, gpu) {
+        ("linux", "x86_64", true) => {
+            "zksync-os-prover-service-v0.7.1-x86_64-unknown-linux-gnu-gpu.tar.gz"
+        }
+        ("linux", "x86_64", false) => {
+            "zksync-os-prover-service-v0.7.1-x86_64-unknown-linux-gnu-cpu.tar.gz"
+        }
+        ("macos", _, true) => {
+            panic!("GPU prover binary is not available for macOS in {RELEASE_VERSION}")
+        }
+        ("macos", _, false) => "zksync-os-prover-service-v0.7.1-universal-apple-darwin-cpu.tar.gz",
+        ("linux", _, _) => panic!(
+            "unsupported Linux architecture `{arch}` for prover binaries; supported architecture: x86_64"
+        ),
+        _ => panic!(
+            "unsupported platform `{os}-{arch}` for prover binaries; supported platforms: linux-x86_64 (cpu/gpu), macos-* (cpu)"
+        ),
+    };
+
+    let local_binary_name = asset_name.trim_end_matches(".tar.gz");
+    let dir = Path::new("prover-binaries");
+    if !std::fs::exists(dir).expect("failed to check dir existence") {
+        std::fs::create_dir_all(dir).expect("failed to create dir");
+    }
+
+    let binary_path = dir.join(local_binary_name);
+    if std::fs::exists(binary_path.as_path()).expect("failed to check binary existence") {
+        tracing::info!(
+            "prover service binary is already present at {}",
+            binary_path.display()
+        );
+        return binary_path.display().to_string();
+    }
+
+    let archive_path = dir.join(asset_name);
+    if !std::fs::exists(archive_path.as_path()).expect("failed to check archive existence") {
+        let url = format!("{RELEASE_BASE_URL}/{asset_name}");
+        tracing::info!(
+            "downloading prover service archive from {url} to {}",
+            archive_path.display()
+        );
+        let resp = download_prover_binary(&url).expect("failed to download");
+        let body = resp.bytes().expect("failed to read response body").to_vec();
+        std::fs::write(archive_path.as_path(), body).expect("failed to write archive");
+    }
+
+    let extract_dir = dir.join(format!("{local_binary_name}-extract"));
+    if std::fs::exists(extract_dir.as_path()).expect("failed to check extraction dir existence") {
+        std::fs::remove_dir_all(extract_dir.as_path())
+            .expect("failed to clear previous extraction dir");
+    }
+    std::fs::create_dir_all(extract_dir.as_path()).expect("failed to create extraction dir");
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive_path.as_path())
+        .arg("-C")
+        .arg(extract_dir.as_path())
+        .status()
+        .expect("failed to execute `tar` to unpack prover archive");
+    if !status.success() {
+        panic!(
+            "failed to unpack prover archive {} with status {status}",
+            archive_path.display()
+        );
+    }
+
+    let extracted_binary_path =
+        find_first_prover_binary(extract_dir.as_path()).unwrap_or_else(|| {
+            panic!(
+                "failed to locate prover binary after unpacking archive {}",
+                archive_path.display()
+            )
+        });
+    std::fs::copy(extracted_binary_path.as_path(), binary_path.as_path())
+        .expect("failed to copy extracted prover binary");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = std::fs::metadata(binary_path.as_path())
+            .expect("failed to load binary metadata")
+            .permissions();
+        perms.set_mode(0o755); // Sets rwxr-xr-x
+        std::fs::set_permissions(binary_path.as_path(), perms)
+            .expect("failed to set binary permissions");
+    }
+    #[cfg(not(unix))]
+    {
+        panic!("unsupported platform (UNIX required)");
+    }
+
+    binary_path.display().to_string()
+}
+
+#[cfg(feature = "prover-tests")]
+fn find_first_prover_binary(dir: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()? {
+        let path = entry.ok()?.path();
+        if path.is_dir() {
+            if let Some(found) = find_first_prover_binary(path.as_path()) {
+                return Some(found);
+            }
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
+        if file_name.starts_with("zksync-os-prover-service") && !file_name.ends_with(".tar.gz") {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[cfg(feature = "prover-tests")]
+fn download_prover_binary(url: &str) -> anyhow::Result<reqwest::blocking::Response> {
+    const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
+    const DOWNLOAD_TIMEOUT_SECS: u64 = 60;
+    const DOWNLOAD_BASE_BACKOFF_MS: u64 = 500;
+
+    fn is_retryable_status(status: StatusCode) -> bool {
+        status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("zksync-os-integration-tests/1.0"),
+    );
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        let bearer = format!("Bearer {}", token.trim());
+        match HeaderValue::from_str(&bearer) {
+            Ok(value) => {
+                headers.insert(AUTHORIZATION, value);
+            }
+            Err(err) => {
+                tracing::warn!("Ignoring invalid GITHUB_TOKEN format: {err}");
+            }
+        }
+    }
+
+    let client = Client::builder()
+        .default_headers(headers)
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .build()
+        .unwrap();
+
+    for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
+        let response = client.get(url).send();
+        match response {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return Ok(response);
+                }
+
+                if is_retryable_status(status) && attempt < DOWNLOAD_MAX_ATTEMPTS {
+                    let delay_ms = DOWNLOAD_BASE_BACKOFF_MS * attempt as u64;
+                    tracing::warn!(
+                        "download attempt {attempt}/{DOWNLOAD_MAX_ATTEMPTS} failed with status {status} for {url}; retrying in {delay_ms}ms"
+                    );
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                    continue;
+                }
+
+                anyhow::bail!("download failed with status {status} for {url}");
+            }
+            Err(err) => {
+                if attempt < DOWNLOAD_MAX_ATTEMPTS {
+                    let delay_ms = DOWNLOAD_BASE_BACKOFF_MS * attempt as u64;
+                    tracing::warn!(
+                        "download attempt {attempt}/{DOWNLOAD_MAX_ATTEMPTS} failed for {url}: {err}; retrying in {delay_ms}ms"
+                    );
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                    continue;
+                }
+
+                anyhow::bail!("download request failed for {url}: {err}");
+            }
+        }
+    }
+    unreachable!("loop always returns on success or final attempt");
 }

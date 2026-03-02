@@ -215,7 +215,7 @@ impl fmt::Display for ZkTxType {
 mod tests {
     use super::*;
     use alloy::consensus::private::alloy_primitives;
-    use alloy::primitives::{TxKind, address};
+    use alloy::primitives::TxKind;
 
     #[test]
     // Test vector from https://etherscan.io/tx/0x280cde7cdefe4b188750e76c888f13bd05ce9a4d7767730feefe8a0e50ca6fc4

@@ -15,7 +15,7 @@ fn parse_git_tag(package_id: &PackageId) -> anyhow::Result<String> {
 
 fn proving_version_from_tag(tag: &str) -> Option<String> {
     match tag {
-        "v0.2.7-interface-v0.0.13" => Some(String::from("V6")),
+        "v0.2.8-interface-v0.0.14" => Some(String::from("V6")),
         _ => None,
     }
 }
@@ -112,6 +112,16 @@ fn main() {
         };
 
         if let Some(proving_version) = proving_version_from_tag(&tag) {
+            // TEMPORARY HACK for V6!!!
+            // We've updated interface and rust toolchain for corresponding zksync-os version and it caused a change in binaries.
+            // We need to use original V6 binaries from zksync-os v0.2.5.
+            // Should be removed as soon as we can get rig of proving V6.
+            let tag = if proving_version == "V6" {
+                "v0.2.5".to_owned()
+            } else {
+                tag
+            };
+
             let dir = format!("{manifest_dir}/apps/{tag}");
             std::fs::create_dir_all(&dir).expect("failed to create directory");
             for variant in [

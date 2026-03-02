@@ -83,7 +83,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     pub async fn prepare_command(
         &mut self,
         block_command: BlockCommand,
-    ) -> anyhow::Result<PreparedBlockCommand> {
+    ) -> anyhow::Result<PreparedBlockCommand<'_>> {
         let prepared_command = match block_command {
             BlockCommand::Produce(produce_command) => {
                 // Create stream:
@@ -149,8 +149,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                     execution_version: execution_version as u32,
-                    blob_fee: U256::ZERO,
-                    code_size_limit: None,
+                    blob_fee: U256::ONE,
                 };
                 self.last_constructed_block_ctx_sender
                     .send_replace(Some(block_context));
@@ -239,7 +238,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     // todo: initialize as source of randomness, i.e. the value of prevRandao
                     mix_hash: Default::default(),
                     execution_version,
-                    code_size_limit: None,
                 };
                 let txs = if rebuild.make_empty {
                     Vec::new()

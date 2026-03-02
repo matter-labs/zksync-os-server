@@ -312,7 +312,6 @@ async fn build_genesis(
         mix_hash: U256::ZERO,
         execution_version: genesis_input.execution_version,
         blob_fee: U256::ZERO,
-        code_size_limit: None,
     };
 
     Ok(GenesisState {
