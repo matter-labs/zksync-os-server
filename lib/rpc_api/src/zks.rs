@@ -1,4 +1,4 @@
-use crate::types::{BlockMetadata, L2ToL1LogProof};
+use crate::types::{BlockMetadata, L2ToL1LogProof, MerklePathType};
 use alloy::primitives::{Address, TxHash};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
@@ -19,6 +19,7 @@ pub trait ZksApi {
         &self,
         tx_hash: TxHash,
         index: Index,
+        merkle_path_type: Option<MerklePathType>,
     ) -> RpcResult<Option<L2ToL1LogProof>>;
 
     #[method(name = "getGenesis")]

@@ -48,6 +48,20 @@ pub struct L2ToL1LogProof {
     pub root: B256,
 }
 
+/// Selects which merkle path format to use for L2->L1 log proofs.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MerklePathType {
+    /// Proof corresponding to `set_batch_chain_merkle_path`: batch is proven against the
+    /// SL L1 batch aggregated root (via the full gateway batch range and local root extension).
+    #[default]
+    Regular,
+    /// Proof corresponding to `set_batch_chain_merkle_path_until_msg_root`: batch is proven
+    /// against the SL block-level message root (no local root extension; uses the specific
+    /// execution block number).
+    UntilMsgRoot,
+}
+
 /// ZKsync-specific block metadata struct.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlockMetadata {
