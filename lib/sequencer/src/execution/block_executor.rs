@@ -61,7 +61,7 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
         SealPolicy::Decide(d, _) => Some(d),
         SealPolicy::UntilExhausted { .. } => None,
     };
-    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx success
+    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
     let mut interop_roots_count = 0;
 
     /* ---------- main loop ------------------------------------------ */
@@ -111,6 +111,19 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                 );
 
                 all_processed_txs.push(tx.clone());
+
+                // Arm the deadline on the first tx attempt (success or failure).
+                // This prevents indefinite hangs when all L2 txs fail validation
+                // (e.g. BaseFeeGreaterThanMaxFee) and no L1 txs arrive to break
+                // the deadlock. Without this, the block executor would wait forever
+                // because the deadline only armed on success, and the sender is
+                // marked invalid in the BestTransactions iterator after a failure.
+                // Note that this behavior may result in an empty block being mined,
+                // which is supported server behavour.
+                if deadline.is_none() && let Some(dur) = deadline_dur {
+                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                }
+
                 match runner.execute_next_tx(tx.clone().encode())
                     .await
                     .map_err(|e| {
@@ -141,11 +154,6 @@ pub async fn execute_block<R: ReadStateHistory + WriteState>(
                         let tx_type = tx.tx_type();
                         executed_txs.push(tx);
                         cumulative_gas_used += res.gas_used;
-
-                        // arm the timer once, after the first successful tx
-                        if deadline.is_none() && let Some(dur) = deadline_dur {
-                            deadline = Some(Box::pin(tokio::time::sleep(dur)));
-                        }
                         if tx_type == ZkTxType::Upgrade {
                             match &command.seal_policy {
                                 SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
