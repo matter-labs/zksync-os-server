@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::factory_deps::load_factory_deps;
 use crate::util::ANVIL_L1_CHAIN_ID;
 use crate::watcher::{L1Watcher, L1WatcherError};
 use crate::{L1WatcherConfig, ProcessL1Event, util};
@@ -9,6 +8,9 @@ use alloy::primitives::{Address, B256, BlockNumber, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::{Filter, Log};
 use alloy::sol_types::SolEvent;
+use zk_os_api::helpers::set_properties_code;
+use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
+use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
 use zksync_os_contract_interface::IChainAdmin::UpdateUpgradeTimestamp;
 use zksync_os_contract_interface::IChainTypeManager::{NewUpgradeCutData, ProposedUpgrade};
 use zksync_os_contract_interface::ZkChain;
@@ -17,10 +19,6 @@ use zksync_os_types::{
     L1UpgradeEnvelope, ProtocolSemanticVersion, ProtocolSemanticVersionError, UpgradeInfo,
     UpgradeMetadata,
 };
-// TODO: disabled until bytecode supplier integration is ready
-// use zksync_os_contract_interface::IBytecodeSupplier::BytecodePublished;
-// use zk_os_api::helpers::set_properties_code;
-// use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 /// Limit the number of L1 blocks to scan when looking for the set timestamp transaction.
 const INITIAL_LOOKBEHIND_BLOCKS: u64 = 100_000;
@@ -34,7 +32,6 @@ pub struct L1UpgradeTxWatcher {
     provider_l1: DynProvider,
     provider_sl: DynProvider,
     /// Address of the bytecode supplier contract (used to detect published bytecode preimages)
-    #[allow(dead_code)] // TODO: enable once bytecode supplier integration is ready
     bytecode_supplier_address: Address,
     /// Address of the CTM contract (used to detect upgrade priority transactions)
     ctm_sl: Address,
@@ -220,51 +217,45 @@ impl L1UpgradeTxWatcher {
 
     async fn fetch_force_preimages(
         &self,
-        _hashes: &[B256],
+        hashes: &[B256],
     ) -> anyhow::Result<Vec<(B256, Vec<u8>)>> {
-        // HACK: For now, we load preimages from a hardcoded JSON file.
-        load_factory_deps()
+        tracing::info!(
+            num_hashes = hashes.len(),
+            "fetching force deployment preimages from bytecode supplier"
+        );
 
-        // // TODO: Bytecode supplier is not ready yet for ZKsync OS.
-        // panic!("fetching force deployment preimages is not yet implemented");
+        let current_block = self.provider_l1.get_block_number().await?;
+        let start_block = current_block
+            .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
+            .max(1u64);
 
-        // tracing::info!(
-        //     num_hashes = hashes.len(),
-        //     "fetching force deployment preimages from bytecode supplier"
-        // );
+        let mut preimages = Vec::new();
+        for hash in hashes {
+            let filter = Filter::new()
+                .from_block(start_block)
+                .to_block(current_block)
+                .address(self.bytecode_supplier_address)
+                .event_signature(BytecodePublished::SIGNATURE_HASH)
+                .topic1(*hash);
+            let logs = self.provider_l1.get_logs(&filter).await?;
+            anyhow::ensure!(
+                logs.len() == 1,
+                "expected exactly one log for bytecode hash {hash:?}, got {} logs",
+                logs.len()
+            );
+            let sol_event = BytecodePublished::decode_log(&logs[0].inner)?.data;
 
-        // // TODO: for now we assume that bytecodes are published within lookbehind range
-        // let current_block = self.provider.get_block_number().await?;
-        // let start_block = current_block
-        //     .saturating_sub(MAX_L1_BLOCKS_LOOKBEHIND)
-        //     .max(1u64);
+            // NOTE: it is guaranteed that `bytecodeHashes` from the transaction correspond to
+            // the `BytecodePublished` events, but there is no guarantee that the bytecode hash
+            // the server expects is the same as the one used in the event. So, we need to re-calculate
+            // the hash here.
+            let mut account_properties = AccountProperties::default();
+            set_properties_code(&mut account_properties, &sol_event.bytecode);
+            let calculated_hash = B256::from_slice(account_properties.bytecode_hash.as_u8_ref());
 
-        // let mut preimages = Vec::new();
-        // for hash in hashes {
-        //     let filter = Filter::new()
-        //         .from_block(start_block)
-        //         .to_block(current_block)
-        //         .address(self.bytecode_supplier_address)
-        //         .event_signature(BytecodePublished::SIGNATURE_HASH)
-        //         .topic1(*hash);
-        //     let logs = self.provider.get_logs(&filter).await?;
-        //     anyhow::ensure!(
-        //         logs.len() == 1,
-        //         "expected exactly one log for bytecode hash {hash:?}, got {logs:?}"
-        //     );
-        //     let sol_event = BytecodePublished::decode_log(&logs[0].inner)?.data;
-
-        //     // NOTE: it is guaranteed that `bytecodeHashes` from the transaction correspond to
-        //     // the `BytecodePublished` events, but there is no guarantee that the bytecode hash
-        //     // the server expects is the same as the one used in the event. So, we need to re-calculate
-        //     // the hash here.
-        //     let mut account_properties = AccountProperties::default();
-        //     set_properties_code(&mut account_properties, &sol_event.bytecode);
-        //     let calculated_hash = B256::from_slice(account_properties.bytecode_hash.as_u8_ref());
-
-        //     preimages.push((calculated_hash, sol_event.bytecode.to_vec()));
-        // }
-        // Ok(preimages)
+            preimages.push((calculated_hash, sol_event.bytecode.to_vec()));
+        }
+        Ok(preimages)
     }
 }
 

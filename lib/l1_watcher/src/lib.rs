@@ -32,5 +32,3 @@ pub use persist_batch_watcher::L1PersistBatchWatcher;
 
 mod gateway_migration_watcher;
 pub use gateway_migration_watcher::{Gateway, GatewayMigrationWatcher, L1};
-
-mod factory_deps;
