@@ -1,5 +1,5 @@
 pub use self::cli::ConfigArgs;
-use self::util::SigningKeyDeserializer;
+use self::util::{SecretKeyDeserializer, SigningKeyDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
 use alloy::primitives::{Address, Bytes, U128};
 use alloy::signers::k256::ecdsa::SigningKey;
@@ -242,7 +242,7 @@ pub struct NetworkConfig {
     /// The node's secret key (256-bit ECDSA), from which the node's identity is derived. Used during
     /// initial RLPx handshake.
     #[config(secret)]
-    #[config(default, with = Serde![str])]
+    #[config(default, with = SecretKeyDeserializer)]
     pub secret_key: Option<SecretKey>,
     /// IPv4 address to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
     #[config(default_t = Ipv4Addr::UNSPECIFIED, with = Serde![str])]
