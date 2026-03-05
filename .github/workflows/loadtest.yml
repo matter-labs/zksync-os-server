@@ -68,6 +68,7 @@ jobs:
       - name: Run loadbase benchmark
         working-directory: loadbase
         run: |
+          set -euo pipefail
           mkdir -p "../${LOADBASE_OUT_DIR}"
           cargo run --release -- \
             --rpc-url "${RPC_URL}" \

@@ -55,13 +55,32 @@ pub async fn distribute_varied<M: Middleware + 'static>(
     println!("▶ Distributing tokens sequentially …");
 
     let provider = token.client().clone();
-    let timeout_s = 30;
+    // CI runners may intermittently delay blocks; keep this generous to avoid false failures.
+    let timeout_s = 180;
+    const SEND_RETRIES: usize = 5;
 
     for (i, (&addr, &amt)) in dests.iter().zip(amounts).enumerate() {
-        // 1. broadcast
-        let call = token.transfer(addr, amt);
-        let pending = call.send().await?;
-        let tx_hash = pending.tx_hash();
+        // 1. broadcast (retry when node reports replacement gas-price race)
+        let mut send_attempt = 0usize;
+        let tx_hash = loop {
+            let send_result = {
+                let call = token.transfer(addr, amt);
+                call.send().await.map(|pending| pending.tx_hash())
+            };
+            match send_result {
+                Ok(tx_hash) => break tx_hash,
+                Err(err) if is_replacement_gas_error(&err.to_string()) && send_attempt < SEND_RETRIES => {
+                    send_attempt += 1;
+                    let backoff_ms = 300 * send_attempt as u64;
+                    println!(
+                        "      ⚠️ send attempt {} hit replacement gas-price race, retrying in {}ms: {}",
+                        send_attempt, backoff_ms, err
+                    );
+                    sleep(Duration::from_millis(backoff_ms)).await;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
         println!(
             "   tx #{:<3} → {addr:?}  amt {:>12}  hash 0x{tx_hash:x}",
             i,
@@ -103,4 +122,24 @@ pub async fn distribute_varied<M: Middleware + 'static>(
 
     println!("   ✅ distribution phase finished\n");
     Ok(())
+}
+
+fn is_replacement_gas_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("insufficient gas price to replace existing transaction")
+        || lower.contains("replacement transaction underpriced")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_replacement_gas_error;
+
+    #[test]
+    fn detects_replacement_underpriced_errors() {
+        assert!(is_replacement_gas_error(
+            "insufficient gas price to replace existing transaction"
+        ));
+        assert!(is_replacement_gas_error("replacement transaction underpriced"));
+        assert!(!is_replacement_gas_error("nonce too low"));
+    }
 }
