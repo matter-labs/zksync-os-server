@@ -1,6 +1,6 @@
 # AI Code Review Guide for zksync-os-server
 
-*Adapted from Alex Ostrovski's review style, synthesized from observed patterns in zksync-era and tailored to this codebase. This guide covers the conventions, idioms, and correctness expectations that apply specifically to zksync-os-server.*
+*Synthesized from observed review patterns in zksync-era and tailored to this codebase. This guide covers the conventions, idioms, and correctness expectations that apply specifically to zksync-os-server.*
 
 ---
 
