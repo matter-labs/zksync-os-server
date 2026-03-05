@@ -30,6 +30,32 @@ rpc_address=0.0.0.0:3051 \
 cargo run --release
 ```
 
+## Before Submitting a PR
+
+Run all of the following checks locally and ensure they pass before pushing:
+
+1. **Format**: `cargo fmt --all --check`
+2. **Lint**: `cargo clippy --all-targets --all-features --workspace -- -D warnings`
+3. **Unit tests**: `cargo nextest run --release --workspace`
+
+### PR title
+
+PR titles must follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification:
+
+```
+<type>(<scope>): <short description>
+```
+
+Examples: `feat(eth_sender): Support new transaction type`, `fix(state_keeper): Correctly handle edge case`, `ci: Add new workflow for linting`
+
+### Breaking changes
+
+If the PR title uses the breaking-change marker (`feat!: ...`, `fix!: ...`), you **must** uncomment and fill in the **Breaking Changes** and **Rollout Instructions** sections in the PR description (see `.github/pull_request_template.md`).
+
+### Wire format immutability
+
+Do **not** modify existing versioned wire format files under `lib/network/src/wire/replays/v*.rs`. Add a new versioned file instead.
+
 ## Architecture Overview
 
 ### Core Subsystems
