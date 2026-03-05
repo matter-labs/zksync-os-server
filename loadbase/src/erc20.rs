@@ -11,6 +11,10 @@ use ethers::{
 use std::{sync::Arc, time::Duration};
 use tokio::time::{sleep, timeout};
 
+const DISTRIBUTION_GAS_FALLBACK_WEI: u64 = 3_000_000_000;
+const DISTRIBUTION_GAS_BID_BASE_BPS: u64 = 400;
+const DISTRIBUTION_GAS_BID_STEP_BPS: u64 = 100;
+
 abigen!(
     SimpleERC20,
     "./contracts/out/SimpleERC20.sol/SimpleERC20.json"
@@ -63,8 +67,19 @@ pub async fn distribute_varied<M: Middleware + 'static>(
         // 1. broadcast (retry when node reports replacement gas-price race)
         let mut send_attempt = 0usize;
         let tx_hash = loop {
+            let chain_gas_price = provider
+                .get_gas_price()
+                .await
+                .unwrap_or_else(|_| U256::from(DISTRIBUTION_GAS_FALLBACK_WEI));
+            let bid_bps =
+                DISTRIBUTION_GAS_BID_BASE_BPS + (send_attempt as u64 * DISTRIBUTION_GAS_BID_STEP_BPS);
+            let gas_price = chain_gas_price
+                .saturating_mul(U256::from(bid_bps))
+                .saturating_add(U256::from(99u64))
+                / U256::from(100u64);
             let send_result = {
-                let call = token.transfer(addr, amt);
+                let mut call = token.transfer(addr, amt);
+                call.tx.set_gas_price(gas_price);
                 call.send().await.map(|pending| pending.tx_hash())
             };
             match send_result {

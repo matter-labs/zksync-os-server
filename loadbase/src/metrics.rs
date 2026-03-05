@@ -105,6 +105,10 @@ impl Metrics {
         self.samples.lock().clone()
     }
 
+    pub fn total_included(&self) -> u64 {
+        self.include.lock().count
+    }
+
     #[cfg(test)]
     pub fn manual_snapshot(
         &self,

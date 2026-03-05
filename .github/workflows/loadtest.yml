@@ -73,12 +73,12 @@ jobs:
           set -euo pipefail
           mkdir -p "../${LOADBASE_OUT_DIR}"
           DURATION="5m"
-          MAX_IN_FLIGHT="25"
-          WALLETS="30"
+          MAX_IN_FLIGHT="52"
+          WALLETS="100"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             DURATION="2m"
-            MAX_IN_FLIGHT="15"
-            WALLETS="20"
+            MAX_IN_FLIGHT="52"
+            WALLETS="100"
           fi
           cargo run --release -- \
             --rpc-url "${RPC_URL}" \
