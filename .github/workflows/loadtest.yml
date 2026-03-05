@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -23,6 +24,7 @@ env:
   LOADBASE_PUSHGATEWAY_URL: ${{ secrets.LOADBASE_PUSHGATEWAY_URL }}
   LOADBASE_PUSHGATEWAY_USERNAME: ${{ secrets.LOADBASE_PUSHGATEWAY_USERNAME }}
   LOADBASE_PUSHGATEWAY_PASSWORD: ${{ secrets.LOADBASE_PUSHGATEWAY_PASSWORD }}
+  BASELINE_SAMPLE_COUNT: "7"
 
 jobs:
   benchmark:
@@ -70,16 +72,38 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "../${LOADBASE_OUT_DIR}"
+          DURATION="5m"
+          MAX_IN_FLIGHT="25"
+          WALLETS="30"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            DURATION="2m"
+            MAX_IN_FLIGHT="15"
+            WALLETS="20"
+          fi
           cargo run --release -- \
             --rpc-url "${RPC_URL}" \
             --rich-privkey "${RICH_PRIVKEY}" \
-            --duration 5m \
-            --max-in-flight 25 \
-            --wallets 30 \
+            --duration "${DURATION}" \
+            --max-in-flight "${MAX_IN_FLIGHT}" \
+            --wallets "${WALLETS}" \
             --dest random \
             --output-dir "../${LOADBASE_OUT_DIR}" \
             --output-format all \
             | tee "../${LOADBASE_LOGFILE}"
+
+      - name: Compare PR run with rolling baseline
+        id: baseline
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/loadtest-compare-baseline.sh
+          .github/scripts/loadtest-compare-baseline.sh \
+            "loadtest.yml" \
+            "${LOADBASE_OUT_DIR}/summary.json" \
+            "${LOADBASE_OUT_DIR}" \
+            "${BASELINE_SAMPLE_COUNT}" \
+            "${GITHUB_REPOSITORY}"
 
       - name: Write GitHub summary
         run: |
@@ -111,6 +135,31 @@ jobs:
             echo "| Receipt timeouts | ${RECEIPT_TIMEOUTS} |"
             echo "| Receipt errors | ${RECEIPT_ERRORS} |"
             echo
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ -f "${LOADBASE_OUT_DIR}/regression.json" ]; then
+              BASELINE_SAMPLES="${{ steps.baseline.outputs.baseline_sample_count }}"
+              WARNING_STATUS="${{ steps.baseline.outputs.warning_status }}"
+              MEDIAN_TPS10_DELTA=$(jq -r '.deltas.median_tps10_pct' "${LOADBASE_OUT_DIR}/regression.json")
+              P95_TPS10_DELTA=$(jq -r '.deltas.p95_tps10_pct' "${LOADBASE_OUT_DIR}/regression.json")
+              INCLUDE_P50_DELTA=$(jq -r '.deltas.include_p50_pct' "${LOADBASE_OUT_DIR}/regression.json")
+              TIMEOUT_DELTA=$(jq -r '.deltas.receipt_timeouts_pct' "${LOADBASE_OUT_DIR}/regression.json")
+              ERROR_DELTA=$(jq -r '.deltas.receipt_errors_pct' "${LOADBASE_OUT_DIR}/regression.json")
+              echo "### Regression Check (${WARNING_STATUS})"
+              echo
+              echo "| Signal | Delta % |"
+              echo "|---|---:|"
+              printf "| Median TPS10 | %.2f |\n" "${MEDIAN_TPS10_DELTA}"
+              printf "| P95 TPS10 | %.2f |\n" "${P95_TPS10_DELTA}"
+              printf "| Include p50 10s | %.2f |\n" "${INCLUDE_P50_DELTA}"
+              printf "| Receipt timeouts | %.2f |\n" "${TIMEOUT_DELTA}"
+              printf "| Receipt errors | %.2f |\n" "${ERROR_DELTA}"
+              echo
+              echo "Compared against rolling baseline from ${BASELINE_SAMPLES} successful main runs."
+              if [ "${WARNING_STATUS}" = "WARN" ]; then
+                echo
+                echo "> Non-blocking warning: potential performance regression detected."
+              fi
+              echo
+            fi
             if [ -f "${REPORT_MD}" ]; then
               echo "<details><summary>Full report</summary>"
               echo
@@ -169,3 +218,6 @@ jobs:
             ${{ env.LOADBASE_OUT_DIR }}/report.md
             ${{ env.LOADBASE_OUT_DIR }}/metrics.json
             ${{ env.LOADBASE_OUT_DIR }}/metrics.csv
+            ${{ env.LOADBASE_OUT_DIR }}/baseline.json
+            ${{ env.LOADBASE_OUT_DIR }}/regression.json
+          retention-days: 30
