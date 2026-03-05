@@ -26,7 +26,6 @@ env:
 
 jobs:
   benchmark:
-    if: github.ref == 'refs/heads/main'
     runs-on: matterlabs-ci-runner-high-performance
     steps:
       - name: Checkout
