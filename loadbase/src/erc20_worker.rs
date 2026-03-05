@@ -27,19 +27,19 @@ const BATCH_SIZE: usize = 10;
 type EthSigner = SignerMiddleware<Provider<Http>, LocalWallet>;
 
 struct PendingTx {
-    raw:     Bytes,
-    permit:  tokio::sync::OwnedSemaphorePermit,
+    raw: Bytes,
+    permit: tokio::sync::OwnedSemaphorePermit,
     sent_at: Instant,
 }
 
 pub struct WorkerConfig {
-    pub gas_limit:   U256,
-    pub mean_amt:    U256,
-    pub token_addr:  Address,
+    pub gas_limit: U256,
+    pub mean_amt: U256,
+    pub token_addr: Address,
     pub dest_random: bool,
-    pub rpc_url:     String,
-    pub all_addrs:   Vec<Address>,
-    pub rng:         Arc<RwLock<StdRng>>,
+    pub rpc_url: String,
+    pub all_addrs: Vec<Address>,
+    pub rng: Arc<RwLock<StdRng>>,
 }
 
 fn jitter_amount(mean: U256, rng: &RwLock<StdRng>) -> U256 {
@@ -51,10 +51,19 @@ fn jitter_amount(mean: U256, rng: &RwLock<StdRng>) -> U256 {
         return mean;
     }
     let d = U256::from((mean.as_u128() as f64 * delta.abs()) as u128);
-    if delta.is_sign_positive() { mean + d } else { mean - d }
+    if delta.is_sign_positive() {
+        mean + d
+    } else {
+        mean - d
+    }
 }
 
-fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng: &RwLock<StdRng>) -> Address {
+fn choose_dest(
+    dest_random: bool,
+    all_addrs: &[Address],
+    self_addr: Address,
+    rng: &RwLock<StdRng>,
+) -> Address {
     if dest_random {
         return H160::random();
     }
@@ -70,23 +79,23 @@ fn choose_dest(dest_random: bool, all_addrs: &[Address], self_addr: Address, rng
 }
 
 async fn build_batch(
-    signer:    &EthSigner,
-    token:     &SimpleERC20<EthSigner>,
-    sem:       &Arc<Semaphore>,
-    nonce:     &mut u64,
+    signer: &EthSigner,
+    token: &SimpleERC20<EthSigner>,
+    sem: &Arc<Semaphore>,
+    nonce: &mut u64,
     gas_price: U256,
-    cfg:       &WorkerConfig,
+    cfg: &WorkerConfig,
 ) -> Vec<PendingTx> {
     let mut batch = Vec::new();
 
     for _ in 0..BATCH_SIZE {
         let permit = match sem.clone().try_acquire_owned() {
-            Ok(p)  => p,
+            Ok(p) => p,
             Err(_) => break, // in‑flight limit
         };
 
         let dest = choose_dest(cfg.dest_random, &cfg.all_addrs, signer.address(), &cfg.rng);
-        let amt  = jitter_amount(cfg.mean_amt, &cfg.rng);
+        let amt = jitter_amount(cfg.mean_amt, &cfg.rng);
 
         let mut call = token.transfer(dest, amt);
         call.tx.set_gas(cfg.gas_limit);
@@ -94,20 +103,28 @@ async fn build_batch(
         call.tx.set_nonce(*nonce);
         *nonce += 1;
 
-        let sig = signer.signer().sign_transaction(&call.tx).await.expect("sign");
+        let sig = signer
+            .signer()
+            .sign_transaction(&call.tx)
+            .await
+            .expect("sign");
         let raw = call.tx.rlp_signed(&sig);
 
-        batch.push(PendingTx { raw, permit, sent_at: Instant::now() });
+        batch.push(PendingTx {
+            raw,
+            permit,
+            sent_at: Instant::now(),
+        });
     }
 
     batch
 }
 
 fn spawn_receipt_waiter(
-    tx_hash:  H256,
-    permit:   tokio::sync::OwnedSemaphorePermit,
+    tx_hash: H256,
+    permit: tokio::sync::OwnedSemaphorePermit,
     provider: Provider<Http>,
-    metrics:  Metrics,
+    metrics: Metrics,
 ) {
     const RECEIPT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -126,7 +143,7 @@ fn spawn_receipt_waiter(
                     break;
                 }
                 Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
-                Err(e)   => {
+                Err(e) => {
                     eprintln!("receipt poll error for {tx_hash:?}: {e}");
                     break;
                 }
@@ -137,10 +154,10 @@ fn spawn_receipt_waiter(
 }
 
 fn process_replies(
-    batch:    Vec<PendingTx>,
-    replies:  Vec<Value>,
+    batch: Vec<PendingTx>,
+    replies: Vec<Value>,
     provider: &Provider<Http>,
-    metrics:  &Metrics,
+    metrics: &Metrics,
 ) {
     for (tx, reply) in batch.into_iter().zip(replies) {
         let sub_ms = tx.sent_at.elapsed().as_millis() as u64;
@@ -172,27 +189,32 @@ async fn send_rpc_batch(http: &Client, url: &str, batch: &[PendingTx]) -> Option
         })
         .collect();
 
-    let resp = http.post(url).json(&payload).send().await
+    let resp = http
+        .post(url)
+        .json(&payload)
+        .send()
+        .await
         .inspect_err(|e| eprintln!("❗ batch send error {e}"))
         .ok()?;
 
-    resp.json::<Vec<Value>>().await
+    resp.json::<Vec<Value>>()
+        .await
         .inspect_err(|e| eprintln!("❗ bad JSON reply {e}"))
         .ok()
 }
 
 async fn run_wallet(
-    idx:     usize,
-    wallet:  LocalWallet,
+    idx: usize,
+    wallet: LocalWallet,
     provider: Provider<Http>,
-    sem:     Arc<Semaphore>,
+    sem: Arc<Semaphore>,
     metrics: Metrics,
     running: Arc<AtomicBool>,
-    http:    Arc<Client>,
-    cfg:     Arc<WorkerConfig>,
+    http: Arc<Client>,
+    cfg: Arc<WorkerConfig>,
 ) {
     let signer = SignerMiddleware::new(provider.clone(), wallet);
-    let token  = SimpleERC20::new(cfg.token_addr, Arc::new(signer.clone()));
+    let token = SimpleERC20::new(cfg.token_addr, Arc::new(signer.clone()));
 
     let mut nonce: u64 = signer
         .get_transaction_count(signer.address(), Some(BlockNumber::Pending.into()))
@@ -203,17 +225,14 @@ async fn run_wallet(
 
     while running.load(Ordering::Relaxed) {
         let gas_price = match provider.get_gas_price().await {
-            Ok(p)  => p,
+            Ok(p) => p,
             Err(e) => {
                 eprintln!("❗ gas‑price fetch error {e} – using 3 gwei");
                 U256::from(3_000_000_000u64) // 3 gwei fallback
             }
         };
 
-        let batch = build_batch(
-            &signer, &token, &sem, &mut nonce,
-            gas_price, &cfg,
-        ).await;
+        let batch = build_batch(&signer, &token, &sem, &mut nonce, gas_price, &cfg).await;
 
         if batch.is_empty() {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -236,18 +255,22 @@ pub fn spawn_erc20_workers(
     max_in_flight: u32,
     cfg: WorkerConfig,
 ) -> Vec<tokio::task::JoinHandle<()>> {
-    let cfg  = Arc::new(cfg);
+    let cfg = Arc::new(cfg);
     let http = Arc::new(Client::new());
-    let sem  = Arc::new(Semaphore::new(max_in_flight as usize));
+    let sem = Arc::new(Semaphore::new(max_in_flight as usize));
 
     wallets
         .into_iter()
         .enumerate()
         .map(|(idx, wallet)| {
             tokio::spawn(run_wallet(
-                idx, wallet,
-                provider.clone(), sem.clone(),
-                metrics.clone(), running.clone(), http.clone(),
+                idx,
+                wallet,
+                provider.clone(),
+                sem.clone(),
+                metrics.clone(),
+                running.clone(),
+                http.clone(),
                 cfg.clone(),
             ))
         })

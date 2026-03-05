@@ -1,8 +1,4 @@
-use ethers::{
-    prelude::*,
-    types::transaction::eip2718::TypedTransaction,
-    types::U256,
-};
+use ethers::{prelude::*, types::transaction::eip2718::TypedTransaction, types::U256};
 
 pub enum GasMode {
     Fixed(U256),

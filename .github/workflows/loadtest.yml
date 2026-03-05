@@ -1,0 +1,162 @@
+name: Load test
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # daily at 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RPC_URL: http://localhost:3050
+  CHAIN_ID: "6565"
+  RICH_PRIVKEY: "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110"
+  SERVER_LOGFILE: zksync-os-server-benchmark.log
+  LOADBASE_OUT_DIR: loadbase-artifacts
+  LOADBASE_LOGFILE: loadbase.log
+  LOADBASE_PUSHGATEWAY_URL: ${{ secrets.LOADBASE_PUSHGATEWAY_URL }}
+  LOADBASE_PUSHGATEWAY_USERNAME: ${{ secrets.LOADBASE_PUSHGATEWAY_USERNAME }}
+  LOADBASE_PUSHGATEWAY_PASSWORD: ${{ secrets.LOADBASE_PUSHGATEWAY_PASSWORD }}
+
+jobs:
+  benchmark:
+    if: github.ref == 'refs/heads/main'
+    runs-on: matterlabs-ci-runner-high-performance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+
+      - name: Decompress anvil state
+        run: gzip -dfk ./local-chains/v30.2/l1-state.json.gz
+
+      - name: Run anvil L1
+        run: anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 &
+
+      - name: Build server
+        run: cargo build --release --bin zksync-os-server
+
+      - name: Run server
+        env:
+          LOG_USE_COLOR: "false"
+        run: cargo run --release --bin zksync-os-server > "${SERVER_LOGFILE}" 2>&1 &
+
+      - name: Wait for server
+        run: |
+          TIMEOUT=300
+          INTERVAL=3
+          START_TIME=$(date +%s)
+          while ! nc -z localhost 3050; do
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+            if [ "${ELAPSED}" -ge "${TIMEOUT}" ]; then
+              echo "Timed out after ${TIMEOUT}s waiting for zksync OS on port 3050"
+              exit 1
+            fi
+            echo "Waiting for ZKsync OS Server... (${ELAPSED}s elapsed)"
+            sleep "${INTERVAL}"
+          done
+          echo "Server is running."
+
+      - name: Run loadbase benchmark
+        working-directory: loadbase
+        run: |
+          mkdir -p "../${LOADBASE_OUT_DIR}"
+          cargo run --release -- \
+            --rpc-url "${RPC_URL}" \
+            --rich-privkey "${RICH_PRIVKEY}" \
+            --duration 5m \
+            --max-in-flight 50 \
+            --wallets 100 \
+            --dest random \
+            --output-dir "../${LOADBASE_OUT_DIR}" \
+            --output-format all \
+            | tee "../${LOADBASE_LOGFILE}"
+
+      - name: Write GitHub summary
+        run: |
+          SUMMARY_JSON="${LOADBASE_OUT_DIR}/summary.json"
+          REPORT_MD="${LOADBASE_OUT_DIR}/report.md"
+          if [ ! -f "${SUMMARY_JSON}" ]; then
+            echo "summary.json is missing" >&2
+            exit 1
+          fi
+
+          MEDIAN_TPS10=$(jq -r '.summary.median_tps10' "${SUMMARY_JSON}")
+          P95_TPS10=$(jq -r '.summary.p95_tps10' "${SUMMARY_JSON}")
+          MEDIAN_INC_P50=$(jq -r '.summary.median_include_p50_10s_s' "${SUMMARY_JSON}")
+          FINAL_INCLUDED=$(jq -r '.summary.final_included' "${SUMMARY_JSON}")
+          SAMPLE_COUNT=$(jq -r '.summary.sample_count' "${SUMMARY_JSON}")
+
+          {
+            echo "## Loadbase Benchmark"
+            echo
+            echo "| Metric | Value |"
+            echo "|---|---:|"
+            echo "| Samples | ${SAMPLE_COUNT} |"
+            echo "| Median TPS10 | ${MEDIAN_TPS10} |"
+            echo "| P95 TPS10 | ${P95_TPS10} |"
+            echo "| Median include p50 10s (s) | ${MEDIAN_INC_P50} |"
+            echo "| Final included | ${FINAL_INCLUDED} |"
+            echo
+            if [ -f "${REPORT_MD}" ]; then
+              echo "<details><summary>Full report</summary>"
+              echo
+              cat "${REPORT_MD}"
+              echo
+              echo "</details>"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Push metrics to Pushgateway
+        if: env.LOADBASE_PUSHGATEWAY_URL != ''
+        run: |
+          SUMMARY_JSON="${LOADBASE_OUT_DIR}/summary.json"
+          METRIC_FILE=$(mktemp)
+          RUN_INSTANCE="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          MEDIAN_TPS10=$(jq -r '.summary.median_tps10' "${SUMMARY_JSON}")
+          P95_TPS10=$(jq -r '.summary.p95_tps10' "${SUMMARY_JSON}")
+          MEDIAN_INC_P50=$(jq -r '.summary.median_include_p50_10s_s' "${SUMMARY_JSON}")
+          FINAL_INCLUDED=$(jq -r '.summary.final_included' "${SUMMARY_JSON}")
+          SAMPLE_COUNT=$(jq -r '.summary.sample_count' "${SUMMARY_JSON}")
+
+          {
+            echo "loadbase_median_tps10 ${MEDIAN_TPS10}"
+            echo "loadbase_p95_tps10 ${P95_TPS10}"
+            echo "loadbase_median_include_p50_10s_seconds ${MEDIAN_INC_P50}"
+            echo "loadbase_final_included ${FINAL_INCLUDED}"
+            echo "loadbase_sample_count ${SAMPLE_COUNT}"
+          } > "${METRIC_FILE}"
+
+          PUSH_URL="${LOADBASE_PUSHGATEWAY_URL%/}/metrics/job/loadbase_benchmark/instance/${RUN_INSTANCE}"
+          if [ -n "${LOADBASE_PUSHGATEWAY_USERNAME}" ] && [ -n "${LOADBASE_PUSHGATEWAY_PASSWORD}" ]; then
+            curl --fail --show-error --silent \
+              --user "${LOADBASE_PUSHGATEWAY_USERNAME}:${LOADBASE_PUSHGATEWAY_PASSWORD}" \
+              --data-binary "@${METRIC_FILE}" \
+              "${PUSH_URL}"
+          else
+            curl --fail --show-error --silent \
+              --data-binary "@${METRIC_FILE}" \
+              "${PUSH_URL}"
+          fi
+          echo "Pushed metrics to Pushgateway."
+
+      - name: Upload benchmark artifacts
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loadbase-benchmark-${{ github.run_id }}
+          path: |
+            ${{ env.SERVER_LOGFILE }}
+            ${{ env.LOADBASE_LOGFILE }}
+            ${{ env.LOADBASE_OUT_DIR }}/summary.json
+            ${{ env.LOADBASE_OUT_DIR }}/report.md
+            ${{ env.LOADBASE_OUT_DIR }}/metrics.json
+            ${{ env.LOADBASE_OUT_DIR }}/metrics.csv

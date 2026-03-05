@@ -31,14 +31,16 @@ pub async fn prefund_varied<S: Signer + 'static>(
 ) -> Result<()> {
     assert_eq!(dests.len(), amounts.len(), "length mismatch");
 
-    let provider   = rich.provider();
-    let gas_price  = provider.get_gas_price().await
+    let provider = rich.provider();
+    let gas_price = provider
+        .get_gas_price()
+        .await
         .unwrap_or_else(|_| U256::from(3_000_000_000u64)); // fallback 3 gwei
     let per_tx_gas = U256::from(50_000) * gas_price;
 
     // ---------- compute how many txs we need & total ETH ----------
     let mut total_needed = U256::zero();
-    let mut tx_count     = 0u64;
+    let mut tx_count = 0u64;
 
     for (&addr, &target) in dests.iter().zip(amounts) {
         let bal = provider.get_balance(addr, None).await?;
@@ -94,9 +96,7 @@ pub async fn prefund_varied<S: Signer + 'static>(
 
         println!(
             "   tx #{:<4} nonce {} → {addr:?} need {} wei  hash …",
-            idx,
-            next_nonce,
-            need
+            idx, next_nonce, need
         );
 
         let pending = rich.send_transaction(tx, None).await?;
@@ -107,7 +107,10 @@ pub async fn prefund_varied<S: Signer + 'static>(
     }
 
     // wait receipts in parallel
-    join_all(pendings.into_iter().map(|p| async move { let _ = p.await; })).await;
+    join_all(pendings.into_iter().map(|p| async move {
+        let _ = p.await;
+    }))
+    .await;
     println!("   all prefund txs mined, verifying …");
 
     // bounded verification (≤20 s) so we never hang

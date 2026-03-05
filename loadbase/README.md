@@ -11,8 +11,24 @@ cargo run --release -- --rpc-url 'http://127.0.0.1:3050' \
 --duration 240m \
 --max-in-flight 50 \
 --wallets 100 \
---dest random
+--dest random \
+--output-dir ./benchmark-out \
+--output-format all
 ```
+
+structured output:
+
+- `summary.json` (always when `--output-dir` is set)
+- `report.md` (always when `--output-dir` is set)
+- `metrics.json` (`--output-format json|all`)
+- `metrics.csv` (`--output-format csv|all`)
+
+supported output formats:
+
+- `text` (default)
+- `json`
+- `csv`
+- `all`
 
 output example:
 ```
